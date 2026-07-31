@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import placeables from "../../public/assets/placeables.json";
 import { objectEcon } from "../src/objectCatalog";
+import { planObjectBuy } from "../src/objects";
 
 describe("fruit-tree balance", () => {
   const tree = (key: string) => placeables.find((entry) => entry.key === key);
@@ -9,6 +10,21 @@ describe("fruit-tree balance", () => {
     expect(tree("oliveTreeOlive")).toMatchObject({ level: 5, harvestValue: 15 });
     expect(tree("fruitTreeLemon")).toMatchObject({ harvestValue: 35 });
     expect(tree("fruitTreeOrange")).toMatchObject({ harvestValue: 18 });
+  });
+
+  it("awards the binary's gold-purchase XP for every fruit tree", () => {
+    const expected = {
+      fruitTreeApple: 5,
+      oliveTreeOlive: 10,
+      fruitTreeLemon: 20,
+      fruitTreeOrange: 10,
+    };
+    for (const [key, xp] of Object.entries(expected)) {
+      expect(tree(key), key).toMatchObject({ xp });
+      expect(objectEcon(key), key).toMatchObject({ xp });
+      expect(planObjectBuy(objectEcon(key), { gold: 10_000, brains: 0, xp: 0 }, 0, 99), key)
+        .toMatchObject({ ok: true, xp });
+    }
   });
 
   it("keeps the authoritative Olive Tree purchase level in sync", () => {

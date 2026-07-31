@@ -36,6 +36,7 @@ import { screenToGrid, tileCenter, TILE_H, TILE_W, HW, HH } from "./iso";
 import { setFootprint } from "./depthSort";
 import { NightLayer, makeLight } from "./lighting";
 import { buyXp, sellBack, zombieSellValue } from "./economy";
+import { purchaseXpFeedback } from "./purchaseFeedback";
 import { harvestXp, plowXp } from "./farmRewards";
 import {
   DEFAULT_FARM_BACKGROUND, getFarmBackground, isFarmBackground, setFarmBackground,
@@ -654,6 +655,16 @@ async function main() {
     floats.push({ view, ttl: 1.1, delay });
   };
 
+  // Purchases made on the farm use the same delayed world-space XP reward as a
+  // crop harvest. Instant purchases made inside a modal (currently pets) use a
+  // visible HUD toast instead, since the modal obscures the world layer.
+  const showPurchaseXp = (xp: number, at?: { x: number; y: number }) => {
+    const feedback = purchaseXpFeedback(xp);
+    if (!feedback) return;
+    if (at) floatText(at.x, at.y, feedback.floating, 0.42);
+    else hud.showToast(feedback.toast);
+  };
+
   // The harvested crop itself pops free and flies upward, echoing the original
   // game's collection feedback. Zombie harvests already visibly produce the new
   // full-size unit, so this collection fly-up is reserved for vegetable crops.
@@ -1183,6 +1194,7 @@ async function main() {
       state.addXp(pet.xp, "purchase");
     }
     state.unlockPet(pet.key);
+    showPurchaseXp(pet.xp);
     return true;
   };
   const storedObjectIds = new Map<string, string[]>();
@@ -1793,7 +1805,7 @@ async function main() {
     if (o) {
       const c = tileCenter(o.oc, o.or);
       floatText(c.x, c.y, `-${def.cost}${def.brainsNeeded ? "b" : "g"}`);
-      if (xp) floatText(c.x, c.y, `+${xp}xp`, 0.42);
+      showPurchaseXp(xp, c);
     }
     questBus.post(QuestEvent.ItemBought, def.name);
   };
@@ -3057,7 +3069,7 @@ async function main() {
     if (def.storageSlots) state.upgradeStorage(def.storageSlots); // shed capacity
     const c = tileCenter(col, row);
     floatText(c.x, c.y, `-${cost}${useBrains ? "b" : "g"}`);
-    if (xp) floatText(c.x, c.y, `+${xp}xp`, 0.42);
+    showPurchaseXp(xp, c);
     questBus.post(QuestEvent.ItemBought, def.name);
   };
 

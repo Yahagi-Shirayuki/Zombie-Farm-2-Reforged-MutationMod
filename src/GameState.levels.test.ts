@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { GameState } from "./GameState";
 
 describe("GameState level-up notifications", () => {
+  it("reports XP relative to the current level", () => {
+    const state = new GameState();
+    state.xp = 3_250;
+
+    expect(state.level).toBe(12);
+    expect(state.levelXp).toEqual({ current: 450, required: 500 });
+
+    state.xp = 218_000;
+    expect(state.levelXp).toBeNull();
+  });
+
   it("starts a fresh player with the one brain required by the tutorial", () => {
     expect(new GameState().brains).toBe(1);
   });

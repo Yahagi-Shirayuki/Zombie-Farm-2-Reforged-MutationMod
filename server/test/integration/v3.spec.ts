@@ -421,7 +421,8 @@ describe("protocol v3 API", () => {
     const bought = await call<any>("POST", "/commands", owner.token, body);
     expect(bought.status).toBe(200);
     expect(bought.body.gameplay).toMatchObject({ ownedPets: ["catActor"], activePet: "catActor" });
-    expect(bought.body.gameplay.balance.brains).toBe(boot.gameplay.balance.brains - 50);
+    expect(bought.body.gameplay.balance.brains).toBe(boot.gameplay.balance.brains - 5);
+    expect(bought.body.gameplay.balance.xp).toBe(boot.gameplay.balance.xp + 500);
 
     await new Promise((resolve) => setTimeout(resolve, 10));
     const retried = await call<any>("POST", "/commands", owner.token, body);

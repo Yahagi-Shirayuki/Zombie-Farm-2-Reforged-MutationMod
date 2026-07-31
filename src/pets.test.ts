@@ -3,12 +3,29 @@ import catalog from "../public/assets/pets/catalog.json";
 import { GameState } from "./GameState";
 
 describe("cosmetic pet catalog and client ownership", () => {
-  it("contains the complete unique, priced source catalog", () => {
+  it("contains the complete unique, post-brainflation catalog", () => {
     expect(catalog.pets).toHaveLength(40);
     expect(new Set(catalog.pets.map((pet) => pet.key)).size).toBe(40);
-    expect(catalog.pets.every((pet) => pet.brains && pet.cost > 0 && !pet.hidden)).toBe(true);
-    expect(catalog.pets.filter((pet) => pet.xp === 1)).toHaveLength(39);
-    expect(catalog.pets.find((pet) => pet.key === "brainActor")?.xp).toBe(0);
+    expect(catalog.pets.every((pet) => pet.brains && pet.cost > 0)).toBe(true);
+    expect(catalog.pets.filter((pet) => pet.cost === 5)).toHaveLength(30);
+    expect(catalog.pets.filter((pet) => pet.cost === 10)).toHaveLength(8);
+    expect(catalog.pets.filter((pet) => pet.hidden).map((pet) => pet.key).sort()).toEqual([
+      "bullyfrogpetActor",
+      "drgroundhogpetActor",
+      "foulowlpetActor",
+      "generalLarvaelusPetActor",
+      "locolocustpetActor",
+      "rockyRhinoPetActor",
+      "skunkPetActor",
+      "tameMamba",
+    ]);
+    expect(catalog.pets.find((pet) => pet.key === "trexActor")?.cost).toBe(25);
+    expect(catalog.pets.every((pet) => pet.xp === pet.cost * 100)).toBe(true);
+    expect(catalog.pets.find((pet) => pet.key === "brainActor")).toMatchObject({
+      cost: 50,
+      xp: 5_000,
+      description: "An exclusive Pet Brain for the low price of 50 brains! It seems to like you!",
+    });
     expect(catalog.pets.find((pet) => pet.key === "pinkBunny")).toMatchObject({
       actorKey: "bunnyActor", color: [255, 190, 190],
     });

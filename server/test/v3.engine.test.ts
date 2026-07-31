@@ -57,8 +57,8 @@ describe("protocol v3 command engine", () => {
 
     const bought = applyCommandBatch(state, commands({ type: "pet.buy", petKey: "catActor" }), { now: 1 });
     expect(bought.results[0]).toMatchObject({ status: "applied" });
-    expect(bought.state.balance.brains).toBe(state.balance.brains - 50);
-    expect(bought.state.balance.xp).toBe(state.balance.xp + 1);
+    expect(bought.state.balance.brains).toBe(state.balance.brains - 5);
+    expect(bought.state.balance.xp).toBe(state.balance.xp + 500);
     expect(bought.state.ownedPets).toEqual(["catActor"]);
     expect(bought.state.activePet).toBe("catActor");
 
@@ -108,13 +108,13 @@ describe("protocol v3 command engine", () => {
 
   it("rejects invalid, locked, and unaffordable pet purchases", () => {
     const state = freshGameplayState();
-    state.balance.brains = 49;
+    state.balance.brains = 4;
     expect(applyCommandBatch(state, commands({ type: "pet.buy", petKey: "catActor" }), { now: 1 }).results[0])
       .toMatchObject({ status: "rejected", error: "insufficient" });
     expect(applyCommandBatch(freshGameplayState(), commands({ type: "pet.buy", petKey: "not-a-pet" }), { now: 1 }).results[0])
       .toMatchObject({ status: "rejected", error: "bad_item" });
     expect(applyCommandBatch(freshGameplayState(), commands({ type: "pet.buy", petKey: "bullyfrogpetActor" }), { now: 1 }).results[0])
-      .toMatchObject({ status: "rejected", error: "locked" });
+      .toMatchObject({ status: "rejected", error: "bad_item" });
   });
 
   it("starts with free Farmer heads and authoritatively buys a priced head once", () => {
