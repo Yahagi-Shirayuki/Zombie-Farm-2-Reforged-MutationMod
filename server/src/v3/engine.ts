@@ -28,6 +28,10 @@ import { resolveCropMutations } from "../../../src/zombie/cropMutations";
 import { createCombineRandom, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
 import { harvestXp, plowXp } from "../../../src/farmRewards";
 import { questSubjectMatches } from "../../../src/quest/matching";
+import {
+  combineSubject, combineSubjectAliases, mutantSubjectIndex, unitQuestSubjects,
+  unitSubjectAliases,
+} from "../../../src/quest/mutantSubjects";
 
 export const MAX_FARM_PLOTS = 225;
 export const MAX_FUNCTIONAL_OBJECTS = 512;
@@ -61,6 +65,34 @@ const zombieNames = new Map(zombieRules.map((r) => [r.key, r.name]));
 const zombieMutations = new Map(zombieRules.map((r) => [r.key, r.mutation ?? 0]));
 const rewardOnlyZombies = new Set(zombieRules.filter((r) => r.rewardOnly).map((r) => r.key));
 const zombieRuleByKey = new Map(zombieRules.map((r) => [r.key, r]));
+// Mutation bit -> Market mutant species name, so a zombie that grew its mutation in
+// the field still satisfies the quests that name the bought mutant (quest 55/56).
+const mutantSubjects = mutantSubjectIndex(zombieRules);
+
+/** Every quest identity of a roster unit: its species name plus each mutant species
+ *  its carried mutations make it equivalent to. */
+function unitSubjects(unit: { key: string; mutation?: number }): string[] {
+  return unitQuestSubjects(
+    zombieNames.get(unit.key) ?? unit.key,
+    unit.mutation ?? 0,
+    mutantSubjects
+  );
+}
+
+/** The Zombie Pot's "combined" event. Its subject is the two parents' species names
+ *  sorted and joined; the aliases cover every pairing their mutations also stand for,
+ *  so quest 56 accepts two field-mutated Regular Zombies as a Carrot + Tomato pair. */
+function combinerCombined(
+  a: { key: string; mutation?: number },
+  b: { key: string; mutation?: number }
+): QuestEvent {
+  const [subjectsA, subjectsB] = [unitSubjects(a), unitSubjects(b)];
+  return {
+    type: "kCombinerCombinedNotification",
+    subject: combineSubject(subjectsA[0], subjectsB[0]),
+    aliases: combineSubjectAliases(subjectsA, subjectsB),
+  };
+}
 
 /** Use the same special override, rare promotion, mutant-donor, and tier rules as
  * the timed client Zombie Pot. */
@@ -118,7 +150,9 @@ export interface EngineResult {
   balanceBefore: BalanceProjection;
 }
 
-export interface QuestEvent { type: string; subject: string }
+/** `aliases` are extra subjects this same event answers to (mutation identities);
+ *  they never add a second increment. See src/quest/mutantSubjects. */
+export interface QuestEvent { type: string; subject: string; aliases?: string[] }
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const plotKey = (oc: number, or: number): string => `${oc}:${or}`;
@@ -226,7 +260,16 @@ function rewardHarvest(
     state.roster.push({ id, key, mutation, invasions: 0, stored: active >= cap.army });
     created.push(id);
     state.balance.xp += harvestXp(zombieCropEcon(key)?.xp ?? 0, hasPlowingMonolith(state));
-    return { ok: true, event: { type: "kCropHarvestedZombieNotification", subject: zombieNames.get(key) ?? key } };
+    return {
+      ok: true,
+      event: {
+        type: "kCropHarvestedZombieNotification",
+        subject: zombieNames.get(key) ?? key,
+        // A crop-adjacency mutation makes this unit the Market mutant's equal, so the
+        // "Harvest a Tomato Zombie" objective counts a home-grown Tomatohead too.
+        aliases: unitSubjectAliases(zombieNames.get(key) ?? key, mutation, mutantSubjects),
+      },
+    };
   }
   const harvestValue = plot.sell * (plot.fertilized ? 2 : 1);
   state.balance.gold += farmerGold(harvestValue, state.farmerHeadId);
@@ -261,7 +304,7 @@ export function applyQuestEvents(
         if (req.notificationID !== event.type) return;
         // An empty object is the quest format's wildcard (for example, "plant any
         // crop"). Match named subjects case-insensitively, like the client engine.
-        if (!questSubjectMatches(req.notificationObject, event.subject)) return;
+        if (!questSubjectMatches(req.notificationObject, event.subject, event.aliases)) return;
         const next = Math.min(req.countTotal, (counts[index] ?? 0) + 1);
         if (next !== counts[index]) {
           counts[index] = next;
@@ -626,10 +669,7 @@ function applyOne(
       b.stored = true;
       a.lockedByRaid = marker;
       b.lockedByRaid = marker;
-      events.push({
-        type: "kCombinerCombinedNotification",
-        subject: [zombieNames.get(a.key) ?? a.key, zombieNames.get(b.key) ?? b.key].sort().join(" "),
-      });
+      events.push(combinerCombined(a, b));
       return { sequence, status: "applied" };
     }
     case "roster.combine": {
@@ -669,11 +709,12 @@ function applyOne(
       const stored = marker ? false : state.roster.filter((unit) => !unit.stored).length >= capacity.army;
       state.roster.push({ id, key: resultKey, mutation, invasions: 0, stored });
       created.push(id);
-      if (!reserved) events.push({
-        type: "kCombinerCombinedNotification",
-        subject: [zombieNames.get(a.key) ?? a.key, zombieNames.get(b.key) ?? b.key].sort().join(" "),
+      if (!reserved) events.push(combinerCombined(a, b));
+      events.push({
+        type: "kCombinerHarvestedNotification",
+        subject: zombieNames.get(resultKey) ?? resultKey,
+        aliases: unitSubjectAliases(zombieNames.get(resultKey) ?? resultKey, mutation, mutantSubjects),
       });
-      events.push({ type: "kCombinerHarvestedNotification", subject: zombieNames.get(resultKey) ?? resultKey });
       return { sequence, status: "applied", createdIds: [id] };
     }
     case "shop.size": {
