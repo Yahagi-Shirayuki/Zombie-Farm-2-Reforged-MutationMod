@@ -91,10 +91,12 @@ Bugs — NOT YET ADDRESSED
   mutation masks, not their species names — src/main.ts:1901-1911 and :4040-4044.
 
 - Pets in the market still use pre-brainflation prices.
-  CONFIRMED STILL BROKEN. public/assets/pets/catalog.json is untouched: 30 pets at 50
-  brains (should be 5), 8 at 100, T-Rex at 250, Pet Brain at 500 (should be 50), and the
-  Pet Brain description still reads "for the low price of 1,000 brains!". Pet xp is 1
-  (0 for Pet Brain) rather than the decor-purchase XP.
+  FIXED. tools/prep_pets.py now applies the post-brainflation one-tenth price and
+  brain-decor XP (final cost x 100) during every catalog export. Pet Brain's stale
+  1,000-brain description is generated from its corrected 50-brain price. The eight
+  epic-boss reward pets remain in the catalog for owned-pet rendering but are hidden
+  from the store and rejected by authoritative purchases. Catalog, client,
+  authoritative engine, and integration assertions cover the balance.
 
 - Desyncs during the tutorial cause major problems.
   NOT ADDRESSED. src/tutorial/ is untouched. The report is also truncated ("One tester

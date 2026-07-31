@@ -155,6 +155,8 @@ export class Hud {
   private zombiesEl!: HTMLElement;
   private levelEl!: HTMLElement;
   private xpFill!: HTMLElement;
+  private levelChip!: HTMLElement;
+  private xpDetails!: HTMLElement;
   private nameEl!: HTMLElement;
   private playStatusEl!: HTMLElement;
   private questCol!: HTMLElement;
@@ -438,6 +440,10 @@ export class Hud {
     this.zombiesEl = zv;
     const lv = document.createElement("div");
     lv.className = "chip level-chip";
+    lv.tabIndex = 0;
+    lv.setAttribute("role", "button");
+    lv.setAttribute("aria-expanded", "false");
+    this.levelChip = lv;
     const star = document.createElement("img");
     star.src = UI("topbar_level_icon.png");
     star.style.height = "18px";
@@ -447,7 +453,27 @@ export class Hud {
     this.xpFill = document.createElement("div");
     this.xpFill.className = "xpfill";
     track.appendChild(this.xpFill);
-    lv.append(star, this.levelEl, track);
+    this.xpDetails = document.createElement("div");
+    this.xpDetails.className = "xp-details";
+    this.xpDetails.setAttribute("role", "tooltip");
+    lv.append(star, this.levelEl, track, this.xpDetails);
+    const toggleXpDetails = () => {
+      const open = lv.classList.toggle("xp-details-open");
+      lv.setAttribute("aria-expanded", String(open));
+    };
+    lv.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleXpDetails();
+    });
+    lv.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggleXpDetails();
+    });
+    document.addEventListener("click", () => {
+      lv.classList.remove("xp-details-open");
+      lv.setAttribute("aria-expanded", "false");
+    });
     chips.append(g, b, z, lv);
 
     const spacer = document.createElement("div");
@@ -4630,6 +4656,12 @@ export class Hud {
     this.zombiesEl.textContent = `${this.state.zombieCount}/${this.state.zombieMax}`;
     this.levelEl.textContent = String(this.state.level);
     this.xpFill.style.width = `${Math.round(this.state.levelProgress * 100)}%`;
+    const levelXp = this.state.levelXp;
+    const xpText = levelXp
+      ? `${levelXp.current.toLocaleString()} / ${levelXp.required.toLocaleString()} XP`
+      : "Max level";
+    this.xpDetails.textContent = xpText;
+    this.levelChip.setAttribute("aria-label", `Level ${this.state.level}: ${xpText}`);
     this.refreshBoostBadge(); // keep the equipped-boost uses badge in sync
     this.refreshName();
   }

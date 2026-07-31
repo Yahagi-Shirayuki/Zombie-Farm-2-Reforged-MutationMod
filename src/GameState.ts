@@ -190,6 +190,15 @@ export class GameState {
     return (this.xp - cur) / (next - cur);
   }
 
+  /** XP earned within this level and the amount required to reach the next one. */
+  get levelXp(): { current: number; required: number } | null {
+    const l = this.level;
+    if (l >= XP_THRESHOLDS.length) return null;
+    const cur = XP_THRESHOLDS[l - 1];
+    const next = XP_THRESHOLDS[l];
+    return { current: this.xp - cur, required: next - cur };
+  }
+
   addGold(n: number, reason = "misc") {
     this.gold += n;
     this.onMoney?.("gold", n, reason);

@@ -23,6 +23,16 @@ PROJ = HERE.parent
 APP = (PROJ / ".." / "ZF2R_extracted" / "raw" / "ios-1.0" / "1.0" /
        "Payload" / "ZF2R.app").resolve()
 OUT = PROJ / "public" / "assets" / "pets"
+BOSS_REWARD_PETS = {
+    "bullyfrogpetActor",
+    "drgroundhogpetActor",
+    "foulowlpetActor",
+    "generalLarvaelusPetActor",
+    "locolocustpetActor",
+    "rockyRhinoPetActor",
+    "skunkPetActor",
+    "tameMamba",
+}
 PAIR = re.compile(r"\{\{\s*(-?\d+),\s*(-?\d+)\s*\},\s*\{\s*(\d+),\s*(\d+)\s*\}\}")
 SIZE = re.compile(r"\{\s*(\d+),\s*(\d+)\s*\}")
 POINT = re.compile(r"\{\s*(-?[\d.]+),\s*(-?[\d.]+)\s*\}")
@@ -158,6 +168,16 @@ def export(check_only: bool = False) -> dict:
             color = market.get("color", [255, 255, 255])
             if len(color) != 3:
                 raise ValueError(f"{key}: invalid color {color!r}")
+            brains = bool(market.get("brainsNeeded", False))
+            source_cost = int(market.get("cost", 0))
+            if brains and (source_cost <= 0 or source_cost % 10 != 0):
+                raise ValueError(f"{key}: brain cost must be positive and divisible by 10")
+            cost = source_cost // 10 if brains else source_cost
+            xp = cost * 100 if brains else int(market.get("xp", 0))
+            description = str(market.get("flavorText") or "")
+            if key == "brainActor":
+                description = (f"An exclusive Pet Brain for the low price of {cost} brains! "
+                               "It seems to like you!")
             portrait_file = f"portraits/{key}.png"
             portraits.add(key)
             if not check_only:
@@ -177,13 +197,16 @@ def export(check_only: bool = False) -> dict:
                 "key": key,
                 "actorKey": actor_key,
                 "name": str(market.get("name") or key),
-                "cost": int(market.get("cost", 0)),
-                # The source awards this on purchase. Missing means zero (Pet Brain).
-                "xp": int(market.get("xp", 0)),
-                "brains": bool(market.get("brainsNeeded", False)),
+                # Reforged's post-brainflation economy uses one tenth of the
+                # recovered price and the standard brain-decor XP award.
+                "cost": cost,
+                "xp": xp,
+                "brains": brains,
                 "level": max(0, int(market.get("level", 0))),
-                "hidden": bool(market.get("dontShowInMarket", False)),
-                "description": str(market.get("flavorText") or ""),
+                # Epic-boss pets remain catalogued for rendering/equipping, but
+                # are granted exclusively by boss loot and cannot be bought.
+                "hidden": bool(market.get("dontShowInMarket", False)) or key in BOSS_REWARD_PETS,
+                "description": description,
                 "color": [int(channel) for channel in color],
                 "scale": float(actor.get("scale", 1)),
                 "walkingSpeed": float(actor.get("walkingSpeed", 1.5)),
