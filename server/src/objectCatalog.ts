@@ -177,7 +177,7 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "ninjaBanner": { cost: 0, brains: false, xp: 0, level: -1 },
   "oakTree": { cost: 900, brains: false, xp: 9, level: 5 },
   "oldMcDonnellBanner": { cost: 0, brains: false, xp: 0, level: -1 },
-  "oliveTreeOlive": { cost: 1000, brains: false, xp: 0, level: 1 },
+  "oliveTreeOlive": { cost: 1000, brains: false, xp: 0, level: 5 },
   "olympus": { cost: 5, brains: true, xp: 500, level: 44 },
   "outhouseNormal": { cost: 2250, brains: false, xp: 22, level: 13 },
   "pailAndShovel": { cost: 4000, brains: false, xp: 0, level: 1 },
