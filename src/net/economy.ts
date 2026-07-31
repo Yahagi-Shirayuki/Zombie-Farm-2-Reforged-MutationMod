@@ -4,6 +4,9 @@ import { CommandQueue } from "./commandQueue";
 import type { BootstrapResponse, CommandBatchResponse, GameplayCommand } from "./protocol";
 import type { RaidOutcome } from "../raid/types";
 import { RAID_RULESET_VERSION } from "../raid/replay";
+import { epicBossRunToClient, serverTimestampToClient } from "./clock";
+
+export const OWNERSHIP_POLL_IDLE_MS = 3 * 60_000;
 
 export interface InventoryInput {
   type: "buy" | "use" | "grant";
@@ -73,6 +76,8 @@ export class EconomyClient {
   private ready = false;
   private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private recoveryAttempt = 0;
+  private ownershipTimer: ReturnType<typeof setTimeout> | null = null;
+  private ownershipCheckInFlight = false;
 
   onShopState: ((size: number, climates: string[]) => void) | null = null;
   onFarmerState: ((headIds: number[], equippedHeadId: number) => void) | null = null;
@@ -89,6 +94,8 @@ export class EconomyClient {
   onTutorialState: ((rewarded: boolean) => void) | null = null;
   onGameplayUnavailable: ((reason: string) => void) | null = null;
   onWriterReplaced: (() => void) | null = null;
+  /** Fired whenever a bootstrap confirms this tab owns the writer, including recovery. */
+  onWriterOwned: (() => void) | null = null;
   onWriterAvailable: (() => void) | null = null;
   onCommandRejected: ((command: GameplayCommand | undefined, error: string) => void) | null = null;
   onAuthoritativeSettled: ((serverTime: number) => void) | null = null;
@@ -114,20 +121,16 @@ export class EconomyClient {
     this.queue.onStateConflict = () => { void this.reloadAfterConflict(); };
     this.queue.onSizeChange = (size) => this.onPendingChange?.(size);
     api.setWriterRejectedHandler(() => this.handleWriterLost());
+    api.setWriterConfirmedHandler(() => this.scheduleOwnershipCheck());
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") void this.checkOwnership();
+        else this.clearOwnershipCheck();
       });
       // A different device cannot push a takeover notification into this page.
-      // Poll the cheap writer projection so an idle displaced session discovers
-      // its server-side revocation and returns to auth without waiting for input.
-      // An ACTIVE session already learns of a takeover through the writerGeneration
-      // on every /commands response, so this poll only covers the idle-visible-tab
-      // case — where discovering displacement in ~45s instead of 5s is invisible.
-      // Slowed from 5s to 45s to cut ~9x of the idle request volume.
-      setInterval(() => {
-        if (document.visibilityState === "visible") void this.checkOwnership();
-      }, 45_000);
+      // Successful writer-protected requests already prove ownership and postpone
+      // the next check. Only an idle visible tab needs a dedicated status request;
+      // focus remains immediate so a resumed tab never waits three minutes.
     }
   }
 
@@ -145,11 +148,12 @@ export class EconomyClient {
       bootstrap = await this.recoverResumableRaid(bootstrap);
       this.queue.adoptBootstrap(bootstrap);
       this.ready = true;
-      this.adoptGameplay(bootstrap.gameplay);
+      this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
       if (bootstrap.raidRulesetVersion !== RAID_RULESET_VERSION) {
         this.onRulesetSkew?.(bootstrap.raidRulesetVersion, RAID_RULESET_VERSION);
       }
       if (this.queue.size === 0) this.onAuthoritativeSettled?.(bootstrap.serverTime);
+      this.syncOwnershipPolling(bootstrap.writer.status);
       if (bootstrap.writer.status === "mine") this.onWriterAvailable?.();
       else this.onWriterReplaced?.();
     } catch {
@@ -165,6 +169,7 @@ export class EconomyClient {
     try {
       const current = await api.bootstrap(true);
       await api.acquireWriter(current.writer.generation, true);
+      this.scheduleOwnershipCheck();
       return true;
     } catch {
       return false;
@@ -172,6 +177,7 @@ export class EconomyClient {
   }
 
   private handleWriterLost(): void {
+    this.clearOwnershipCheck();
     api.clearWriterCredential();
     this.queue.markWriterLost();
     this.optimistic.clear();
@@ -185,19 +191,48 @@ export class EconomyClient {
       const bootstrap = await api.bootstrap(true);
       this.queue.adoptBootstrap(bootstrap);
       this.ready = true;
-      this.adoptGameplay(bootstrap.gameplay);
+      this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
+      this.syncOwnershipPolling(bootstrap.writer.status);
       if (this.queue.size === 0) this.onAuthoritativeSettled?.(bootstrap.serverTime);
     } catch { /* the blocking state remains until a later focus/reconnect */ }
   }
 
+  private clearOwnershipCheck(): void {
+    if (this.ownershipTimer) clearTimeout(this.ownershipTimer);
+    this.ownershipTimer = null;
+  }
+
+  private scheduleOwnershipCheck(): void {
+    this.clearOwnershipCheck();
+    if (typeof window === "undefined" || typeof document === "undefined" ||
+        document.visibilityState !== "visible" || !this.ready ||
+        !api.getSession() || !api.hasWriterCredential()) return;
+    this.ownershipTimer = setTimeout(() => {
+      this.ownershipTimer = null;
+      void this.checkOwnership();
+    }, OWNERSHIP_POLL_IDLE_MS);
+  }
+
+  private syncOwnershipPolling(status: "free" | "mine" | "other"): void {
+    if (status === "mine") {
+      this.scheduleOwnershipCheck();
+      this.onWriterOwned?.();
+    } else this.clearOwnershipCheck();
+  }
+
   private async checkOwnership(): Promise<void> {
-    if (!this.ready || !api.getSession()) return;
+    if (this.ownershipCheckInFlight) return;
+    this.clearOwnershipCheck();
+    if (!this.ready || !api.getSession() || !api.hasWriterCredential()) return;
+    this.ownershipCheckInFlight = true;
     try {
       const writer = await api.writerStatus();
-      if (writer.status !== "mine") {
-        this.handleWriterLost();
-      }
+      if (writer.status !== "mine") this.handleWriterLost();
     } catch { /* ordinary recovery owns network failure handling */ }
+    finally {
+      this.ownershipCheckInFlight = false;
+      this.scheduleOwnershipCheck();
+    }
   }
 
   private scheduleRecovery(): void {
@@ -216,7 +251,8 @@ export class EconomyClient {
       bootstrap = await this.recoverResumableRaid(bootstrap);
       this.queue.adoptBootstrap(bootstrap);
       this.ready = true;
-      this.adoptGameplay(bootstrap.gameplay);
+      this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
+      this.syncOwnershipPolling(bootstrap.writer.status);
       if (this.queue.size === 0) this.onAuthoritativeSettled?.(bootstrap.serverTime);
       if (!this.queue.available) {
         if (bootstrap.writer.status === "other") this.onWriterReplaced?.();
@@ -237,7 +273,8 @@ export class EconomyClient {
       this.queue.rebaseAfterConflict(bootstrap);
       this.ready = true;
       this.optimistic.clear();
-      this.adoptGameplay(bootstrap.gameplay);
+      this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
+      this.syncOwnershipPolling(bootstrap.writer.status);
       await this.queue.retry();
     } catch {
       this.onGameplayUnavailable?.("state_conflict");
@@ -476,7 +513,10 @@ export class EconomyClient {
     if (result.inventory) this.serverInv = { ...result.inventory };
     if (result.storage) this.state.syncStorage(result.storage.received, result.storage.stored);
     if (result.raidProgress) this.state.syncRaidProgress(result.raidProgress);
-    this.state.syncRaidCooldown(result.lastRaidAt);
+    this.state.syncRaidCooldown(serverTimestampToClient(
+      result.lastRaidAt,
+      result.serverTime ?? Date.now(),
+    ));
     this.onQuestChanges?.(result.questChanges ?? []);
     this.reconcile();
     this.onRaidSettled?.(result);
@@ -506,7 +546,8 @@ export class EconomyClient {
     const bootstrap = await api.bootstrap(true);
     this.queue.adoptBootstrap(bootstrap);
     this.ready = true;
-    this.adoptGameplay(bootstrap.gameplay);
+    this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
+    this.syncOwnershipPolling(bootstrap.writer.status);
     if (bootstrap.writer.status !== "mine") {
       this.onWriterReplaced?.();
       throw new Error("writer_replaced");
@@ -523,7 +564,8 @@ export class EconomyClient {
     const bootstrap = await api.bootstrap(true);
     this.queue.adoptBootstrap(bootstrap);
     this.ready = true;
-    this.adoptGameplay(bootstrap.gameplay);
+    this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
+    this.syncOwnershipPolling(bootstrap.writer.status);
     if (bootstrap.writer.status !== "mine") throw new Error("writer_replaced");
     return bootstrap.accountVersion;
   }
@@ -540,13 +582,22 @@ export class EconomyClient {
     this.onPetState?.(result.ownedPets, this.state.activePet, this.state.penPets);
     this.onQuestState?.({ completed: result.quests.completed, progress: result.quests.progress, questChanges: result.questChanges });
     this.onQuestChanges?.(result.questChanges);
-    this.onEpicBossState?.(result.event);
+    const serverTime = result.serverTime ?? Date.now();
+    this.onEpicBossState?.(epicBossRunToClient(result.event, serverTime));
+    if (result.lastRaidAt != null) this.state.syncRaidCooldown(serverTimestampToClient(
+      result.lastRaidAt,
+      serverTime,
+    ));
     this.reconcile();
   }
 
-  adoptEpicBossActivation(event: NonNullable<BootstrapResponse["gameplay"]["epicBoss"]>, balance: api.Balance): void {
+  adoptEpicBossActivation(
+    event: NonNullable<BootstrapResponse["gameplay"]["epicBoss"]>,
+    balance: api.Balance,
+    serverTime = Date.now(),
+  ): void {
     this.base = balance;
-    this.onEpicBossState?.(event);
+    this.onEpicBossState?.(epicBossRunToClient(event, serverTime));
     this.reconcile();
   }
 
@@ -560,7 +611,8 @@ export class EconomyClient {
     bootstrap = await this.recoverResumableRaid(bootstrap);
     this.queue.adoptBootstrap(bootstrap);
     this.ready = true;
-    this.adoptGameplay(bootstrap.gameplay);
+    this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
+    this.syncOwnershipPolling(bootstrap.writer.status);
   }
   async refreshAuthoritative(): Promise<void> { await this.refreshInventory(); }
 
@@ -707,7 +759,7 @@ export class EconomyClient {
     Object.assign(this.deferredObjectAliases, objectAliases);
     rejectedObjectIds.forEach((id) => this.deferredRejectedObjectIds.add(id));
     this.onQuestChanges?.(response.questChanges);
-    this.adoptGameplay(response.gameplay, aliases, objectAliases, rejectedObjectIds);
+    this.adoptGameplay(response.gameplay, aliases, objectAliases, rejectedObjectIds, response.serverTime);
     if (this.queue.size === 0) this.onAuthoritativeSettled?.(response.serverTime);
   }
 
@@ -715,15 +767,22 @@ export class EconomyClient {
     gameplay: BootstrapResponse["gameplay"],
     aliases: Record<string, string> = {},
     objectAliases: Record<string, string> = {},
-    rejectedObjectIds: string[] = []
+    rejectedObjectIds: string[] = [],
+    serverTime = Date.now(),
   ): void {
     this.base = gameplay.balance;
     this.serverInv = gameplay.inventory;
     this.state.zombiePotBought = gameplay.zombiePotBought ?? false;
+    this.state.syncRaidProgress(gameplay.raids.progress);
+    this.state.syncRaidCooldown(serverTimestampToClient(gameplay.raids.lastRaidAt, serverTime));
     const deferStructural = this.commandsBySequence.size > 0;
     const plowed: api.FarmState["plowed"] = [];
     const spent: NonNullable<api.FarmState["spent"]> = [];
     const crops: api.FarmState["crops"] = [];
+    // Farm growth uses the local wall clock. Translate server-authored timestamps
+    // into that clock domain so clock skew cannot make an acknowledged Insta-Grow
+    // briefly appear unripe (or skew every ordinary crop countdown).
+    const clientTime = Date.now();
     for (const [key, plot] of Object.entries(gameplay.farm.plots)) {
       const [oc, pr] = key.split(":").map(Number);
       if (plot.state === "plowed") plowed.push({ oc, pr });
@@ -733,7 +792,7 @@ export class EconomyClient {
           oc,
           pr,
           crop_key: plot.cropKey,
-          planted_at: plot.plantedAt,
+          planted_at: serverTimestampToClient(plot.plantedAt, serverTime, clientTime),
           grow_ms: plot.growMs,
           fertilized: plot.fertilized ? 1 : 0,
         });
@@ -752,7 +811,10 @@ export class EconomyClient {
       for (const crop of crops) if (crop.fertilized) this.onCropFertilized?.(crop.oc, crop.pr);
       this.onFarmState?.({ plowed, spent, crops });
       this.onObjectState?.(
-        gameplay.objects.objects,
+        gameplay.objects.objects.map((object) => object.readyAt === undefined ? object : ({
+          ...object,
+          readyAt: serverTimestampToClient(object.readyAt, serverTime, clientTime),
+        })),
         { ...this.deferredObjectAliases, ...objectAliases },
         gameplay.zombieMax,
         [...new Set([...this.deferredRejectedObjectIds, ...rejectedObjectIds])]
@@ -764,7 +826,7 @@ export class EconomyClient {
       if (gameplay.raidRevival) this.onRaidRevival?.(gameplay.raidRevival, gameplay.balance.brains);
       this.onRosterState?.(gameplay.roster, { ...this.deferredRosterAliases, ...aliases });
       this.deferredRosterAliases = {};
-      this.onEpicBossState?.(gameplay.epicBoss ?? null);
+      this.onEpicBossState?.(epicBossRunToClient(gameplay.epicBoss, serverTime, clientTime));
       this.onTutorialState?.(gameplay.tutorialRewarded);
     }
     this.reconcile();

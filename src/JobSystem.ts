@@ -52,6 +52,8 @@ interface Job {
 }
 
 export class JobSystem {
+  /** Presentation persistence hook. Set by main after SaveManager is constructed. */
+  onQueueChanged: (() => void) | null = null;
   private queue: Job[] = [];
   private active: Job | null = null;
   private phase: "walk" | "work" | null = null;
@@ -68,7 +70,7 @@ export class JobSystem {
     private actor: Actor,
     private walk: WalkController,
     private state: GameState,
-    private float: (x: number, y: number, msg: string) => void,
+    private float: (x: number, y: number, msg: string, delay?: number) => void,
     private sfx: (name: Sfx) => void = () => {},
     // Fired when a zombie crop is harvested, to grow an owned zombie at its plot.
     // Returns the spawned unit's id (so an online harvest can tell the server which
@@ -139,6 +141,7 @@ export class JobSystem {
     const diamond = this.makeDiamond(c.x, c.y, PLOT, kind === "till");
     this.queue.push({ kind, oc, or, cx: c.x, cy: c.y, queuedAt: Date.now(), diamond, bar: null, cfg, pendKey: k });
     this.pending.add(k);
+    this.onQueueChanged?.();
     return true;
   }
 
@@ -153,6 +156,7 @@ export class JobSystem {
       diamond, bar: null, objId, pendKey: k,
     });
     this.pending.add(k);
+    this.onQueueChanged?.();
     return true;
   }
 
@@ -162,6 +166,7 @@ export class JobSystem {
     this.queue.push({
       kind: "walk", oc: -1, or: -1, cx: x, cy: y, queuedAt: Date.now(), diamond: null, bar: null,
     });
+    this.onQueueChanged?.();
   }
 
   get busy(): boolean {
@@ -188,13 +193,19 @@ export class JobSystem {
     };
   }
 
-  /** Restore a Local Farm queue after the field and objects are hydrated. Invalid
-   * or obsolete targets are dropped by the same validation used for fresh taps. */
+  /** Restore a saved queue after the field and objects are hydrated. Invalid or
+   * obsolete targets are dropped by the same validation used for fresh taps.
+   *
+   * Returns whether this call took responsibility for `save`. An unusable save is
+   * consumed (there is nothing to retry), but a restore declined because the queue is
+   * already busy returns false so an online caller can keep the journal parked and try
+   * again once the live queue drains. */
   restorePending(
     save: FarmJobQueueSave | undefined,
     cropOf: (key: string) => CropConfig | undefined,
-  ): void {
-    if (!save || !Array.isArray(save.jobs) || this.busy) return;
+  ): boolean {
+    if (!save || !Array.isArray(save.jobs)) return true;
+    if (this.busy) return false;
     for (const job of save.jobs) {
       if (job.kind === "walk") this.enqueueWalk(job.cx, job.cy);
       else if (job.kind === "harvestTree" && job.objectId) {
@@ -213,6 +224,7 @@ export class JobSystem {
     const savedAt = Number.isFinite(oldest) ? oldest
       : Number.isFinite(save.savedAt) ? save.savedAt : Date.now();
     this.advanceElapsed(Math.max(0, Date.now() - savedAt) / 1000, true);
+    return true;
   }
 
   /** Advance farmer movement and queued work by real elapsed time.
@@ -279,6 +291,7 @@ export class JobSystem {
       this.phase = null;
       cancelled = true;
     }
+    if (cancelled) this.onQueueChanged?.();
     return cancelled;
   }
 
@@ -300,6 +313,7 @@ export class JobSystem {
       this.phase = null;
       cancelled = true;
     }
+    if (cancelled) this.onQueueChanged?.();
     return cancelled;
   }
 
@@ -396,7 +410,8 @@ export class JobSystem {
           if (cost > 0) this.state.spendGold(cost);
           if (xp) this.state.addXp(xp);
         }
-        this.float(job.cx, job.cy, cost > 0 ? `-${cost}g  +${xp}xp` : "Plowed!");
+        this.float(job.cx, job.cy, cost > 0 ? `-${cost}g` : "Plowed!");
+        if (xp) this.float(job.cx, job.cy, `+${xp}xp`, 0.42);
         this.playSfx(xp ? "xp" : "till");
         this.onPlotPlowed(job.oc, job.or);
         this.quest.post(QuestEvent.SoilPlowed, "Plow");
@@ -482,10 +497,13 @@ export class JobSystem {
         // out of the crop that produced it.
         const bossToken = !r.isZombie && this.onCropHarvested(r.growMs, r.sell, job.cx, job.cy);
         // Zombie crops pay no gold — they yield an owned zombie unit instead.
-        const msg = r.zombieKey
-          ? `+${xp}xp`
-          : `+${r.sell}g${r.fertilized ? " ×2" : ""}  +${xp}xp`;
-        this.float(job.cx, job.cy, bossToken ? `${msg}  +1 Boss Token!` : msg);
+        if (r.zombieKey) {
+          this.float(job.cx, job.cy, `+${xp}xp`);
+        } else {
+          this.float(job.cx, job.cy, `+${r.sell}g${r.fertilized ? " ×2" : ""}`);
+          if (xp) this.float(job.cx, job.cy, `+${xp}xp`, 0.42);
+          if (bossToken) this.float(job.cx, job.cy, "+1 Boss Token!", xp ? 0.84 : 0.42);
+        }
         // A harvested zombie "resurrects"; a plain crop gives the reward chime.
         this.playSfx(r.isZombie ? "harvestZombie" : "xp");
         this.quest.post(
@@ -500,6 +518,7 @@ export class JobSystem {
     if (this.active) this.dropJob(this.active);
     this.active = null;
     this.phase = null;
+    this.onQueueChanged?.();
   }
 
   // Green plot diamond marking a queued/working plot (under the farmer).

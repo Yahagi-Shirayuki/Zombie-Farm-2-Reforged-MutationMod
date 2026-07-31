@@ -24,6 +24,49 @@ const commandBody = (
 });
 
 describe("protocol v3 API", () => {
+  it("persists a level-up invasion cooldown reset in the command transaction", async () => {
+    const session = await signIn(uniqueSub("level-cooldown-reset"));
+    await grantBalance(session, { xp: 24 });
+    await grantRoster(session, [{
+      id: "level-reset-zombie", key: "ZombieActorRegularTier1", stored: false,
+    }]);
+
+    const started = await call<any>("POST", "/raid/start", session.token, {
+      raidId: 1,
+      orderedUnitIds: ["level-reset-zombie"],
+      rulesetVersion: RAID_RULESET_VERSION,
+    });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    expect(started.body.lastRaidAt).toBeGreaterThan(0);
+
+    const finished = await call<any>("POST", "/raid/finish", session.token, {
+      sessionId: started.body.sessionId,
+      finalTick: 0,
+      inputs: [{ seq: 1, tick: 0, type: "retreat" }],
+      clientWin: false,
+    });
+    expect(finished.status, JSON.stringify(finished.body)).toBe(200);
+
+    const before = await call<any>("POST", "/bootstrap", session.token, {});
+    const leveled = await call<any>("POST", "/commands", session.token,
+      commandBody(before.body, "level-cooldown-reset-batch", 1, [
+        { type: "farm.plow", oc: 0, or: 0 },
+      ]));
+    expect(leveled.status, JSON.stringify(leveled.body)).toBe(200);
+    expect(leveled.body.gameplay.balance.xp).toBe(25);
+    expect(leveled.body.gameplay.raids.lastRaidAt).toBe(0);
+
+    const after = await call<any>("POST", "/bootstrap", session.token, {});
+    expect(after.body.gameplay.raids.lastRaidAt).toBe(0);
+
+    const immediate = await call<any>("POST", "/raid/start", session.token, {
+      raidId: 1,
+      orderedUnitIds: ["level-reset-zombie"],
+      rulesetVersion: RAID_RULESET_VERSION,
+    });
+    expect(immediate.status, JSON.stringify(immediate.body)).toBe(200);
+  });
+
   it("awards 5 XP per send and caps the sender at two gifts per UTC day", async () => {
     const sender = await signIn(uniqueSub("gift-xp-sender"));
     const recipients = await Promise.all([
@@ -51,6 +94,48 @@ describe("protocol v3 API", () => {
 
     const after = await call<any>("POST", "/bootstrap", sender.token, {});
     expect(after.body.gameplay.balance.xp).toBe(10);
+  });
+
+  it("resets the invasion cooldown when gift XP crosses a level", async () => {
+    const sender = await signIn(uniqueSub("gift-level-reset-sender"));
+    const recipient = await signIn(uniqueSub("gift-level-reset-recipient"));
+    await befriend(sender, recipient);
+    await grantBalance(sender, { xp: 24 });
+    await grantRoster(sender, [{
+      id: "gift-level-zombie", key: "ZombieActorRegularTier1", stored: false,
+    }]);
+
+    const started = await call<any>("POST", "/raid/start", sender.token, {
+      raidId: 1,
+      orderedUnitIds: ["gift-level-zombie"],
+      rulesetVersion: RAID_RULESET_VERSION,
+    });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    expect(started.body.lastRaidAt).toBeGreaterThan(0);
+
+    const finished = await call<any>("POST", "/raid/finish", sender.token, {
+      sessionId: started.body.sessionId,
+      finalTick: 0,
+      inputs: [{ seq: 1, tick: 0, type: "retreat" }],
+      clientWin: false,
+    });
+    expect(finished.status, JSON.stringify(finished.body)).toBe(200);
+
+    const gift = await call<any>("POST", "/gifts", sender.token, {
+      toAccountId: recipient.accountId,
+    });
+    expect(gift.status, JSON.stringify(gift.body)).toBe(200);
+    expect(gift.body).toMatchObject({ balance: { xp: 29 }, lastRaidAt: 0 });
+
+    const after = await call<any>("POST", "/bootstrap", sender.token, {});
+    expect(after.body.gameplay.raids.lastRaidAt).toBe(0);
+
+    const immediate = await call<any>("POST", "/raid/start", sender.token, {
+      raidId: 1,
+      orderedUnitIds: ["gift-level-zombie"],
+      rulesetVersion: RAID_RULESET_VERSION,
+    });
+    expect(immediate.status, JSON.stringify(immediate.body)).toBe(200);
   });
 
   it("claims a gift atomically and credits exactly once across concurrent attempts", async () => {
@@ -338,8 +423,10 @@ describe("protocol v3 API", () => {
     expect(bought.body.gameplay).toMatchObject({ ownedPets: ["catActor"], activePet: "catActor" });
     expect(bought.body.gameplay.balance.brains).toBe(boot.gameplay.balance.brains - 50);
 
+    await new Promise((resolve) => setTimeout(resolve, 10));
     const retried = await call<any>("POST", "/commands", owner.token, body);
-    expect(retried.body).toEqual(bought.body);
+    expect(retried.body.serverTime).toBeGreaterThan(bought.body.serverTime);
+    expect({ ...retried.body, serverTime: bought.body.serverTime }).toEqual(bought.body);
     const forged = await call<any>("PUT", "/presentation", owner.token, {
       protocolVersion: 3,
       expectedVersion: 0,
@@ -396,9 +483,11 @@ describe("protocol v3 API", () => {
     expect(applied.body.gameplay.balance.gold).toBe(385);
     expect(applied.body.gameplay.farm.plots["0:0"].plantedAt).toBeTypeOf("number");
 
+    await new Promise((resolve) => setTimeout(resolve, 10));
     const duplicate = await call<any>("POST", "/commands", session.token, body);
     expect(duplicate.status).toBe(200);
-    expect(duplicate.body).toEqual(applied.body);
+    expect(duplicate.body.serverTime).toBeGreaterThan(applied.body.serverTime);
+    expect({ ...duplicate.body, serverTime: applied.body.serverTime }).toEqual(applied.body);
 
     const zombieBatch = commandBody(applied.body, "batch-zombie-create", 4, [
       { type: "farm.remove", oc: 0, or: 0 },
@@ -614,11 +703,13 @@ describe("raid finish — clientWin concession", () => {
     expect(finished.body.revival?.zombies?.some((z: any) => z.id === unitId)).toBe(true);
 
     // The result is committed idempotently rather than closing the session as invalid.
+    await new Promise((resolve) => setTimeout(resolve, 10));
     const retry = await call<any>("POST", "/raid/finish", session.token, {
       sessionId, finalTick: 0, inputs: [], clientWin: false, clientLosses: [unitId],
     });
     expect(retry.status).toBe(200);
-    expect(retry.body).toEqual(finished.body);
+    expect(retry.body.serverTime).toBeGreaterThan(finished.body.serverTime);
+    expect({ ...retry.body, serverTime: finished.body.serverTime }).toEqual(finished.body);
   });
 
   it("does not let concession bypass structurally invalid transcripts", async () => {

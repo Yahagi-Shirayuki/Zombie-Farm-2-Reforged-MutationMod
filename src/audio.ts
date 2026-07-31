@@ -133,6 +133,7 @@ export class AudioManager {
   // holds the active raid track (and `raidFile` its filename); the farm bgm is
   // paused for the raid's duration.
   private raidBgm: HTMLAudioElement | null = null;
+  private victoryBgm: HTMLAudioElement | null = null;
   private raidFile = "";
   private zombieBarkSource: (() => { group: string; key: string } | null) | null = null;
 
@@ -288,6 +289,29 @@ export class AudioManager {
       this.raidBgm = a;
       this.raidFile = file;
     }
+    // Warm the short victory cue while the battle is running so the decisive tick
+    // never waits on its first network fetch/decode.
+    if (!this.victoryBgm) {
+      this.victoryBgm = new Audio(A("winBGM.mp3"));
+      this.victoryBgm.preload = "auto";
+    }
+    if (this.musicOn && this.canPlay()) void this.raidBgm!.play().catch(() => this.arm());
+  }
+
+  /** Replace the looping battle track with the recovered, non-looping invasion-win
+   *  theme. This follows the Music toggle/volume rather than the SFX channel. */
+  playRaidVictory() {
+    const file = "winBGM.mp3";
+    if (this.raidFile !== file) {
+      this.exitRaid(true);
+      this.bgm.pause();
+      const audio = this.victoryBgm ?? new Audio(A(file));
+      audio.currentTime = 0;
+      audio.loop = false;
+      audio.volume = 0.4 * this.musicVolume;
+      this.raidBgm = audio;
+      this.raidFile = file;
+    }
     if (this.musicOn && this.canPlay()) void this.raidBgm!.play().catch(() => this.arm());
   }
 
@@ -295,6 +319,7 @@ export class AudioManager {
   // is used internally when immediately swapping to another raid track.
   exitRaid(keepFarmPaused = false) {
     if (this.raidBgm) {
+      if (this.raidBgm === this.victoryBgm) this.victoryBgm = null;
       this.raidBgm.pause();
       this.raidBgm.src = "";
       this.raidBgm = null;

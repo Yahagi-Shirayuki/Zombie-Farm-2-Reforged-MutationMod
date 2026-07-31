@@ -25,6 +25,7 @@ import {
   playerStagingOffset,
   visualCountdown,
 } from "./renderInterpolation";
+import { advanceRaidArmy, raidArmyHasExited } from "./raidOutro";
 import { zombieRaidHeightScale } from "../zombie/displayScale";
 import { zombieBasicAttackName } from "./zombieAttackPresentation";
 
@@ -76,6 +77,8 @@ export interface RaidSceneParams {
   }) => void;
   /** Presentation-only zombie bark when its full-focus brain bubble sends it forward. */
   onBrainRelease?: (sourceKey: string) => void;
+  /** Presentation-only callback on the decisive victory tick, before the outro march. */
+  onVictory?: () => void;
   onFinish: (outcome: RaidOutcome, finalTick: number, inputs: RaidReplayInput[]) => void;
 }
 
@@ -92,11 +95,10 @@ const SHOW_REGULAR_ZOMBIE_LASERS = false;
 const INTRO_MS = 700; // brief establishing hold before combat starts
 const END_PAUSE_MS = 650; // beat after the last blow before we move on
 // On a win, survivors stroll off to the right at a normal walking pace (not the old
-// victory sprint), and the results/loot panel holds off for this long before sliding
-// in — so the army has a moment to walk away first.
+// victory sprint). Results wait until the entire visible army clears the stage.
 const OUTRO_WALK_SPEED = 230; // sim px/s — a normal march (cf. enemy EMERGE_SPEED 210)
-const OUTRO_RESULT_DELAY_MS = 1500; // beat before the loot panel comes in from the right
-const RETREAT_RESULT_DELAY_MS = 1500; // let survivors walk off left before the loss panel
+const OUTRO_RESULT_DELAY_MS = 1500; // keep the original menu timing while the march continues behind it
+const RETREAT_RESULT_DELAY_MS = 1500;
 const EPIC_BOSS_EXIT_MS = 800; // reverse the sky entry before the result panel appears
 const DEATH_FADE = 0.45; // seconds for a fallen unit to poof + fade out
 const HEAL_POSE_S = 0.7; // Garden healer raises, holds, then lowers both arms
@@ -312,6 +314,7 @@ export class RaidScene {
     sfxFile?: string;
   }) => void) | null;
   private onBrainRelease: ((sourceKey: string) => void) | null;
+  private onVictory: (() => void) | null;
   private lastCheckpointTick = 0;
   private checkpointing = false;
   private checkpointRetryAt = 0;
@@ -433,6 +436,8 @@ export class RaidScene {
   private phase: Phase = "intro";
   private phaseT = 0;
   private resultFired = false;
+  private armyExitPrepared = false;
+  private victoryNotified = false;
   private confirmRetreat: () => Promise<boolean>;
 
   private constructor(private app: Application, params: RaidSceneParams) {
@@ -442,6 +447,7 @@ export class RaidScene {
     this.onCheckpoint = params.onCheckpoint ?? null;
     this.onStrike = params.onStrike ?? null;
     this.onBrainRelease = params.onBrainRelease ?? null;
+    this.onVictory = params.onVictory ?? null;
     this.bossThrow = params.bossThrow;
     this.wallTemplate = params.wallTemplate ?? null;
     this.grabberSprite = params.grabber?.sprite ?? "";
@@ -1385,7 +1391,7 @@ export class RaidScene {
         // The source focus pose narrows the eyes while the gold bar is advancing.
         // A distracted zombie or one waiting on the full-bar brain bubble is no
         // longer actively focusing, so its eyes relax.
-        const focusing =
+        const focusing = this.phase === "fight" && !this.sim.finished &&
           u.state === "charging" && !u.distracted && !u.awaitRelease && u.charge < 1;
         tok.actor.update(dtSec, moving, focusing);
 
@@ -1521,7 +1527,7 @@ export class RaidScene {
 
       // Focus bar while charging (golden), or the activated-move wind-up (orange).
       tok.charge.clear();
-      if (u.state === "charging") {
+      if (this.phase === "fight" && !this.sim.finished && u.state === "charging") {
         const w = tok.base * 2;
         tok.charge
           .rect(-tok.base, 0, w, 4).fill(0x2a2410)
@@ -1537,7 +1543,7 @@ export class RaidScene {
 
     // Focus bubble: hover it over the charging zombie while it's distracted (butterfly)
     // or fully charged and awaiting release (brain); hide it otherwise.
-    const bub = this.sim.chargingBubble();
+    const bub = this.phase === "fight" && !this.sim.finished ? this.sim.chargingBubble() : null;
     const bubTok = bub ? this.tokens.get(bub.id) : undefined;
     if (bub && bubTok) {
       this.bubbleUnitId = bub.id;
@@ -1983,6 +1989,7 @@ export class RaidScene {
       this.retreatBtn.visible = false;
       this.abilityStrip.interactiveChildren = false;
       this.bubble.visible = false;
+      this.prepareArmyExit();
       this.setPhase("retreat");
     }
 
@@ -2073,6 +2080,13 @@ export class RaidScene {
           this.abilityStrip.interactiveChildren = false;
           this.bubble.visible = false;
           this.retreatBtn.visible = false;
+          if (this.sim.playerWon) {
+            this.prepareArmyExit();
+            if (!this.victoryNotified) {
+              this.victoryNotified = true;
+              this.onVictory?.();
+            }
+          }
         }
         // Confetti pops the moment the players win (across the top of the field).
         if (this.sim.finished && this.sim.playerWon && !this.confettiFired && this.confettiCfg) {
@@ -2089,25 +2103,19 @@ export class RaidScene {
         break;
       }
       case "outro": {
-        // Survivors stroll off to the right at a normal walking pace (was a 600px/s
-        // sprint). After a short beat the results/loot panel slides in from the
-        // right — giving the army a moment to walk away before it appears.
-        for (const u of this.sim.units) {
-          if (u.team === "player" && u.alive) u.x += (OUTRO_WALK_SPEED * dtMs) / 1000;
-        }
-        if (this.phaseT >= OUTRO_RESULT_DELAY_MS) this.fireResult();
+        // Every visible survivor, including zombies that were still waiting at the
+        // focus bar, keeps walking until it has cleared the right edge.
+        advanceRaidArmy(this.sim.units, 1, OUTRO_WALK_SPEED, dtMs);
+        if (!this.resultFired && this.phaseT >= OUTRO_RESULT_DELAY_MS) this.fireResult();
+        if (this.resultFired && raidArmyHasExited(this.sim.units, 1)) this.phase = "done";
         break;
       }
       case "retreat": {
-        // Living zombies turn around and walk off the left edge. Combat is frozen;
-        // after the same kind of visual beat used by victory, show the loss panel.
-        for (const u of this.sim.units) {
-          if (u.team === "player" && u.alive) u.x -= (OUTRO_WALK_SPEED * dtMs) / 1000;
-        }
-        if (this.phaseT >= RETREAT_RESULT_DELAY_MS) {
-          this.fireResult();
-          this.phase = "done";
-        }
+        // Living zombies turn around and keep walking until the whole visible army
+        // has cleared the left edge. Combat and rescue hazards are already frozen.
+        advanceRaidArmy(this.sim.units, -1, OUTRO_WALK_SPEED, dtMs);
+        if (!this.resultFired && this.phaseT >= RETREAT_RESULT_DELAY_MS) this.fireResult();
+        if (this.resultFired && raidArmyHasExited(this.sim.units, -1)) this.phase = "done";
         break;
       }
       case "defeat":
@@ -2126,6 +2134,14 @@ export class RaidScene {
   private setPhase(p: Phase) {
     this.phase = p;
     this.phaseT = 0;
+  }
+
+  private prepareArmyExit() {
+    if (this.armyExitPrepared) return;
+    this.armyExitPrepared = true;
+    this.sim.prepareArmyExit();
+    this.bubble.visible = false;
+    this.bubbleUnitId = null;
   }
 
   /** Emit the outcome once (the reward pipeline + results panel run in main).

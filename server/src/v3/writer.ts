@@ -24,17 +24,18 @@ interface RuntimeWriterRow {
 const OPERATION_TTL_MS = 120_000;
 
 /** How long a lease survives with no live document behind it. This is NOT "time
- *  since the player last acted": a visible tab refreshes the lease every few
- *  seconds via GET /writer/status, so an AFK player keeps their lease indefinitely.
+ *  since the player last acted": an idle visible tab refreshes the lease through
+ *  adaptive GET /writer/status checks, so an AFK player keeps its lease indefinitely.
  *  It elapses only when the tab is closed, crashed, force-quit, or backgrounded --
  *  and even then the lease is merely CLAIMABLE, never revoked. A holder whose lease
  *  nobody took keeps writing without interruption. */
 export const WRITER_IDLE_MS = 600_000;
 
-/** The ownership poll runs every 5s while visible; persisting that would be ~720
- *  writes per player-hour for no benefit. One write per minute keeps a lease far
- *  from the idle threshold at a twelfth of the cost. */
-const HEARTBEAT_MIN_INTERVAL_MS = 60_000;
+/** The client checks after three minutes without a writer-protected gameplay call.
+ *  Persist at most every five minutes; the next three-minute tick lands at six,
+ *  leaving four minutes of margin before another device may claim the lease. */
+export const HEARTBEAT_MIN_INTERVAL_MS = 5 * 60_000;
+const LAST_ONLINE_MIN_INTERVAL_MS = 5 * 60_000;
 
 const isHeld = (row: RuntimeWriterRow): boolean =>
   !!row.writer_device_id && !!row.writer_token_hash && !!row.writer_session_id;
@@ -44,11 +45,10 @@ const isHeld = (row: RuntimeWriterRow): boolean =>
 const isIdle = (row: RuntimeWriterRow, now: number): boolean =>
   now - (row.writer_last_activity_at ?? 0) > WRITER_IDLE_MS;
 
-/** Refresh the holder's lease from its ownership poll and keep the account-level
- *  last-online tracker on the same one-minute cadence. The runtime WHERE clause
- *  repeats the full ownership fence so a takeover landing between the read and this
- *  write can never be papered over by a heartbeat. Returns the effective activity
- *  timestamp. */
+/** Refresh the holder's lease from an idle ownership poll. Last-online is deliberately
+ *  not touched here: it represents authenticated gameplay, not a tab sitting open.
+ *  The runtime WHERE clause repeats the ownership fence so a takeover landing between
+ *  the read and write can never be papered over. */
 const heartbeat = async (
   db: D1Database,
   accountId: string,
@@ -59,13 +59,9 @@ const heartbeat = async (
 ): Promise<number> => {
   const last = row.writer_last_activity_at ?? 0;
   if (now - last < HEARTBEAT_MIN_INTERVAL_MS) return last;
-  const [result] = await db.batch([
-    db.prepare(`UPDATE account_runtime_v3 SET writer_last_activity_at=?,updated_at=?
-      WHERE account_id=? AND writer_device_id=? AND writer_session_id=? AND writer_generation=?`)
-      .bind(now, now, accountId, credential.clientId, sessionId, credential.generation),
-    db.prepare("UPDATE accounts SET last_online_at = MAX(last_online_at, ?) WHERE id = ?")
-      .bind(now, accountId),
-  ]);
+  const result = await db.prepare(`UPDATE account_runtime_v3 SET writer_last_activity_at=?,updated_at=?
+    WHERE account_id=? AND writer_device_id=? AND writer_session_id=? AND writer_generation=?`)
+    .bind(now, now, accountId, credential.clientId, sessionId, credential.generation).run();
   return (result.meta.changes ?? 0) === 1 ? now : last;
 };
 
@@ -217,10 +213,18 @@ export async function validate(
 ): Promise<boolean> {
   if (!credential) return false;
   const hash = await tokenHash(credential.token);
-  const result = await db.prepare(`UPDATE account_runtime_v3 SET writer_last_activity_at=?,updated_at=?
-    WHERE account_id=? AND writer_device_id=? AND writer_session_id=?
-      AND writer_generation=? AND writer_token_hash=?`)
-    .bind(now, now, accountId, credential.clientId, sessionId, credential.generation, hash).run();
+  const [result] = await db.batch([
+    db.prepare(`UPDATE account_runtime_v3 SET writer_last_activity_at=?,updated_at=?
+      WHERE account_id=? AND writer_device_id=? AND writer_session_id=?
+        AND writer_generation=? AND writer_token_hash=?`)
+      .bind(now, now, accountId, credential.clientId, sessionId, credential.generation, hash),
+    db.prepare(`UPDATE accounts SET last_online_at=?
+      WHERE id=? AND last_online_at<? AND EXISTS (SELECT 1 FROM account_runtime_v3
+        WHERE account_id=? AND writer_device_id=? AND writer_session_id=?
+          AND writer_generation=? AND writer_token_hash=?)`)
+      .bind(now, accountId, now - LAST_ONLINE_MIN_INTERVAL_MS, accountId,
+        credential.clientId, sessionId, credential.generation, hash),
+  ]);
   return (result.meta.changes ?? 0) === 1;
 }
 
@@ -234,13 +238,21 @@ export async function beginOperation(
 ): Promise<"ok" | "writer_replaced" | "operation_in_progress"> {
   if (!credential) return "writer_replaced";
   const hash = await tokenHash(credential.token);
-  const result = await db.prepare(`UPDATE account_runtime_v3 SET
-      active_batch_id=?,active_batch_expires_at=?,writer_last_activity_at=?,updated_at=?
-    WHERE account_id=? AND writer_device_id=? AND writer_session_id=?
-      AND writer_generation=? AND writer_token_hash=?
-      AND (active_batch_id IS NULL OR active_batch_expires_at<=?)`)
-    .bind(operationId, now + OPERATION_TTL_MS, now, now, accountId, credential.clientId,
-      sessionId, credential.generation, hash, now).run();
+  const [result] = await db.batch([
+    db.prepare(`UPDATE account_runtime_v3 SET
+        active_batch_id=?,active_batch_expires_at=?,writer_last_activity_at=?,updated_at=?
+      WHERE account_id=? AND writer_device_id=? AND writer_session_id=?
+        AND writer_generation=? AND writer_token_hash=?
+        AND (active_batch_id IS NULL OR active_batch_expires_at<=?)`)
+      .bind(operationId, now + OPERATION_TTL_MS, now, now, accountId, credential.clientId,
+        sessionId, credential.generation, hash, now),
+    db.prepare(`UPDATE accounts SET last_online_at=?
+      WHERE id=? AND last_online_at<? AND EXISTS (SELECT 1 FROM account_runtime_v3
+        WHERE account_id=? AND active_batch_id=? AND writer_device_id=?
+          AND writer_session_id=? AND writer_generation=? AND writer_token_hash=?)`)
+      .bind(now, accountId, now - LAST_ONLINE_MIN_INTERVAL_MS, accountId, operationId,
+        credential.clientId, sessionId, credential.generation, hash),
+  ]);
   if ((result.meta.changes ?? 0) === 1) return "ok";
   return await projection(db, accountId, sessionId, credential, now).then((value) =>
     value.status === "mine" ? "operation_in_progress" : "writer_replaced");

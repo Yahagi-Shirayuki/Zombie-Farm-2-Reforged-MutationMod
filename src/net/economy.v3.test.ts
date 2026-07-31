@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GameState } from "../GameState";
-import { EconomyClient } from "./economy";
+import { EconomyClient, OWNERSHIP_POLL_IDLE_MS } from "./economy";
 import type { CommandBatchResponse } from "./protocol";
 import * as api from "./api";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  api.setWriterConfirmedHandler(null);
+  api.setWriterRejectedHandler(null);
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -23,6 +25,37 @@ const memoryStorage = () => {
 };
 
 describe("v3 raid dependency ids", () => {
+  it("postpones the three-minute ownership poll after confirmed gameplay", async () => {
+    vi.useFakeTimers();
+    let confirmed: (() => void) | null = null;
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("document", {
+      visibilityState: "visible",
+      addEventListener: vi.fn(),
+    });
+    vi.spyOn(api, "setWriterConfirmedHandler").mockImplementation((handler) => { confirmed = handler; });
+    vi.spyOn(api, "getSession").mockReturnValue({
+      token: "session-token", accountId: "poll-account", username: "Player", friendCode: "CODE",
+    });
+    vi.spyOn(api, "hasWriterCredential").mockReturnValue(true);
+    const status = vi.spyOn(api, "writerStatus").mockResolvedValue({
+      status: "mine", generation: 1, lastActivityAt: 1,
+    });
+    const economy = new EconomyClient(new GameState(), "poll-account");
+    (economy as any).ready = true;
+    (economy as any).scheduleOwnershipCheck();
+
+    await vi.advanceTimersByTimeAsync(OWNERSHIP_POLL_IDLE_MS - 60_000);
+    expect(status).not.toHaveBeenCalled();
+    expect(confirmed).not.toBeNull();
+    confirmed!();
+    await vi.advanceTimersByTimeAsync(OWNERSHIP_POLL_IDLE_MS - 1);
+    expect(status).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(status).toHaveBeenCalledOnce();
+  });
+
   it("carries the immediate fertilization result in the existing plant command", () => {
     const economy = new EconomyClient(new GameState(), "fertilized-plant");
 
@@ -471,6 +504,51 @@ describe("v3 raid dependency ids", () => {
     expect(projections[0].spent).toEqual([{ oc: 8, pr: 6, zombie: true }]);
   });
 
+  it("translates server crop timestamps into the browser clock domain", () => {
+    vi.spyOn(Date, "now").mockReturnValue(5_000);
+    const economy = new EconomyClient(new GameState(), "crop-clock-account");
+    let projection: api.FarmState | null = null;
+    economy.onFarmState = (farm) => { projection = farm; };
+    const gameplay = {
+      balance: { gold: 0, brains: 0, xp: 0 },
+      farm: { version: 1, plots: {
+        "4:6": { state: "planted" as const, cropKey: "carrot", plantedAt: 3_000,
+          growMs: 1_000, sell: 1, xp: 1, fertilized: false, zombie: false },
+      } },
+      objects: { version: 0, objects: [] }, quests: { version: 0, completed: [], progress: [] },
+      inventory: {}, storage: { received: {}, stored: {} }, roster: [], farmSize: 30,
+      climates: ["grass"], farmerHeads: [], farmerHeadId: 1, ownedPets: [], activePet: null,
+      penPets: [], zombieMax: 16, tutorialRewarded: false, raids: { progress: {}, lastRaidAt: 0 },
+    };
+
+    (economy as any).adoptGameplay(gameplay, {}, {}, [], 4_000);
+
+    expect(projection!.crops[0].planted_at).toBe(4_000);
+    expect(projection!.crops[0].planted_at + projection!.crops[0].grow_ms).toBe(Date.now());
+  });
+
+  it("translates fruit-tree and raid timestamps into the browser clock domain", () => {
+    vi.spyOn(Date, "now").mockReturnValue(5_000);
+    const state = new GameState();
+    const economy = new EconomyClient(state, "server-clock-account");
+    let readyAt = 0;
+    economy.onObjectState = (objects) => { readyAt = objects[0]?.readyAt ?? 0; };
+    const gameplay = {
+      balance: { gold: 0, brains: 0, xp: 0 }, farm: { version: 0, plots: {} },
+      objects: { version: 1, objects: [{ instanceId: "tree-1", catalogKey: "appleTree",
+        status: "placed" as const, readyAt: 3_500 }] },
+      quests: { version: 0, completed: [], progress: [] }, inventory: {},
+      storage: { received: {}, stored: {} }, roster: [], farmSize: 30, climates: ["grass"],
+      farmerHeads: [], farmerHeadId: 1, ownedPets: [], activePet: null, penPets: [],
+      zombieMax: 16, tutorialRewarded: false, raids: { progress: {}, lastRaidAt: 3_000 },
+    };
+
+    (economy as any).adoptGameplay(gameplay, {}, {}, [], 2_000);
+
+    expect(readyAt).toBe(6_500);
+    expect(state.lastRaidAt).toBe(6_000);
+  });
+
   it("carries harvest id aliases across a deferred roster projection", () => {
     const economy = new EconomyClient(new GameState(), "pending-roster-account");
     (economy as any).commandsBySequence.set(1, { type: "farm.harvest", oc: 1, or: 1 });
@@ -565,6 +643,8 @@ describe("v3 raid dependency ids", () => {
 
   it("recovers an empty paused queue before an out-of-band dependency", async () => {
     const economy = new EconomyClient(new GameState(), "gift-recovery-account");
+    const writerOwned = vi.fn();
+    economy.onWriterOwned = writerOwned;
     (economy as any).queue.disable("offline");
     vi.spyOn(api, "bootstrap").mockResolvedValue({
       protocolVersion: 3, serverTime: 1, minimumProtocolVersion: 3,
@@ -589,6 +669,7 @@ describe("v3 raid dependency ids", () => {
     await expect(economy.settleBeforeDependency()).resolves.toBeUndefined();
     expect(api.bootstrap).toHaveBeenCalledWith(true);
     expect(economy.available).toBe(true);
+    expect(writerOwned).toHaveBeenCalledOnce();
   });
 
   it("does not bypass a paused queue that still has unresolved commands", async () => {

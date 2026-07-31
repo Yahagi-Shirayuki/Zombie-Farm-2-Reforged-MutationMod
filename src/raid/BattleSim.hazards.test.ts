@@ -114,6 +114,34 @@ describe("Trapeze Artist grab hazard", () => {
     expect(sim.grabbers.some((x) => x.state !== "gone")).toBe(false);
   });
 
+  it("destroys remaining hazards and drops a held zombie for the end march", () => {
+    const player = unit({ id: "p", sourceKey: "ZombieActorRegularTier1", team: "player" });
+    const enemy = unit({ id: "e", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 3000 });
+    const sim = grabSim(GRAB, [player], [enemy]);
+    stepUntil(sim, () => sim.activeGrabber() !== null);
+    const zombie = sim.units.find((unit) => unit.id === "p")!;
+    zombie.distracted = true;
+    zombie.awaitRelease = true;
+    sim.projectiles.push({
+      id: "late-shot", x: 0, y: 0, vx: 0, vy: 0, rot: 0, rotSpeed: 0,
+      damage: 1, sprite: "", spriteSize: 1, done: false, gravity: 0,
+    });
+    sim.crabs.push({
+      id: "late-crab", x: zombie.x, y: zombie.y, state: "hold", dir: -1,
+      wanderMs: 0, hp: 100, maxHp: 100, tapDamage: 10, grabbedId: zombie.id,
+      holdMs: 1000, tapCdMs: 0, sprite: "crab.png", struckThisTick: false,
+    });
+
+    sim.prepareArmyExit();
+
+    expect(sim.grabbers).toHaveLength(0);
+    expect(sim.crabs).toHaveLength(0);
+    expect(sim.projectiles).toHaveLength(0);
+    expect(zombie).toMatchObject({
+      alive: true, state: "advance", distracted: false, awaitRelease: false, charge: 0,
+    });
+  });
+
   it("honors the tap cooldown (a second tap in the same beat is ignored)", () => {
     const player = unit({ id: "p", sourceKey: "ZombieActorRegularTier1", team: "player" });
     const enemy = unit({ id: "e", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 3000 });

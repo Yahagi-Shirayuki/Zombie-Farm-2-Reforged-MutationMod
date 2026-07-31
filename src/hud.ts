@@ -19,7 +19,7 @@ import { isMobile } from "./platform";
 import { type DayNightMode, type FarmBackground } from "./prefs";
 import { fmtCooldown, MCDONNELL_ID, VOUCHER_KEY } from "./raid/RaidCatalog";
 import { marketPageSize } from "./marketPageSize";
-import { STATS, veterancy, veterancyMultiplier, STAT_TILE, VALUE_FILL, VALUE_END, ABILITY_FRAME,
+import { STATS, veterancy, STAT_TILE, VALUE_FILL, VALUE_END, ABILITY_FRAME,
   ABILITY_POOL, unitAbilityAt, TIER_BOSS, MAX_ABILITY_TIER } from "./zombie/traits";
 import { statBreakdown } from "./zombie/statDisplay";
 import { classTierRank } from "./zombie/taxonomy";
@@ -42,6 +42,7 @@ import "./ui/hud.css";
 import {
   bindBackdropDismiss, MENU_ACTIVATION_DELAY_MS, openModal, shouldBlockFreshMenuActivation,
 } from "./ui/Modal";
+import type { ModalHandle } from "./ui/Modal";
 import { renderLevelUp, renderQuestComplete, renderObjectActions, renderInfoPanel } from "./ui/panels/dialogs";
 import {
   openSettings as openSettingsPanel, openDevMenu as openDevMenuPanel,
@@ -158,6 +159,8 @@ export class Hud {
   private playStatusEl!: HTMLElement;
   private questCol!: HTMLElement;
   private questViews: QuestView[] = [];
+  private questLogModal: ModalHandle | null = null;
+  private questDetailModal: { id: string; handle: ModalHandle } | null = null;
   private tools: Record<string, HTMLButtonElement> = {};
   private menuCol!: HTMLElement;
   private toolsBar!: HTMLElement;
@@ -178,6 +181,10 @@ export class Hud {
   private placingObj: PlaceableDef | null = null;
   private plantLabel!: HTMLElement;
   private cropHover!: HTMLElement;
+  private cropHoverInfo: { name: string; ripe: boolean; remainingMs: number; fertilized: boolean } | null = null;
+  private cropHoverShownAt = 0;
+  private cropHoverX = 0;
+  private cropHoverY = 0;
   private temporaryPanMode: Mode | null = null;
   onTemporaryPanChange: (() => void) | null = null;
 
@@ -504,6 +511,12 @@ export class Hud {
   setQuests(views: QuestView[]) {
     this.questViews = views;
     this.renderQuests();
+    if (this.questLogModal) this.renderQuestLog(this.questLogModal.panel);
+    if (this.questDetailModal) {
+      const current = this.questViews.find((view) => view.id === this.questDetailModal!.id);
+      if (current) this.renderQuestDetail(this.questDetailModal.handle.panel, current);
+      else this.questDetailModal.handle.close();
+    }
   }
 
   // The rail shows only the first RAIL_MAX active quests; the rest live in the quest
@@ -552,9 +565,20 @@ export class Hud {
 
   // Full quest screen: every active quest as a card with its objectives, scrollable.
   private openQuestLog() {
-    const { panel } = openModal({
-      host: this.el, panelClass: "questlog", title: `Quests (${this.questViews.length})`,
+    this.questLogModal?.close();
+    let handle!: ModalHandle;
+    handle = openModal({
+      host: this.el, panelClass: "questlog", title: "Quests",
+      onClose: () => { if (this.questLogModal === handle) this.questLogModal = null; },
     });
+    this.questLogModal = handle;
+    this.renderQuestLog(handle.panel);
+  }
+
+  private renderQuestLog(panel: HTMLElement) {
+    const heading = panel.querySelector("h2");
+    if (heading) heading.textContent = `Quests (${this.questViews.length})`;
+    panel.querySelector(".qlog-list")?.remove();
     const list = document.createElement("div");
     list.className = "qlog-list";
     if (!this.questViews.length) {
@@ -602,7 +626,24 @@ export class Hud {
 
   // A quest's detail popup: title, tip, and each objective with its live count.
   private openQuestDetail(q: QuestView) {
-    const { panel } = openModal({ host: this.el, panelClass: "qdetail", title: q.title });
+    this.questDetailModal?.handle.close();
+    let handle!: ModalHandle;
+    handle = openModal({
+      host: this.el,
+      panelClass: "qdetail",
+      title: q.title,
+      onClose: () => {
+        if (this.questDetailModal?.handle === handle) this.questDetailModal = null;
+      },
+    });
+    this.questDetailModal = { id: q.id, handle };
+    this.renderQuestDetail(handle.panel, q);
+  }
+
+  private renderQuestDetail(panel: HTMLElement, q: QuestView) {
+    const heading = panel.querySelector("h2");
+    if (heading) heading.textContent = q.title;
+    panel.querySelectorAll(".qobj, .qtip, .qreward-title, .qreward").forEach((node) => node.remove());
     for (const o of q.objectives) {
       const row = document.createElement("div");
       row.className = "qobj" + (o.done ? " done" : "");
@@ -2573,6 +2614,17 @@ export class Hud {
           marketCard.className = `bm-card${order.mine ? " mine" : ""}`;
           const portrait = document.createElement("img");
           portrait.src = this.zombiePortraitOf?.(order.zombieKey) ?? cardFor(order.zombieKey)?.portrait ?? "";
+          // A sale represents one concrete owned zombie, so its portrait should use
+          // that unit's complete mutation mask. Keep the catalog image as an
+          // immediate/failure fallback; wanted orders can describe alternatives and
+          // therefore deliberately retain the neutral species portrait.
+          if (order.kind === "SELL_ZOMBIE" && this.zombieMutationPortraitOf) {
+            void this.zombieMutationPortraitOf(order.zombieKey, order.mutation ?? 0)
+              .then((source) => {
+                if (generation === renderGeneration && marketCard.isConnected) portrait.src = source;
+              })
+              .catch(() => { /* retain the static species portrait */ });
+          }
           const body = document.createElement("div");
           const name = document.createElement("div"); name.className = "bm-name";
           name.textContent = cardFor(order.zombieKey)?.name ?? order.zombieKey;
@@ -3160,11 +3212,8 @@ export class Hud {
     }
     const meta = document.createElement("div");
     meta.className = "zcard-meta";
-    const vetPct = Math.round((veterancyMultiplier(info.invasions) - 1) * 100);
     meta.innerHTML =
-      `<div class="zvet">${veterancy(info.invasions)}` +
-      (vetPct > 0 ? ` <span class="zvet-b">+${vetPct}% stats</span>` : "") +
-      `</div>` +
+      `<div class="zvet">${veterancy(info.invasions)}</div>` +
       `<div class="ztype">${info.typeName}</div>` +
       `<div class="zinv">Invasions: ${info.invasions}</div>`;
     card.append(port, meta);
@@ -3613,7 +3662,7 @@ export class Hud {
       mutation: number,
       color?: [number, number, number],
     ) => {
-      const fallback = portraitOf(key);
+      const fallback = portraitOf(key) || portraitOf("ZombieActorRegularTier1");
       if (fallback) el.style.backgroundImage = `url(${fallback})`;
       if (!this.zombieMutationPortraitOf) return;
       void this.zombieMutationPortraitOf(key, mutation, color)
@@ -4485,10 +4534,23 @@ export class Hud {
     x = 0, y = 0,
   ) {
     if (!info) {
+      this.cropHoverInfo = null;
       this.cropHover.style.display = "none";
       return;
     }
-    const time = info.ripe ? "Ready to harvest" : `Time remaining: ${fmtCooldown(info.remainingMs)}`;
+    this.cropHoverInfo = info;
+    this.cropHoverShownAt = Date.now();
+    this.cropHoverX = x;
+    this.cropHoverY = y;
+    this.renderCropHover();
+  }
+
+  private renderCropHover() {
+    const info = this.cropHoverInfo;
+    if (!info) return;
+    const remainingMs = Math.max(0, info.remainingMs - (Date.now() - this.cropHoverShownAt));
+    const ripe = info.ripe || remainingMs <= 0;
+    const time = ripe ? "Ready to harvest" : `Time remaining: ${fmtCooldown(remainingMs)}`;
     this.cropHover.replaceChildren();
     const name = document.createElement("strong");
     name.textContent = info.name;
@@ -4501,8 +4563,8 @@ export class Hud {
       fertilized.textContent = "🍃 Fertilized";
       this.cropHover.append(fertilized);
     }
-    this.cropHover.style.left = `${Math.min(window.innerWidth - 170, x + 16)}px`;
-    this.cropHover.style.top = `${Math.min(window.innerHeight - 92, y + 16)}px`;
+    this.cropHover.style.left = `${Math.min(window.innerWidth - 170, this.cropHoverX + 16)}px`;
+    this.cropHover.style.top = `${Math.min(window.innerHeight - 92, this.cropHoverY + 16)}px`;
     this.cropHover.style.display = "flex";
   }
 

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { WRITER_IDLE_MS, acquire, projection } from "../src/v3/writer";
+import {
+  HEARTBEAT_MIN_INTERVAL_MS,
+  WRITER_IDLE_MS,
+  acquire,
+  beginOperation,
+  projection,
+  validate,
+} from "../src/v3/writer";
 
 // The lease row as the server reads it. Overrides describe the scenario under test.
 interface RuntimeRow {
@@ -102,25 +109,41 @@ describe("writer lease idle expiry", () => {
     expect(result.status).toBe("mine");
   });
 
-  it("refreshes the lease from the holder's ownership poll", async () => {
-    const { db, calls, sql } = fakeDb(await heldByMe(5 * 60_000));
+  it("refreshes only the lease from the holder's ownership poll", async () => {
+    const { db, sql } = fakeDb(await heldByMe(HEARTBEAT_MIN_INTERVAL_MS + 1));
     const result = await projection(db, "account", MINE.sessionId, credential, NOW);
     expect(sql()).toEqual(expect.arrayContaining([
       expect.stringContaining("UPDATE account_runtime_v3 SET writer_last_activity_at"),
-      expect.stringContaining("UPDATE accounts SET last_online_at"),
     ]));
-    const accountHeartbeat = calls.find((call) =>
-      call.sql.includes("UPDATE accounts SET last_online_at"));
-    expect(accountHeartbeat?.args).toEqual([NOW, "account"]);
+    expect(sql().some((statement) => statement.includes("UPDATE accounts SET last_online_at"))).toBe(false);
     expect(result.lastActivityAt).toBe(NOW);
   });
 
-  it("throttles the heartbeat to one write per minute", async () => {
-    const { db, sql } = fakeDb(await heldByMe(5_000));
+  it("throttles the idle lease heartbeat to five minutes", async () => {
+    const { db, sql } = fakeDb(await heldByMe(HEARTBEAT_MIN_INTERVAL_MS - 1));
     const result = await projection(db, "account", MINE.sessionId, credential, NOW);
     expect(result.status).toBe("mine");
     expect(sql().some((s) => s.startsWith("UPDATE"))).toBe(false);
-    expect(result.lastActivityAt).toBe(NOW - 5_000);
+    expect(result.lastActivityAt).toBe(NOW - HEARTBEAT_MIN_INTERVAL_MS + 1);
+  });
+
+  it("records throttled last-online activity with a valid command writer", async () => {
+    const { db, calls } = fakeDb(await heldByMe(0));
+    await expect(validate(db, "account", MINE.sessionId, credential, NOW)).resolves.toBe(true);
+    const activity = calls.find((call) => call.sql.includes("UPDATE accounts SET last_online_at"));
+    expect(activity?.args.slice(0, 4)).toEqual([NOW, "account", NOW - 5 * 60_000, "account"]);
+    expect(activity?.sql).toContain("writer_token_hash");
+  });
+
+  it("records throttled last-online activity for other protected gameplay operations", async () => {
+    const { db, calls } = fakeDb(await heldByMe(0));
+    await expect(beginOperation(
+      db, "account", MINE.sessionId, credential, "operation-1", NOW
+    )).resolves.toBe("ok");
+    const activity = calls.find((call) => call.sql.includes("UPDATE accounts SET last_online_at"));
+    expect(activity?.args.slice(0, 5)).toEqual([
+      NOW, "account", NOW - 5 * 60_000, "account", "operation-1",
+    ]);
   });
 
   it("reports a stale lease as free to other clients", async () => {

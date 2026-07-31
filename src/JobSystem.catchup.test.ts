@@ -49,9 +49,33 @@ describe("JobSystem elapsed-time catch-up", () => {
     expect(jobs.busy).toBe(false);
   });
 
+  it("reports whether a restore was accepted, so a refused journal can be retried", () => {
+    const walk = new FakeWalk();
+    const jobs = new JobSystem(
+      {} as never, {} as never, walk as never, {} as never, () => {},
+    );
+    const save = { savedAt: 1, jobs: [{ kind: "walk" as const, oc: -1, or: -1, cx: 10, cy: 10 }] };
+
+    jobs.enqueueWalk(5, 5); // a tap that landed before the journal could be replayed
+    expect(jobs.busy).toBe(true);
+    expect(jobs.restorePending(save, () => undefined)).toBe(false);
+
+    jobs.advanceElapsed(1); // the live job finishes and the queue drains
+    expect(walk.arrivals).toEqual([5]); // the refused journal queued nothing
+    expect(jobs.busy).toBe(false);
+
+    // The retry is accepted and replays the journal from its own elapsed time.
+    expect(jobs.restorePending(save, () => undefined)).toBe(true);
+    expect(walk.arrivals).toEqual([5, 10]);
+
+    // An unusable save is consumed rather than retried forever.
+    expect(jobs.restorePending(undefined, () => undefined)).toBe(true);
+  });
+
   it("consumes walking and work time across multiple farm jobs in queue order", () => {
     const walk = new FakeWalk();
     const tilled: string[] = [];
+    const feedback: { message: string; delay?: number }[] = [];
     const field = {
       highlightLayer: new Container(),
       plowHighlightLayer: new Container(),
@@ -78,7 +102,7 @@ describe("JobSystem elapsed-time catch-up", () => {
       actor as never,
       walk as never,
       state as never,
-      () => {},
+      (_x, _y, message, delay) => feedback.push({ message, delay }),
     );
 
     expect(jobs.enqueue("till", 10, 10)).toBe(true);
@@ -89,6 +113,12 @@ describe("JobSystem elapsed-time catch-up", () => {
 
     expect(tilled).toEqual(["10,10", "20,20"]);
     expect(state.gold).toBe(80);
+    expect(feedback).toEqual([
+      { message: "-10g", delay: undefined },
+      { message: "+1xp", delay: 0.42 },
+      { message: "-10g", delay: undefined },
+      { message: "+1xp", delay: 0.42 },
+    ]);
     expect(jobs.busy).toBe(false);
   });
 

@@ -1275,6 +1275,19 @@ export class Field {
     const o = this.objects.get(id);
     return !!o && !!o.def.harvestValue && o.ready;
   }
+  /** Hover-card projection for a placed fruit tree. */
+  treeInfoAtPoint(x: number, y: number):
+    { name: string; ripe: boolean; remainingMs: number; fertilized: false } | null {
+    const id = this.objectAtPoint(x, y);
+    const o = id ? this.objects.get(id) : null;
+    if (!o?.def.harvestValue) return null;
+    return {
+      name: o.def.name,
+      ripe: o.ready,
+      remainingMs: o.ready ? 0 : Math.max(0, o.readyAt - Date.now()),
+      fertilized: false,
+    };
+  }
   /** Every ripe fruit tree, for farm-wide harvest powers. */
   ripeTreeIds(): string[] {
     return [...this.objects.values()]
