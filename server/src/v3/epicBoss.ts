@@ -252,7 +252,9 @@ export async function finish(
   const session = await db.prepare("SELECT * FROM epic_boss_sessions_v3 WHERE id=? AND account_id=?")
     .bind(body.sessionId, accountId).first<SessionRow>();
   if (!session) return { status: 404, body: { error: "bad_session" } };
-  if (session.result_json) return { status: 200, body: parse(session.result_json, {}) };
+  if (session.result_json) {
+    return { status: 200, body: { ...parse<Record<string, unknown>>(session.result_json, {}), serverTime: now } };
+  }
   if (session.finished_at) return { status: 409, body: { error: "already_finished" } };
   if (now >= session.expires_at) {
     await expireLiveEpicBoss(db, accountId, now);
@@ -293,7 +295,7 @@ export async function finish(
   // omits them from survivors. Keep them separate so their server locks still clear.
   const escapedRoster = verified.retreated
     ? locked.filter((id) => !losses.includes(id) && !survivors.includes(id)) : [];
-  const [run, balance, coreRow, questRow, objectRow, rosterCounts] = await Promise.all([
+  const [run, balance, coreRow, questRow, objectRow, rosterCounts, raidState] = await Promise.all([
     db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id=? AND run_id=?").bind(accountId, session.run_id).first<RunRow>(),
     db.prepare("SELECT gold,brains,xp,claimed_level FROM balances WHERE account_id=?").bind(accountId).first<{gold:number;brains:number;xp:number;claimed_level:number}>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id=?").bind(accountId).first<{current_json:string}>(),
@@ -301,8 +303,11 @@ export async function finish(
     db.prepare("SELECT current_json FROM object_documents_v3 WHERE account_id=?").bind(accountId).first<{current_json:string}>(),
     db.prepare(`SELECT stored,COUNT(*) AS count FROM roster_v3 WHERE account_id=? GROUP BY stored`)
       .bind(accountId).all<{stored:number;count:number}>(),
+    db.prepare("SELECT last_started_at FROM raid_state_v3 WHERE account_id=?")
+      .bind(accountId).first<{last_started_at:number}>(),
   ]);
-  if (!run || !balance || !coreRow || !questRow || !objectRow || run.level !== session.level) return { status: 409, body: { error: "stale_session" } };
+  if (!run || !balance || !coreRow || !questRow || !objectRow || !raidState || run.level !== session.level) return { status: 409, body: { error: "stale_session" } };
+  const xpBefore = balance.xp;
   const damage = Math.max(0, Math.min(session.starting_hp, Math.round(verified.outcome.playerDamage)));
   const defeated = verified.outcome.win && damage >= session.starting_hp;
   const defeatedLevel = defeated ? run.level : null;
@@ -350,6 +355,7 @@ export async function finish(
     ...(loot ? [{ type: "kEpicBossEpicItemWonNotification", subject: loot.name }] : []),
   ];
   const questChanges = applyQuestEvents(balance, quests, events, { includeEpic: true, epicQuestIds: new Set(def.questIds) });
+  const leveledUp = levelForXp(balance.xp) > levelForXp(xpBefore);
   const newlyCompleted = quests.completed.filter((id) => !beforeCompleted.has(id));
   const armyCapacity = core.zombieMax + objects.reduce((total, object) =>
     total + (object.status === "placed" ? objectArmyCapacity.get(object.catalogKey) ?? 0 : 0), 0);
@@ -371,11 +377,12 @@ export async function finish(
       if (!stored) activeCount++;
     }
   }
-  const result = { event: {
+  const result = { serverTime: now, event: {
     ...projectRun(run)!, level: run.level, maxHp: run.max_hp, currentHp: run.current_hp,
     encounterStartedAt: run.encounter_started_at, retryReadyAt: run.retry_ready_at, completedAt: run.completed_at,
   }, defeatedLevel, escaped: !defeated, loot, balance, inventory: core.inventory,
     storage: core.storage, ownedPets: core.ownedPets, survivors, losses, quests, questChanges, newZombies };
+  if (leveledUp) Object.assign(result, { lastRaidAt: 0 });
   const resultJson = JSON.stringify(result);
   const guard = "EXISTS(SELECT 1 FROM epic_boss_sessions_v3 s WHERE s.id=? AND s.result_json=?)";
   const statements: D1PreparedStatement[] = [
@@ -384,13 +391,15 @@ export async function finish(
     db.prepare(`UPDATE epic_boss_runs_v3 SET level=?,max_hp=?,current_hp=?,encounter_started_at=?,
       retry_ready_at=?,token_count=?,completed_at=? WHERE account_id=? AND run_id=? AND ${guard}`)
       .bind(run.level,run.max_hp,run.current_hp,run.encounter_started_at,run.retry_ready_at,run.token_count,run.completed_at,accountId,run.run_id,session.id,resultJson),
-    db.prepare(`UPDATE balances SET gold=?,brains=?,xp=? WHERE account_id=? AND ${guard}`)
-      .bind(balance.gold,balance.brains,balance.xp,accountId,session.id,resultJson),
+    db.prepare(`UPDATE balances SET gold=?,brains=?,xp=?,claimed_level=? WHERE account_id=? AND ${guard}`)
+      .bind(balance.gold,balance.brains,balance.xp,levelForXp(balance.xp),accountId,session.id,resultJson),
     db.prepare(`UPDATE gameplay_documents_v3 SET current_json=?,updated_at=? WHERE account_id=? AND ${guard}`)
       .bind(JSON.stringify(core),now,accountId,session.id,resultJson),
     db.prepare(`UPDATE quest_documents_v3 SET version=version+1,current_json=?,updated_at=? WHERE account_id=? AND ${guard}`)
       .bind(JSON.stringify({completed:quests.completed,progress:quests.progress}),now,accountId,session.id,resultJson),
   ];
+  if (leveledUp) statements.push(db.prepare(`UPDATE raid_state_v3 SET last_started_at=0
+    WHERE account_id=? AND ${guard}`).bind(accountId,accountId,session.id,resultJson));
   losses.forEach((id) => statements.push(db.prepare(`DELETE FROM roster_v3 WHERE account_id=? AND unit_id=? AND locked_by_raid=? AND ${guard}`)
     .bind(accountId,id,session.id,session.id,resultJson)));
   survivors.forEach((id) => statements.push(db.prepare(`UPDATE roster_v3 SET invasions=invasions+1,locked_by_raid=NULL
@@ -404,7 +413,7 @@ export async function finish(
     const raced = await db.prepare("SELECT result_json FROM epic_boss_sessions_v3 WHERE id=? AND account_id=?")
       .bind(session.id, accountId).first<{ result_json: string | null }>();
     return raced?.result_json
-      ? { status: 200, body: parse(raced.result_json, {}) }
+      ? { status: 200, body: { ...parse<Record<string, unknown>>(raced.result_json, {}), serverTime: now } }
       : { status: 409, body: { error: "state_conflict" } };
   }
   return { status: 200, body: result };

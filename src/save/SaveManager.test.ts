@@ -86,6 +86,160 @@ describe("SaveManager object layout races", () => {
 });
 
 describe("SaveManager mode isolation", () => {
+  it("replays an Online Farm journal only after the command channel is ready", () => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    vi.spyOn(api, "getSession").mockReturnValue({ accountId: "restore-owner" } as never);
+    const jobs = {
+      restorePending: vi.fn().mockReturnValue(true),
+      serializePending: vi.fn().mockReturnValue(undefined),
+    };
+    const manager = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map([["carrot", { key: "carrot" } as never]]), new Map(),
+      async () => undefined, "online", jobs as never,
+    );
+    const journal = {
+      savedAt: 123,
+      jobs: [{ kind: "plant" as const, oc: 4, or: 6, cx: 10, cy: 20, cropKey: "carrot" }],
+    };
+    (manager as any).pendingOnlineJobs = journal;
+
+    expect(jobs.restorePending).not.toHaveBeenCalled();
+    manager.restoreOnlineJobs();
+    manager.restoreOnlineJobs();
+
+    expect(jobs.restorePending).toHaveBeenCalledOnce();
+    expect(jobs.restorePending).toHaveBeenCalledWith(journal, expect.any(Function));
+  });
+
+  it("re-offers a parked journal that JobSystem refused because the queue was busy", () => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    vi.spyOn(api, "getSession").mockReturnValue({ accountId: "busy-owner" } as never);
+    // A plow tapped while the tab was still booting leaves the queue busy, so
+    // restorePending declines the first offer and accepts once that job finishes.
+    const restorePending = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const jobs = { restorePending, serializePending: vi.fn().mockReturnValue(undefined) };
+    const manager = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "online", jobs as never,
+    );
+    const journal = {
+      savedAt: 123,
+      jobs: [{ kind: "plant" as const, oc: 4, or: 6, cx: 10, cy: 20, cropKey: "carrot" }],
+    };
+    (manager as any).pendingOnlineJobs = journal;
+    const key = `${(manager as any).cacheKey()}::farm-jobs`;
+    localStorage.setItem(key, JSON.stringify(journal)); // as hydration left it on disk
+
+    manager.restoreOnlineJobs();
+    expect((manager as any).pendingOnlineJobs).toBe(journal);
+    expect(JSON.parse(localStorage.getItem(key) ?? "null")).toEqual(journal);
+
+    manager.checkpointJobs(); // the live job completed -> queue change -> retry
+    expect(restorePending).toHaveBeenCalledTimes(2);
+    expect((manager as any).pendingOnlineJobs).toBeUndefined();
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+
+  it("keeps a parked Online Farm journal through pre-writer checkpoints", () => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    vi.spyOn(api, "getSession").mockReturnValue({ accountId: "parked-owner" } as never);
+    vi.spyOn(api, "isConfigured").mockReturnValue(false);
+    const manager = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "online",
+      { serializePending: vi.fn().mockReturnValue(undefined) } as never,
+    );
+    const journal = {
+      savedAt: 123,
+      jobs: [{ kind: "plant" as const, oc: 4, or: 6, cx: 10, cy: 20, cropKey: "carrot" }],
+    };
+    (manager as any).pendingOnlineJobs = journal;
+    vi.spyOn(manager, "serialize").mockReturnValue({ farmJobs: undefined } as never);
+
+    manager.save();
+
+    const key = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)!)
+      .find((candidate) => candidate.endsWith("::farm-jobs"));
+    expect(JSON.parse(localStorage.getItem(key!) ?? "null")).toEqual(journal);
+  });
+
+  it("keeps a parked journal retryable when restoration throws", () => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    vi.spyOn(api, "getSession").mockReturnValue({ accountId: "retry-owner" } as never);
+    const jobs = { restorePending: vi.fn(() => { throw new Error("restore failed"); }) };
+    const manager = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "online", jobs as never,
+    );
+    const journal = { savedAt: 123, jobs: [{ kind: "plow" as const, oc: 1, or: 2, cx: 3, cy: 4 }] };
+    (manager as any).pendingOnlineJobs = journal;
+
+    expect(() => manager.restoreOnlineJobs()).toThrow("restore failed");
+    expect((manager as any).pendingOnlineJobs).toBe(journal);
+  });
+
+  it("translates authoritative timers before hydrating the first online frame", () => {
+    vi.spyOn(Date, "now").mockReturnValue(20_000);
+    const manager = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "online",
+    );
+    const save = (manager as any).fromBootstrap({
+      serverTime: 10_000,
+      presentation: { data: {} },
+      gameplay: {
+        balance: { gold: 0, brains: 0, xp: 0 }, zombieMax: 16, zombiePotBought: false,
+        farmerHeads: [1], farmerHeadId: 1, ownedPets: [], activePet: null, penPets: [],
+        farmSize: 30, climates: ["grass"], inventory: {},
+        storage: { stored: {}, received: {} },
+        farm: { plots: { "1:2": { state: "planted", cropKey: "carrot", zombie: false,
+          plantedAt: 9_000, growMs: 60_000, fertilized: false } } },
+        objects: { objects: [{ status: "placed", instanceId: "tree-1", catalogKey: "fruitTreeApple",
+          readyAt: 12_000 }] },
+        roster: [], quests: { progress: [], completed: [] },
+        raids: { progress: {}, lastRaidAt: 8_000 }, epicBoss: null, tutorialRewarded: false,
+      },
+      social: { friends: [] },
+    });
+
+    expect(save.farm.plots[0].crop.plantedAt).toBe(19_000);
+    expect(save.objects[0].readyAt).toBe(22_000);
+    expect(save.raids.lastRaidAt).toBe(18_000);
+  });
+
+  it("keeps online farmer intentions in an account-scoped device journal", () => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    vi.spyOn(api, "getSession").mockReturnValue({ accountId: "queue-owner" } as never);
+    const jobs = {
+      serializePending: vi.fn().mockReturnValue({
+        savedAt: 123,
+        jobs: [{ kind: "plant", oc: 4, or: 6, cx: 10, cy: 20, cropKey: "carrot" }],
+      }),
+    };
+    const manager = new SaveManager(
+      { name: "Tester", ownedFarmerHeads: [], ownedFarmerBodies: [], farmerHeadId: 1, farmerBodyId: 0,
+        ownedPets: [], activePet: null, penPets: [], ownedClimates: [], boostInv: [], storageItemCap: 8,
+        storedItems: [], received: [], raidsCompleted: {}, lastRaidAt: 0, raidAttackOrder: [], friends: [] } as never,
+      { w: 30, h: 30, climate: "grass", serialize: () => [], serializeObjects: () => [] } as never,
+      { tile: { col: 0, row: 0 } } as never,
+      { serialize: () => [], serializePots: () => undefined, isGathered: false } as never,
+      { serialize: () => undefined } as never,
+      new Map(), new Map(), async () => undefined, "online", jobs as never,
+    );
+
+    const pending = manager.serialize().farmJobs;
+    (manager as any).writeJobJournal(pending);
+
+    const journalKey = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)!)
+      .find((key) => key.endsWith("::farm-jobs"));
+    expect(journalKey).toContain("queue-owner");
+    expect(JSON.parse(localStorage.getItem(journalKey!) ?? "null")).toEqual({
+      savedAt: 123,
+      jobs: [{ kind: "plant", oc: 4, or: 6, cx: 10, cy: 20, cropKey: "carrot" }],
+    });
+  });
+
   it("never falls back to a Local Farm write from Online Farm", () => {
     vi.stubGlobal("localStorage", memoryStorage());
     vi.spyOn(api, "isConfigured").mockReturnValue(false);

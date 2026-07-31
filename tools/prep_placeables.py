@@ -426,7 +426,7 @@ def main():
                if tp.get("tapSoundEffect") or tp.get("soundID") else {}),
         })
 
-    # Design override (not in the source data): the Zombie Pot's FIRST purchase is
+    # Design override (not in the source data): the Zombie Pot's first purchase is
     # 500 gold (the shown price). Additional pots cost 30 brains — that dual pricing
     # is applied at placement (see main.ts tryPlaceObject).
     for c in catalog:

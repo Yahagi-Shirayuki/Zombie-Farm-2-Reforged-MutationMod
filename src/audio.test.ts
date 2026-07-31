@@ -202,6 +202,26 @@ describe("AudioManager focus muting", () => {
     expect(MockAudio.instances[MockAudio.instances.length - 1]?.src).toContain("assets/audio/splat.wav");
   });
 
+  it("uses the recovered non-looping invasion theme for raid victories", () => {
+    const audio = new AudioManager();
+
+    audio.enterRaid("farmStageBGM.mp3");
+    audio.playRaidVictory();
+
+    const victory = MockAudio.instances[MockAudio.instances.length - 1];
+    expect(victory.src).toContain("assets/audio/winBGM.mp3");
+    expect(victory.loop).toBe(false);
+    expect(victory.playCalls).toBe(1);
+  });
+
+  it("keeps the winner cue assigned to level-ups", () => {
+    const audio = new AudioManager();
+
+    audio.play("levelUp");
+
+    expect(MockAudio.instances[MockAudio.instances.length - 1]?.src).toContain("assets/audio/winner.mp3");
+  });
+
   it("uses the farm interaction bark for a raid zombie actor key", () => {
     const audio = new AudioManager();
 

@@ -917,8 +917,10 @@ app.post("/epic-boss/activate", async (c) => {
   const body: { activationId?: unknown; bossId?: unknown } =
     await c.req.json<{ activationId?: unknown; bossId?: unknown }>().catch(() => ({}));
   const activationId = typeof body.activationId === "string" && body.activationId ? body.activationId : crypto.randomUUID();
-  const result = await v3EpicBoss.activate(c.env.DB, c.get("accountId"), activationId, body.bossId, Date.now());
-  if (result.status === 200) return c.json(result.body);
+  const now = Date.now();
+  const result = await v3EpicBoss.activate(c.env.DB, c.get("accountId"), activationId, body.bossId, now);
+  // serverTime anchors the run's authoritative epochs for the client's clock translation.
+  if (result.status === 200) return c.json({ ...result.body, serverTime: now });
   if (result.status === 400) return c.json(result.body, 400);
   if (result.status === 403) return c.json(result.body, 403);
   return c.json(result.body, 409);
@@ -927,8 +929,9 @@ app.post("/epic-boss/activate", async (c) => {
 app.post("/epic-boss/end", async (c) => {
   if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
   const body: { runId?: unknown } = await c.req.json<{ runId?: unknown }>().catch(() => ({}));
-  const result = await v3EpicBoss.end(c.env.DB, c.get("accountId"), body.runId, Date.now());
-  if (result.status === 200) return c.json(result.body);
+  const now = Date.now();
+  const result = await v3EpicBoss.end(c.env.DB, c.get("accountId"), body.runId, now);
+  if (result.status === 200) return c.json({ ...result.body, serverTime: now });
   if (result.status === 400) return c.json(result.body, 400);
   return c.json(result.body, 409);
 });
@@ -937,9 +940,10 @@ app.post("/epic-boss/start", async (c) => {
   if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
   const body: { orderedUnitIds?: unknown; payment?: unknown } =
     await c.req.json<{ orderedUnitIds?: unknown; payment?: unknown }>().catch(() => ({}));
-  await v3Raid.expireLiveRaid(c.env.DB, c.get("accountId"), Date.now());
-  const result = await v3EpicBoss.start(c.env.DB, c.get("accountId"), body.orderedUnitIds, body.payment, Date.now());
-  if (result.status === 200) return c.json(result.body);
+  const now = Date.now();
+  await v3Raid.expireLiveRaid(c.env.DB, c.get("accountId"), now);
+  const result = await v3EpicBoss.start(c.env.DB, c.get("accountId"), body.orderedUnitIds, body.payment, now);
+  if (result.status === 200) return c.json({ ...result.body, serverTime: now });
   if (result.status === 400) return c.json(result.body, 400);
   if (result.status === 429) return c.json(result.body, 429);
   return c.json(result.body, 409);
@@ -1390,6 +1394,8 @@ app.post("/gifts", async (c) => {
     giftsRemaining: Math.max(0, 2 - result.sentToday),
     balance: result.balance,
     accountVersion: result.accountVersion,
+    lastRaidAt: result.lastRaidAt,
+    serverTime: now,
   });
 });
 

@@ -45,7 +45,7 @@ describe("displayed stat — bonus fold-in", () => {
     expect(statBreakdown(master, "focus", NONE).total).toBe(125);
     const vet = statBreakdown(master, "focus", NONE).lines.find((l) => l.label.startsWith("Veterancy"))!;
     expect(vet.label).toBe("Veterancy (Master)");
-    expect(vet.amount).toBe("+25%");
+    expect(vet.amount).toBe("+25");
   });
 });
 
@@ -62,12 +62,12 @@ describe("self stat abilities", () => {
     expect(statBreakdown(largeGreen, "str", NONE).total).toBe(100); // powerBuff locked → base
   });
 
-  it("lists the ability on every stat, +0% where it does not contribute", () => {
+  it("lists the ability's real displayed increase on every stat", () => {
     const dmg = statBreakdown(largeGreen, "str", ALL).lines.find((l) => l.label === "+10% Damage")!;
-    expect(dmg.amount).toBe("+10%");
+    expect(dmg.amount).toBe("+10");
     expect(dmg.zero).toBe(false);
     const life = statBreakdown(largeGreen, "con", ALL).lines.find((l) => l.label === "+10% Damage")!;
-    expect(life.amount).toBe("+0%");
+    expect(life.amount).toBe("+0");
     expect(life.zero).toBe(true);
   });
 
@@ -96,7 +96,7 @@ describe("breakdown completeness", () => {
     expect(mut.amount).toBe("+0");
     expect(mut.zero).toBe(true);
     const vet = plain.lines.find((l) => l.label.startsWith("Veterancy"))!;
-    expect(vet.amount).toBe("+0%");
+    expect(vet.amount).toBe("+0");
     expect(vet.zero).toBe(true);
 
     const focus = statBreakdown(z({}), "focus", NONE);

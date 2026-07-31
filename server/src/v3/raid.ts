@@ -177,6 +177,7 @@ export async function startRaid(
   await db.batch(statements);
   return { status: 200, body: { ok: true, sessionId, bypassed: remaining > 0, dice,
     concentration, brainDrop, inventory: core.inventory, lastRaidAt: now, expiresAt, earliestFinishAt,
+    serverTime: now,
     rulesetVersion: RAID_RULESET_VERSION } };
 }
 
@@ -231,7 +232,9 @@ export async function finishRaid(
   const session = await db.prepare("SELECT * FROM raid_sessions_v3 WHERE id = ? AND account_id = ?")
     .bind(body.sessionId, accountId).first<SessionRow>();
   if (!session) return { status: 404, body: { error: "bad_session" } };
-  if (session.result_json) return { status: 200, body: parse(session.result_json, {}) };
+  if (session.result_json) {
+    return { status: 200, body: { ...parse<Record<string, unknown>>(session.result_json, {}), serverTime: now } };
+  }
   if (session.finished_at) return { status: 409, body: { error: "already_finished" } };
   const locked = parse<string[]>(session.roster_json, []);
   if (now >= session.expires_at) {
@@ -412,7 +415,10 @@ export async function finishRaid(
     ...(newZombie ? [{ type: "kLootItemWonNotification", subject: OLD_MC_ZOMBIE_NAME }] : []),
   ] : [];
   const questChanges = applyQuestEvents(nextBalance, quests, questEvents);
-  nextBalance.brains += levelUpBrains(levelForXp(balance.xp), levelForXp(nextBalance.xp));
+  const levelBefore = levelForXp(balance.xp);
+  const levelAfter = levelForXp(nextBalance.xp);
+  const lastRaidAt = levelAfter > levelBefore ? 0 : raidState.last_started_at;
+  nextBalance.brains += levelUpBrains(levelBefore, levelAfter);
   // Report the SETTLED result, not the raw replay: on a concession the reward pipeline
   // above already treated this as a loss, so the echoed outcome must agree or the
   // client's result panel would claim a win it was not paid for.
@@ -429,7 +435,7 @@ export async function finishRaid(
     ? { sessionId: session.id, zombies: casualties, costPerZombie: 1 }
     : null;
   const settlementId = crypto.randomUUID();
-  const result = { settlementId, lastRaidAt: raidState.last_started_at, balance: nextBalance, gold: baseGold + lootGold,
+  const result = { settlementId, lastRaidAt, serverTime: now, balance: nextBalance, gold: baseGold + lootGold,
     brains, xp: nextBalance.xp - balance.xp, firstClear, loot, newZombie, outcome, questChanges,
     inventory: core.inventory, storage: core.storage, raidProgress: progress, revival,
     rulesetVersion: RAID_RULESET_VERSION };
@@ -444,8 +450,9 @@ export async function finishRaid(
     db.prepare(`UPDATE gameplay_documents_v3 SET current_json = ?, updated_at = ?
       WHERE account_id = ? AND ${guard}`)
       .bind(JSON.stringify(core), now, accountId, session.id, resultJson),
-    db.prepare(`UPDATE raid_state_v3 SET progress_json = ? WHERE account_id = ? AND ${guard}`)
-      .bind(JSON.stringify(progress), accountId, session.id, resultJson),
+    db.prepare(`UPDATE raid_state_v3 SET progress_json = ?, last_started_at = ?
+      WHERE account_id = ? AND ${guard}`)
+      .bind(JSON.stringify(progress), lastRaidAt, accountId, session.id, resultJson),
     db.prepare(`UPDATE quest_documents_v3 SET version = version + 1, current_json = ?, updated_at = ?
       WHERE account_id = ? AND ${guard}`)
       .bind(JSON.stringify({ completed: quests.completed, progress: quests.progress }), now, accountId, session.id, resultJson),
@@ -474,7 +481,9 @@ export async function finishRaid(
   const committed = await db.batch(statements);
   if ((committed[0]?.meta.changes ?? 0) !== 1) {
     const raced = await db.prepare("SELECT result_json FROM raid_sessions_v3 WHERE id = ?").bind(session.id).first<{ result_json: string | null }>();
-    return raced?.result_json ? { status: 200, body: parse(raced.result_json, {}) } : { status: 409, body: { error: "state_conflict" } };
+    return raced?.result_json
+      ? { status: 200, body: { ...parse<Record<string, unknown>>(raced.result_json, {}), serverTime: now } }
+      : { status: 409, body: { error: "state_conflict" } };
   }
   return { status: 200, body: result };
 }

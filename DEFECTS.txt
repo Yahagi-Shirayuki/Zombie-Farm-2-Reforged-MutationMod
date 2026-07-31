@@ -1,11 +1,308 @@
+Status re-audited 2026-07-31 (sweep 3) against the uncommitted working tree
+(37 modified files, plus new src/net/clock.ts, src/raid/raidOutro.ts,
+src/raid/raidOutro.test.ts, src/lighting.test.ts, public/assets/audio/winBGM.mp3).
+Verification run: tsc clean (client + server), 511 client tests, 285 server unit
+tests, 37 server integration tests — all passing.
+
+Sweep 3 re-verified every sweep-1 and sweep-2 item independently (not from the notes
+below). Sweep-2 A, B, D and E hold up; the fruit-tree balance override is gone. The two
+residuals it found (F and G) have since been fixed and are covered by new tests, so no
+known defect from this pass remains open. Still outstanding from the original report:
+natural-mutation quests, pet prices, the tutorial desync, the invasion-verification
+error, the Heartichoke text, the original font, and the ZF1 graphics option.
+
+
 Deferred investigation
 
 - Insta-Grow can optimistically mature a crop, then briefly revert it to a few
-  seconds remaining before becoming fully grown again. Confirm whether this is
-  limited to online/server reconciliation before changing it.
+  seconds remaining before becoming fully grown again.
+  FIXED. src/net/economy.ts serverTimestampToClient() now shifts every server-authored
+  epoch (crop plantedAt, fruit-tree readyAt, raid lastRaidAt, earliestFinishAt) into the
+  browser clock domain using the response's serverTime anchor, so clock skew can no
+  longer make an acknowledged Insta-Grow look unripe. Idempotent replays refresh that
+  anchor. Covered by economy.v3 and integration tests, including first-frame hydration.
 
 Deferred polish
 
 - Farmer plowing animation needs a visual touch-up. Alpha testers explicitly
   requested that this remain out of the current environment/UI feedback pass.
+  UNCHANGED — still deferred by request.
 
+
+Bugs — FIXED in this pass
+
+- mutations are not displaying properly in the black market.
+  FIXED. src/hud.ts renders SELL_ZOMBIE cards through zombieMutationPortraitOf() with
+  the order's full escrow mutation mask (the server already sent it), keeping the
+  catalog image as the immediate/failure fallback. BUY_ZOMBIE ("wanted") posts keep the
+  neutral species portrait on purpose, since they describe alternatives.
+  Caveat: the market card does not pass the unit's colour — see New issues #4.
+
+- on mobile, when queueing up multiple crops via dragging a crop over multiple tilled
+  land, the land does not turn green until the dragging is complete.
+  FIXED. src/main.ts paints a green plot diamond per tile as the finger crosses it
+  (recordTouchPlantTile / touchPlantPreviews) and clears the previews when the stroke
+  commits or is cancelled. Till mode is unchanged (it uses the rectangle preview).
+
+- A player reported their lantern burnt out when opening the site during the night.
+  FIXED (plausible root cause). src/lighting.ts gains resetRenderTarget(); src/main.ts
+  calls it on every day->night transition, on tab re-show while night, and on
+  webglcontextrestored, so a discarded GPU light map can no longer leave the night mask
+  fully dark. Now covered by src/lighting.test.ts, but still unverified against a real
+  repro — the fix is a hypothesis about GPU context loss, not a confirmed diagnosis.
+
+
+Bugs — FIXED in the follow-up pass
+
+- Actions sometimes remove themselves if they are queued right before tabbing out.
+  FIXED. The deferred journal is preserved through pre-writer checkpoints and replayed
+  after any bootstrap or recovery confirms writer ownership. The parked copy is cleared
+  only after JobSystem accepts the restore. Full detail is in sweep-2 issues A and B:
+   * src/save/SaveManager.ts writes an account-scoped device journal of pending farmer
+     intents on every queue change (JobSystem.onQueueChanged -> checkpointJobs()).
+   * applySave() parks an online journal in pendingOnlineJobs instead of replaying it
+     during bootstrap, so a replay can no longer take JobSystem's offline path.
+   * src/main.ts commits an in-progress touch plant stroke on blur/visibilitychange.
+
+
+Bugs — MITIGATED, root cause not established
+
+- Zombie profile pics are not showing for some players, in the combine pot and the
+  zombies stat card.
+  MITIGATION ONLY. src/zombie/mutationPortrait.ts adds validatePortraitDataUrl(), which
+  decodes the extracted PNG and rejects it if every pixel is transparent, so the caller
+  falls back to the static species portrait instead of showing a blank; the combine-pot
+  call site now also falls back to the Regular portrait when the species has no catalog
+  image. Both paths are tested. This turns "invisible" into "generic portrait"; it does
+  not explain WHY the extraction produced an empty image on that Firefox 153 client.
+  The reporter's diagnostics line ("failed to load Google Sign-In") is a separate issue
+  (blocked accounts.google.com script), not evidence for this bug.
+
+
+Bugs — NOT YET ADDRESSED
+
+- Natural mutations (from zombies grown by crops to get mutations) do not count for
+  mutation related quests.
+  CONFIRMED STILL BROKEN. quests.json #56 "It's Alive!" requires
+  kCombinerCombinedNotification with the subject "Carrot Zombie Tomato Zombie", and
+  src/main.ts:1906 builds that subject from the two INPUT units' species names. A
+  Regular Zombie carrying tomato/carrot mutation bits therefore never matches. The fix
+  needs the emitted subject (or an additional emission) to be derived from the units'
+  mutation masks, not their species names — src/main.ts:1901-1911 and :4040-4044.
+
+- Pets in the market still use pre-brainflation prices.
+  CONFIRMED STILL BROKEN. public/assets/pets/catalog.json is untouched: 30 pets at 50
+  brains (should be 5), 8 at 100, T-Rex at 250, Pet Brain at 500 (should be 50), and the
+  Pet Brain description still reads "for the low price of 1,000 brains!". Pet xp is 1
+  (0 for Pet Brain) rather than the decor-purchase XP.
+
+- Desyncs during the tutorial cause major problems.
+  NOT ADDRESSED. src/tutorial/ is untouched. The report is also truncated ("One tester
+  reported ") — needs the rest of the repro before it can be actioned.
+
+- A player got "The invasion results could not be verified" error message.
+  NOT ADDRESSED. src/main.ts:2758 still raises it and nothing in the replay/verification
+  path changed. Needs the failing session id / ruleset version to progress.
+
+- Wrong text displayed, also for Heartichoke (lvl 44).
+  NOT ADDRESSED. Under-specified: Heartichoke is level 43 in plants.json, and it is
+  unclear which string is wrong (unlock popup, quest text, or mutation description).
+
+
+Suggestions — DONE
+
+- Refresh the invasion timer upon level reset.
+  DONE, client and server. server/src/v3/engine.ts zeroes raids.lastRaidAt when a
+  command batch crosses a level; server/src/v3/db.ts persists it in the same D1
+  transaction; raid.ts and epicBoss.ts do the same for XP earned in a fight; db.ts
+  creditLevelUps() covers the gift path and returns lastRaidAt through POST /gifts.
+  Client adopts it in economy.adoptGameplay/applyEpicBossFinish and main.ts.
+  Requires a Worker deploy — see Deploy notes. Also see New issues #3.
+
+- Add a visual indicator/mouse hover info bubble for fruit trees showing cooldowns.
+  DONE. src/Field.ts treeInfoAtPoint() feeds the existing desktop crop hover card, and
+  main.ts repeats the tree hit-test on its 0.25 s refresh so the countdown runs live and
+  flips to "Ready to harvest". Cleared on modal open, pointerleave, and raid entry.
+
+- When harvesting/planting, separate +gold and +XP text into two lines, one after
+  another.
+  DONE. floatText() takes a delay; JobSystem and main.ts emit "-10g" / "+1xp" (and
+  "+1 Boss Token!") as sequenced floats at 0.42 s spacing. Test-covered.
+
+- Real time quest data updating.
+  DONE. Hud tracks the open quest-log and quest-detail modals and re-renders them in
+  place from setQuests(), which QuestSystem already calls on every progress change.
+
+- Add the victory theme when you defeat old McDonnell Farm (and other raids).
+  DONE. audio.playRaidVictory() swaps the battle loop for winBGM (109 KB MP3, warmed
+  during enterRaid) on the decisive victory tick. BattleSim.prepareArmyExit() clears
+  remaining hazards/projectiles and releases held zombies; the results panel keeps its
+  original 1.5 s beat while the army marches off-stage behind it.
+
+- Change zombie stat visuals to show the real stat increase rather than percent.
+  DONE. src/zombie/statDisplay.ts computes each ability's and veterancy's contribution
+  in displayed stat units ("+1" instead of "+5%"); the zombie card's global
+  "+25% stats" badge was dropped rather than converted, since one number cannot stand
+  in for every stat.
+
+
+Suggestions — NOT YET ADDRESSED
+
+- Use the original character font. No font assets and no @font-face anywhere.
+- Implement the option to return to zombie farm 1 graphics. Not started.
+
+
+Issues raised in sweep 1
+
+1. FIXED — see sweep-2 issues A and B. The original defect (restoring online farmer
+   jobs before state.onFarm/EconomyClient exist, so replayed work took JobSystem's
+   offline path) IS resolved: applySave() now parks the journal in pendingOnlineJobs and
+   restoreOnlineJobs() replays it only after the writer channel is live. The journal now
+   remains parked until replay succeeds, and every writer-owned bootstrap triggers it.
+
+2. FIXED — creditLevelUps() no longer writes to `raid_state`, the table migration 0020
+   dropped. The batch is now [reset raid_state_v3 guarded on the observed claimed_level,
+   then the claimed_level CAS], so only the request that wins the level transition can
+   clear the cooldown and a stale concurrent request is a no-op. Unit-tested in
+   server/test/levels.test.ts.
+
+3. OPEN BY DESIGN — the level-up cooldown reset REQUIRES the Worker deploy. economy
+   .adoptGameplay() now adopts raids.lastRaidAt from every response, so a client shipped
+   ahead of the Worker would have the server's stale cooldown overwrite the local reset.
+
+4. NOT FIXED (accepted) — black-market portraits lose the unit's colour. src/hud.ts:2622
+   calls zombieMutationPortraitOf(key, mutation) with no colour argument, so mixed-colour
+   combined zombies render in the default tint on their market card. BlackMarketOrderView
+   carries no colour field; fixing it properly needs a protocol addition.
+
+5. FIXED — fruit-tree readyAt, raid lastRaidAt, and earliestFinishAt now go through
+   serverTimestampToClient() alongside crop plantedAt, including first-frame hydration.
+
+6. FIXED — the hover card no longer outlives the hover: main.ts clears it when a modal
+   opens, and pointerleave/raid entry already cleared it. The redundant HUD ticker is gone.
+
+7. PARTLY FIXED — validatePortraitDataUrl and NightLayer.resetRenderTarget now have
+   focused regression tests. The touch plant preview and the quest-panel re-render still
+   have no direct coverage and should be exercised in the local play-test.
+
+8. FIXED — winBGM is a 111 KB MP3 (the WAV is gone), preloaded during enterRaid and
+   released by exitRaid, so the victory cue does not wait on a first fetch/decode.
+
+9. FIXED — the results panel is back on the original fixed 1.5 s beat; the living army
+   keeps marching behind it until off-stage, then the scene idles. Replay transcripts are
+   unaffected (BattleSim stepping stops at sim.finished, so finalTick does not move).
+
+10. FIXED — idempotent command, raid, and Epic Boss replays now return a fresh serverTime
+    while keeping their cached authoritative state, so a delayed retry cannot add the
+    offline interval to crop/tree/raid timers. Integration-tested. The only remaining
+    stale-serverTime replay is POST /raid/finish-v2-replay-disabled, a retired route.
+
+
+New issues found in sweep 2
+
+A. FIXED — the deferred online job journal is preserved while parked.
+   SaveManager.save() calls writeJobJournal(serialize().farmJobs), and writeJobJournal
+   removes the key whenever the queue is empty (SaveManager.ts:104-108). Because the
+   replay is now deferred, the queue IS empty at boot, and main.ts:1125 calls
+   saveManager.save() immediately after load() — before the writer is available. The
+   journal key is deleted on every start. Verified with a throwaway probe test against
+   the real SaveManager: after that save(), localStorage[<account>::farm-jobs] is null.
+   In the happy path pendingOnlineJobs still holds the intents in memory, so the replay
+   works and rewrites the journal; but any reload/crash before the writer arrives loses
+   them for good. Fix: keep the journal intact while pendingOnlineJobs is set (write the
+   parked value through instead of clearing), or defer the first checkpoint until after
+   restoreOnlineJobs(). SaveManager now writes the parked journal through pre-writer
+   checkpoints, and only clears the parked copy after restorePending succeeds.
+
+B. FIXED — online job replay now follows every transition to writer ownership.
+   onWriterAvailable is fired only from EconomyClient.start() when bootstrap.writer
+   .status === "mine" (economy.ts:161), and main.ts:1402 is its only listener.
+   recover(), reloadAfterConflict(), reconnectAfterFailure(), and takeOver() all reach a
+   writable channel without firing it. So:
+    * first bootstrap fails (network blip), recovery succeeds seconds later -> intents
+      stranded in memory forever, journal already erased by A;
+    * another device holds the writer -> writer-lock UI; "Take over" reloads the page,
+      and after the reload the journal is gone (A), so the queued actions are lost.
+   Combined with A this means the reported defect still reproduces whenever the first
+   bootstrap does not immediately hand this tab the writer. Fix: drive the replay off
+   setOnlineWritable(true) (or call restoreOnlineJobs from every path that reaches a
+   live writer) — it is already idempotent and safe to call repeatedly. The centralized
+   ownership-sync path now fires onWriterOwned for initial boot and recovery bootstraps;
+   main uses that signal to enable writes and replay the parked journal.
+
+C. REVIEWED — writer polling retained; unrelated fruit-tree balance overrides reverted.
+   Nothing in this document asks for either change, and both alter live behaviour:
+    * Writer-lease polling redesign. The fixed 45 s ownership poll became an adaptive
+      3-minute timer rescheduled by every successful writer-protected response; the
+      server heartbeat throttle went 60 s -> 5 min; accounts.last_online_at moved off the
+      session touch (db.ts sessionAccount) onto writer.validate/beginOperation with a
+      5-minute throttle. I checked the timing: worst-case lease staleness is 6 min
+      against WRITER_IDLE_MS of 10 min (4 min margin), and the client's
+      writerProtectedRequest list matches the server's writerProtectedMutation exactly,
+      so the mechanism is sound. Two behaviour changes to accept knowingly: a displaced
+      idle session now discovers its takeover in <=3 min instead of <=45 s, and
+      last_online_at no longer advances for a signed-in tab that never takes the writer.
+    * Fruit-tree balance (reverted): Olive Tree level 1 -> 5 (placeables.json, prep_placeables.py,
+      server/src/objectCatalog.ts), Lemon harvestValue 15 -> 35, Orange 15 -> 18. No
+      client/server desync — server/src/v3/engine.ts imports placeables.json directly —
+      but this is an economy change, not a defect fix.
+
+D. FIXED — the redundant HUD-owned crop-hover ticker was removed. main.ts remains
+   the sole owner of the 250 ms hover refresh and clearing rules. Previously hud.ts started
+   window.setInterval(() => this.renderCropHover(), 250) in the constructor (never
+   cleared), while main.ts re-pushes the hover every 0.25 s and owns the clearing rules.
+   Harmless, but the hud interval is now dead weight and re-shows the card from state
+   main.ts is responsible for clearing.
+
+E. FIXED — bootstrap timers are translated before the first frame. SaveManager
+   .fromBootstrap() places fruit trees with the raw server readyAt, and only the later
+   economy onObjectState pass (main.ts:1274) re-syncs the translated value. The
+   offline cached-snapshot path never gets the translated value at all, so a skewed
+   clock shows a wrong tree countdown in offline view — the same class of bug the
+   Insta-Grow fix eliminated for crops. Crop plantedAt, object readyAt, and raid lastRaidAt
+   now share one clock helper and one captured client timestamp during hydration.
+
+
+New issues found in sweep 3
+
+F. FIXED — a parked journal refused by a busy JobSystem is now retried, not discarded.
+   JobSystem.restorePending() early-returned on `if (this.busy) return;` without
+   signalling that it had done nothing, and restoreOnlineJobs() cleared
+   pendingOnlineJobs regardless, then overwrote the journal with the live queue. Proved
+   with a probe. The sweep-2 throw-retry guard did not cover it — the bail is silent,
+   not an exception — and it was reachable because enqueueTool (main.ts:1625) has no
+   onlineGameplayBlocked() guard, so any plow/plant tap between load() and onWriterOwned
+   makes the queue busy: one bootstrap round-trip normally, but 2-60 s on the recovery
+   backoff path, where the farm stays interactive behind the "Online gameplay paused"
+   toast. restorePending now returns whether it took responsibility for the save (an
+   unusable save is consumed; a busy refusal is not), SaveManager keeps the journal
+   parked on a refusal, and checkpointJobs — already fired on every queue change —
+   re-offers it as soon as the live job finishes. A `draining` flag guards the re-entry
+   from restorePending's own enqueues. Covered by both a real-JobSystem contract test
+   and a SaveManager refuse-then-retry test.
+
+G. FIXED — Epic Boss timers now share the one clock helper.
+   The run projection was the last authoritative epoch crossing untranslated:
+   SaveManager.fromBootstrap passed boot.gameplay.epicBoss straight through, and economy
+   pushed the raw projection from adoptGameplay / adoptEpicBossResult /
+   adoptEpicBossActivation. Its expiresAt / encounterStartedAt / retryReadyAt were then
+   compared against the local clock in EpicBossManager.ts:31, :35, :46, :52, :64 and in
+   the "days remaining" pill at main.ts:1992, so a skewed client could read an active
+   event as expired (or the reverse). src/net/clock.ts gains epicBossRunToClient(),
+   which moves all five epochs at once — no caller can translate some and forget the
+   rest — and leaves the 0 sentinel alone so "not started"/"not completed" cannot drift
+   into a real time. /epic-boss/activate, /end and /start now return serverTime as the
+   anchor (finish already did); a missing anchor degrades to a zero offset, so the
+   client stays correct against an older Worker. Covered by src/net/clock.test.ts.
+
+
+Deploy / migration notes for this pass
+
+- Worker deploy: REQUIRED. The invasion-cooldown reset, the gift response's lastRaidAt
+  and serverTime, the epic-boss claimed_level write, the raid-finish cooldown, the
+  fresh-serverTime replay responses, the new serverTime on /epic-boss/activate|end|start,
+  and the writer heartbeat/last-online changes all live in server/src. Issue #3 means
+  shipping the client without the Worker is a regression; every other client-side
+  timestamp translation degrades safely to a zero offset when serverTime is absent.
+- Database migration: none added and none needed. The invalid legacy raid_state write
+  was removed rather than recreating a table protocol v3 does not use.

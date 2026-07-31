@@ -1,7 +1,9 @@
 import { Texture } from "pixi.js";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GameAssets, ZombieModel } from "../assets";
-import { buildZombiePortraitRig } from "./mutationPortrait";
+import { buildZombiePortraitRig, validatePortraitDataUrl } from "./mutationPortrait";
+
+afterEach(() => vi.unstubAllGlobals());
 
 const model: ZombieModel = {
   name: "Test", neck: { x: 2, y: -20 }, scale: 1, color: [100, 120, 140],
@@ -32,6 +34,32 @@ const assets = {
 } as unknown as GameAssets;
 
 describe("mutation-aware zombie portraits", () => {
+  it("accepts visible extracts and rejects fully transparent PNGs", async () => {
+    class FakeImage {
+      src = "";
+      naturalWidth = 1;
+      naturalHeight = 1;
+      decode = vi.fn().mockResolvedValue(undefined);
+    }
+    let alpha = 255;
+    vi.stubGlobal("Image", FakeImage);
+    vi.stubGlobal("document", {
+      createElement: () => ({
+        width: 0, height: 0,
+        getContext: () => ({
+          drawImage: vi.fn(),
+          getImageData: () => ({ data: new Uint8ClampedArray([0, 0, 0, alpha]) }),
+        }),
+      }),
+    });
+
+    await expect(validatePortraitDataUrl("data:image/png;base64,visible")).resolves
+      .toBe("data:image/png;base64,visible");
+    alpha = 0;
+    await expect(validatePortraitDataUrl("data:image/png;base64,blank")).rejects
+      .toThrow("portrait extraction was transparent");
+  });
+
   it("renders every mutation and hides the base parts they replace", () => {
     const rig = buildZombiePortraitRig(assets, "test", 1 | 8 | 1024);
     const children = rig.children as unknown as {

@@ -80,6 +80,7 @@ const readWriterCredential = (): WriterCredential | null => {
 
 let writerCredential: WriterCredential | null = readWriterCredential();
 let writerRejectedHandler: (() => void) | null = null;
+let writerConfirmedHandler: (() => void) | null = null;
 let sessionRejectedHandler: (() => void) | null = null;
 
 // A server credential belongs to one live document at a time. Web Locks are scoped
@@ -152,6 +153,9 @@ export const hasWriterCredential = (): boolean => localWriterLockHeld &&
   !!writerCredential && writerCredential.accountId === session?.accountId;
 export const clearWriterCredential = (): void => persistWriter(null);
 export const setWriterRejectedHandler = (handler: (() => void) | null): void => { writerRejectedHandler = handler; };
+/** Successful writer-protected requests prove that this document still owns the
+ * server lease. Higher layers use that proof to postpone otherwise-idle polling. */
+export const setWriterConfirmedHandler = (handler: (() => void) | null): void => { writerConfirmedHandler = handler; };
 export const setSessionRejectedHandler = (handler: (() => void) | null): void => { sessionRejectedHandler = handler; };
 
 export interface Session {
@@ -218,6 +222,13 @@ export function clearSession() {
 }
 
 // ---- core request -------------------------------------------------------
+const writerProtectedRequest = (method: string, path: string): boolean => {
+  if (method === "PUT" && (path === "/presentation" || path === "/save")) return true;
+  if (method !== "POST") return false;
+  return path === "/commands" || path === "/gifts" ||
+    path.startsWith("/raid/") || path.startsWith("/epic-boss/") || path.startsWith("/black-market/");
+};
+
 async function req<T>(
   method: string,
   path: string,
@@ -226,6 +237,7 @@ async function req<T>(
 ): Promise<T> {
   if (!API) throw new ApiError(0, "not_configured");
   const headers: Record<string, string> = {};
+  let writerCredentialAttached = false;
   headers["X-Integrity-Version"] = String(CLIENT_INTEGRITY_VERSION);
   headers["X-Client-Build"] = import.meta.env.VITE_BUILD_ID ?? "dev";
   if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -236,6 +248,7 @@ async function req<T>(
       headers["X-Writer-Client"] = writerCredential.clientId;
       headers["X-Writer-Generation"] = String(writerCredential.generation);
       headers["X-Writer-Token"] = writerCredential.token;
+      writerCredentialAttached = true;
     }
   }
   let res: Response;
@@ -263,6 +276,7 @@ async function req<T>(
     }
     throw new ApiError(res.status, code, data);
   }
+  if (writerCredentialAttached && writerProtectedRequest(method, path)) writerConfirmedHandler?.();
   return data as T;
 }
 
@@ -518,7 +532,7 @@ export const addFriend = (code: string) =>
 
 /** Send a brain. Throws ApiError(429) if the daily limit is hit. */
 export const sendGift = (toAccountId: string) =>
-  req<{ ok: true; xpAwarded?: number; giftsRemaining?: number; balance?: Balance; accountVersion?: number }>(
+  req<{ ok: true; xpAwarded?: number; giftsRemaining?: number; balance?: Balance; accountVersion?: number; lastRaidAt?: number; serverTime?: number }>(
     "POST", "/gifts", { toAccountId }
   );
 
@@ -819,6 +833,7 @@ export const raidStart = (
     inventory?: Record<string, number>;
     /** Authoritative time at which this accepted invasion started its cooldown. */
     lastRaidAt?: number;
+    serverTime?: number;
     /** Earliest server time at which a non-retreat result may be settled. */
     earliestFinishAt?: number;
   }>("POST", "/raid/start", {
@@ -834,6 +849,7 @@ export const raidStart = (
  *  balance, and the amounts CREDITED this call (0 on a loss / idempotent replay). */
 export interface RaidFinishResult {
   lastRaidAt: number;
+  serverTime?: number;
   balance: Balance;
   gold: number;
   /** Invasion brains credited by this verified boss win. */
@@ -898,9 +914,12 @@ export const raidCheckpoint = (sessionId: string, finalTick: number, inputs: Rai
   );
 
 export interface EpicBossFinishResult {
+  serverTime?: number;
   event: import("./protocol").EpicBossProjection;
   defeatedLevel: number | null;
   escaped: boolean;
+  /** Present when an XP quest reward leveled the player and reset raid cooldown. */
+  lastRaidAt?: number;
   loot: { name: string; tile?: string; stageActor?: string; sprite: string } | null;
   balance: Balance;
   inventory: Record<string, number>;
@@ -916,10 +935,12 @@ export interface EpicBossFinishResult {
 export const epicBossActivate = (activationId: string, bossId: string) => req<{
   event: import("./protocol").EpicBossProjection;
   balance: Balance;
+  serverTime?: number;
 }>("POST", "/epic-boss/activate", { activationId, bossId });
 
 export const epicBossEnd = (runId: string) => req<{
   event: import("./protocol").EpicBossProjection;
+  serverTime?: number;
 }>("POST", "/epic-boss/end", { runId });
 
 export const epicBossStart = (orderedUnitIds: string[], payment: import("../epicBoss/tokens").EpicBossPayment) => req<{
@@ -928,6 +949,7 @@ export const epicBossStart = (orderedUnitIds: string[], payment: import("../epic
   event: import("./protocol").EpicBossProjection;
   balance: Balance;
   expiresAt: number;
+  serverTime?: number;
 }>("POST", "/epic-boss/start", { orderedUnitIds, payment });
 
 export const epicBossFinish = (

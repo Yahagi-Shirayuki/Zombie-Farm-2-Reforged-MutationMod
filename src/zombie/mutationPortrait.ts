@@ -13,6 +13,33 @@ const MUT_HEAD_REPLACE_Z = 4.5;
 const MUT_FACE_OVERLAY_Z = 20;
 const MUT_BASE_FOREGROUND_Z = 30;
 
+/** Ensure a renderer extraction contains at least one visible pixel before it is
+ * allowed to replace a known-good catalog portrait. Some browser/GPU combinations
+ * have returned a valid transparent PNG instead of rejecting the extraction. */
+export async function validatePortraitDataUrl(source: string): Promise<string> {
+  if (typeof document === "undefined" || typeof Image === "undefined") return source;
+  const image = new Image();
+  image.src = source;
+  if (typeof image.decode === "function") await image.decode();
+  else await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("portrait image could not be decoded"));
+  });
+  const width = Math.max(1, image.naturalWidth || image.width);
+  const height = Math.max(1, image.naturalHeight || image.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("portrait validation canvas unavailable");
+  context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(0, 0, width, height).data;
+  for (let index = 3; index < pixels.length; index += 4) {
+    if (pixels[index] !== 0) return source;
+  }
+  throw new Error("portrait extraction was transparent");
+}
+
 /** Assemble the same static rig used by an owned farm zombie, including every
  * mutation overlay/replacement carried in its individual bitmask. */
 export function buildZombiePortraitRig(
@@ -117,13 +144,14 @@ export class MutationPortraits {
       Math.max(1, bounds.height + pad * 2),
     );
     try {
-      return await this.renderer.extract.base64({
+      const source = await this.renderer.extract.base64({
         target,
         frame,
         resolution: 2,
         format: "png",
         clearColor: [0, 0, 0, 0],
       });
+      return await validatePortraitDataUrl(source);
     } finally {
       target.destroy({ children: true });
     }

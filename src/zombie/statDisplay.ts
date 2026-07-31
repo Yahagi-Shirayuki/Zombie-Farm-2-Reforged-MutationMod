@@ -38,7 +38,7 @@ export interface StatSource {
 /** One line in a stat's hover breakdown. */
 export interface StatModifierLine {
   label: string; // "Mutation", "+10% Power", "Veterancy (Master)"
-  amount: string; // "+13" (mutation, display units) or "+25%" (multipliers)
+  amount: string; // actual contribution in displayed stat units, e.g. "+13" or "+1"
   zero: boolean; // true when this modifier currently contributes nothing (dim it)
 }
 
@@ -118,15 +118,25 @@ export function statBreakdown(
     const delta = displayStat(stat, raw) - displayStat(stat, baseRaw);
     lines.push({ label: "Mutation", amount: `${delta >= 0 ? "+" : ""}${delta}`, zero: mut === 0 });
   }
-  // Each self stat-ability, in tier order, with its % on THIS stat (+0% where it
-  // doesn't touch this stat — demonstrating it's present but not contributing here).
+  // Each self stat-ability, in tier order, with its actual contribution to THIS stat.
   for (const k of abilities) {
-    const pct = Math.round((abilityStatMult(k, stat) - 1) * 100);
-    lines.push({ label: ABILITY_POOL[k]?.label ?? k, amount: `${pct >= 0 ? "+" : ""}${pct}%`, zero: pct === 0 });
+    const mult = abilityStatMult(k, stat);
+    const without = mult === 0 ? effective : (effective - mut) / mult + mut;
+    const delta = displayStat(stat, effective) - displayStat(stat, without);
+    lines.push({
+      label: ABILITY_POOL[k]?.label ?? k,
+      amount: `${delta >= 0 ? "+" : ""}${delta}`,
+      zero: delta === 0,
+    });
   }
-  // Veterancy — always applicable to every stat; +0% at Newbie is still shown.
-  const vpct = Math.round((v - 1) * 100);
-  lines.push({ label: `Veterancy (${veterancy(z.invasions)})`, amount: `+${vpct}%`, zero: vpct === 0 });
+  // Veterancy — always applicable to every stat; +0 at Newbie is still shown.
+  const withoutVeterancy = v === 0 ? effective : (effective - mut) / v + mut;
+  const veterancyDelta = displayStat(stat, effective) - displayStat(stat, withoutVeterancy);
+  lines.push({
+    label: `Veterancy (${veterancy(z.invasions)})`,
+    amount: `${veterancyDelta >= 0 ? "+" : ""}${veterancyDelta}`,
+    zero: veterancyDelta === 0,
+  });
 
   return { base: displayStat(stat, baseRaw), total: displayStat(stat, effective), lines };
 }

@@ -127,6 +127,20 @@ export class NightLayer extends Container {
     this.visible = false;
   }
 
+  /** Recreate the GPU-backed light map after a context restore or a cold night-mode
+   * activation. The darkness/lights scene is retained; only the disposable render
+   * target and its screen sprite are replaced. */
+  resetRenderTarget() {
+    this.display.removeFromParent();
+    this.display.destroy();
+    this.rt.destroy(true);
+    this.rt = RenderTexture.create({ width: 2, height: 2 });
+    this.display = new Sprite(this.rt);
+    this.addChild(this.display);
+    this.sw = 0;
+    this.sh = 0;
+  }
+
   /** Rebuild the light-map for this frame and lay it screen-aligned over the farm.
    *  `world` is the camera container; lights inside `this.lights` are world-space. */
   update(renderer: Renderer, world: Container) {
