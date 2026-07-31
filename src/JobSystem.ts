@@ -160,6 +160,18 @@ export class JobSystem {
     return true;
   }
 
+  /** Input previews use these read-only checks so crossing a queued harvest does
+   * not show it as a new swipe target. enqueue()/enqueueTreeHarvest() remain the
+   * authoritative deduplication boundary. */
+  isPlotHarvestPending(col: number, row: number): boolean {
+    const at = this.field.plotOriginAt(col, row);
+    return !!at && this.pending.has(this.key("harvest", at.oc, at.or));
+  }
+
+  isTreeHarvestPending(objId: string): boolean {
+    return this.pending.has(`tree:${objId}`);
+  }
+
   // Plain move-to-point, serialized behind any queued work so it never hijacks the
   // farmer mid-job.
   enqueueWalk(x: number, y: number) {

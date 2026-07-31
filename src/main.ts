@@ -53,6 +53,9 @@ import {
   captureTouchPointer, gestureMoved, isDeferredTouchMode, isOutsideFarmPanGesture, isTouchPointer,
   isSelectTapGesture, isZombieHold, plotOwnsObjectTap, shouldRecoverTouchPointerUp, TOUCH_ZOMBIE_HOLD_MS,
 } from "./touchInput";
+import {
+  appendHarvestTarget, harvestTargetKey, sampleStrokeSegment, type HarvestTarget,
+} from "./harvestStroke";
 import { mutationDescription } from "./zombie/mutations";
 import { resolveCropMutations } from "./zombie/cropMutations";
 import { MutationPortraits } from "./zombie/mutationPortrait";
@@ -1487,6 +1490,12 @@ async function main() {
   let touchOutsideFarmPan = false;
   let zombieLongPressTimer: ReturnType<typeof setTimeout> | null = null;
   let zombieLongPressActivated = false;
+  let harvestStrokeCandidate: HarvestTarget | null = null;
+  let harvestStrokeActive = false;
+  const harvestStrokeLast = new Point();
+  const harvestStrokeTargets: HarvestTarget[] = [];
+  const harvestStrokeKeys = new Set<string>();
+  const harvestStrokePreviews = new Map<string, Graphics>();
   // Plant tiles painted by the current finger gesture. Plowing uses the explicit
   // rectangle state below so a release can never also become a second plow tap.
   const touchGestureTiles: { col: number; row: number }[] = [];
@@ -1511,6 +1520,14 @@ async function main() {
     touchGestureTileKeys.clear();
     touchToolStartTile = null;
     clearTouchPlantPreview();
+  };
+  const clearHarvestStroke = () => {
+    for (const preview of harvestStrokePreviews.values()) preview.destroy();
+    harvestStrokePreviews.clear();
+    harvestStrokeTargets.length = 0;
+    harvestStrokeKeys.clear();
+    harvestStrokeCandidate = null;
+    harvestStrokeActive = false;
   };
   const recordTouchPlantTile = (col: number, row: number) => {
     const rawKey = tileKey(col, row);
@@ -1568,6 +1585,7 @@ async function main() {
     temporaryPanGesture = false;
     field.hideCursor();
     field.setObjectHighlight(null);
+    clearHarvestStroke();
   };
   // Canvas-relative CSS pixels (same space wheel/zoomAt use).
   const canvasXY = (clientX: number, clientY: number) => {
@@ -1589,6 +1607,7 @@ async function main() {
       // Nothing has committed yet: discard the pending paint stroke and let the
       // two fingers control the camera instead.
       clearTouchToolStroke();
+      clearHarvestStroke();
       lastPlot = "";
       plowPreview = null;
       touchPlowGesture = null;
@@ -1631,6 +1650,93 @@ async function main() {
     return { col: Math.round(g.col), row: Math.round(g.row), wx: w.x, wy: w.y };
   };
   const tileKey = (col: number, row: number) => `${col},${row}`;
+
+  const harvestTargetPending = (target: HarvestTarget): boolean => target.kind === "tree"
+    ? jobs.isTreeHarvestPending(target.instanceId)
+    : jobs.isPlotHarvestPending(target.oc, target.or);
+
+  // A visible ripe tree owns the swipe point before the plot behind its canopy.
+  // Else resolve to the canonical 4x4 plot origin so crossing one crop's tiles only
+  // creates one target. Tutorial strokes remain constrained to the current beat.
+  const harvestTargetAt = (globalX: number, globalY: number): HarvestTarget | null => {
+    const worldPoint = world.toLocal(new Point(globalX, globalY));
+    const grid = screenToGrid(worldPoint.x, worldPoint.y);
+    const col = Math.round(grid.col), row = Math.round(grid.row);
+    if (tutorial?.active && !tutorial.allowsTile(col, row)) return null;
+    const objectId = field.objectAtPoint(worldPoint.x, worldPoint.y);
+    if (objectId) {
+      if (!field.isObjectReady(objectId)) return null;
+      const target: HarvestTarget = { kind: "tree", instanceId: objectId };
+      return harvestTargetPending(target) ? null : target;
+    }
+    const origin = field.plotOriginAt(col, row);
+    if (!origin || !field.isRipe(col, row)) return null;
+    const target: HarvestTarget = {
+      kind: "plot", oc: origin.oc, or: origin.or,
+      isZombie: field.ripeZombieAt(col, row),
+    };
+    return harvestTargetPending(target) ? null : target;
+  };
+
+  const enqueueHarvestTarget = (target: HarvestTarget): boolean => {
+    if (target.kind === "tree") {
+      if (!field.isObjectReady(target.instanceId)) return false;
+      const point = field.objectWorkPoint(target.instanceId);
+      return !!point && jobs.enqueueTreeHarvest(target.instanceId, point.x, point.y);
+    }
+    if (!field.isRipe(target.oc, target.or)) return false;
+    if (field.ripeZombieAt(target.oc, target.or) && !zombies.canHarvestZombie()) {
+      const center = field.plotCenterOf(target.oc, target.or);
+      floatText(center.x, center.y, "Army full!");
+      return false;
+    }
+    return jobs.enqueue("harvest", target.oc, target.or);
+  };
+
+  const showHarvestStrokePreview = (target: HarvestTarget) => {
+    const key = harvestTargetKey(target);
+    if (harvestStrokePreviews.has(key)) return;
+    const area = target.kind === "tree"
+      ? field.objectHighlightArea(target.instanceId)
+      : { ...field.plotCenterOf(target.oc, target.or), tiles: PLOT };
+    if (!area) return;
+    const w = area.tiles * HW, h = area.tiles * HH;
+    const preview = new Graphics();
+    preview.moveTo(0, -h).lineTo(w, 0).lineTo(0, h).lineTo(-w, 0).lineTo(0, -h)
+      .fill({ color: 0xffd45a, alpha: 0.24 })
+      .stroke({ width: 3, color: 0xffe58a, alpha: 0.95 });
+    preview.position.set(area.x, area.y);
+    field.highlightLayer.addChild(preview);
+    harvestStrokePreviews.set(key, preview);
+  };
+
+  const recordHarvestStrokeTarget = (target: HarvestTarget) => {
+    if (harvestTargetPending(target) ||
+        !appendHarvestTarget(target, harvestStrokeTargets, harvestStrokeKeys)) return;
+    if (isTouchPointer(pressPointerType)) showHarvestStrokePreview(target);
+    else enqueueHarvestTarget(target);
+  };
+
+  const collectHarvestStrokeSegment = (x: number, y: number) => {
+    for (const point of sampleStrokeSegment(harvestStrokeLast, { x, y })) {
+      const target = harvestTargetAt(point.x, point.y);
+      if (target) recordHarvestStrokeTarget(target);
+    }
+    harvestStrokeLast.set(x, y);
+  };
+
+  const beginHarvestStroke = (x: number, y: number) => {
+    if (!harvestStrokeCandidate) return;
+    harvestStrokeActive = true;
+    recordHarvestStrokeTarget(harvestStrokeCandidate);
+    collectHarvestStrokeSegment(x, y);
+  };
+
+  const commitTouchHarvestStroke = () => {
+    const targets = [...harvestStrokeTargets];
+    clearHarvestStroke();
+    for (const target of targets) enqueueHarvestTarget(target);
+  };
 
   // Queue the active tool on a plot: Plow places/re-tills a 4x4; Plant sows the
   // currently-selected crop. No-op for select/sell.
@@ -3255,8 +3361,7 @@ async function main() {
       activePotId = objId;
       hud.openCombiner();
     } else if (field.isObjectReady(objId)) {
-      const wp = field.objectWorkPoint(objId);
-      if (wp) jobs.enqueueTreeHarvest(objId, wp.x, wp.y);
+      enqueueHarvestTarget({ kind: "tree", instanceId: objId });
     } else {
       const oid = objId, def = objDef;
       hud.openObjectActions({
@@ -3337,6 +3442,7 @@ async function main() {
     touchOutsideFarmPan = false;
     cancelZombieLongPress();
     zombieLongPressActivated = false;
+    clearHarvestStroke();
     pressStart.copyFrom(e.global);
     clearTouchToolStroke();
     if (visiting) {
@@ -3383,6 +3489,10 @@ async function main() {
     // opens the same left-side Plants/Zombies picker as a desktop click.
     if (touch && hud.mode === "till" && field.canPlant(col, row)) hud.setMode("walk");
     if (touch && hud.mode === "walk") touchSelectStartTile = { col, row };
+    if (hud.mode === "walk") {
+      harvestStrokeCandidate = harvestTargetAt(e.global.x, e.global.y);
+      harvestStrokeLast.copyFrom(e.global);
+    }
     if (touch && hud.mode === "walk") beginWorldLongPress(wx, wy, e.pointerId);
     if (touch && hud.mode === "till") {
       dragging = true;
@@ -3457,6 +3567,15 @@ async function main() {
       );
       if (!moved) moved = gestureMoved(pressStart.x, pressStart.y, e.global.x, e.global.y, pressPointerType);
       if (moved) cancelZombieLongPress();
+      if (moved && !harvestStrokeActive && harvestStrokeCandidate && hud.mode === "walk" &&
+          !temporaryPanGesture) beginHarvestStroke(e.global.x, e.global.y);
+    }
+    if (harvestStrokeActive) {
+      collectHarvestStrokeSegment(e.global.x, e.global.y);
+      hoveredCrop = null;
+      hud.showCropHover(null);
+      field.hideCursor();
+      return;
     }
     if (visiting) {
       hoveredCrop = null;
@@ -3661,8 +3780,7 @@ async function main() {
           activePotId = objId;
           hud.openCombiner(); // pick two zombies to combine, or collect a finished one
         } else if (objId && field.isObjectReady(objId)) {
-          const wp = field.objectWorkPoint(objId); // farmer walks over and hoes (fast)
-          if (wp) jobs.enqueueTreeHarvest(objId, wp.x, wp.y);
+          enqueueHarvestTarget({ kind: "tree", instanceId: objId });
         } else if (objId && objDef) {
           // A placed decoration/tree: Move / Store / Sell popup.
           const oid = objId, def = objDef;
@@ -3685,13 +3803,11 @@ async function main() {
             onSell: () => sellObject(oid),
           });
         } else if (field.isRipe(col, row)) {
-          // Refuse only when neither the active army nor Mausoleum has a free slot.
-          if (field.ripeZombieAt(col, row) && !zombies.canHarvestZombie()) {
-            const c = tileCenter(col, row);
-            floatText(c.x, c.y, "Army full!");
-          } else {
-            jobs.enqueue("harvest", col, row);
-          }
+          const origin = field.plotOriginAt(col, row);
+          if (origin) enqueueHarvestTarget({
+            kind: "plot", oc: origin.oc, or: origin.or,
+            isZombie: field.ripeZombieAt(col, row),
+          });
         } else if (field.hasCrop(col, row)) {
           // Still-growing crop/zombie (not ripe yet): show its type + time left
           // (re-read on the popup's timer so the countdown ticks live) plus a button
@@ -3735,6 +3851,7 @@ async function main() {
       lastPlot = "";
       pressPointerId = -1;
       clearTouchToolStroke();
+      clearHarvestStroke();
       return;
     }
     if (temporaryPanGesture) {
@@ -3743,6 +3860,20 @@ async function main() {
       moved = false;
       lastPlot = "";
       pressPointerId = -1;
+      clearHarvestStroke();
+      return;
+    }
+    if (harvestStrokeActive) {
+      collectHarvestStrokeSegment(e.global.x, e.global.y);
+      if (isTouchPointer(pressPointerType)) commitTouchHarvestStroke();
+      else clearHarvestStroke();
+      dragging = false;
+      moved = false;
+      lastPlot = "";
+      pressPointerId = -1;
+      touchOutsideFarmPan = false;
+      touchSelectStartTile = null;
+      clearTouchToolStroke();
       return;
     }
     if (dragging && hud.mode === "till" && plowPreview) {
@@ -3771,6 +3902,7 @@ async function main() {
     touchOutsideFarmPan = false;
     touchSelectStartTile = null;
     clearTouchToolStroke();
+    clearHarvestStroke();
   };
   app.stage.on("pointerup", onPointerUp);
   app.stage.on("pointerupoutside", onPointerUp);
