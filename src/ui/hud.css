@@ -21,6 +21,20 @@
 #hud .chip .xpbar { width: 60px; height: 8px; background: rgba(0,0,0,.55);
   border: 1px solid #2f1d0d; border-radius: 5px; overflow: hidden; margin-left: 2px; }
 #hud .chip .xpfill { height: 100%; width: 0%; background: linear-gradient(#b6f36a,#5fbf2f); }
+#hud .level-chip { position: relative; cursor: pointer; overflow: visible; }
+#hud .level-chip:focus-visible { outline: 2px solid #d9ff9b; outline-offset: 2px; }
+#hud .xp-details { position: absolute; top: calc(100% + 8px); left: 50%; z-index: 2;
+  translate: -50% -3px; padding: 5px 9px; border: 1px solid #2f1d0d;
+  border-radius: 7px; background: rgba(47,29,13,.96); box-shadow: 0 2px 5px rgba(0,0,0,.4);
+  color: #fff4c7; font-size: 12px; font-weight: 800; line-height: 1.2;
+  white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden;
+  transition: opacity .12s ease, translate .12s ease, visibility 0s linear .12s; }
+#hud .xp-details::before { content: ""; position: absolute; bottom: 100%; left: 50%;
+  translate: -50% 0; border: 5px solid transparent; border-bottom-color: #2f1d0d; }
+#hud .level-chip:hover .xp-details,
+#hud .level-chip:focus-visible .xp-details,
+#hud .level-chip.xp-details-open .xp-details { opacity: 1; visibility: visible;
+  translate: -50% 0; transition-delay: 0s; }
 #hud .spacer { flex: 1 1 auto; }
 #hud .nameplate { border-style: solid; border-width: 9px 16px;
   border-image: url("/assets/ui/button_bg.png") 14 fill / 9px 16px stretch;

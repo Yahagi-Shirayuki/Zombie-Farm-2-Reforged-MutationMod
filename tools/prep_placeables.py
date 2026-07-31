@@ -319,7 +319,11 @@ def main():
             "category": category,
             "cost": e.get("cost", 0),
             "level": e.get("level", 1),
-            "xp": e.get("xp", 0),
+            # Fruit-tree rows omit `xp`, but the binary's
+            # +[MarketDataManager xpFromItem:] awards normal gold tree/decor
+            # purchases floor(cost / 100) XP. Preserve authored XP elsewhere.
+            "xp": (e.get("cost", 0) // 100 if category == "tree"
+                   else e.get("xp", 0)),
             "brainsNeeded": bool(e.get("brainsNeeded", False)),
             # The original game passes this Market RGB through
             # placeNewObjectTileWithKey:andFilename:andColor: and applies it as a
