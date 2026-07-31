@@ -17,6 +17,33 @@ import type { PlayMode } from "./playMode";
  *  SW's activate-and-reload path when an update is genuinely waiting. Null in dev,
  *  in browsers without service workers, and before initPwa runs. */
 let updateSW: ((reloadPage?: boolean) => Promise<void>) | null = null;
+let reloadRequested = false;
+
+/** Promote the waiting worker before reloading. Reloading immediately after the
+ *  SKIP_WAITING message can race activation and serve the old precached shell again,
+ *  which makes the update button appear to do nothing. */
+async function activateWaitingWorkerAndReload(): Promise<void> {
+  if (reloadRequested) return;
+  reloadRequested = true;
+
+  const registration = await navigator.serviceWorker.getRegistration();
+  const waiting = registration?.waiting;
+  if (!waiting) {
+    // Ruleset-skew prompts can reuse this path when no update is waiting.
+    location.reload();
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    const timeout = window.setTimeout(resolve, 5_000);
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      window.clearTimeout(timeout);
+      resolve();
+    }, { once: true });
+    waiting.postMessage({ type: "SKIP_WAITING" });
+  });
+  location.reload();
+}
 
 /** Wire up the service worker. Call once at startup. Safe to call in dev. */
 export function initPwa(mode: PlayMode): void {
@@ -26,7 +53,7 @@ export function initPwa(mode: PlayMode): void {
 
   updateSW = registerSW({
     onNeedRefresh() {
-      showUpdateToast("A new version is ready.", () => void updateSW?.(true)); // skip waiting + reload
+      showUpdateToast("A new version is ready.", () => void activateWaitingWorkerAndReload());
     },
     onOfflineReady() {
       showBriefToast(mode === "local"
@@ -45,7 +72,7 @@ export function initPwa(mode: PlayMode): void {
  *  a silent reload mid-raid would cost the player the fight. */
 export function promptReload(message: string): void {
   showUpdateToast(message, () => {
-    if (updateSW) void updateSW(true);
+    if (updateSW) void activateWaitingWorkerAndReload();
     else location.reload();
   });
 }
