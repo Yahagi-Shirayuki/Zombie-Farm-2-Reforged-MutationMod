@@ -9,6 +9,7 @@ import { diagnosticsReport, diagnosticsCount, clearDiagnostics } from "../../dia
 import { getSpriteSet, setSpriteSet, FARM_BACKGROUNDS } from "../../prefs";
 import { ABILITY_POOL, ABILITY_TIER, TIER_BOSS } from "../../zombie/traits";
 import { otherPlayMode, playModeDestinationLabel } from "../../playMode";
+import { updateCheckMessage, type UpdateCheckResult } from "../../updateCheck";
 
 export async function confirmLocalFarmReset(
   hud: Pick<Hud, "confirmInGame" | "onResetLocal">,
@@ -346,6 +347,34 @@ export function openSettings(hud: Hud): void {
   diagControls.append(copyButton, clearButton);
   diagnostics.append(diagLabel, diagControls);
 
+  // Updates: ask the service worker to re-check the network right now, rather than
+  // waiting for the browser's own periodic check. A waiting build raises the usual
+  // bottom toast (with its Reload button) from pwa.ts; every other outcome is
+  // reported in the note under the row, so a check that finds nothing still says so.
+  const updates = document.createElement("div");
+  updates.className = "set-row";
+  const updatesLabel = document.createElement("span");
+  updatesLabel.textContent = "Updates";
+  const updatesButton = document.createElement("button");
+  updatesButton.className = "set-action";
+  updatesButton.textContent = "Check for Updates";
+  const updatesNote = noteEl("Look for a newer version of the game.");
+  updatesButton.onclick = async () => {
+    updatesButton.disabled = true;
+    updatesButton.textContent = "Checking…";
+    updatesNote.textContent = "Checking for updates…";
+    let result: UpdateCheckResult;
+    try {
+      result = (await hud.onCheckForUpdate?.()) ?? "unavailable";
+    } catch {
+      result = "error";
+    }
+    updatesNote.textContent = updateCheckMessage(result);
+    updatesButton.textContent = "Check for Updates";
+    updatesButton.disabled = false;
+  };
+  updates.append(updatesLabel, updatesButton);
+
   panel.append(
     farmMode,
     farmModeNote,
@@ -368,7 +397,9 @@ export function openSettings(hud: Hud): void {
     ...bgBlock,
     spriteRow, spriteNote,
     diagnostics,
-    noteEl("Copies this build's id, your browser, and any recorded errors. Nothing is sent anywhere — paste it into a bug report.")
+    noteEl("Copies this build's id, your browser, and any recorded errors. Nothing is sent anywhere — paste it into a bug report."),
+    updates,
+    updatesNote,
   );
   const version = document.createElement("div");
   version.className = "set-version";

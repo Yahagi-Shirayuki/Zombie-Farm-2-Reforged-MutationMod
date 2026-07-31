@@ -27,7 +27,12 @@ export const QuestEvent = {
   SocialDidGiftBrain: "kSocialManagerDidGiftBrain",
 } as const;
 
-type Handler = (notificationID: string, object: string, n: number) => void;
+type Handler = (
+  notificationID: string,
+  object: string,
+  n: number,
+  aliases: readonly string[]
+) => void;
 
 export class QuestBus {
   private handlers = new Set<Handler>();
@@ -41,8 +46,12 @@ export class QuestBus {
   /**
    * Post a game event. `object` is the specific subject (crop/zombie/item name);
    * pass "" when there's no subject. `n` is the increment (default 1).
+   *
+   * `aliases` are additional subjects the SAME event also answers to — used so a
+   * field-mutated zombie counts for the Market mutant's quest without posting a
+   * second event that wildcard requirements would count twice (quest/mutantSubjects).
    */
-  post(notificationID: string, object = "", n = 1) {
-    for (const fn of this.handlers) fn(notificationID, object, n);
+  post(notificationID: string, object = "", n = 1, aliases: readonly string[] = []) {
+    for (const fn of this.handlers) fn(notificationID, object, n, aliases);
   }
 }

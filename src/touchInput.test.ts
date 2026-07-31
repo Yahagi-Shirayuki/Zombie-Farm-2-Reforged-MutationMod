@@ -63,11 +63,12 @@ describe("farm touch gesture classification", () => {
       expect(isDeferredTouchMode(mode), mode).toBe(false);
   });
 
-  it("uses an outside-farm touch drag to pan while planting", () => {
+  it("uses an outside-farm touch drag to pan while planting or plowing", () => {
     expect(isOutsideFarmPanGesture("touch", "plant", false)).toBe(true);
     expect(isOutsideFarmPanGesture("touch", "plant", true)).toBe(false);
     expect(isOutsideFarmPanGesture("mouse", "plant", false)).toBe(false);
-    expect(isOutsideFarmPanGesture("touch", "till", false)).toBe(false);
+    expect(isOutsideFarmPanGesture("touch", "till", false)).toBe(true);
+    expect(isOutsideFarmPanGesture("touch", "till", true)).toBe(false);
   });
 
   it("reserves zombie selection for an unmoved touch hold", () => {

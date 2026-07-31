@@ -27,6 +27,7 @@ import { BASE } from "./base";
 import { compareCropMarketOrder } from "./marketOrder";
 import { fillPartySelection, orderPartyRoster } from "./raid/partySelection";
 import { otherPlayMode, playModeDestinationLabel, type PlayMode } from "./playMode";
+import type { UpdateCheckResult } from "./updateCheck";
 import type {
   BlackMarketListResponse, BlackMarketMutationResponse, BlackMarketOrderKind,
   BlackMarketOrderView,
@@ -1280,6 +1281,9 @@ export class Hud {
   onExportLocal: (() => void) | null = null;
   onImportLocal: ((raw: string) => boolean) | null = null;
   onResetLocal: (() => void) | null = null;
+  /** Settings' "Check for Updates": poll the service worker on demand. Null where
+   *  no service worker can exist (see main.ts / pwa.ts). */
+  onCheckForUpdate: (() => Promise<UpdateCheckResult>) | null = null;
   // ---- friends (offline stub; set by main) ----
   /** The current friends list. */
   getFriends: (() => Friend[]) | null = null;

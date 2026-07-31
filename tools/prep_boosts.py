@@ -25,6 +25,8 @@ Run:  python tools/prep_boosts.py
 """
 import os, json, shutil, re
 
+from reforge_economy import price
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ = os.path.dirname(HERE)
 APP = os.path.normpath(os.path.join(
@@ -100,11 +102,14 @@ def main():
             icon = f"{key}.png"
             shutil.copy(os.path.join(APP, ss), os.path.join(BOOSTDIR, icon))
             icons += 1
+        brains = bool(e.get("brainsNeeded", False))
         boosts.append({
             "key": key,
             "name": e["name"],
-            "cost": int(e.get("cost", 0)),
-            "brainsNeeded": bool(e.get("brainsNeeded", False)),
+            # Brain prices take the brainflation retune (10 source -> 1 here); gold
+            # prices pass through. See tools/reforge_economy.py.
+            "cost": price(e.get("cost", 0), brains, e["name"]),
+            "brainsNeeded": brains,
             "level": max(0, e.get("level", 0)),  # source uses negatives as "always"
             "effect": eff,
             # Insta-Grow is single-use (grows ONE crop per use). To keep the same
@@ -133,8 +138,10 @@ def main():
         })
 
     boosts.sort(key=lambda b: (not b["usableOnFarm"], b["cost"], b["name"]))
+    # Trailing newline so a re-run is byte-for-byte identical to the committed asset.
     with open(os.path.join(OUT, "boosts.json"), "w", encoding="utf-8") as f:
         json.dump(boosts, f, indent=1)
+        f.write("\n")
     usable = sum(1 for b in boosts if b["usableOnFarm"])
     print(f"boosts: wrote {len(boosts)} ({usable} farm-usable) + {icons} icons")
     for b in boosts:

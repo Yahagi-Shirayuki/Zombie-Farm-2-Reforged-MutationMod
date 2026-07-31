@@ -11,6 +11,53 @@ known defect from this pass remains open. Still outstanding from the original re
 natural-mutation quests, pet prices, the tutorial desync, the invasion-verification
 error, the Heartichoke text, the original font, and the ZF1 graphics option.
 
+UPDATE 2026-07-31 (later): natural-mutation quests, the tutorial desync, and the
+Heartichoke text are now FIXED — see the section below. The invasion-verification
+error is deferred by request. Verification: tsc clean (client + server), 575 client
+tests (1 skipped), 299 server unit tests, 37 server integration tests, all passing.
+
+FIXED: the asset generators had all drifted from the assets they generate. The
+brainflation retune (ZF2 inflated ZF1's brain prices 10x; Reforged divides them back
+so typical prices sit at 1-5 brains and the premium Pet Brain at 50) was applied to the
+checked-in assets BY HAND and never taught to the generators, so re-running any of them
+silently reverted it. prep_pets.py alone had the rule right; that rule is now
+tools/reforge_economy.py (brain_price / price), shared by every generator.
+
+  prep_market.py     55 brains-priced zombies reverted (5 -> 50, 20 -> 200, 40 -> 400,
+                     1 -> 10). Both cost paths now retune — the main enrichment loop
+                     AND the specialSprite block that skips it — and
+                     MARKET_SPECIAL_BRAIN_COST replaces a hardcoded 50.
+  prep_boosts.py     all 5 brain-priced boosts reverted 1 -> 10.
+  prep_upgrades.py   the 3 farm-size tiers reverted 6/8/12 -> 60/80/120. Also wrote
+                     indent=2 and a different key order than the committed asset, so
+                     every run rewrote the whole file; both now match.
+  prep_placeables.py 121 brains-priced objects reverted (x10), and three more bugs:
+                       - it emitted 413 objects against the shipped 303, adding 110
+                         holiday/seasonal decors that have NEVER been in the asset in
+                         any commit (and extracting their PNGs). Nothing in the source
+                         distinguishes them, so SEASONAL_DECOR_EXCLUDED lists them
+                         explicitly — delete an entry to ship that decor.
+                       - 6 decors the game awards rather than sells (rockBunny,
+                         green/red/yellowGift, teddyBear, loveShack) were emitted as
+                         purchasable; REWARD_ONLY_DECOR restores cost 0 / no gate.
+                       - the Zombie Pot's XP was read from the source row (500) before
+                         the 500-gold override was applied; it now re-applies the
+                         game's own floor(cost/100) rule, giving the shipped 5.
+                     Three premium showpieces (heartGravestone 15, cupidStatueA/B 50)
+                     deliberately skip the retune and are listed in PREMIUM_BRAIN_PRICES.
+
+Verified: every generator is now a fixed point — running each twice produces output
+byte-identical to the committed assets, with no stray extracted art. The only asset
+changes are placeables.json (SAME 303 entries, every field identical; only the array
+ORDER moves, because the file had been price-edited by hand without re-sorting and the
+script sorts by category/level/cost) and a one-time trailing newline on plants.json.
+
+Guarded going forward by server/test/objectCatalogSync.test.ts: server/src/objectCatalog
+.ts is a hand-maintained mirror of placeables.json and is what the server actually
+CHARGES, so a drift there bills a different price than the store shows. The test asserts
+cost/currency/level parity and that no brain price exceeds the 50-brain premium ceiling.
+It passes today — client and server prices agree.
+
 
 Deferred investigation
 
@@ -79,36 +126,89 @@ Bugs — MITIGATED, root cause not established
   (blocked accounts.google.com script), not evidence for this bug.
 
 
-Bugs — NOT YET ADDRESSED
+Bugs — FIXED in the natural-mutation / tutorial / market-text pass
 
 - Natural mutations (from zombies grown by crops to get mutations) do not count for
   mutation related quests.
-  CONFIRMED STILL BROKEN. quests.json #56 "It's Alive!" requires
-  kCombinerCombinedNotification with the subject "Carrot Zombie Tomato Zombie", and
-  src/main.ts:1906 builds that subject from the two INPUT units' species names. A
-  Regular Zombie carrying tomato/carrot mutation bits therefore never matches. The fix
-  needs the emitted subject (or an additional emission) to be derived from the units'
-  mutation masks, not their species names — src/main.ts:1901-1911 and :4040-4044.
-
-- Pets in the market still use pre-brainflation prices.
-  FIXED. tools/prep_pets.py now applies the post-brainflation one-tenth price and
-  brain-decor XP (final cost x 100) during every catalog export. Pet Brain's stale
-  1,000-brain description is generated from its corrected 50-brain price. The eight
-  epic-boss reward pets remain in the catalog for owned-pet rendering but are hidden
-  from the store and rejected by authoritative purchases. Catalog, client,
-  authoritative engine, and integration assertions cover the balance.
+  FIXED, client and server. Root cause confirmed: quest 55 "Mutation Nation" and quest
+  56 "It's Alive!" name the MARKET mutant species ("Tomato Zombie", and the combiner
+  subject "Carrot Zombie Tomato Zombie"), but a mutation grown from crop adjacency
+  lands as a mutation BIT on a ZombieActorRegularTier1 whose species name is "Zombie",
+  so neither quest could ever advance that way.
+  Quest events now carry ALIASES — extra subjects the same single event answers to —
+  rather than a second event, which the format's wildcard "" requirements (e.g. quest 3
+  "Harvest 8 Zombies") would have counted twice.
+   * src/quest/mutantSubjects.ts (new) derives bit -> Market mutant name from
+     zombies.json, and builds unit aliases + the combiner's parent-pair cross product.
+     Both Tier-4 bit-sharers are kept, so bit 4 aliases to Carrot AND Eyebiscus.
+   * src/quest/matching.ts takes an alias list; QuestSystem + QuestBus thread it
+     through (both the offline and the authoritative-preview paths).
+   * Emitters: server/src/v3/engine.ts (authoritative — zombie harvest, combine_start,
+     combine, combine harvest) and client src/JobSystem.ts + src/main.ts (farmer
+     harvest, Insta-Harvest, pot collect, debug hook).
+  Covered by src/quest/mutantSubjects.test.ts (12) and server/test/mutationQuests.test.ts
+  (7, including the "does not double-count the wildcard objective" case). Verified live:
+  combining two field-mutated Regular Zombies posts subject "Zombie Zombie" with the
+  alias "Carrot Zombie Tomato Zombie" — quest 56's exact requirement.
 
 - Desyncs during the tutorial cause major problems.
-  NOT ADDRESSED. src/tutorial/ is untouched. The report is also truncated ("One tester
-  reported ") — needs the rest of the repro before it can be actioned.
+  FIXED (hardened; the original repro was never recovered — the report is truncated at
+  "One tester reported "). The tutorial gates EVERY farm tap and every menu down to the
+  current beat's single target and persists its beat, so any state a beat cannot detect
+  is a permanent, reload-proof freeze. Two such dead ends were provable by inspection
+  and are now closed, plus an escape hatch for anything left:
+   * Invasion beat with no army. Losing the tutorial invasion kills the player's only
+     zombie (revival costs brains, and the tutorial spends the starting one on
+     Insta-Grow). Nothing advanced the beat and nothing else was tappable.
+     recoverTutorialInvadeStep() now rewinds to Plow/PlantZombie to grow a replacement.
+   * Plot beat with no target. allowsTile() refuses every tile when plotTarget is null,
+     and a plot beat highlights no menu — nothing on screen was clickable. tick() now
+     re-acquires the target and falls back to Plow (the one plot beat needing none);
+     restore() applies the same guard, and an unknown persisted step restarts rather
+     than mounting an undefined beat.
+   * Escape hatch: a "Skip tutorial" button (two taps; the second confirms) the CSS had
+     always anticipated but which was never built. Skipping does NOT grant the 200-gold
+     completion bonus — that is the reward for finishing, and a one-tap grant would be
+     an exploit.
+  Covered by three new cases in src/tutorial/steps.test.ts. Verified live: two taps
+  unmount the overlay, release the #hud.tutorial input gate, and persist {done:true}.
+
+- Wrong text displayed, also for Heartichoke (lvl 44), AND the market quoted raw
+  mutation values instead of the normalized ones the player actually sees.
+  FIXED — one change addresses both. (The "lvl 44" in the report is the ZOMBIE's level;
+  the Heartichoke CROP is 43, which is why the two looked contradictory.)
+   * Wrong name: the two Tier-4 mutants REUSE a lower tier's mutation bit (Eyebiscus =
+     Carrot's 4, Heartichoke = Cauliflower's 512), so text derived from the bit named
+     the wrong mutation — a Heartichoke Zombie read "Cauli-hair". The line no longer
+     names the mutation at all (the card's title already names the species), which is
+     the only correct answer while the bit is genuinely shared.
+   * Wrong magnitude: the line quoted the mutation's RAW 1-4 stat points, but no
+     surface ever shows a raw stat — every tile normalizes against a fixed reference
+     (traits.STAT_DISPLAY_MAX), and the three references differ enormously. Speed's is
+     only 4.4, so Carrot's "+1 speed" is +23 Speed on the card; Tomato's "+1 damage" is
+     +4. The raw text both understated every mutation and misranked them against each
+     other.
+  zombie/statDisplay.ts gains mutationDisplayGains() + mutationMarketDescription(),
+  which measure the gain exactly as statBreakdown's own "Mutation" line does, so the
+  Market's promise equals the card's later reading. mutations.mutationDescription() is
+  gone (it lived in a module that must not know about display normalization).
+  Now reads: Carrot/Eyebiscus +23 Speed, Coffee +46 Speed, Tomato +4 Damage, Turnip +8,
+  Celery/Garlic +13, Dragon Fruit +17, Onion +3 Life, Potato +6, Broccoli/Cauliflower/
+  Heartichoke/Lima Bean +10, Flytrap +13.
+  Covered by src/zombie/marketMutationText.test.ts, which grows all 15 mutants through
+  the real makeOwned + statBreakdown and asserts each card's Mutation line equals its
+  market promise. Verified live against the running modules.
+  NOTE: Market.plist's own authored line was tried first and rejected. It is in raw
+  units, and it disagrees with the shipped flag for exactly the bit-sharers (Eyebiscus
+  advertises +3 speed but carries Carrot's +1 dex; Heartichoke advertises +4 life but
+  carries Cauliflower's +3 con), so it would have promised bonuses the game never
+  grants. Nothing is baked into zombies.json for it.
+
+Bugs — NOT YET ADDRESSED
 
 - A player got "The invasion results could not be verified" error message.
-  NOT ADDRESSED. src/main.ts:2758 still raises it and nothing in the replay/verification
-  path changed. Needs the failing session id / ruleset version to progress.
-
-- Wrong text displayed, also for Heartichoke (lvl 44).
-  NOT ADDRESSED. Under-specified: Heartichoke is level 43 in plants.json, and it is
-  unclear which string is wrong (unlock popup, quest text, or mutation description).
+  NOT ADDRESSED (deferred by request). src/main.ts still raises it and nothing in the
+  replay/verification path changed. Needs the failing session id / ruleset version.
 
 
 Suggestions — DONE

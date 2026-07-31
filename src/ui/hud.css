@@ -1536,6 +1536,18 @@
   border: 8px solid transparent; border-right-color: #7a4a1e; }
 #hud .tut-hint { display: block; margin-top: 8px; font-size: 12px; font-weight: 700;
   color: #9a7038; opacity: .85; }
+/* Escape hatch. Sits above the blocker so it stays reachable on every beat — it is
+   the only way out if a beat's advance condition becomes unreachable. Top-right,
+   clear of Tim (bottom-left, or bottom-right on the invade beat). */
+#hud .tut-skip { position: fixed; z-index: 43; pointer-events: auto;
+  top: calc(max(10px, env(safe-area-inset-top)) + 46px);
+  right: max(10px, env(safe-area-inset-right));
+  padding: 6px 12px; border: 2px solid rgba(255,255,255,.35); border-radius: 999px;
+  background: rgba(20,14,8,.72); color: #f0e6d2; font: 700 12px/1 inherit;
+  letter-spacing: .02em; cursor: pointer; opacity: .75; }
+#hud .tut-skip:hover { opacity: 1; }
+#hud .tut-skip.armed { opacity: 1; border-color: #ffe27a; color: #ffe27a;
+  background: rgba(60,30,10,.9); }
 /* Pulsing arrow that points at the current target. */
 #hud .tut-arrow { position: fixed; width: 27px; height: 27px; pointer-events: none;
   z-index: 41; filter: drop-shadow(0 2px 3px rgba(0,0,0,.5));

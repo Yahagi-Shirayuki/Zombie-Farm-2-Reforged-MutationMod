@@ -74,8 +74,12 @@ export class JobSystem {
     private sfx: (name: Sfx) => void = () => {},
     // Fired when a zombie crop is harvested, to grow an owned zombie at its plot.
     // Returns the spawned unit's id (so an online harvest can tell the server which
-    // verified unit the crop yielded), or null if nothing was spawned.
-    private onZombieHarvest: (key: string, oc: number, or: number, mutation: ZombieMutationContext) => string | null = () => null,
+    // verified unit the crop yielded) plus the quest subjects the unit answers to —
+    // a field-grown mutation makes it count as the matching Market mutant. Null when
+    // nothing was spawned.
+    private onZombieHarvest: (
+      key: string, oc: number, or: number, mutation: ZombieMutationContext
+    ) => { id: string; subjectAliases: readonly string[] } | null = () => null,
     // Quest event bus: plow/plant/harvest post notifications that advance quests.
     private quest: QuestBus = new QuestBus(),
     // Fired after a veggie crop is planted, to let Garden zombies roll to fertilize
@@ -485,15 +489,15 @@ export class JobSystem {
         // Spawn the harvested zombie FIRST (if any) so an online harvest can hand the
         // server the exact verified unit id it should record. spawnVerified suppresses
         // the generic onGrant — the server grants the unit via this farm harvest instead.
-        const unitId = r.zombieKey
+        const spawned = r.zombieKey
           ? this.onZombieHarvest(r.zombieKey, job.oc, job.or, r.mutationContext!)
           : null;
 
         if (r.zombieKey) {
           // Zombie crop: ONLINE the server grow-gates + grants the verified unit + xp
           // (no gold). Offline (or if the army was full so nothing spawned) credit xp.
-          if (online && unitId) {
-            this.state.onFarm!({ type: "harvest", oc: job.oc, or: job.or, unitId }, { xp });
+          if (online && spawned) {
+            this.state.onFarm!({ type: "harvest", oc: job.oc, or: job.or, unitId: spawned.id }, { xp });
           } else {
             this.state.addXp(xp);
           }
@@ -520,7 +524,9 @@ export class JobSystem {
         this.playSfx(r.isZombie ? "harvestZombie" : "xp");
         this.quest.post(
           r.isZombie ? QuestEvent.ZombieHarvested : QuestEvent.CropHarvested,
-          r.name
+          r.name,
+          1,
+          spawned?.subjectAliases
         );
       }
     }

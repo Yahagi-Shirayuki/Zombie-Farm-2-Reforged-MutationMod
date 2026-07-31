@@ -14,13 +14,17 @@ import { Hud } from "../hud";
 import { QuestBus, QuestEvent } from "../quest/events";
 import { TutorialSave } from "../save/schema";
 import {
-  nextTutorialStep, recoverTutorialCropStep, STEPS, StepDef, TutStep,
-  TUTORIAL_GROW_BOOST_KEY, tutorialBoostPurchaseAllowed,
+  nextTutorialStep, recoverTutorialCropStep, recoverTutorialInvadeStep, STEPS, StepDef,
+  TutStep, TUTORIAL_GROW_BOOST_KEY, tutorialBoostPurchaseAllowed, tutorialStepNeedsTarget,
 } from "./steps";
 
 const ARROW_SIZE = 27;
 const ARROW_MENU_GAP = 6;
 const ARROW_PLOT_GAP = 24;
+
+const SKIP_LABEL = "Skip tutorial";
+const SKIP_CONFIRM_LABEL = "Tap again to skip";
+const SKIP_CONFIRM_MS = 4000;
 
 /** The Insta-Grow boost key (mirrors GROW_BOOST_KEY in main.ts). */
 const GROW_BOOST_KEY = TUTORIAL_GROW_BOOST_KEY;
@@ -59,7 +63,11 @@ export class TutorialController {
   private timSprite!: HTMLImageElement;
   private bubble!: HTMLDivElement;
   private arrow!: HTMLImageElement;
+  private skip!: HTMLButtonElement;
   private blocker: HTMLDivElement | null = null;
+  /** The skip button asks once before it ends the run. */
+  private skipArmed = false;
+  private skipDisarm = 0;
 
   constructor(deps: TutorialDeps) {
     this.d = deps;
@@ -90,6 +98,12 @@ export class TutorialController {
     // their client-only starter soil vanished during server reconciliation, restart
     // at the real plow step rather than leaving the player stuck on bare ground.
     let step = save.step === 6 || save.step === 7 ? TutStep.Done : save.step as TutStep;
+    // A step this build does not know (a save from a future/edited build) would crash
+    // enterStep on an undefined beat. Start over rather than mount a broken overlay.
+    if (!STEPS[step]) step = TutStep.Welcome;
+    // A beat that needs a target but has none can reach nothing; Plow needs none, so
+    // land there instead of mounting the overlay on a frozen screen.
+    if (!this.plotTarget && tutorialStepNeedsTarget(step)) step = TutStep.Plow;
     if (step === TutStep.PlantZombie && this.plotTarget &&
         !this.d.field.canPlant(this.plotTarget.col, this.plotTarget.row)) {
       step = TutStep.Plow;
@@ -135,6 +149,7 @@ export class TutorialController {
     this.active = false;
     if (this.raf) cancelAnimationFrame(this.raf);
     this.raf = 0;
+    this.disarmSkip();
     this.unsubBus?.();
     this.unsubBus = null;
     this.removeBlocker();
@@ -212,6 +227,7 @@ export class TutorialController {
     this.current = step;
     const def = STEPS[step];
     this.removeBlocker();
+    this.disarmSkip(); // a half-tapped skip must not carry into the next beat
     this.layer.classList.toggle("invade-step", step === TutStep.Invade);
     this.layer.classList.remove("invasion-menu-open");
     this.d.hud.setTutorialMenuTarget(def.kind === "menu" ? (def.menuLabel ?? null) : null);
@@ -303,6 +319,15 @@ export class TutorialController {
         !!document.querySelector("#hud .raid-bg, #hud .army-bg")
     );
 
+    // A plot beat with no target reaches NOTHING: allowsTile() refuses every tile and
+    // a plot beat highlights no menu, so the overlay would sit there with the whole
+    // game frozen behind it (and the freeze is persisted, so a reload does not help).
+    if (!this.ensurePlotTarget()) return;
+    // Losing the army during the invasion beat is the other dead end — every farm tap
+    // is gated, so the player could never grow a replacement zombie to invade with.
+    const afterInvade = recoverTutorialInvadeStep(this.current, this.hasArmy(), this.canPlantTarget());
+    if (afterInvade !== this.current) { this.advanceTo(afterInvade); return; }
+
     // If an old client-only tutorial plot disappears when authoritative farm state
     // arrives, rewind to the earliest real action the surviving state supports.
     if (!this.settlingPlant && this.plotTarget && this.current === TutStep.PlantZombie &&
@@ -339,6 +364,35 @@ export class TutorialController {
     }
     this.positionArrow();
   };
+
+  /** Whether the player holds a zombie that could actually be sent on an invasion.
+   *  A stored (Mausoleum) unit does not count — deploying it needs the Zombies menu,
+   *  which the invasion beat's input gate keeps out of reach. */
+  private hasArmy(): boolean {
+    return this.d.zombies.roster().some((zombie) => !zombie.stored);
+  }
+
+  private canPlantTarget(): boolean {
+    return !!this.plotTarget && this.d.field.canPlant(this.plotTarget.col, this.plotTarget.row);
+  }
+
+  /**
+   * Guarantee the current beat has something to point at. Returns false when it
+   * rewound (the caller should stop this frame).
+   *
+   * Plow is exempt: it accepts any tillable ground, so it is the safe landing spot
+   * whenever no target can be found at all.
+   */
+  private ensurePlotTarget(): boolean {
+    if (!tutorialStepNeedsTarget(this.current) || this.plotTarget) return true;
+    this.plotTarget = this.d.findTutorialPlot(true);
+    if (this.plotTarget) {
+      this.persist(this.current, false);
+      return true;
+    }
+    this.advanceTo(TutStep.Plow);
+    return false;
+  }
 
   private positionArrow() {
     const def = STEPS[this.current];
@@ -389,12 +443,49 @@ export class TutorialController {
     arrow.src = `${BASE}assets/ui/market/arrow_right.png`;
     arrow.style.display = "none";
 
-    layer.append(tim, arrow);
+    // The escape hatch. Every beat gates all farm input down to one target, so any
+    // state the beat cannot detect leaves the player with a frozen game and no way
+    // out — and the beat is persisted, so reloading does not clear it. Two taps
+    // (the second confirms) end the run. Skipping forfeits the completion bonus,
+    // which is why it is not one tap.
+    const skip = document.createElement("button");
+    skip.className = "tut-skip";
+    skip.type = "button";
+    skip.textContent = SKIP_LABEL;
+    skip.onclick = (e) => { e.stopPropagation(); this.onSkipTapped(); };
+
+    layer.append(tim, arrow, skip);
     this.layer = layer;
     this.tim = tim;
     this.timSprite = sprite;
     this.bubble = bubble;
     this.arrow = arrow;
+    this.skip = skip;
+  }
+
+  /** First tap arms and re-labels; a second within the window ends the tutorial. */
+  private onSkipTapped() {
+    if (this.skipDisarm) { clearTimeout(this.skipDisarm); this.skipDisarm = 0; }
+    if (!this.skipArmed) {
+      this.skipArmed = true;
+      this.skip.textContent = SKIP_CONFIRM_LABEL;
+      this.skip.classList.add("armed");
+      this.skipDisarm = window.setTimeout(() => this.disarmSkip(), SKIP_CONFIRM_MS);
+      return;
+    }
+    this.disarmSkip();
+    // Persist as done WITHOUT the completion bonus: the bonus is the reward for
+    // finishing, and a one-tap 200 gold would be an exploit. dispose() releases the
+    // input gate, so the farm is fully playable again immediately.
+    this.persist(TutStep.Done, true);
+    this.dispose();
+  }
+
+  private disarmSkip() {
+    if (this.skipDisarm) { clearTimeout(this.skipDisarm); this.skipDisarm = 0; }
+    this.skipArmed = false;
+    this.skip.textContent = SKIP_LABEL;
+    this.skip.classList.remove("armed");
   }
 
   private showBubble(def: StepDef) {

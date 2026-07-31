@@ -1,12 +1,12 @@
 import { Application, Assets, Container, FederatedPointerEvent, Graphics, Point, Sprite, Text, Texture } from "pixi.js";
-import { plowRectangle, PlowOrigin, uniquePlowOrigins } from "./plowSelection";
+import { snapPlowOrigin } from "./plowSelection";
 // Patch Pixi's renderer to use no-eval polyfills for its shader/UBO/uniform/particle
 // codegen (it otherwise uses `new Function`, which the production CSP's script-src
 // blocks — no 'unsafe-eval'). Side-effect import; must run before `new Application()`.
 // pixi.js lists ./lib/unsafe-eval/init.* under "sideEffects", so it survives bundling.
 import "pixi.js/unsafe-eval";
 import { loadAssets, ensureObjectTexture, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, lootImage, purchasableZombies, placeablePurchaseLimit } from "./assets";
-import { Field, CARROT, CropConfig, PLOT, type TillHandleDirection, type TillTarget } from "./Field";
+import { Field, CARROT, CropConfig, PLOT } from "./Field";
 import { Actor } from "./Actor";
 import { PetActor } from "./PetActor";
 import { WalkController } from "./WalkController";
@@ -32,6 +32,7 @@ import { RaidManager, RaidResultView } from "./raid/RaidManager";
 import { RaidScene } from "./raid/RaidScene";
 import { RAID_COOLDOWN_MS } from "./raid/RaidCatalog";
 import { reconcilePartySelection } from "./raid/partySelection";
+import { postRaidWinQuests } from "./raid/questEvents";
 import { screenToGrid, tileCenter, TILE_H, TILE_W, HW, HH } from "./iso";
 import { setFootprint } from "./depthSort";
 import { NightLayer, makeLight } from "./lighting";
@@ -47,7 +48,7 @@ import { BASE } from "./base";
 import { TutorialController } from "./tutorial/TutorialController";
 import { reconcileTutorialCompletion, TutStep, TUTORIAL_ZOMBIE_KEY } from "./tutorial/steps";
 import { initPlatform, isMobile } from "./platform";
-import { initPwa, promptReload } from "./pwa";
+import { initPwa, promptReload, checkForUpdate } from "./pwa";
 import { initDiagnostics } from "./diagnostics";
 import {
   captureTouchPointer, gestureMoved, isDeferredTouchMode, isOutsideFarmPanGesture, isTouchPointer,
@@ -56,7 +57,11 @@ import {
 import {
   appendHarvestTarget, harvestTargetKey, sampleStrokeSegment, type HarvestTarget,
 } from "./harvestStroke";
-import { mutationDescription } from "./zombie/mutations";
+import { mutationMarketDescription } from "./zombie/statDisplay";
+import {
+  combineSubject, combineSubjectAliases, mutantSubjectIndex, unitQuestSubjects,
+  unitSubjectAliases,
+} from "./quest/mutantSubjects";
 import { resolveCropMutations } from "./zombie/cropMutations";
 import { MutationPortraits } from "./zombie/mutationPortrait";
 import {
@@ -181,6 +186,29 @@ async function main() {
   // def (stats + taxonomy) to spawn the matching owned unit.
   const zombieDefs = new Map<string, ZombieDef>();
   for (const z of assets.zombies) zombieDefs.set(z.key, z);
+  // Mutation bit -> Market mutant species name. A zombie that grew its mutation next
+  // to crops answers to the bought mutant's name for quest purposes (quest 55/56).
+  const mutantSubjects = mutantSubjectIndex(assets.zombies);
+  /** The extra quest subjects an owned unit's mutations make it equivalent to.
+   *  Spawns hand back either the live actor or a stored record, so read whichever. */
+  const unitSubjectAliasesOf = (
+    unit: { getData(): { key: string; mutation: number } } | { key: string; mutation: number } | null | undefined
+  ): readonly string[] => {
+    if (!unit) return [];
+    const data = "getData" in unit ? unit.getData() : unit;
+    return unitSubjectAliases(
+      zombieDefs.get(data.key)?.name ?? data.key, data.mutation ?? 0, mutantSubjects
+    );
+  };
+  /** The Zombie Pot's "combined" subject plus every pairing the parents' mutations
+   *  also stand for, so quest 56 accepts two field-mutated Regular Zombies. */
+  const combinedPotSubjects = (pot: { keyA: string; keyB: string; maskA: number; maskB: number }) => {
+    const subjectsOf = (key: string, mask: number) =>
+      unitQuestSubjects(zombieDefs.get(key)?.name ?? "", mask, mutantSubjects).filter(Boolean);
+    const a = subjectsOf(pot.keyA, pot.maskA);
+    const b = subjectsOf(pot.keyB, pot.maskB);
+    return { subject: combineSubject(a[0] ?? "", b[0] ?? ""), aliases: combineSubjectAliases(a, b) };
+  };
   const offlineHarvestMutation = (key: string, context: { cropKeys: string[]; guaranteed: boolean }): number | undefined => {
     if (state.onFarm) return undefined; // online mutation rolls are server-owned
     const def = zombieDefs.get(key);
@@ -203,7 +231,9 @@ async function main() {
     return {
       name: z.name, cost: z.cost, brains: z.brainsNeeded, timeLabel: fmtTime(z.growMs), level: z.level,
       category: z.category,
-      description: mutationDescription(z.mutation ?? 0),
+      // Catalog stats are pre-mutation (makeOwned folds the bonus in), so this is the
+      // exact displayed gain the grown unit's stat tile will show.
+      description: mutationMarketDescription(z, z.mutation ?? 0),
       portrait: zombiePortrait(z.key), // per-type composited portrait
       cfg,
     };
@@ -750,9 +780,10 @@ async function main() {
   // Harvesting a zombie crop grows an owned zombie at the plot's center tile.
   const jobs = new JobSystem(
     field, actor, walk, state, floatText, (name) => audio.play(name),
-    (key, oc, or, context) => zombies.spawnVerified(
-      key, oc + 1, or + 1, offlineHarvestMutation(key, context)
-    )?.id ?? null,
+    (key, oc, or, context) => {
+      const unit = zombies.spawnVerified(key, oc + 1, or + 1, offlineHarvestMutation(key, context));
+      return unit ? { id: unit.id, subjectAliases: unitSubjectAliasesOf(unit) } : null;
+    },
     questBus,
     (oc, or) => zombies.tryFertilize(oc, or),
     (oc, or) => tutorial?.onPlotPlowed(oc, or),
@@ -763,6 +794,12 @@ async function main() {
     popHarvestIcon,
     () => zombies.canHarvestZombie()
   );
+
+  // `raidActive` is declared up here (ahead of both the celebration queue and the raid
+  // block far below) so every closure that reads it — the tutorial's isRaidActive(),
+  // celebrateQuest() — sees an already-initialised binding; the raid launch handlers
+  // assign it.
+  let raidActive = false;
 
   // Quest-complete celebration, styled like the level-up popup. Quests can finish in
   // bursts (several at once on a raid return), so completions QUEUE and show one at a
@@ -788,6 +825,13 @@ async function main() {
       message: def.messageComplete,
       rewards: questRewards(def),
     });
+    // A battle owns the screen (and online a raid quest completes the moment
+    // /raid/finish answers, while the result panel is still up), so hold the
+    // celebration until the player is back on the farm. Closing the raid result
+    // flushes the queue.
+    if (!questCompleteShowing && !raidActive) showNextQuestComplete();
+  };
+  const flushQuestCompletions = () => {
     if (!questCompleteShowing) showNextQuestComplete();
   };
 
@@ -967,12 +1011,14 @@ async function main() {
         if (!r) continue;
         const cropCenter = field.plotCenterOf(pl.oc, pl.or);
         popHarvestIcon(r, cropCenter.x, cropCenter.y);
+        let harvestAliases: readonly string[] = [];
         if (state.onFarm) {
           if (r.zombieKey) {
             const context = mutationContexts.get(`${pl.oc}:${pl.or}`) ?? r.mutationContext!;
             const unit = zombies.spawnVerified(r.zombieKey, pl.oc + 1, pl.or + 1,
               offlineHarvestMutation(r.zombieKey, context));
             if (!unit) continue;
+            harvestAliases = unitSubjectAliasesOf(unit);
             powerUnitIds.push({ id: unit.id, oc: pl.oc, or: pl.or });
           }
           // The server receives one semantic power command from onUseBoost below;
@@ -982,11 +1028,16 @@ async function main() {
           state.addXp(harvestXp(r.xp, field.hasPlowFree()));
           if (r.zombieKey) {
             const context = mutationContexts.get(`${pl.oc}:${pl.or}`) ?? r.mutationContext!;
-            zombies.spawn(r.zombieKey, pl.oc + 1, pl.or + 1,
-              offlineHarvestMutation(r.zombieKey, context));
+            harvestAliases = unitSubjectAliasesOf(
+              zombies.spawn(r.zombieKey, pl.oc + 1, pl.or + 1,
+                offlineHarvestMutation(r.zombieKey, context))
+            );
           }
         }
-        questBus.post(r.isZombie ? QuestEvent.ZombieHarvested : QuestEvent.CropHarvested, r.name);
+        questBus.post(
+          r.isZombie ? QuestEvent.ZombieHarvested : QuestEvent.CropHarvested,
+          r.name, 1, harvestAliases
+        );
         if (!r.isZombie && awardOfflineEpicBossToken(r.growMs, r.sell, cropCenter.x, cropCenter.y)) {
           floatText(c.x, c.y - 28, "+1 Boss Token!");
         }
@@ -1501,10 +1552,11 @@ async function main() {
   const touchGestureTiles: { col: number; row: number }[] = [];
   const touchGestureTileKeys = new Set<string>();
   const touchPlantPreviews = new Map<string, Graphics>();
-  type PlowPreview = { anchor: PlowOrigin; current: PlowOrigin; targets: TillTarget[] };
-  let plowPreview: PlowPreview | null = null;
-  let touchPlowGesture: "position" | "resize" | "confirm" | null = null;
-  let touchPlowHandle: TillHandleDirection | null = null;
+  let plowStrokeAnchor: { oc: number; or: number } | null = null;
+  const plowStrokeLast = new Point();
+  const plowStrokeTargets: { oc: number; or: number }[] = [];
+  const plowStrokeKeys = new Set<string>();
+  const plowStrokePreviews = new Map<string, Graphics>();
 
   const cancelZombieLongPress = () => {
     if (zombieLongPressTimer !== null) clearTimeout(zombieLongPressTimer);
@@ -1528,6 +1580,13 @@ async function main() {
     harvestStrokeKeys.clear();
     harvestStrokeCandidate = null;
     harvestStrokeActive = false;
+  };
+  const clearPlowStroke = () => {
+    for (const preview of plowStrokePreviews.values()) preview.destroy();
+    plowStrokePreviews.clear();
+    plowStrokeTargets.length = 0;
+    plowStrokeKeys.clear();
+    plowStrokeAnchor = null;
   };
   const recordTouchPlantTile = (col: number, row: number) => {
     const rawKey = tileKey(col, row);
@@ -1576,9 +1635,7 @@ async function main() {
     pressPointerId = -1;
     touchOutsideFarmPan = false;
     clearTouchToolStroke();
-    plowPreview = null;
-    touchPlowGesture = null;
-    touchPlowHandle = null;
+    clearPlowStroke();
     field.clearTillSelection();
     touchPinch = false;
     pinchDist = 0;
@@ -1609,9 +1666,7 @@ async function main() {
       clearTouchToolStroke();
       clearHarvestStroke();
       lastPlot = "";
-      plowPreview = null;
-      touchPlowGesture = null;
-      touchPlowHandle = null;
+      clearPlowStroke();
       field.clearTillSelection();
       field.hideCursor();
       const g = pinchInfo(e.touches);
@@ -1747,42 +1802,75 @@ async function main() {
     return false;
   };
 
-  const originAtTile = (col: number, row: number): PlowOrigin => {
+  const originAtTile = (col: number, row: number): { oc: number; or: number } => {
     const target = field.resolveTill(col, row);
     return { oc: target.oc, or: target.or };
   };
-  const resolvedPlowTargets = (anchor: PlowOrigin, current: PlowOrigin): TillTarget[] => {
-    const resolved = plowRectangle(anchor, current).map(({ oc, or }) =>
-      field.resolveTill(oc + PLOT / 2, or + PLOT / 2));
-    return uniquePlowOrigins(resolved);
+
+  const showPlowStrokePreview = (target: { oc: number; or: number }) => {
+    const key = tileKey(target.oc, target.or);
+    if (plowStrokePreviews.has(key)) return;
+    const center = field.plotCenterOf(target.oc, target.or);
+    const w = PLOT * HW, h = PLOT * HH;
+    const preview = new Graphics();
+    preview.moveTo(0, -h).lineTo(w, 0).lineTo(0, h).lineTo(-w, 0).lineTo(0, -h)
+      .fill({ color: 0x8df25a, alpha: 0.2 })
+      .stroke({ width: 3, color: 0x8df25a, alpha: 0.8 });
+    preview.position.set(center.x, center.y);
+    field.plowHighlightLayer.addChild(preview);
+    plowStrokePreviews.set(key, preview);
   };
-  const showPlowPreview = (anchor: PlowOrigin, current: PlowOrigin, handles: boolean) => {
-    const targets = resolvedPlowTargets(anchor, current);
-    plowPreview = { anchor, current, targets };
-    field.setTillSelection(targets, handles);
+
+  const recordPlowStrokeTarget = (target: { oc: number; or: number }) => {
+    const key = tileKey(target.oc, target.or);
+    if (plowStrokeKeys.has(key)) return;
+    const current = field.resolveTill(target.oc + PLOT / 2, target.or + PLOT / 2);
+    if (!current.valid || current.oc !== target.oc || current.or !== target.or) return;
+    plowStrokeKeys.add(key);
+    plowStrokeTargets.push(target);
+    if (isTouchPointer(pressPointerType)) showPlowStrokePreview(target);
+    else jobs.enqueue("till", target.oc + PLOT / 2, target.or + PLOT / 2);
   };
-  const clearPlowPreview = () => {
-    plowPreview = null;
-    touchPlowGesture = null;
-    touchPlowHandle = null;
-    field.clearTillSelection();
+
+  const plowTargetAt = (globalX: number, globalY: number): { oc: number; or: number } | null => {
+    if (!plowStrokeAnchor) return null;
+    const worldPoint = world.toLocal(new Point(globalX, globalY));
+    const grid = screenToGrid(worldPoint.x, worldPoint.y);
+    const col = Math.round(grid.col), row = Math.round(grid.row);
+    if (tutorial?.active && !tutorial.allowsTile(col, row)) return null;
+    const existing = field.plotOriginAt(col, row);
+    if (existing) {
+      const target = field.resolveTill(col, row);
+      return target.valid ? { oc: target.oc, or: target.or } : null;
+    }
+    const current = originAtTile(col, row);
+    const snapped = snapPlowOrigin(plowStrokeAnchor, current);
+    const target = field.resolveTill(snapped.oc + PLOT / 2, snapped.or + PLOT / 2);
+    return target.valid && target.oc === snapped.oc && target.or === snapped.or ? snapped : null;
   };
-  const commitPlowPreview = () => {
-    const targets = uniquePlowOrigins(plowPreview?.targets ?? []).filter((target) => target.valid);
-    clearPlowPreview();
+
+  const collectPlowStrokeSegment = (x: number, y: number) => {
+    for (const point of sampleStrokeSegment(plowStrokeLast, { x, y })) {
+      const target = plowTargetAt(point.x, point.y);
+      if (target) recordPlowStrokeTarget(target);
+    }
+    plowStrokeLast.set(x, y);
+  };
+
+  const beginPlowStroke = (col: number, row: number, x: number, y: number): boolean => {
+    const target = field.resolveTill(col, row);
+    if (!target.valid) return false;
+    plowStrokeAnchor = { oc: target.oc, or: target.or };
+    plowStrokeLast.set(x, y);
+    recordPlowStrokeTarget(plowStrokeAnchor);
+    return true;
+  };
+
+  const commitTouchPlowStroke = () => {
+    const targets = [...plowStrokeTargets];
+    clearPlowStroke();
     for (const target of targets)
       jobs.enqueue("till", target.oc + PLOT / 2, target.or + PLOT / 2);
-  };
-  const previewContains = (col: number, row: number) => !!plowPreview?.targets.some(
-    ({ oc, or }) => col >= oc && col < oc + PLOT && row >= or && row < or + PLOT
-  );
-  const constrainHandleDrag = (origin: PlowOrigin): PlowOrigin => {
-    if (!plowPreview || !touchPlowHandle) return origin;
-    const { anchor } = plowPreview;
-    if (touchPlowHandle === "col-") return { oc: Math.min(origin.oc, anchor.oc), or: origin.or };
-    if (touchPlowHandle === "col+") return { oc: Math.max(origin.oc, anchor.oc), or: origin.or };
-    if (touchPlowHandle === "row-") return { oc: origin.oc, or: Math.min(origin.or, anchor.or) };
-    return { oc: origin.oc, or: Math.max(origin.or, anchor.or) };
   };
 
   // ---- object buy / place / move ----
@@ -2024,13 +2112,13 @@ async function main() {
     if (onlineGameplayBlocked()) return null;
     if (!activePotId) return null;
     const pending = zombies.potFor(activePotId).pending;
-    const object = pending
-      ? [zombieDefs.get(pending.keyA)?.name ?? "", zombieDefs.get(pending.keyB)?.name ?? ""].filter(Boolean).sort().join(" ")
-      : "";
+    const combined = pending ? combinedPotSubjects(pending) : null;
     const z = zombies.collectCombine(walk.tile.col, walk.tile.row, activePotId);
     if (z) {
-      if (object) questBus.post(QuestEvent.CombinerCombined, object);
-      questBus.post(QuestEvent.CombinerHarvested, z.typeName);
+      if (combined?.subject) {
+        questBus.post(QuestEvent.CombinerCombined, combined.subject, 1, combined.aliases);
+      }
+      questBus.post(QuestEvent.CombinerHarvested, z.typeName, 1, unitSubjectAliasesOf(z));
       const c = tileCenter(z.col, z.row);
       floatText(c.x, c.y, z.mutation ? `${z.name}!` : z.name);
       try { await economy?.settleBeforeDependency(); }
@@ -2183,24 +2271,10 @@ async function main() {
   };
   syncEpicBossUi();
   window.setInterval(syncEpicBossUi, 60_000);
-  // Emit the quest events a raid WIN produces: the invasion itself, each looted
-  // item, and a "perfect game" when nobody fell. Object names match the quest data
-  // (raid name / loot item name), so invasion/loot quests advance.
-  const postRaidWinQuests = (view: RaidResultView, raidName: string) => {
-    if (!view.win) return;
-    questBus.post(QuestEvent.InvasionSuccessful, raidName, 1);
-    if (view.zombiesLost === 0) questBus.post(QuestEvent.InvasionPerfectGame, raidName, 1);
-    for (const drop of view.loot) questBus.post(QuestEvent.LootItemWon, drop.name, 1);
-  };
-
   // ---- Tim Buckwheat guided tutorial (first-run) ----
   // A DOM overlay layer that leads the player through the core farm loop. It
   // coexists with the quest rail (subscribes to the same questBus, polls live
   // state) and mutates no gameplay systems. See src/tutorial/.
-  // `raidActive` is declared here (ahead of the raid block below) so the tutorial's
-  // isRaidActive() closure reads an already-initialised binding; the raid launch
-  // handler assigns it.
-  let raidActive = false;
   // Quietly absorb rapid relaunch taps during the server's minimum invasion window.
   // This mainly covers an immediate retreat to correct the selected army order while
   // the result request is still releasing the shared raid/Epic-Boss session lock.
@@ -2305,6 +2379,8 @@ async function main() {
     saveManager.clear();
     location.reload();
   } : null;
+  // Available in both farm modes — the service worker serves the app shell either way.
+  hud.onCheckForUpdate = () => checkForUpdate();
 
   // ---- friends: OFFLINE path (local stub, autosaved via GameState.onChange).
   // Used when no server is configured or the player is signed out. ----
@@ -2677,6 +2753,7 @@ async function main() {
           world.visible = true;
           hud.setRaiding(false);
           audio.exitRaid();
+          flushQuestCompletions(); // celebrate on the farm, not over the result panel
         });
         };
         if (onlineFarm && epicSessionId) {
@@ -2701,6 +2778,7 @@ async function main() {
             hud.showToast("The fight result could not be verified. Reconnecting will recover it.");
             if (raidScene) { app.stage.removeChild(raidScene.container); raidScene.destroy(); raidScene = null; }
             raidActive = false; world.visible = true; hud.setRaiding(false); audio.exitRaid();
+            flushQuestCompletions();
           });
           return;
         }
@@ -2854,6 +2932,10 @@ async function main() {
           economy!.onRaidSettled = (res) => {
             economy!.onRaidSettled = null;
             if (res.outcome) zombies.applyServerRaidOutcome(res.outcome.survivors, res.outcome.losses);
+            // Online the tutorial's invade beat no longer rides the local quest event,
+            // so advance it from the verified outcome as soon as it lands (closing the
+            // result panel is the other, later, chance).
+            tutorial?.onRaidResolved();
             const drops = res.loot ? [{ name: res.loot.name, icon: raids.lootIconFor(res.loot.name) }] : [];
             if (res.newZombie) {
               zombies.grantReward(
@@ -2925,10 +3007,13 @@ async function main() {
           world.visible = true;
           hud.setRaiding(false);
           audio.exitRaid(); // battle over — hand the farm bed back
-          // Advance raid quests only now that we're back on the farm, so their
-          // completion popups appear over the farm rather than the battle result.
-          postRaidWinQuests(view, setup.raid.name);
-          tutorial.onRaidResolved(); // finish post-win if the quest event did not
+          // OFFLINE, advance raid quests only now that we're back on the farm. Online
+          // the server already counted this win and its questChanges have been applied,
+          // so posting again would count it twice (see src/raid/questEvents.ts).
+          postRaidWinQuests(questBus, view, setup.raid.name, onlineFarm);
+          tutorial?.onRaidResolved(); // finish post-win if the quest event did not
+          // Any quest that completed during the battle celebrates now, on the farm.
+          flushQuestCompletions();
 
           if (!casualtyParty.length) return;
           const revivalViews = casualtyParty.map((zombie) => ({
@@ -3443,6 +3528,7 @@ async function main() {
     cancelZombieLongPress();
     zombieLongPressActivated = false;
     clearHarvestStroke();
+    clearPlowStroke();
     pressStart.copyFrom(e.global);
     clearTouchToolStroke();
     if (visiting) {
@@ -3494,29 +3580,6 @@ async function main() {
       harvestStrokeLast.copyFrom(e.global);
     }
     if (touch && hud.mode === "walk") beginWorldLongPress(wx, wy, e.pointerId);
-    if (touch && hud.mode === "till") {
-      dragging = true;
-      moved = false;
-      last.copyFrom(e.global);
-      const handle = plowPreview
-        ? field.tillHandleAt(wx, wy, 34 / Math.max(0.01, world.scale.x))
-        : null;
-      if (handle) {
-        touchPlowGesture = "resize";
-        touchPlowHandle = handle;
-      } else if (previewContains(col, row)) {
-        // Confirmation is deliberately deferred until an unmoved pointer-up. This
-        // is the single commit path that prevents one tap from placing twice.
-        touchPlowGesture = "confirm";
-        touchPlowHandle = null;
-      } else {
-        const anchor = originAtTile(col, row);
-        touchPlowGesture = "position";
-        touchPlowHandle = null;
-        showPlowPreview(anchor, anchor, true);
-      }
-      return;
-    }
     if (isDeferredTouchMode(hud.mode)) {
       if (touch) {
         // Wait for pointer-up. A second finger may still convert this tap into a
@@ -3539,12 +3602,11 @@ async function main() {
       dragging = false;
       return;
     }
-    if (!touch && hud.mode === "till") {
-      const anchor = originAtTile(col, row);
+    if (hud.mode === "till") {
       dragging = true;
       moved = false;
       last.copyFrom(e.global);
-      showPlowPreview(anchor, anchor, false);
+      if (!touchOutsideFarmPan) beginPlowStroke(col, row, e.global.x, e.global.y);
       return;
     }
     dragging = true;
@@ -3643,17 +3705,11 @@ async function main() {
           clampCamera(); // block panning above the sky
         }
         last.copyFrom(e.global);
-      } else if (hud.mode === "till" && plowPreview) {
-        if (moved && touchPlowGesture === "position") {
-          const anchor = originAtTile(col, row);
-          showPlowPreview(anchor, anchor, true);
-        } else if (moved && touchPlowGesture === "resize") {
-          showPlowPreview(plowPreview.anchor, constrainHandleDrag(originAtTile(col, row)), true);
-        } else if (moved && !isTouchPointer(pressPointerType)) {
-          showPlowPreview(plowPreview.anchor, originAtTile(col, row), false);
-        }
+      } else if (hud.mode === "till" && plowStrokeAnchor) {
+        collectPlowStrokeSegment(e.global.x, e.global.y);
+        field.setCursor(col, row, "till");
         return;
-      } else if (moved) {
+      } else if (hud.mode === "plant" && moved) {
         // Drag-paint plants across the field. Touch records the stroke and commits
         // on finger-up; mouse queues each new tile immediately.
         const tk = tileKey(col, row);
@@ -3668,9 +3724,7 @@ async function main() {
         }
       }
     }
-    const tool = (hud.mode === "till" && plowPreview)
-      ? null
-      : hud.mode === "till" || hud.mode === "plant" ? hud.mode : null;
+    const tool = hud.mode === "till" || hud.mode === "plant" ? hud.mode : null;
     field.setCursor(col, row, tool);
   });
   app.canvas.addEventListener("pointerleave", () => {
@@ -3852,6 +3906,7 @@ async function main() {
       pressPointerId = -1;
       clearTouchToolStroke();
       clearHarvestStroke();
+      clearPlowStroke();
       return;
     }
     if (temporaryPanGesture) {
@@ -3860,6 +3915,20 @@ async function main() {
       moved = false;
       lastPlot = "";
       pressPointerId = -1;
+      clearHarvestStroke();
+      clearPlowStroke();
+      return;
+    }
+    if (dragging && hud.mode === "till" && plowStrokeTargets.length) {
+      collectPlowStrokeSegment(e.global.x, e.global.y);
+      if (isTouchPointer(pressPointerType)) commitTouchPlowStroke();
+      else clearPlowStroke();
+      dragging = false;
+      moved = false;
+      lastPlot = "";
+      pressPointerId = -1;
+      touchOutsideFarmPan = false;
+      clearTouchToolStroke();
       clearHarvestStroke();
       return;
     }
@@ -3876,25 +3945,8 @@ async function main() {
       clearTouchToolStroke();
       return;
     }
-    if (dragging && hud.mode === "till" && plowPreview) {
-      if (isTouchPointer(pressPointerType)) {
-        if (touchPlowGesture === "confirm" && !moved) commitPlowPreview();
-        else {
-          // Positioning and handle drags only edit the preview; a later tap on the
-          // highlighted area performs the one and only commit.
-          touchPlowGesture = null;
-          touchPlowHandle = null;
-        }
-      } else commitPlowPreview();
-      dragging = false;
-      moved = false;
-      lastPlot = "";
-      pressPointerId = -1;
-      clearTouchToolStroke();
-      return;
-    }
     if (dragging && moved && !touchOutsideFarmPan && isTouchPointer(pressPointerType) &&
-        (hud.mode === "till" || hud.mode === "plant")) {
+        hud.mode === "plant") {
       commitTouchToolStroke();
     }
     endDrag(e);
@@ -3903,6 +3955,7 @@ async function main() {
     touchSelectStartTile = null;
     clearTouchToolStroke();
     clearHarvestStroke();
+    clearPlowStroke();
   };
   app.stage.on("pointerup", onPointerUp);
   app.stage.on("pointerupoutside", onPointerUp);
@@ -3943,7 +3996,8 @@ async function main() {
   // Hide the tool cursor when switching tools (and drop any carried object);
   // next pointer move re-shows the right cursor.
   hud.onModeChange = () => {
-    clearPlowPreview();
+    clearPlowStroke();
+    field.clearTillSelection();
     field.hideCursor();
     field.setObjectHighlight(null);
     zombies.clearSelection();
@@ -3953,7 +4007,8 @@ async function main() {
     if (hud.mode !== "place") placeFlipped = false; // and reset the ghost orientation
   };
   hud.onTemporaryPanChange = () => {
-    clearPlowPreview();
+    clearPlowStroke();
+    field.clearTillSelection();
     field.hideCursor();
     field.setObjectHighlight(null);
     hoveredCrop = null;
@@ -4204,13 +4259,13 @@ async function main() {
     // Collect a finished combine onto the farmer's tile (or storage if capped).
     collectCombine: () => {
       const pending = zombies.combinePot.pending;
-      const object = pending
-        ? [zombieDefs.get(pending.keyA)?.name ?? "", zombieDefs.get(pending.keyB)?.name ?? ""].filter(Boolean).sort().join(" ")
-        : "";
+      const combined = pending ? combinedPotSubjects(pending) : null;
       const z = zombies.collectCombine(walk.tile.col, walk.tile.row);
       if (z) {
-        if (object) questBus.post(QuestEvent.CombinerCombined, object);
-        questBus.post(QuestEvent.CombinerHarvested, z.typeName);
+        if (combined?.subject) {
+          questBus.post(QuestEvent.CombinerCombined, combined.subject, 1, combined.aliases);
+        }
+        questBus.post(QuestEvent.CombinerHarvested, z.typeName, 1, unitSubjectAliasesOf(z));
       }
       return z;
     },

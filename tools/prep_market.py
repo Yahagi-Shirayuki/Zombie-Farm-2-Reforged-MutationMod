@@ -21,6 +21,8 @@ import os
 import re
 import sys
 
+from reforge_economy import brain_price
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GAMEPLAY = os.path.join(ROOT, "ZF2R_extracted", "data", "json", "gameplay", "Market.json")
 UNITSTATS = os.path.join(ROOT, "ZF2R_extracted", "data", "json", "gameplay", "UnitStats.json")
@@ -41,6 +43,12 @@ MARKET_SPECIALS = {
     "Dapper Zombie",
     "Granny Zombie",
 }
+
+# Brain prices take the shared brainflation retune (see tools/reforge_economy.py).
+# Without it this script silently reverted the retune on every re-run, snapping all
+# 55 brains-priced zombies back to their ZF2 values (5 -> 50, 20 -> 200, 40 -> 400).
+# The permanent plantable specials are priced flat rather than from source.
+MARKET_SPECIAL_BRAIN_COST = 5
 
 # ---- Zombie taxonomy (Phase 3) ---------------------------------------------
 # Keys look like ZombieActor<Group><Tier?><Suffix?>. The GROUP token (with a
@@ -169,10 +177,15 @@ def main():
         source = named[source_name]
         info, stats = source["marketInfo"], source["unitStats"]
         row = next((z for z in zombies if z["key"] == key), None)
+        brains = bool(info["brainsNeeded"])
         data = {
-            "key": key, "name": source_name, "cost": info["cost"], "growMs": 86_400_000,
+            "key": key, "name": source_name,
+            # These rows skip the main enrichment loop below, so they take the
+            # reforged brain price here.
+            "cost": brain_price(info["cost"], source_name) if brains else info["cost"],
+            "growMs": 86_400_000,
             "category": "special", "level": info["level"], "xp": info["xp"],
-            "brainsNeeded": bool(info["brainsNeeded"]), "group": group,
+            "brainsNeeded": brains, "group": group,
             "className": "Special", "classColor": "#c077ff", "str": stats["str"],
             "dex": stats["dex"], "con": stats["con"], "focus": stats["focus"],
             "mutation": 0, "tier": stats["tier"], "specialSprite": sprite,
@@ -195,12 +208,23 @@ def main():
         raw_xp = int(s.get("xp", 2) or 1)
         z["xp"] = raw_xp if raw_xp in (1, 2) else 1
         z["brainsNeeded"] = bool(s.get("brainsNeeded", False))
+        # Source prices are ZF2's. Brains-priced units take the reforged tenth.
+        if z["brainsNeeded"]:
+            z["cost"] = brain_price(z["cost"], z["key"])
         z["category"] = CATMAP.get(s.get("subCategory"), z.get("category", "normal"))
         z["marketHidden"] = bool(s.get("dontShowInMarket", False))
         # Market mutant zombies carry a mutation BITMASK (power of two) in the
         # source `mutation` field (e.g. Carrot=4, Tomato=1). Bake it so a grown
         # market mutant gets its mutation guaranteed. Non-mutants have no bit (0).
         z["mutation"] = int(s.get("mutation") or 0)
+        # NOTE: Market.json's authored bonus line ("+3 speed") is deliberately NOT
+        # baked. It is in RAW stat points, while the game shows every stat normalized
+        # against a fixed reference (see traits.STAT_DISPLAY_MAX) — "+1 speed" reads as
+        # +23 Speed on the card. It also disagrees with the shipped mutation flag for
+        # the two Tier-4 mutants that reuse a lower tier's bit (Eyebiscus carries
+        # Carrot's +1 dex despite advertising +3). The client derives the displayed
+        # bonus from the mask instead: zombie/statDisplay.mutationMarketDescription.
+        z.pop("marketInfo", None)
         # Taxonomy (group + colour class) derived from the key.
         group, cls, color = classify(z["key"])
         z["group"] = group
@@ -243,7 +267,7 @@ def main():
         is_market_special = z["name"] in MARKET_SPECIALS
         z["marketHidden"] = not is_market_special
         if is_market_special:
-            z["cost"] = 50
+            z["cost"] = MARKET_SPECIAL_BRAIN_COST
             z["level"] = 20
             z["brainsNeeded"] = True
             z["rewardOnly"] = False
@@ -253,10 +277,14 @@ def main():
     plants.sort(key=lambda p: (bool(p.get("seasonal", False)), p.get("level", 1)))
     zombies.sort(key=lambda z: z.get("level", 1))
 
+    # Trailing newline so a re-run is a byte-for-byte no-op against the committed
+    # assets rather than showing a permanent one-line diff.
     with open(PLANTS, "w", encoding="utf-8") as f:
         json.dump(plants, f, indent=1)
+        f.write("\n")
     with open(ZOMBIES, "w", encoding="utf-8") as f:
         json.dump(zombies, f, indent=1)
+        f.write("\n")
 
     print(f"plants:  {len(plants)} enriched (levels {min(p['level'] for p in plants)}"
           f"-{max(p['level'] for p in plants)})")

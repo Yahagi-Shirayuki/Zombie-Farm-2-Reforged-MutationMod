@@ -80,7 +80,7 @@ export class QuestSystem {
     bus: QuestBus,
     private hooks: QuestHooks
   ) {
-    bus.subscribe((nid, object, n) => this.onEvent(nid, object, n));
+    bus.subscribe((nid, object, n, aliases) => this.onEvent(nid, object, n, aliases));
     // Leveling up can satisfy a level gate, so re-check activation on state change.
     this.state.onChange(() => {
       if (this.tryActivate()) this.hooks.render(this.views());
@@ -116,9 +116,9 @@ export class QuestSystem {
     return changed;
   }
 
-  private onEvent(nid: string, object: string, n: number) {
+  private onEvent(nid: string, object: string, n: number, aliases: readonly string[] = []) {
     if (this.hooks.authoritative) {
-      const { advanced, completed } = this.previewAuthoritativeEvent(nid, object, n);
+      const { advanced, completed } = this.previewAuthoritativeEvent(nid, object, n, aliases);
       if (advanced) this.hooks.render(this.views());
       if (completed) this.hooks.requestAuthoritativeCompletionCheck?.();
       return;
@@ -133,8 +133,9 @@ export class QuestSystem {
       def.requirements.forEach((r, i) => {
         if (counts[i] >= r.countTotal) return;
         if (r.notificationID !== nid) return;
-        // "" object = match any subject; otherwise require an exact (case-insensitive) name.
-        if (!questSubjectMatches(r.notificationObject, object)) return;
+        // "" object = match any subject; otherwise require an exact (case-insensitive)
+        // name — either the event's own subject or one of its mutation aliases.
+        if (!questSubjectMatches(r.notificationObject, object, aliases)) return;
         counts[i] = Math.min(r.countTotal, counts[i] + n);
         advanced = true;
       });
@@ -228,7 +229,8 @@ export class QuestSystem {
   private previewAuthoritativeEvent(
     nid: string,
     object: string,
-    n: number
+    n: number,
+    aliases: readonly string[] = []
   ): { advanced: boolean; completed: boolean } {
     let anyAdvanced = false;
     let anyCompleted = false;
@@ -240,7 +242,7 @@ export class QuestSystem {
       let advanced = false;
       def.requirements.forEach((requirement, index) => {
         if (counts[index] >= requirement.countTotal || requirement.notificationID !== nid) return;
-        if (!questSubjectMatches(requirement.notificationObject, object)) return;
+        if (!questSubjectMatches(requirement.notificationObject, object, aliases)) return;
         counts[index] = Math.min(requirement.countTotal, counts[index] + n);
         advanced = true;
       });

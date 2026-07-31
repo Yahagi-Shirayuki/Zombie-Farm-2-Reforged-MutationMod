@@ -12,6 +12,7 @@
 // player tap "Reload" when they're ready.
 import { registerSW } from "virtual:pwa-register";
 import type { PlayMode } from "./playMode";
+import { checkRegistrationForUpdate, type UpdateCheckResult } from "./updateCheck";
 
 /** Retained so a non-service-worker caller (the ruleset-skew check) can reuse the
  *  SW's activate-and-reload path when an update is genuinely waiting. Null in dev,
@@ -63,6 +64,21 @@ export function initPwa(mode: PlayMode): void {
   });
 }
 
+/** Settings' "Check for Updates" button: poll the network on demand instead of
+ *  waiting for the browser's own periodic check. When something is waiting we show
+ *  the same bottom toast the automatic path uses; the caller reports the other
+ *  outcomes in the Settings panel. */
+export async function checkForUpdate(): Promise<UpdateCheckResult> {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return "unavailable";
+
+  const result = await checkRegistrationForUpdate(() =>
+    navigator.serviceWorker.getRegistration());
+  if (result === "update-ready") {
+    showUpdateToast("A new version is ready.", () => void activateWaitingWorkerAndReload());
+  }
+  return result;
+}
+
 /** Ask the player to reload, for a reason OTHER than a waiting service worker —
  *  currently a raid-ruleset mismatch between this tab's JS and the live Worker.
  *
@@ -105,8 +121,15 @@ function baseToast(): HTMLDivElement {
   return t;
 }
 
+/** The update toast currently on screen, if any. A manual check races the SW's own
+ *  onNeedRefresh (both fire for the same update), so the newest toast replaces the
+ *  old one rather than stacking a second Reload button on top of it. */
+let activeUpdateToast: HTMLDivElement | null = null;
+
 function showUpdateToast(message: string, onReload: () => void): void {
+  activeUpdateToast?.remove();
   const t = baseToast();
+  activeUpdateToast = t;
 
   const label = document.createElement("span");
   label.textContent = message;
@@ -136,7 +159,10 @@ function showUpdateToast(message: string, onReload: () => void): void {
     opacity: "0.7",
   } as CSSStyleDeclaration);
   dismiss.setAttribute("aria-label", "Dismiss");
-  dismiss.addEventListener("click", () => t.remove());
+  dismiss.addEventListener("click", () => {
+    if (activeUpdateToast === t) activeUpdateToast = null;
+    t.remove();
+  });
 
   t.append(label, reload, dismiss);
   document.body.appendChild(t);

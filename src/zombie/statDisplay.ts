@@ -18,7 +18,7 @@
 // Everything here is pure + headless-testable; no Pixi, no game-state object.
 // ---------------------------------------------------------------------------
 
-import { StatMeta, displayStat, veterancyMultiplier, veterancy, ABILITY_POOL } from "./traits";
+import { StatMeta, STATS, displayStat, veterancyMultiplier, veterancy, ABILITY_POOL } from "./traits";
 import { ABILITY_KIND, ABILITY_COMBAT, activeAbilities, AbilityCombatEffect } from "./abilities";
 import { mutationBonus } from "./mutations";
 
@@ -139,6 +139,69 @@ export function statBreakdown(
   });
 
   return { base: displayStat(stat, baseRaw), total: displayStat(stat, effective), lines };
+}
+
+// ---------------------------------------------------------------------------
+// Mutation bonuses in DISPLAYED units.
+// ---------------------------------------------------------------------------
+// A mutation's raw bonus is 1–4 stat points, but no surface ever shows a raw stat:
+// every tile normalizes against a fixed reference (traits.STAT_DISPLAY_MAX), and the
+// three references differ wildly. Speed's is only 4.4, so Carrot's "+1 dex" lands as
+// +23 Speed on the card, while Tomato's "+1 str" is +4 Damage. Quoting the raw points
+// in the Market therefore understated every mutation and misranked them against each
+// other. These helpers report the number the player will actually watch change.
+
+/** The base (unmutated) stats a species is listed with. Catalog rows carry these raw;
+ *  makeOwned is what folds a mutation in, so a catalog row is always pre-mutation. */
+export interface BaseStats {
+  str: number;
+  dex: number;
+  con: number;
+}
+
+export interface MutationDisplayGain {
+  stat: "str" | "dex" | "con";
+  label: string; // "Damage" / "Speed" / "Life" — matches the stat tiles
+  delta: number; // in displayed units, e.g. 23
+}
+
+/**
+ * What a mutation mask adds to a species' DISPLAYED stats. Measured as the difference
+ * between the normalized mutated and unmutated values, exactly as statBreakdown's
+ * "Mutation" line does, so the Market's promise equals the card's later reading.
+ *
+ * Grouped per stat rather than per mutation: two mutations on the same stat combine
+ * into one raw sum, and normalizing that sum once avoids double rounding.
+ */
+export function mutationDisplayGains(base: BaseStats, mask: number): MutationDisplayGain[] {
+  const bonus = mutationBonus(mask);
+  const gains: MutationDisplayGain[] = [];
+  for (const meta of STATS) {
+    if (meta.key === "focus") continue; // focus is never mutated
+    const stat = meta.key;
+    const raw = bonus[stat];
+    if (!raw) continue;
+    const delta = displayStat(stat, base[stat] + raw) - displayStat(stat, base[stat]);
+    if (delta) gains.push({ stat, label: meta.label, delta });
+  }
+  return gains;
+}
+
+/**
+ * The Market card's line for a pre-mutated zombie, in the same units its stat tiles
+ * use. Undefined when the species carries no mutation.
+ *
+ * The mutation is deliberately NOT named. The two Tier-4 mutants reuse a lower tier's
+ * bit (Eyebiscus carries Carrot's 4, Heartichoke Cauliflower's 512), so a name derived
+ * from the mask is simply wrong for them — the reported "wrong text ... for Heartichoke
+ * (lvl 44)" defect, which read "Cauli-hair". The card's own title already names the
+ * species, so the bonus is what the line needs to carry.
+ */
+export function mutationMarketDescription(base: BaseStats, mask: number): string | undefined {
+  const gains = mutationDisplayGains(base, mask);
+  if (!gains.length) return undefined;
+  const effects = gains.map((g) => `+${g.delta} ${g.label}`).join(", ");
+  return `Starts with a guaranteed mutation: ${effects}. Mutations carry into Zombie Pot combinations.`;
 }
 
 /** The four displayed totals (Damage/Speed/Life/Focus) for a zombie — the value each

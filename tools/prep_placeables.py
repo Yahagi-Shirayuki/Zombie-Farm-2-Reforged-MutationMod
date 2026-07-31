@@ -25,6 +25,8 @@ import os
 import plistlib
 import re
 
+from reforge_economy import brain_price
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ = os.path.dirname(HERE)
 ROOT = os.path.dirname(PROJ)
@@ -53,6 +55,56 @@ EPIC_REWARD_TILES = {
     "rockyRhinosBanner", "rockyRhinosCave", "rockyRhinosGong", "rockyRhinosSculpture",
     "generalLarvaelusBanner", "generalLarvaelusTeleporterA", "generalLarvaelusTeleporterB", "teleporter",
     "mysticalMambaBanner", "mysticalMambasWishMachineLeft", "mysticalMambasWishMachineRight",
+}
+
+# ---- Catalog curation (hand-maintained, NOT derivable from source) -----------
+# The shipped Items catalog is a CURATED subset of the source decor. These 110
+# holiday/seasonal/themed decors (Christmas, Halloween, Easter, Valentine's,
+# St Patrick's, Lunar New Year, dinosaur/space/underwater sets) have never been in
+# placeables.json in any commit — the generator grew past the asset over time, so
+# re-running it used to add 110 unshipped store items and extract their PNGs.
+#
+# Nothing in the source data distinguishes them (no seasonal/event flag), so the
+# list is explicit. DELETE an entry here to ship that decor.
+SEASONAL_DECOR_EXCLUDED = {
+    "appleBobbing", "aqueduct", "bigDragonBoat", "birthdayBalloonsRight",
+    "birthdayTimStatue", "blueBox", "blueSatchet", "boulder", "candelabra",
+    "candleAltarDay", "chariot", "chocolateBunnyA", "chocolateBunnyB", "colossus",
+    "column", "cornucopia", "cupidTopiary", "dinosaurFern", "dinosaurFootprint",
+    "dinosaurJeep", "dinosaurRaptor", "dinosaurSkull", "dinosaurTriceratops",
+    "dragonStatue", "eggTree", "enormoPumpkin", "fancyChair", "fancyCoatOfArms",
+    "fancyMustache", "fancyTeacup", "fancyTeakettle", "fancyUmbrellaTree",
+    "festiveFence", "giantPeep", "giftBasket", "hauntedHouse", "holidayBalloonRed",
+    "holidayBalloonWhite", "holidayBalloonYellow", "holidayHeartTopiary",
+    "holidayRoseBushRed", "holidayRoseBushWhite", "holidayRoseBushYellow",
+    "iceSculpture", "igloo", "lotusLantern", "luckPlant", "mayflower", "monolithBusted",
+    "monolithEgg", "newYearBallLeft", "newYearBallRight", "newYearBannerLeft",
+    "newYearBannerRight", "newYearTree", "organ", "pagoda", "patioBench", "patioTable",
+    "pond", "pond1", "pond2", "pond3", "pond4", "pond5", "pond6", "pond7", "pumpkin",
+    "redLantern", "redSatchet", "redTractor", "riceDumpling", "riceDumplingPile",
+    "sleigh", "smallDragonBoat", "snowBalls", "snowCannon", "snowFort", "snowMan",
+    "soilDivider", "spaceCrater", "spaceLunarLander", "spaceMoon", "spaceRocketShip",
+    "spookyStrawmanRight", "stPatricksClover", "stPatricksPotOfGold",
+    "stPatricksShamrock", "stoneDivider", "stoneLion", "sugarSkull", "temple",
+    "treeAutumn1", "treeAutumn2", "treeAutumn3", "trojanHorse", "underwaterCoral",
+    "underwaterMermaid", "underwaterShip", "underwaterTreasure", "urn",
+    "winterSnowWoman", "xmasArch", "xmasCandle", "xmasFence", "xmasGifts",
+    "xmasGingerbreadHouse", "xmasTree", "xmasWreath", "yellowSatchet"
+}
+
+# Hand-set premium brain prices. These deliberately skip the brainflation retune —
+# they are meant to read as expensive showpieces rather than land in the typical
+# 1-5 brain band.
+PREMIUM_BRAIN_PRICES = {
+    "heartGravestone": 15,
+    "cupidStatueA": 50,
+    "cupidStatueB": 50,
+}
+
+# Market decors that Reforged awards through quests/events instead of selling.
+# They keep their art but are never purchasable: cost 0, no level gate, no XP.
+REWARD_ONLY_DECOR = {
+    "rockBunny", "greenGift", "redGift", "yellowGift", "teddyBear", "loveShack",
 }
 
 # These quest objectives target separately named color variants that share one
@@ -226,6 +278,7 @@ def main():
     seen = set()  # tile keys with at least one emitted market/reward object
     counts = {"tree": 0, "decor": 0, "functional": 0, "reward": 0}
     skipped = 0
+    excluded = 0
 
     # Sort so the cheapest/earliest variant of a shared tile wins.
     items = [e for e in market if ((e.get("category") == "item" and classify(e)) or e.get("tile") in EPIC_REWARD_TILES)
@@ -236,8 +289,14 @@ def main():
         tile = e.get("tile")
         if not tile or (tile in seen and e.get("name") not in QUEST_VARIANT_KEYS):
             continue
+        # Not part of the shipped catalog — skip before any art is written, so the
+        # excluded decors do not leave orphan PNGs in public/assets/objects.
+        if tile in SEASONAL_DECOR_EXCLUDED:
+            excluded += 1
+            continue
         key = tile if tile not in seen else QUEST_VARIANT_KEYS[e["name"]]
-        category = "reward" if tile in EPIC_REWARD_TILES else classify(e)
+        category = ("reward" if tile in EPIC_REWARD_TILES or tile in REWARD_ONLY_DECOR
+                    else classify(e))
         tp = tileprops.get(tile, {})
 
         sprite_img = None
@@ -313,18 +372,31 @@ def main():
         m = re.search(r"(\d+)\s*slots", tp.get("toolTip", ""))
         if m:
             slots = int(m.group(1))
+        # Reward-only decor is never sold: no price, no level gate, no purchase XP.
+        reward_only = tile in REWARD_ONLY_DECOR
+        brains = bool(e.get("brainsNeeded", False)) and not reward_only
+        if reward_only:
+            cost = 0
+        elif brains:
+            # Brain prices take the brainflation retune, except the few premium
+            # showpieces priced by hand. See tools/reforge_economy.py.
+            cost = PREMIUM_BRAIN_PRICES.get(key) or brain_price(
+                e.get("cost", 0), key, strict=False)
+        else:
+            cost = e.get("cost", 0)
         catalog.append({
             "key": key,
             "name": e["name"],
             "category": category,
-            "cost": e.get("cost", 0),
-            "level": e.get("level", 1),
+            "cost": cost,
+            "level": -1 if reward_only else e.get("level", 1),
             # Fruit-tree rows omit `xp`, but the binary's
             # +[MarketDataManager xpFromItem:] awards normal gold tree/decor
             # purchases floor(cost / 100) XP. Preserve authored XP elsewhere.
-            "xp": (e.get("cost", 0) // 100 if category == "tree"
+            "xp": (0 if reward_only
+                   else e.get("cost", 0) // 100 if category == "tree"
                    else e.get("xp", 0)),
-            "brainsNeeded": bool(e.get("brainsNeeded", False)),
+            "brainsNeeded": brains,
             # The original game passes this Market RGB through
             # placeNewObjectTileWithKey:andFilename:andColor: and applies it as a
             # multiplicative cocos2d sprite tint. Functional monoliths deliberately
@@ -443,12 +515,17 @@ def main():
         if c["key"] == "zombieCombiner":
             c["cost"] = 500
             c["brainsNeeded"] = False
+            # The override replaces the price AFTER the loop above computed xp from
+            # the source row, so re-apply the game's own floor(cost / 100) rule to
+            # the price actually charged (500 gold -> 5 xp, not the source's 500).
+            c["xp"] = c["cost"] // 100
 
     catalog.sort(key=lambda c: (c["category"], c["level"], c["cost"]))
     with open(os.path.join(OUT, "placeables.json"), "w", encoding="utf-8") as f:
         json.dump(catalog, f, indent=1)
     print(f"placeables: {len(catalog)} objects -> {counts} "
           f"+ {reward_count} reward decor (skipped {skipped} market, "
+          f"{excluded} curated out, "
           f"{len(reward_skipped)} reward w/o art)")
     if reward_skipped:
         print(f"  reward w/o art: {', '.join(reward_skipped)}")

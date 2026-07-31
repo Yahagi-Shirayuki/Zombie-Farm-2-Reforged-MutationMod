@@ -5,6 +5,16 @@ export interface PlowOrigin {
   or: number;
 }
 
+/** Snap a freehand pointer target to the 4x4 plot lattice established where the
+ * stroke began. This keeps neighbouring swipe-plowed plots edge-aligned instead
+ * of producing overlapping origins for every individual ground tile crossed. */
+export function snapPlowOrigin(anchor: PlowOrigin, current: PlowOrigin): PlowOrigin {
+  return {
+    oc: anchor.oc + Math.round((current.oc - anchor.oc) / PLOT) * PLOT,
+    or: anchor.or + Math.round((current.or - anchor.or) / PLOT) * PLOT,
+  };
+}
+
 /** Build an inclusive plot rectangle on the lattice established by the anchor. */
 export function plowRectangle(anchor: PlowOrigin, current: PlowOrigin): PlowOrigin[] {
   const dc = Math.round((current.oc - anchor.oc) / PLOT);

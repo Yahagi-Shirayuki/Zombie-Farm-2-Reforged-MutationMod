@@ -72,6 +72,29 @@ export function recoverTutorialCropStep(
   return step;
 }
 
+/** Whether a beat is unreachable without a target plot. Plot beats gate world input
+ * down to their own target, so one with no target accepts NO tap — and, being a plot
+ * beat, it highlights no menu either, freezing the whole game behind the overlay.
+ * Plow is the exception: it accepts any tillable ground, so it needs no target and is
+ * the safe landing spot when none can be found. */
+export function tutorialStepNeedsTarget(step: TutStep): boolean {
+  return STEPS[step]?.kind === "plot" && step !== TutStep.Plow;
+}
+
+/** The Invade beat is the one step the player cannot re-attempt after losing what it
+ * needs: it gates every farm tap and every menu but the Invade shortcut, so a player
+ * whose only zombie died in the invasion had no way to grow another and the tutorial
+ * (persisted) trapped them for good. Send them back to the earliest farm action the
+ * surviving state supports. `canPlant` refers to the beat's own target plot. */
+export function recoverTutorialInvadeStep(
+  step: TutStep,
+  hasArmy: boolean,
+  canPlant: boolean
+): TutStep {
+  if (step !== TutStep.Invade || hasArmy) return step;
+  return canPlant ? TutStep.PlantZombie : TutStep.Plow;
+}
+
 export type StepKind = "narrative" | "plot" | "menu";
 
 export interface StepDef {

@@ -19,6 +19,8 @@ import json
 import os
 import shutil
 
+from reforge_economy import brain_price
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 EXTRACT = os.path.join(ROOT, "..", "ZF2R_extracted")
@@ -62,7 +64,9 @@ def main():
         r = by_size[size]
         costs = sorted(r["costs"])
         # gold is always the larger price, brains the smaller (10000 vs 60, etc.)
-        brains = costs[0] if len(costs) > 1 else 0
+        # The brains half takes the brainflation retune (60 source -> 6 here); the
+        # gold half passes through. See tools/reforge_economy.py.
+        brains = brain_price(costs[0], r["name"]) if len(costs) > 1 else 0
         gold = costs[-1]
         map_size.append({
             "name": r["name"], "size": size, "level": r["level"],
@@ -86,14 +90,18 @@ def main():
         gid = int(e.get("climateGID", 0))
         row = (gid - 1) // 5 if gid > 0 else 0
         terrain = GROUND_ROWS[row] if 0 <= row < len(GROUND_ROWS) else "grass"
+        # Key order matches the committed asset so a re-run is a clean no-op rather
+        # than a whole-file rewrite. Climates are gold-only (grass is free).
         climate.append({
-            "name": e["name"], "climateGID": gid, "terrain": terrain,
-            "level": int(e["level"]), "gold": int(e["cost"]), "icon": icon,
+            "name": e["name"], "climateGID": gid, "level": int(e["level"]),
+            "gold": int(e["cost"]), "icon": icon, "terrain": terrain,
         })
 
     os.makedirs(os.path.dirname(OUT_JSON), exist_ok=True)
+    # indent=1 and no trailing newline: matches the committed asset (and the other
+    # generated catalogs) so a re-run is a clean no-op.
     json.dump({"mapSize": map_size, "climate": climate},
-              open(OUT_JSON, "w", encoding="utf-8"), indent=2)
+              open(OUT_JSON, "w", encoding="utf-8"), indent=1)
     print(f"wrote {OUT_JSON}")
     print(f"  mapSize: {len(map_size)} tiers -> {[m['size'] for m in map_size]}")
     print(f"  climate: {len(climate)} skins")

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { combineMasks, mutationDescription, SLOT_MASK } from "./mutations";
+import { combineMasks, SLOT_MASK } from "./mutations";
 
 // Ground truth: combineZombieMutationFlag:withZombieFlag: / randMutation: — per slot,
 // non-conflicting bits carry over; a same-slot conflict keeps the HIGHER bit value
@@ -37,10 +37,5 @@ describe("combineMasks — deterministic per-slot inheritance", () => {
   });
 });
 
-describe("mutationDescription", () => {
-  it("describes guaranteed Market mutation bonuses", () => {
-    expect(mutationDescription(1)).toContain("Tomatohead (+1 strength)");
-    expect(mutationDescription(8 | 1024)).toContain("Turnip-Arm (+2 strength), Lima Bean (+3 life)");
-    expect(mutationDescription(0)).toBeUndefined();
-  });
-});
+// The Market's guaranteed-mutation line moved to zombie/statDisplay, because the
+// number it shows has to be normalized — see marketMutationText.test.ts.
