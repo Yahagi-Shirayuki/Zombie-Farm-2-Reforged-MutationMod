@@ -70,8 +70,8 @@ interface MktEntry {
   cost: number;
   level: number;
   brains?: boolean; // priced in brains rather than gold
-  sell?: number; // harvest value (plants only)
-  timeLabel?: string; // catalog grow time (crop/zombie cards)
+  sell?: number; // harvest value (plants and fruit trees)
+  timeLabel?: string; // catalog grow/regrowth time
   graveNeeded?: "Blue" | "Red" | "Silver"; // locked until this colored grave is owned
   ownedLimit?: boolean; // "1 per farm" limit reached (gift vouchers) — can't buy
   owned?: boolean;
@@ -1515,6 +1515,10 @@ export class Hud {
             name: c.name, portrait: c.portrait,
             cost: potPriced ? 3 : c.cost, level: c.level,
             brains: potPriced ? true : c.brainsNeeded,
+            sell: c.category === "tree" ? c.def.harvestValue : undefined,
+            timeLabel: c.category === "tree" && c.def.growMs
+              ? fmtCooldown(c.def.growMs)
+              : undefined,
             description: functionalDescription(c.def), tint: c.def.color,
             onPick: () => { if (this.onBuy) this.onBuy(c.def); bg.remove(); },
           };
