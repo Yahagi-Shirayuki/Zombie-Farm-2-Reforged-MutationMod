@@ -24,6 +24,7 @@ import * as auth from "./net/auth";
 import { requireAuth } from "./net/gate";
 import { getVisitTarget, enterVisit, exitVisit, clearVisitTarget } from "./net/visit";
 import { EconomyClient } from "./net/economy";
+import { epicBossRunToClient, serverTimestampToClient } from "./net/clock";
 import { QuestBus, QuestEvent } from "./quest/events";
 import { QuestSystem } from "./quest/QuestSystem";
 import { QuestDef, questRewardInfo } from "./quest/types";
@@ -447,6 +448,10 @@ async function main() {
   world.addChild(night);
   let isNight = false;
   const setNight = (on: boolean) => {
+    // A browser may preserve the JS objects while discarding their GPU render
+    // target in the background. Rebuild on an off->on transition so a cold night
+    // load never inherits an empty light map.
+    if (on && !isNight) night.resetRenderTarget();
     isNight = on;
     night.visible = on;
     actor.setLanternVisible(on);
@@ -476,7 +481,14 @@ async function main() {
     if (dayNightMode === "auto") syncEnvironment();
   }, 60_000);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && dayNightMode === "auto") syncEnvironment();
+    if (!document.hidden) {
+      if (isNight) night.resetRenderTarget();
+      if (dayNightMode === "auto") syncEnvironment();
+    }
+  });
+  app.canvas.addEventListener("webglcontextrestored", () => {
+    night.resetRenderTarget();
+    syncEnvironment();
   });
 
   // Job labels ("Plow/Plant/Harvest" pills) and the plot cursor render above the
@@ -607,8 +619,8 @@ async function main() {
     brains: await Assets.load<Texture>(`${BASE}assets/ui/topbar_brain_icon.png`),
     xp: await Assets.load<Texture>(`${BASE}assets/ui/topbar_exp_icon.png`),
   };
-  const floats: { view: Container; ttl: number }[] = [];
-  const floatText = (x: number, y: number, msg: string) => {
+  const floats: { view: Container; ttl: number; delay: number }[] = [];
+  const floatText = (x: number, y: number, msg: string, delay = 0) => {
     const currency = /[+-]\d+g\b/.test(msg) ? "gold"
       : /[+-]\d+b\b/.test(msg) ? "brains"
       : /[+-]\d+xp\b/.test(msg) ? "xp" : null;
@@ -637,8 +649,9 @@ async function main() {
       view.addChild(t);
     }
     view.position.set(x, y);
+    view.visible = delay <= 0;
     world.addChild(view);
-    floats.push({ view, ttl: 1.1 });
+    floats.push({ view, ttl: 1.1, delay });
   };
 
   // The harvested crop itself pops free and flies upward, echoing the original
@@ -991,7 +1004,10 @@ async function main() {
         questBus.post(QuestEvent.SoilPlowed, "Plow");
         questBus.post(QuestEvent.NewSoilPlowed, "Plow");
       }
-      if (n) floatText(c.x, c.y, xp > 0 ? `Plowed ${n}!  +${xp}xp` : `Plowed ${n}!`);
+      if (n) {
+        floatText(c.x, c.y, `Plowed ${n}!`);
+        if (xp) floatText(c.x, c.y, `+${xp}xp`, 0.42);
+      }
       return n > 0;
     }
     if (def.effect === "gift") {
@@ -1023,6 +1039,7 @@ async function main() {
     jobs,
   );
   saveManager.onStorageError = (message) => hud.showToast(message);
+  jobs.onQueueChanged = () => saveManager.checkpointJobs();
 
   // Visit mode: if a friend farm was requested (via enterVisit → reload), hydrate
   // THEIR read-only save into these fresh singletons and — crucially — never call
@@ -1381,8 +1398,11 @@ async function main() {
       });
     };
     economy.onWriterReplaced = showWriterLock;
-    economy.onWriterAvailable = () => {
+    economy.onWriterOwned = () => {
       saveManager.setOnlineWritable(true);
+      saveManager.restoreOnlineJobs();
+    };
+    economy.onWriterAvailable = () => {
       hud.setPlayStatus("online", "synced");
       hud.hideWriterLock();
     };
@@ -1444,19 +1464,22 @@ async function main() {
   let lastPlot = "";
   const last = new Point();
   const pressStart = new Point();
-  let hoveredCrop: { col: number; row: number; x: number; y: number } | null = null;
+  let hoveredCrop: { col: number; row: number; wx: number; wy: number; x: number; y: number } | null = null;
   let cropHoverRefresh = 0;
   let temporaryPanGesture = false;
   let pressPointerType = "mouse";
   let pressPointerId = -1;
   let pressMaxDistance = 0;
   let touchSelectStartTile: { col: number; row: number } | null = null;
+  let touchToolStartTile: { col: number; row: number } | null = null;
   let touchOutsideFarmPan = false;
   let zombieLongPressTimer: ReturnType<typeof setTimeout> | null = null;
   let zombieLongPressActivated = false;
   // Plant tiles painted by the current finger gesture. Plowing uses the explicit
   // rectangle state below so a release can never also become a second plow tap.
   const touchGestureTiles: { col: number; row: number }[] = [];
+  const touchGestureTileKeys = new Set<string>();
+  const touchPlantPreviews = new Map<string, Graphics>();
   type PlowPreview = { anchor: PlowOrigin; current: PlowOrigin; targets: TillTarget[] };
   let plowPreview: PlowPreview | null = null;
   let touchPlowGesture: "position" | "resize" | "confirm" | null = null;
@@ -1465,6 +1488,42 @@ async function main() {
   const cancelZombieLongPress = () => {
     if (zombieLongPressTimer !== null) clearTimeout(zombieLongPressTimer);
     zombieLongPressTimer = null;
+  };
+
+  const clearTouchPlantPreview = () => {
+    for (const preview of touchPlantPreviews.values()) preview.destroy();
+    touchPlantPreviews.clear();
+  };
+  const clearTouchToolStroke = () => {
+    touchGestureTiles.length = 0;
+    touchGestureTileKeys.clear();
+    touchToolStartTile = null;
+    clearTouchPlantPreview();
+  };
+  const recordTouchPlantTile = (col: number, row: number) => {
+    const rawKey = tileKey(col, row);
+    if (touchGestureTileKeys.has(rawKey)) return;
+    touchGestureTileKeys.add(rawKey);
+    touchGestureTiles.push({ col, row });
+    if (hud.mode !== "plant" || !hud.planting || !field.canPlant(col, row)) return;
+    const origin = field.plotOriginAt(col, row);
+    if (!origin) return;
+    const key = tileKey(origin.oc, origin.or);
+    if (touchPlantPreviews.has(key)) return;
+    const center = field.plotCenterOf(origin.oc, origin.or);
+    const width = PLOT * HW;
+    const height = PLOT * HH;
+    const preview = new Graphics();
+    preview.moveTo(0, -height).lineTo(width, 0).lineTo(0, height).lineTo(-width, 0).lineTo(0, -height)
+      .fill({ color: 0x8df25a, alpha: 0.2 })
+      .stroke({ width: 3, color: 0x8df25a, alpha: 0.8 });
+    preview.position.set(center.x, center.y);
+    field.highlightLayer.addChild(preview);
+    touchPlantPreviews.set(key, preview);
+  };
+  const commitTouchToolStroke = () => {
+    for (const tile of touchGestureTiles) enqueueTool(tile.col, tile.row);
+    clearTouchToolStroke();
   };
 
   // ---- multi-touch pinch-to-zoom (mobile) ----
@@ -1487,7 +1546,7 @@ async function main() {
     lastPlot = "";
     pressPointerId = -1;
     touchOutsideFarmPan = false;
-    touchGestureTiles.length = 0;
+    clearTouchToolStroke();
     plowPreview = null;
     touchPlowGesture = null;
     touchPlowHandle = null;
@@ -1517,7 +1576,7 @@ async function main() {
       dragging = false; // abandon any in-progress single-finger pan
       // Nothing has committed yet: discard the pending paint stroke and let the
       // two fingers control the camera instead.
-      touchGestureTiles.length = 0;
+      clearTouchToolStroke();
       lastPlot = "";
       plowPreview = null;
       touchPlowGesture = null;
@@ -1733,7 +1792,8 @@ async function main() {
     const o = field.objectOriginOf(id);
     if (o) {
       const c = tileCenter(o.oc, o.or);
-      floatText(c.x, c.y, `-${def.cost}${def.brainsNeeded ? "b" : "g"}  +${xp}xp`);
+      floatText(c.x, c.y, `-${def.cost}${def.brainsNeeded ? "b" : "g"}`);
+      if (xp) floatText(c.x, c.y, `+${xp}xp`, 0.42);
     }
     questBus.post(QuestEvent.ItemBought, def.name);
   };
@@ -1957,8 +2017,9 @@ async function main() {
       try {
         await economy?.settleBeforeDependency();
         const activated = await api.epicBossActivate(crypto.randomUUID(), def.id);
-        economy?.adoptEpicBossActivation(activated.event, activated.balance);
-        state.setEpicBossRun(activated.event);
+        const activatedRun = epicBossRunToClient(activated.event, activated.serverTime ?? Date.now());
+        economy?.adoptEpicBossActivation(activated.event, activated.balance, activated.serverTime);
+        state.setEpicBossRun(activatedRun);
         syncEpicBossUi();
         saveManager.flush();
         audio.play("buy");
@@ -1986,7 +2047,7 @@ async function main() {
       try {
         await economy?.settleBeforeDependency();
         const ended = await api.epicBossEnd(run.runId);
-        state.setEpicBossRun(ended.event);
+        state.setEpicBossRun(epicBossRunToClient(ended.event, ended.serverTime ?? Date.now()));
       } catch (error) {
         const code = errCode(error);
         hud.showToast(code === "inactive" ? "That Epic Boss event has already ended."
@@ -2244,6 +2305,10 @@ async function main() {
       const result = await api.sendGift(friendId);
       // Remain compatible while the manually deployed Worker rolls forward.
       if (result.balance) economy?.adoptExternalBalance(result.balance, result.accountVersion);
+      if (result.lastRaidAt != null) state.syncRaidCooldown(serverTimestampToClient(
+        result.lastRaidAt,
+        result.serverTime ?? Date.now(),
+      ));
       return null;
     } catch (e) {
       return errCode(e);
@@ -2393,8 +2458,8 @@ async function main() {
         if (!party.length) return false;
         const opened = await api.epicBossStart(partyIds, payment);
         epicSessionId = opened.sessionId;
-        economy?.adoptEpicBossActivation(opened.event, opened.balance);
-        state.setEpicBossRun(opened.event);
+        economy?.adoptEpicBossActivation(opened.event, opened.balance, opened.serverTime);
+        state.setEpicBossRun(epicBossRunToClient(opened.event, opened.serverTime ?? Date.now()));
       } catch (error) {
         const code = errCode(error);
         if (code === "insufficient_tokens") hud.showToast("You need a Boss Token.");
@@ -2587,10 +2652,15 @@ async function main() {
         raidSessionId = gate.sessionId ?? null;
         raidLaunchLockedUntil = Math.max(
           raidLaunchLockedUntil,
-          gate.earliestFinishAt ?? Date.now() + 15_000
+          gate.earliestFinishAt == null
+            ? Date.now() + 15_000
+            : serverTimestampToClient(gate.earliestFinishAt, gate.serverTime ?? Date.now())
         );
         if (gate.inventory) economy?.adoptRaidStartInventory(gate.inventory);
-        if (gate.lastRaidAt != null) state.syncRaidCooldown(gate.lastRaidAt);
+        if (gate.lastRaidAt != null) state.syncRaidCooldown(serverTimestampToClient(
+          gate.lastRaidAt,
+          gate.serverTime ?? Date.now(),
+        ));
         opts = {
           ...opts,
           serverAuthorized: true,
@@ -2642,6 +2712,7 @@ async function main() {
       concentration: setup.concentration,
       onStrike: (strike) => audio.fightStrike(strike),
       onBrainRelease: (sourceKey) => audio.brainForZombie(sourceKey),
+      onVictory: () => audio.playRaidVictory(),
       confirmRetreat: () => hud.confirmInGame(
         "Retreat from invasion?", "This invasion will count as a loss.", "Retreat"
       ),
@@ -2720,7 +2791,10 @@ async function main() {
           raidSessionId = null;
           void api
             .raidFinish(sid, finalTick, inputs, outcome)
-            .then((r) => { state.syncRaidCooldown(r.lastRaidAt); })
+            .then((r) => { state.syncRaidCooldown(serverTimestampToClient(
+              r.lastRaidAt,
+              r.serverTime ?? Date.now(),
+            )); })
             .catch(() => {});
         }
         hud.openRaidResult(view, () => {
@@ -2982,7 +3056,8 @@ async function main() {
     if (def.armyMax) state.addZombieMax(def.armyMax); // functional effect
     if (def.storageSlots) state.upgradeStorage(def.storageSlots); // shed capacity
     const c = tileCenter(col, row);
-    floatText(c.x, c.y, `-${cost}${useBrains ? "b" : "g"}  +${xp}xp`);
+    floatText(c.x, c.y, `-${cost}${useBrains ? "b" : "g"}`);
+    if (xp) floatText(c.x, c.y, `+${xp}xp`, 0.42);
     questBus.post(QuestEvent.ItemBought, def.name);
   };
 
@@ -3246,11 +3321,12 @@ async function main() {
     pressPointerId = e.pointerId;
     pressMaxDistance = 0;
     touchSelectStartTile = null;
+    touchToolStartTile = null;
     touchOutsideFarmPan = false;
     cancelZombieLongPress();
     zombieLongPressActivated = false;
     pressStart.copyFrom(e.global);
-    touchGestureTiles.length = 0;
+    clearTouchToolStroke();
     if (visiting) {
       // Read-only visit: no tools, no editing. Only start a camera pan; a tap
       // (pan that doesn't move) resolves to walk / inspect in endDrag below.
@@ -3279,6 +3355,7 @@ async function main() {
       return;
     }
     const { col, row, wx, wy } = tileAt(e);
+    if (touch && hud.mode === "plant") touchToolStartTile = { col, row };
     touchOutsideFarmPan = isOutsideFarmPanGesture(
       e.pointerType,
       hud.mode,
@@ -3387,8 +3464,12 @@ async function main() {
     }
     const { col, row, wx, wy } = tileAt(e);
     if (!dragging && hud.mode === "walk" && !isTouchPointer(e.pointerType)) {
-      hoveredCrop = { col, row, x: e.global.x, y: e.global.y };
-      hud.showCropHover(field.cropInfoAt(col, row), e.global.x, e.global.y);
+      hoveredCrop = { col, row, wx, wy, x: e.global.x, y: e.global.y };
+      hud.showCropHover(
+        field.cropInfoAt(col, row) ?? field.treeInfoAtPoint(wx, wy),
+        e.global.x,
+        e.global.y,
+      );
     } else {
       hoveredCrop = null;
       hud.showCropHover(null);
@@ -3446,7 +3527,11 @@ async function main() {
         // on finger-up; mouse queues each new tile immediately.
         const tk = tileKey(col, row);
         if (tk !== lastPlot) {
-          if (isTouchPointer(pressPointerType)) touchGestureTiles.push({ col, row });
+          if (isTouchPointer(pressPointerType)) {
+            if (!touchGestureTiles.length && touchToolStartTile)
+              recordTouchPlantTile(touchToolStartTile.col, touchToolStartTile.row);
+            recordTouchPlantTile(col, row);
+          }
           else enqueueTool(col, row);
           lastPlot = tk;
         }
@@ -3637,7 +3722,7 @@ async function main() {
       moved = false;
       lastPlot = "";
       pressPointerId = -1;
-      touchGestureTiles.length = 0;
+      clearTouchToolStroke();
       return;
     }
     if (temporaryPanGesture) {
@@ -3662,18 +3747,18 @@ async function main() {
       moved = false;
       lastPlot = "";
       pressPointerId = -1;
-      touchGestureTiles.length = 0;
+      clearTouchToolStroke();
       return;
     }
     if (dragging && moved && !touchOutsideFarmPan && isTouchPointer(pressPointerType) &&
         (hud.mode === "till" || hud.mode === "plant")) {
-      for (const tile of touchGestureTiles) enqueueTool(tile.col, tile.row);
+      commitTouchToolStroke();
     }
     endDrag(e);
     pressPointerId = -1;
     touchOutsideFarmPan = false;
     touchSelectStartTile = null;
-    touchGestureTiles.length = 0;
+    clearTouchToolStroke();
   };
   app.stage.on("pointerup", onPointerUp);
   app.stage.on("pointerupoutside", onPointerUp);
@@ -3691,9 +3776,17 @@ async function main() {
     }, 0);
   });
   app.stage.on("pointercancel", cancelPointerGesture);
-  window.addEventListener("blur", cancelPointerGesture);
+  window.addEventListener("blur", () => {
+    if (dragging && moved && isTouchPointer(pressPointerType) && hud.mode === "plant")
+      commitTouchToolStroke();
+    cancelPointerGesture();
+  });
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) cancelPointerGesture();
+    if (document.hidden) {
+      if (dragging && moved && isTouchPointer(pressPointerType) && hud.mode === "plant")
+        commitTouchToolStroke();
+      cancelPointerGesture();
+    }
   });
 
   // Right-click anywhere returns to the select tool (and suppress the browser menu).
@@ -3783,6 +3876,10 @@ async function main() {
   app.ticker.add((ticker) => {
     const dt = Math.min(ticker.deltaMS / 1000, 0.05);
     const modalOpen = !!hud.el.querySelector(".panelbg, .mkt-bg, .st-bg, .pm-bg");
+    if (modalOpen && hoveredCrop) {
+      hoveredCrop = null;
+      hud.showCropHover(null);
+    }
     if (!raidActive && !modalOpen && cameraKeys.size) {
       const speed = 520 * dt;
       const dx = (cameraKeys.has("a") ? speed : 0) - (cameraKeys.has("d") ? speed : 0);
@@ -3795,7 +3892,12 @@ async function main() {
     }
     cropHoverRefresh -= dt;
     if (hoveredCrop && cropHoverRefresh <= 0) {
-      hud.showCropHover(field.cropInfoAt(hoveredCrop.col, hoveredCrop.row), hoveredCrop.x, hoveredCrop.y);
+      hud.showCropHover(
+        field.cropInfoAt(hoveredCrop.col, hoveredCrop.row) ??
+          field.treeInfoAtPoint(hoveredCrop.wx, hoveredCrop.wy),
+        hoveredCrop.x,
+        hoveredCrop.y,
+      );
       cropHoverRefresh = 0.25;
     }
     for (let i = bossTokenFx.length - 1; i >= 0; i--) {
@@ -3866,6 +3968,11 @@ async function main() {
     // animate floating popups (rise + fade)
     for (let i = floats.length - 1; i >= 0; i--) {
       const f = floats[i];
+      if (f.delay > 0) {
+        f.delay -= dt;
+        if (f.delay > 0) continue;
+        f.view.visible = true;
+      }
       f.ttl -= dt;
       f.view.y -= 26 * dt;
       f.view.alpha = Math.min(1, f.ttl);

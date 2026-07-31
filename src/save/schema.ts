@@ -74,7 +74,8 @@ export interface SaveGame {
   raids?: RaidProgressSave;
   /** Active/completed limited Epic Boss run. Absent in saves created before the feature. */
   epicBoss?: EpicBossRun;
-  /** Local Farm only: unfinished farmer intents, replayed from elapsed wall time. */
+  /** Unfinished farmer intents, replayed from elapsed wall time. Online saves keep
+   * these in presentation data and revalidate them against server farm state. */
   farmJobs?: FarmJobQueueSave;
   /** Local offline-fallback friends list + gifting state. The online friend system
    *  is server-backed (net/api.ts + server/), not stored here. Absent = no local

@@ -28,9 +28,12 @@ describe("raid finish — replay-derived and idempotent", () => {
     });
     const body = { sessionId: start.body.sessionId, finalTick: 0, inputs: [{ seq: 1, tick: 0, type: "retreat" }] };
     const first = await call<Record<string, unknown>>("POST", "/raid/finish", s.token, body);
+    await new Promise((resolve) => setTimeout(resolve, 10));
     const retry = await call<Record<string, unknown>>("POST", "/raid/finish", s.token, body);
     expect(first.status).toBe(200);
     expect(first.body).toMatchObject({ outcome: { win: false }, gold: 0, xp: 0 });
-    expect(retry.body).toEqual(first.body);
+    expect(retry.body.serverTime).toEqual(expect.any(Number));
+    expect(Number(retry.body.serverTime)).toBeGreaterThan(Number(first.body.serverTime));
+    expect({ ...retry.body, serverTime: first.body.serverTime }).toEqual(first.body);
   });
 });

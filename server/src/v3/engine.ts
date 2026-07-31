@@ -825,7 +825,13 @@ export function applyCommandBatch(
     if (result.status === "rejected") keys.forEach((key) => failedResources.add(key));
   }
   const questChanges = applyQuestEvents(state.balance, state.quests, events);
-  state.balance.brains += levelUpBrains(levelForXp(balanceBefore.xp), levelForXp(state.balance.xp));
+  const levelBefore = levelForXp(balanceBefore.xp);
+  const levelAfter = levelForXp(state.balance.xp);
+  // The original game makes invasions immediately available after a level-up.
+  // Keep the reset in the authoritative projection so the D1 commit and client
+  // reconciliation cannot disagree about the cooldown.
+  if (levelAfter > levelBefore) state.raids.lastRaidAt = 0;
+  state.balance.brains += levelUpBrains(levelBefore, levelAfter);
   return {
     state,
     results,

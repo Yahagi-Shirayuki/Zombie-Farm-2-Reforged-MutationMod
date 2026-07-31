@@ -33,6 +33,22 @@ describe("protocol v3 command engine", () => {
     expect(result.state).toEqual(state);
   });
 
+  it("resets the authoritative invasion cooldown when XP crosses a level", () => {
+    const state = freshGameplayState();
+    state.balance.xp = 24;
+    state.raids.lastRaidAt = 123_456;
+    const result = applyCommandBatch(state, commands({ type: "farm.plow", oc: 0, or: 0 }), { now: 1 });
+    expect(result.state.balance.xp).toBe(25);
+    expect(result.state.raids.lastRaidAt).toBe(0);
+  });
+
+  it("keeps the invasion cooldown when XP does not cross a level", () => {
+    const state = freshGameplayState();
+    state.raids.lastRaidAt = 123_456;
+    const result = applyCommandBatch(state, commands({ type: "farm.plow", oc: 0, or: 0 }), { now: 1 });
+    expect(result.state.raids.lastRaidAt).toBe(123_456);
+  });
+
   it("authoritatively buys, equips, and hides cosmetic pets", () => {
     const state = freshGameplayState();
     state.balance.brains = 10_000;

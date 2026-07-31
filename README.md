@@ -102,8 +102,11 @@ must also update [SECURITY.md](SECURITY.md) and [server/README.md](server/README
 - Free-placed 4x4 plots with plow, plant, harvest, zombie-hole, and offline timers.
 - **Multi-plot plow selection**: drag to preview a rectangle of 4x4 plots (invalid plots stay visible in red and are skipped) and commit them as one batch of plow jobs. On touch the preview can be repositioned and resized with edge handles before a confirming tap.
 - Queued farm jobs keep advancing while the browser tab is hidden, and jobs replayed from elapsed offline time are stamped at their real completion moment, so growth timers stay accurate across backgrounding.
-- Local Farm persists unfinished farmer jobs across close/reopen and replays them from elapsed wall time.
+- Local and Online Farms persist unfinished farmer jobs across close/reopen and replay them from elapsed wall time; Online Farm revalidates restored intentions against authoritative state.
+- Mobile crop-dragging previews every queued planting tile immediately, and a background/blur transition commits the completed stroke before suspending it.
 - Objects placed against the farm's south/east edge (notably fruit trees) are harvestable — their walk-to point is clamped onto the grid, and a job with an unreachable destination cancels instead of jamming the queue.
+- Fruit trees expose their live regrowth countdown in the same desktop hover card used by crops, switching to “Ready to harvest” when the timer expires.
+- Farm purchases and harvests show their gold/brain and XP feedback as sequential floating rewards, matching the original game's cadence.
 - Source-derived crop and zombie catalogs with level/currency/grave gates.
 - Local gold, brains, XP, level curve, item economy, and level-up unlock popup. A new farm starts with 400 gold and **1 brain** (the tutorial spends it on Insta-Grow).
 - **Selling always pays gold.** Gold-bought placeables refund 20% of cost; gold zombies return half their cost (minimum 1). Anything bought with brains — placeables or zombies — pays **1,000 gold per brain** of its original cost, so a 5-brain special zombie sells for 5,000 gold. Nothing refunds brains.
@@ -120,6 +123,8 @@ must also update [SECURITY.md](SECURITY.md) and [server/README.md](server/README
 
 ### Zombies and mutation
 - Owned zombies with per-type models/portraits, wandering, roster, detail cards, storage/deploy, selling (with confirmation), veterancy, mutations, and ability display.
+- Dynamically rendered mutation portraits are checked for visible pixels before replacing the catalog fallback, avoiding transparent profile cards after a failed GPU extraction.
+- Zombie stat breakdowns show each mutation, passive ability, and veterancy bonus as the actual displayed-stat increase for that zombie rather than as a generic percentage.
 - Tapping a still-growing crop or zombie opens an info popup with its type, a live countdown to harvest, and an Insta-Grow button that spends one boost use to ripen it on the spot.
 - Mutation/combination system (Zombie Pot) with bitmask inheritance, slot restrictions, timers, mixed-color combined zombies, same-type alternate results, and field rendering.
 - Farm zombies render at authored per-family scales (`src/zombie/displayScale.ts`) — Regular/Large/Headless 0.9, Female/Girl 0.8, Garden 0.7, Small 0.6 — with four tier-5 transformations keeping their smaller size. In raids, actors are contain-fit to a target height using *measured* native rig heights, so ordinary Headless bodies stay short while the near-full-height tier-5 Skull Head isn't shrunk.
@@ -131,6 +136,7 @@ must also update [SECURITY.md](SECURITY.md) and [server/README.md](server/README
 - Live quest events cover the farm loop (soil plowing, crop plant/harvest, zombie harvest, item purchase), raids/invasions (successful invasion, perfect invasion, raid loot), and the Zombie Pot combiner (combine + harvest).
 - The quest detail popup shows the quest's reward (icon + amount) before you complete it.
 - Completing a quest shows a celebratory "QUEST COMPLETE!" popup (quest icon + reward), styled like the level-up popup; multiple completions queue and show one at a time. Raid-driven completions are held until the player returns to the farm, so they never pop over the battle result screen.
+- Open quest-detail and full quest-log panels rerender optimistic progress in place while farm actions are being queued and completed.
 
 ### Raids and combat
 - Raid select, army select, **live battle scene** (there is no player-facing quick/instant resolve — the game always plays the fight out), result panel, cooldown, voucher, loot, and XP/gold/brain rewards, including first-clear XP and ability tier unlocks.
@@ -142,9 +148,11 @@ must also update [SECURITY.md](SECURITY.md) and [server/README.md](server/README
 - Side-view enemy actor art for all 11 raids. Ten use bone rigs from `public/assets/raids/enemies/models.json` (32 rigs); Video Games' five actors play real per-frame idle/attack animations. Eleven named enemy attacks (Circus, Lawyers, Pirate, Ninja, Robot) play **authored timelines recovered from `ZFAttackAnims`**, rotated so the source contact frame lands on the simulated hit; unmapped enemies fall back to a procedural lunge. Ninja/Pirate/City rigs are decoded from the iOS binary (their atlases have no TexturePacker plist — see `docs/mechanics/RAID_TIMING_AND_HAZARDS.md`). Raid particle FX (impact dust, victory confetti, heal).
 - Zombies fight with two recovered basic attacks — bite (anim 8) and scratch (anim 9) — alternating per swing from a per-unit seed so the horde is staggered, each with its own strike SFX. Zombies also narrow their eyes while their deployment bar fills.
 - Raid audio: per-stage battle BGM (farm/pirate/ninja/robot/alien themes, with `fightBGM` covering the other six raids) plus attack-keyed strike SFX (bite/poke/swipe/flail/punch) in both raids and Epic Boss fights.
+- Winning any invasion replaces the battle loop with the recovered `winBGM` victory theme; remaining hazards disappear and release held zombies, thinking poses stop, and the surviving army marches fully off the right edge before results appear. Retreating zombies likewise march fully off the left edge.
 
 ### Online and social (Reforged)
 - **Explicit Local/Online choice** — Local Farm and Online Farm use isolated storage and carry a persistent in-game mode badge. Settings returns to the chooser without moving progress between them.
+- Leveling up resets the invasion cooldown in both Local and Online Farm; online resets are committed atomically with the XP award by the Worker.
 - **Google account authentication** — Online Farm is gated behind Sign in with Google (`src/net/gate.ts`). The gate covers Online Farm *only*: the mode is chosen before auth is touched (`src/main.ts`), so Local Farm makes no account or gameplay-server call even when the browser still holds a valid session. A build with no online config never shows the chooser and opens Local Farm directly.
 - **Local Farm profiles** — Local Farm supports multiple named save slots (create, rename, delete, switch). Switching flushes and suspends the outgoing save before reloading, so autosave can't write into the incoming profile. Online Farm has no profile picker; the account is the slot.
 - **Offline view** — if the Online Farm bootstrap fails, the game can render from the last server-confirmed snapshot and says so ("Offline view; changes may be waiting to sync"). It never silently falls back to Local Farm; the recovery dialog offers a *separate* local farm as an explicit choice.

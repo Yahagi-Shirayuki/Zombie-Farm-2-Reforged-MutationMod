@@ -417,6 +417,7 @@ export interface GiftSendResult {
   balance: Balance;
   accountVersion: number;
   sentToday: number;
+  lastRaidAt: number;
 }
 
 /** Atomically create a gift and award its sender XP. The conditional INSERT
@@ -452,7 +453,7 @@ export async function sendGiftWithReward(
   const sent = (results[0]?.meta.changes ?? 0) === 1;
   if (sent) await creditLevelUps(db, from, now);
 
-  const [balance, runtime, duplicate, daily] = await Promise.all([
+  const [balance, runtime, duplicate, daily, raidState] = await Promise.all([
     getOrSeedBalance(db, from, seed),
     db.prepare("SELECT account_version FROM account_runtime_v3 WHERE account_id=?")
       .bind(from).first<{ account_version: number }>(),
@@ -461,11 +462,19 @@ export async function sendGiftWithReward(
     ).bind(from, to, bucket).first<{ found: number }>(),
     db.prepare("SELECT COUNT(*) AS n FROM gifts WHERE from_id=? AND day_bucket=?")
       .bind(from, bucket).first<{ n: number }>(),
+    db.prepare("SELECT last_started_at FROM raid_state_v3 WHERE account_id=?")
+      .bind(from).first<{ last_started_at: number }>(),
   ]);
   const sentToday = daily?.n ?? 0;
   const status: GiftSendStatus = sent ? "sent" : duplicate ? "already_gifted_today" :
     sentToday >= 2 ? "daily_gift_limit" : "conflict";
-  return { status, balance, accountVersion: runtime?.account_version ?? 0, sentToday };
+  return {
+    status,
+    balance,
+    accountVersion: runtime?.account_version ?? 0,
+    sentToday,
+    lastRaidAt: raidState?.last_started_at ?? 0,
+  };
 }
 
 /** Count of unclaimed gifts sitting in `to`'s inbox (for the inbox cap). */
@@ -710,12 +719,8 @@ export async function sessionAccount(
   if (!row) return null;
   if (now - row.last_used_at > SESSION_IDLE_MAX_MS) return null; // idle-expired
   if (now - row.last_used_at > SESSION_TOUCH_MS) {
-    await db.batch([
-      db.prepare("UPDATE sessions SET last_used_at = ? WHERE id = ?")
-        .bind(now, sessionId),
-      db.prepare("UPDATE accounts SET last_online_at = MAX(last_online_at, ?) WHERE id = ?")
-        .bind(now, row.account_id),
-    ]);
+    await db.prepare("UPDATE sessions SET last_used_at = ? WHERE id = ?")
+      .bind(now, sessionId).run();
   }
   return row.account_id;
 }
@@ -844,10 +849,18 @@ export async function creditLevelUps(
   // Post-brainflation revert: leveling up no longer grants brains. Still advance
   // claimed_level so this doesn't re-run every call (and stays consistent with any
   // level gating), but credit nothing and write no ledger entry.
-  await db
-    .prepare("UPDATE balances SET claimed_level = ? WHERE account_id = ? AND claimed_level = ?")
-    .bind(level, accountId, row.claimed_level)
-    .run();
+  // Reset the protocol-v3 cooldown in the same D1 transaction as claimed_level.
+  // Put the reset first and guard it on the level we observed: D1 executes a batch
+  // sequentially, so exactly the request that still sees the old claimed_level can
+  // reset the cooldown. A stale concurrent request then sees the new level and its
+  // reset is a no-op, even if a raid started after the winning batch committed.
+  await db.batch([
+    db.prepare(`UPDATE raid_state_v3 SET last_started_at = 0 WHERE account_id = ?
+      AND EXISTS(SELECT 1 FROM balances WHERE account_id = ? AND claimed_level = ?)`)
+      .bind(accountId, accountId, row.claimed_level),
+    db.prepare("UPDATE balances SET claimed_level = ? WHERE account_id = ? AND claimed_level = ?")
+      .bind(level, accountId, row.claimed_level),
+  ]);
   return 0;
 }
 

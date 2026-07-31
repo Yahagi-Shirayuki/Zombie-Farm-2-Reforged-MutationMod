@@ -12,6 +12,7 @@ import * as api from "../net/api";
 import { getFarmBackground } from "../prefs";
 import { epicBossById } from "../epicBoss/catalog";
 import { GAMEPLAY_PROTOCOL } from "../net/protocol";
+import { epicBossRunToClient, serverTimestampToClient } from "../net/clock";
 import { reconcileTutorialCompletion } from "../tutorial/steps";
 import type { PlayMode } from "../playMode";
 import type { JobSystem } from "../JobSystem";
@@ -62,6 +63,15 @@ export class SaveManager {
   // server command must not erase the only position the server can use on reload.
   private objectLayouts = new Map<string, ObjectLayout>();
   private readonly localKey: string | null;
+  // Online job intents are hydrated with the authoritative farm projection, but
+  // their elapsed-time replay must wait until EconomyClient owns a live writer
+  // channel. Replaying during bootstrap would otherwise take JobSystem's offline
+  // mutation path and discard the journal without sending commands.
+  private pendingOnlineJobs: SaveGame["farmJobs"];
+  // Set once a bootstrap confirms this tab owns the writer; until then the journal
+  // stays parked. `draining` guards the re-entry from restorePending's own enqueues.
+  private onlineJobsResumable = false;
+  private draining = false;
   onStorageError: ((message: string) => void) | null = null;
 
   constructor(
@@ -96,13 +106,61 @@ export class SaveManager {
       ? `${ONLINE_SNAPSHOT_PREFIX}::${session.accountId}`
       : null;
   }
+  private jobJournalKey(): string | null {
+    return this.mode === "online" && api.getSession() ? `${this.cacheKey()}::farm-jobs` : null;
+  }
+  private writeJobJournal(jobs: SaveGame["farmJobs"]): void {
+    const key = this.jobJournalKey();
+    if (!key) return;
+    try {
+      const journal = this.pendingOnlineJobs ?? jobs;
+      if (journal?.jobs.length) localStorage.setItem(key, JSON.stringify(journal));
+      else localStorage.removeItem(key);
+    } catch { /* optional crash-recovery journal */ }
+  }
+  private readJobJournal(): SaveGame["farmJobs"] {
+    const key = this.jobJournalKey();
+    if (!key) return undefined;
+    try { return JSON.parse(localStorage.getItem(key) ?? "null") ?? undefined; }
+    catch { return undefined; }
+  }
+
+  /** Resume an Online Farm journal once the authoritative command channel is ready.
+   * Safe to call repeatedly (writer recovery can announce availability more than once). */
+  restoreOnlineJobs(): void {
+    this.onlineJobsResumable = true;
+    this.drainOnlineJobs();
+  }
+
+  /** Hand the parked journal to JobSystem, or leave it parked if JobSystem declines.
+   * A tap made while the tab was still booting leaves the queue busy, and
+   * restorePending refuses to interleave with it; checkpointJobs retries this as soon
+   * as that live job finishes, so the intents are never silently discarded. */
+  private drainOnlineJobs(): void {
+    if (this.draining || !this.onlineJobsResumable || this.mode !== "online") return;
+    if (!this.pendingOnlineJobs || !this.jobs) return;
+    this.draining = true;
+    try {
+      // The parked copy is cleared only once JobSystem accepts it, so a throw or a
+      // busy-queue refusal both leave the journal intact for the next attempt.
+      if (!this.jobs.restorePending(this.pendingOnlineJobs, (key) => this.catalog.get(key))) return;
+      this.pendingOnlineJobs = undefined;
+    } finally {
+      this.draining = false;
+    }
+    this.writeJobJournal(this.jobs.serializePending());
+  }
 
   hasSave(): boolean {
     try { return localStorage.getItem(this.cacheKey()) !== null; } catch { return false; }
   }
 
   serialize(): SaveGame {
-    const farmJobs = this.mode === "local" ? this.jobs?.serializePending() : undefined;
+    // Online farm jobs are still client-side movement intentions until the farmer
+    // reaches the target and emits its server command. Persist those intentions in
+    // an account-scoped device journal so a discarded tab can restore and revalidate
+    // them against the authoritative farm projection on its next bootstrap.
+    const farmJobs = this.jobs?.serializePending();
     return {
       version: SAVE_VERSION,
       savedAt: Date.now(),
@@ -191,11 +249,20 @@ export class SaveManager {
   }
 
   flush(): void { this.autoFlush ? this.autoFlush() : this.save(); }
+  /** Immediately checkpoint only the lightweight client-side farmer queue. Fired on
+   * every queue change, which also makes it the retry point for a parked journal
+   * JobSystem previously refused (see drainOnlineJobs). */
+  checkpointJobs(): void {
+    if (this.suspended || this.mode !== "online") return;
+    this.drainOnlineJobs();
+    this.writeJobJournal(this.jobs?.serializePending());
+  }
   /** Persist state that must survive an immediate reload (currently Zombie Pot jobs). */
   flushCritical(): void {
     if (this.suspended) return;
     const blob = this.serialize();
     if (this.mode === "local") { this.writeLocal(blob); return; }
+    this.writeJobJournal(blob.farmJobs);
     if (!this.isOnline()) return;
     const data = this.presentation(blob);
     try { localStorage.setItem(this.cacheKey(), JSON.stringify(data)); } catch { /* ignore */ }
@@ -216,6 +283,7 @@ export class SaveManager {
       this.writeLocal(blob);
       return;
     }
+    this.writeJobJournal(blob.farmJobs);
     if (!this.isOnline()) return;
     // Gameplay code calls save() at many semantic boundaries. In v3 those calls only
     // mark presentation dirty; they must not bypass the fixed one-minute deadline.
@@ -227,6 +295,7 @@ export class SaveManager {
   }
 
   private commitPresentation(blob = this.serialize()): void {
+    this.writeJobJournal(blob.farmJobs);
     if (this.suspended || !this.isOnline()) return;
     const data = this.presentation(blob);
     const encoded = JSON.stringify(data);
@@ -355,7 +424,7 @@ export class SaveManager {
       if (!raw) return null;
       const snapshot = JSON.parse(raw) as SaveGame;
       if (snapshot.version !== SAVE_VERSION) return null;
-      await this.applySave(snapshot);
+      await this.applySave(snapshot, false);
       return { kind: "online-cached", savedAt: snapshot.savedAt };
     } catch {
       return null;
@@ -364,6 +433,7 @@ export class SaveManager {
 
   private fromBootstrap(boot: Awaited<ReturnType<typeof api.bootstrap>>): SaveGame {
     const p = boot.presentation.data as PresentationData;
+    const clientTime = Date.now();
     this.objectLayouts = new Map((p.objectLayout ?? []).map((layout) => [layout.id, { ...layout }]));
     const objectLayout = new Map((p.objectLayout ?? []).map((o) => [o.id, o]));
     const rosterLayout = new Map((p.rosterLayout ?? []).map((u) => [u.id, u]));
@@ -372,7 +442,8 @@ export class SaveManager {
       if (plot.state === "plowed") return { oc, or, state: "plowed" as const };
       if (plot.state === "spent") return { oc, or, state: plot.zombie ? "hole" as const : "dirt" as const };
       return { oc, or, state: "planted" as const, crop: {
-        key: plot.cropKey, isZombie: plot.zombie, plantedAt: plot.plantedAt,
+        key: plot.cropKey, isZombie: plot.zombie,
+        plantedAt: serverTimestampToClient(plot.plantedAt, boot.serverTime, clientTime),
         growMs: plot.growMs, fertilized: plot.fertilized,
       } };
     });
@@ -380,7 +451,9 @@ export class SaveManager {
       if (obj.status !== "placed") return [];
       const layout = objectLayout.get(obj.instanceId);
       return [{ id: obj.instanceId, key: obj.catalogKey, oc: layout?.oc ?? 0, or: layout?.or ?? 0,
-        rotation: layout?.rotation, readyAt: obj.readyAt }];
+        rotation: layout?.rotation, readyAt: obj.readyAt == null
+          ? undefined
+          : serverTimestampToClient(obj.readyAt, boot.serverTime, clientTime) }];
     });
     for (const layout of objectLayout.values()) {
       if (layout.key === "storage01" && !objects.some((object) => object.id === layout.id)) {
@@ -434,10 +507,13 @@ export class SaveManager {
       },
       boosts: Object.entries(boot.gameplay.inventory).map(([key, count]) => ({ key, count })),
       quests: { active: boot.gameplay.quests.progress.map((q) => ({ id: q.questId, counts: q.counts })), completed: boot.gameplay.quests.completed },
-      raids: { completed: boot.gameplay.raids.progress, lastRaidAt: boot.gameplay.raids.lastRaidAt, attackOrder: p.ui?.attackOrder ?? [] },
-      epicBoss: boot.gameplay.epicBoss ?? undefined,
+      raids: { completed: boot.gameplay.raids.progress,
+        lastRaidAt: serverTimestampToClient(boot.gameplay.raids.lastRaidAt, boot.serverTime, clientTime),
+        attackOrder: p.ui?.attackOrder ?? [] },
+      epicBoss: epicBossRunToClient(boot.gameplay.epicBoss, boot.serverTime, clientTime) ?? undefined,
       social: { friends: boot.social.friends.map((friend) => ({ id: friend.accountId, name: friend.name, addedAt: boot.serverTime, giftsSent: 0 })) },
       tutorial: reconcileTutorialCompletion(p.tutorial, boot.gameplay.tutorialRewarded),
+      farmJobs: this.readJobJournal(),
     };
   }
 
@@ -469,7 +545,7 @@ export class SaveManager {
     return { kind: "local-unavailable", reason: "save_unreadable" };
   }
 
-  private async applySave(data: SaveGame): Promise<void> {
+  private async applySave(data: SaveGame, restoreJobs = true): Promise<void> {
     this.loadedFarmBackground = data.farm.background;
     const player = data.player;
     this.state.apply({ name: player.name, gold: player.gold, brains: player.brains, xp: player.xp,
@@ -518,11 +594,16 @@ export class SaveManager {
     const epicActive = !!epicRun && !epicRun.completedAt && Date.now() < epicRun.expiresAt;
     this.quests.setEpicBossActive(epicActive, epicActive ? epicDef?.questIds ?? [] : []);
     this.quests.restore(data.quests);
-    if (this.mode === "local") this.jobs?.restorePending(data.farmJobs, (key) => this.catalog.get(key));
+    // restorePending uses the same current-field validation as a fresh tap, so an
+    // online intent whose command already committed is safely discarded here.
+    if (restoreJobs) {
+      if (this.mode === "online") this.pendingOnlineJobs = data.farmJobs;
+      else this.jobs?.restorePending(data.farmJobs, (key) => this.catalog.get(key));
+    }
     if (player.farmer) this.walk.teleport(player.farmer.col, player.farmer.row);
   }
 
-  async hydrateReadOnly(save: SaveGame): Promise<void> { await this.applySave(save); }
+  async hydrateReadOnly(save: SaveGame): Promise<void> { await this.applySave(save, false); }
   exportLocal(): string | null {
     if (this.mode !== "local") return null;
     try { return localStorage.getItem(this.cacheKey()); } catch { return null; }

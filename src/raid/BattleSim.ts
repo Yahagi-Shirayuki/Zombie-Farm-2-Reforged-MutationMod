@@ -2064,6 +2064,40 @@ export class BattleSim {
     return this.crabs.filter((c) => c.state !== "gone");
   }
 
+  /** Prepare living zombies for the presentation-only end march. Remaining rescue
+   *  hazards are destroyed and drop their passengers; focus/ability poses are
+   *  cleared so nobody keeps thinking or attacking after combat has ended. */
+  prepareArmyExit(): void {
+    const heldIds = new Set<string>();
+    for (const grabber of this.grabbers) {
+      if (grabber.grabbedId) heldIds.add(grabber.grabbedId);
+    }
+    for (const crab of this.crabs) {
+      if (crab.grabbedId) heldIds.add(crab.grabbedId);
+    }
+
+    this.grabbers.length = 0;
+    this.crabs.length = 0;
+    this.projectiles.length = 0;
+
+    for (const zombie of this.players) {
+      if (!zombie.alive || zombie.taken) continue;
+      if (heldIds.has(zombie.id)) zombie.y = CENTER_Y;
+      if (!zombie.buddyCarrierId) zombie.state = "advance";
+      zombie.prevX = zombie.x;
+      zombie.prevY = zombie.y;
+      zombie.vx = 0;
+      zombie.vy = 0;
+      zombie.charge = 0;
+      zombie.distracted = false;
+      zombie.awaitRelease = false;
+      zombie.bubbleMs = 0;
+      zombie.windupKey = null;
+      zombie.windupMs = 0;
+      zombie.stunMs = 0;
+    }
+  }
+
   private spawnGrabber(victim: SimUnit) {
     const cfg = this.grabberCfg!;
     const seq = this.grabSeq++;

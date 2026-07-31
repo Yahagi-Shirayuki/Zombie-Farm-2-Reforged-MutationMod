@@ -426,10 +426,16 @@ def main():
                if tp.get("tapSoundEffect") or tp.get("soundID") else {}),
         })
 
-    # Design override (not in the source data): the Zombie Pot's FIRST purchase is
+    # Design override (not in the source data): the Zombie Pot's first purchase is
     # 500 gold (the shown price). Additional pots cost 30 brains — that dual pricing
     # is applied at placement (see main.ts tryPlaceObject).
+    tree_balance = {
+        "oliveTreeOlive": {"level": 5},
+        "fruitTreeLemon": {"harvestValue": 35},
+        "fruitTreeOrange": {"harvestValue": 18},
+    }
     for c in catalog:
+        c.update(tree_balance.get(c["key"], {}))
         if c["key"] == "zombieCombiner":
             c["cost"] = 500
             c["brainsNeeded"] = False

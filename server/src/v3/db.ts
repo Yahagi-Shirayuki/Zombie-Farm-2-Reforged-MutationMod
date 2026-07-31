@@ -249,7 +249,12 @@ export async function applyBatch(
   const rows = await loadRows(db, accountId, now);
   const runtime = rows.runtime;
   if (runtime.last_batch_id === body.batchId && runtime.last_result_json) {
-    return { status: 200, response: parse<CommandBatchResponse>(runtime.last_result_json, null as never) };
+    const cached = parse<CommandBatchResponse>(runtime.last_result_json, null as never);
+    // The projection timestamps are absolute server epochs, but serverTime is the
+    // response-time clock anchor used to translate them into the browser's clock
+    // domain. Refresh only that anchor when replaying an idempotent result; reusing
+    // the original value would add the whole retry/offline interval to every timer.
+    return { status: 200, response: { ...cached, serverTime: now } };
   }
   if (runtime.active_batch_id) return { status: 409, error: "batch_in_progress" };
   if (body.expectedAccountVersion !== runtime.account_version) {
@@ -335,6 +340,11 @@ export async function applyBatch(
   if (engine.questChanged) statements.push(db.prepare(`UPDATE quest_documents_v3 SET
       version = version + 1, current_json = ?, updated_at = ? WHERE account_id = ? AND ${guard}`)
     .bind(JSON.stringify({ completed: engine.state.quests.completed, progress: engine.state.quests.progress }), now, accountId, accountId, body.batchId));
+  if (before.raids.lastRaidAt !== engine.state.raids.lastRaidAt) {
+    statements.push(db.prepare(`UPDATE raid_state_v3 SET last_started_at = ?
+      WHERE account_id = ? AND ${guard}`)
+      .bind(engine.state.raids.lastRaidAt, accountId, accountId, body.batchId));
+  }
   if (before.epicBoss && engine.state.epicBoss && before.epicBoss.runId === engine.state.epicBoss.runId &&
       before.epicBoss.tokenCount !== engine.state.epicBoss.tokenCount) {
     statements.push(db.prepare(`UPDATE epic_boss_runs_v3 SET token_count=?
