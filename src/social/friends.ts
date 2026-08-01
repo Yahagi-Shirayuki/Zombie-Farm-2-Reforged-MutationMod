@@ -22,6 +22,9 @@ export interface Friend {
   id: string;
   /** Display name. */
   name: string;
+  /** Server-derived player level for online friends. Offline placeholder friends
+   *  have no authoritative farm progression, so this is absent for them. */
+  level?: number;
   /** Epoch ms this friend was added. */
   addedAt: number;
   /** Epoch ms of the last brain we gifted this friend. Absent = never gifted.

@@ -299,6 +299,7 @@ export interface FriendView {
   accountId: string;
   name: string;
   friendCode: string;
+  level?: number;
   giftOnCooldown?: boolean;
 }
 export interface InboxGift {
@@ -967,6 +968,7 @@ export function toFriend(f: FriendView): Friend {
   return {
     id: f.accountId,
     name: f.name,
+    level: f.level,
     addedAt: 0,
     giftsSent: 0,
     friendCode: f.friendCode,

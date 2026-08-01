@@ -1720,10 +1720,12 @@ export class Hud {
     // Live-filter as the player types; every keystroke returns to the first page.
     const collapseSearch = () => {
       searchRow.classList.remove("expanded");
+      mkt.classList.remove("search-expanded");
       searchToggle.setAttribute("aria-expanded", "false");
     };
     searchToggle.onclick = () => {
       searchRow.classList.add("expanded");
+      mkt.classList.add("search-expanded");
       searchToggle.setAttribute("aria-expanded", "true");
       searchInput.focus();
     };
@@ -1761,9 +1763,11 @@ export class Hud {
       }
     };
 
+    let selectedTabButton: HTMLButtonElement | null = null;
     for (const name of ["Crops", "Items", "Upgrade", "Boosts", "Farmer", "Pets", "Epic Boss"]) {
       const b = document.createElement("button");
       b.className = "mkt-tab" + (name === tab ? " sel" : "");
+      if (name === tab) selectedTabButton = b;
       b.textContent = name;
       b.onclick = () => {
         this.audio.play("menuClick");
@@ -1792,6 +1796,11 @@ export class Hud {
     this.el.appendChild(bg);
     renderSubs();
     renderGrid();
+    // An initially selected category can be beyond the edge of the compact,
+    // horizontally scrollable phone tab rail (for example, Epic Boss).
+    requestAnimationFrame(() => selectedTabButton?.scrollIntoView({
+      behavior: "instant", block: "nearest", inline: "center",
+    }));
   }
 
   private renderEpicBossGrid(grid: HTMLElement, refreshCur: () => void, rerender: () => void) {
@@ -2985,10 +2994,15 @@ export class Hud {
       }
       for (const f of friends) {
         const row = document.createElement("div");
-        row.className = "prof-row";
-        const nm = document.createElement("div");
-        nm.className = "prof-name";
-        nm.textContent = f.name;
+        row.className = "prof-row fr-friend-row";
+        const nm = document.createElement("button");
+        nm.className = "prof-name fr-friend-toggle";
+        nm.type = "button";
+        nm.setAttribute("aria-expanded", "false");
+        const nameText = document.createElement("span");
+        nameText.className = "fr-friend-name";
+        nameText.textContent = f.name;
+        nm.appendChild(nameText);
         if (!online() && f.giftsSent > 0) {
           const b = document.createElement("span");
           b.className = "prof-badge fr-gifts";
@@ -2996,6 +3010,19 @@ export class Hud {
           b.title = `${f.giftsSent} brain${f.giftsSent === 1 ? "" : "s"} gifted`;
           nm.appendChild(b);
         }
+        const more = document.createElement("span");
+        more.className = "fr-friend-more";
+        more.setAttribute("aria-hidden", "true");
+        more.textContent = "•••";
+        nm.appendChild(more);
+        const menu = document.createElement("div");
+        menu.className = "fr-friend-menu";
+        const menuId = `friend-menu-${f.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+        menu.id = menuId;
+        nm.setAttribute("aria-controls", menuId);
+        const level = document.createElement("div");
+        level.className = "fr-friend-level";
+        level.textContent = f.level == null ? "Level unavailable" : `Level ${f.level}`;
         const acts = document.createElement("div");
         acts.className = "prof-actions";
         const gift = document.createElement("button");
@@ -3065,7 +3092,17 @@ export class Hud {
           });
           acts.appendChild(del);
         }
-        row.append(nm, acts);
+        menu.append(level, acts);
+        nm.onclick = () => {
+          const expand = !row.classList.contains("expanded");
+          list.querySelectorAll<HTMLElement>(".fr-friend-row.expanded").forEach((openRow) => {
+            openRow.classList.remove("expanded");
+            openRow.querySelector(".fr-friend-toggle")?.setAttribute("aria-expanded", "false");
+          });
+          row.classList.toggle("expanded", expand);
+          nm.setAttribute("aria-expanded", String(expand));
+        };
+        row.append(nm, menu);
         list.appendChild(row);
       }
       // Add-friend row: by code online, by name offline.

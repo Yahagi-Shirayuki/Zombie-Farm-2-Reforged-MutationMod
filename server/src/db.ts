@@ -191,16 +191,17 @@ export async function casWriteSave(
 export async function listFriends(
   db: D1Database,
   accountId: string
-): Promise<Account[]> {
+): Promise<Array<Account & { xp: number }>> {
   const res = await db
     .prepare(
-      `SELECT a.* FROM accounts a
+      `SELECT a.*, COALESCE(b.xp, 0) AS xp FROM accounts a
        JOIN friendships f ON f.b_id = a.id
+       LEFT JOIN balances b ON b.account_id = a.id
        WHERE f.a_id = ?
        ORDER BY a.username COLLATE NOCASE`
     )
     .bind(accountId)
-    .all<Account>();
+    .all<Account & { xp: number }>();
   return res.results ?? [];
 }
 

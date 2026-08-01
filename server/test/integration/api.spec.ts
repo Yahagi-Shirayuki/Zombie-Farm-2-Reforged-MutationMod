@@ -62,7 +62,9 @@ describe("friends — consent, non-oracle, blocks", () => {
     const reqs = await call<{ fromAccountId: string }[]>("GET", "/friends/requests", b.token);
     expect(reqs.body.map((r) => r.fromAccountId)).toContain(a.accountId);
     await call("POST", "/friends/accept", b.token, { fromAccountId: a.accountId });
-    expect((await call<unknown[]>("GET", "/friends", a.token)).body).toHaveLength(1);
+    const aFriends = await call<{ level: number }[]>("GET", "/friends", a.token);
+    expect(aFriends.body).toHaveLength(1);
+    expect(aFriends.body[0].level).toBe(1);
     expect((await call<unknown[]>("GET", "/friends", b.token)).body).toHaveLength(1);
   });
 

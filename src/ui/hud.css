@@ -124,7 +124,9 @@
 /* profile manager */
 #hud .panel.profiles { width: min(440px, 92vw); text-align: left; }
 #hud .prof-list { margin-top: 8px; display: flex; flex-direction: column; gap: 8px;
-  max-height: 62vh; overflow-y: auto; padding-right: 2px; }
+  max-height: 62vh; overflow-y: auto; padding-right: 2px;
+  scrollbar-width: none; -ms-overflow-style: none; }
+#hud .prof-list::-webkit-scrollbar { display: none; }
 #hud .prof-row { display: flex; align-items: center; gap: 10px; padding: 9px 11px;
   border-radius: 10px; background: rgba(0,0,0,.22); }
 #hud .prof-row.active { background: rgba(112,169,30,.22); box-shadow: inset 0 0 0 1px rgba(142,199,79,.5); }
@@ -162,6 +164,12 @@
 #hud .fr-gsi { flex: 0 0 auto; }
 #hud .fr-inbox-h { margin-top: 12px; margin-bottom: 4px; font-weight: 800; font-size: 13px; color: #ffd98a; }
 #hud .fr-inbox-row { background: rgba(255,193,60,.12); box-shadow: inset 0 0 0 1px rgba(255,193,60,.3); }
+#hud .fr-friend-toggle { appearance: none; border: 0; padding: 0; text-align: left;
+  font-family: inherit; background: transparent; cursor: default; }
+#hud .fr-friend-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#hud .fr-friend-more { display: none; margin-left: auto; flex: 0 0 auto; letter-spacing: 1px; }
+#hud .fr-friend-menu { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+#hud .fr-friend-level { display: none; }
 /* quest-complete toast */
 #hud .qtoast { position: fixed; top: 72px; left: 50%; transform: translate(-50%, -12px);
   pointer-events: none; background: linear-gradient(#3c5a10, #2a3f0b);
@@ -1263,8 +1271,20 @@
   /* market: 3 roomy columns instead of 5 cramped ones. */
   #hud .mkt-grid { grid-template-columns: repeat(3, 1fr); grid-auto-rows: 116px; }
   #hud .mkt-title { font-size: 19px; width: 190px; height: 50px; top: -26px; }
-  #hud .mkt-tabs { flex-wrap: wrap; }
-  #hud .mkt-tab { font-size: 13px; border-width: 6px 13px; }
+  #hud .mkt-tabs {
+    flex-wrap: nowrap; justify-content: flex-start; flex: 0 0 auto;
+    overflow-x: auto; overflow-y: hidden; padding-inline: 2px;
+    scroll-padding-inline: 12px; overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  #hud .mkt-tabs::-webkit-scrollbar { display: none; }
+  #hud .mkt-tab {
+    flex: 0 0 auto; white-space: nowrap;
+    font-size: 13px; border-width: 6px 13px;
+  }
+  /* The expanded search field drops below the title board. Make room for it
+     instead of covering the category rail on short touch layouts. */
+  #hud .mkt.search-expanded .mkt-tabs { margin-top: 26px; }
 
   /* zombie detail: stack the card above the stats instead of side-by-side. */
   #hud .zdetail { flex-direction: column; gap: 14px; }
@@ -1323,6 +1343,26 @@
     width: 100%; height: 100%; max-width: none; max-height: none;
   }
   #hud .mkt-bg:not(.bm-bg) > .mkt > .mkt-cur { display: none; }
+  /* With the redundant currency row hidden, explicitly reserve the space
+     occupied by the title board and its expanded search field. */
+  #hud .mkt-bg:not(.bm-bg) > .mkt > .mkt-tabs { margin-top: 24px; }
+  #hud .mkt-bg:not(.bm-bg) > .mkt.search-expanded > .mkt-tabs { margin-top: 58px; }
+
+  /* Friend rows prioritize the display name in portrait. Tapping the name/more
+     control reveals one compact action drawer at a time. */
+  #hud .fr-friend-row { display: block; padding: 0; overflow: hidden; }
+  #hud .fr-friend-toggle { width: 100%; min-height: 44px; padding: 10px 12px;
+    cursor: pointer; font-size: 16px; }
+  #hud .fr-friend-more { display: block; color: #d8bc84; }
+  #hud .fr-friend-menu { display: none; padding: 0 10px 10px;
+    border-top: 1px solid rgba(216,188,132,.22); }
+  #hud .fr-friend-row.expanded .fr-friend-menu { display: flex; flex-direction: column;
+    align-items: stretch; gap: 8px; }
+  #hud .fr-friend-level { display: block; padding-top: 8px; color: #d8bc84;
+    font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+  #hud .fr-friend-row .prof-actions { display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+  #hud .fr-friend-row .prof-btn { width: 100%; min-height: 38px; }
 }
 
 /* A phone held sideways has enough width for a two-column card but very little

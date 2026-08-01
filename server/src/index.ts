@@ -1203,6 +1203,7 @@ app.get("/friends", async (c) => {
       accountId: f.id,
       name: f.username ?? "Player", // chosen display name only (no PII)
       friendCode: f.friend_code,
+      level: levelForXp(f.xp),
       giftOnCooldown: gifted.has(f.id),
     }))
   );
