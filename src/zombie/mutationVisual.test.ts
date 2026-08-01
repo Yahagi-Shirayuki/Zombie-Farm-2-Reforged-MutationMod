@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { matchesMutationReplacement, mutationBitsForRendering } from "./mutationVisual";
+import {
+  EYE_MUTATION_FOREGROUND_Z,
+  matchesMutationReplacement,
+  mutationBitsForRendering,
+  mutationPartZIndex,
+} from "./mutationVisual";
 
 describe("mutation visual replacements", () => {
+  it("keeps the Carrot/Eyebiscus eye attachment above every other layer", () => {
+    expect(mutationPartZIndex(4, "head", 6)).toBe(EYE_MUTATION_FOREGROUND_Z);
+    expect(mutationPartZIndex(128, "head", 6)).toBe(4.5);
+    expect(mutationPartZIndex(8, "root", 8)).toBe(8);
+  });
+
   it("omits carrot-eye artwork from special zombies without changing other mutations", () => {
     const zombies = [
       { key: "regular", category: "normal" as const },

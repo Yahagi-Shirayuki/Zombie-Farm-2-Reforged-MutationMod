@@ -9,6 +9,7 @@ import {
   isMutationForegroundPart,
   matchesMutationReplacement,
   mutationBitsForRendering,
+  mutationPartZIndex,
   type MutationReplacement,
 } from "../zombie/mutationVisual";
 import {
@@ -71,8 +72,6 @@ const DEATH_HEAD_VX = 92; // local px/s, backward (away from the enemy)
 const DEATH_HEAD_VY = -255; // local px/s, up
 const DEATH_HEAD_G = 820; // gravity pulling the head back down
 const DEATH_HEAD_SPIN = 13; // rad/s tumble
-const MUT_HEAD_REPLACE_Z = 4.5;
-const MUT_FACE_OVERLAY_Z = 20;
 const MUT_BASE_FOREGROUND_Z = 30;
 
 export class RaidActor {
@@ -209,10 +208,10 @@ export class RaidActor {
       const py = -mp.oy + (mp.headRel ? m.neck.y : 0);
       sp.position.set(px, py);
       if (mp.group === "head") {
-        sp.zIndex = slotOf(bit) === "hair_eye" ? MUT_FACE_OVERLAY_Z : MUT_HEAD_REPLACE_Z;
+        sp.zIndex = mutationPartZIndex(bit, mp.group, mp.z);
         this.headParts.push({ sp, bx: px, by: py });
       } else {
-        sp.zIndex = mp.z;
+        sp.zIndex = mutationPartZIndex(bit, mp.group, mp.z);
         if (slotOf(bit) === "arm") this.arms.push(sp);
       }
       this.root.addChild(sp);

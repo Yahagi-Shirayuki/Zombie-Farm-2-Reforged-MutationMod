@@ -232,6 +232,7 @@ export interface PlaceableDef {
   key: string;
   name: string;
   category: "tree" | "decor" | "functional" | "reward"; // Items section ("reward" = raid loot, not sold)
+  seasonal?: boolean; // holiday/event decor is grouped after the permanent catalog
   cost: number;
   level: number; // player level required to unlock
   xp: number; // gold-buy XP; zero falls back to cost / 100, brain XP is cost-derived

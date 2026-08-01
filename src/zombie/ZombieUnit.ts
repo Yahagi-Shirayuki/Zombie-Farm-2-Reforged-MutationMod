@@ -18,6 +18,7 @@ import {
   isMutationForegroundPart,
   matchesMutationReplacement,
   mutationBitsForRendering,
+  mutationPartZIndex,
   type MutationReplacement,
 } from "./mutationVisual";
 import {
@@ -31,8 +32,6 @@ import { zombieFarmScale } from "./displayScale";
 
 // Head replacements draw over the base skull but under facial parts, so eyes stay
 // visible on Onion/Tomato/etc. Hair/eye mutations draw above the face.
-const MUT_HEAD_REPLACE_Z = 4.5;
-const MUT_FACE_OVERLAY_Z = 20;
 const MUT_BASE_FOREGROUND_Z = 30;
 
 const SPEED_PX = 34; // slow amble
@@ -312,7 +311,7 @@ export class ZombieUnit {
       }
       this.root.addChild(sp);
       if (mp.group === "head") {
-        sp.zIndex = slotOf(bit) === "hair_eye" ? MUT_FACE_OVERLAY_Z : MUT_HEAD_REPLACE_Z;
+        sp.zIndex = mutationPartZIndex(bit, mp.group, mp.z);
         this.headParts.push({ sp, bx: px, by: py }); // tilts with the head-nod
       } else {
         sp.zIndex = mp.z; // arms/body/collar keep their authored layering

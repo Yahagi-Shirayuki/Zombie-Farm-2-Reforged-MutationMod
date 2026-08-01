@@ -1395,9 +1395,12 @@ async function main() {
       });
       const views = casualties.map((zombie) => ({
         id: zombie.id,
+        key: zombie.key,
         name: zombie.name,
         typeName: zombie.typeName,
         portrait: zombiePortrait(zombie.key),
+        mutation: zombie.mutation,
+        color: zombie.color,
       }));
       hud.openZombieRevival(views, brains, async (reviveIds) => {
         const revived = await economy!.resolveRaidRevival(offer.sessionId, reviveIds);
@@ -3050,9 +3053,12 @@ async function main() {
           if (!casualtyParty.length) return;
           const revivalViews = casualtyParty.map((zombie) => ({
             id: zombie.id,
+            key: zombie.key,
             name: zombie.name,
             typeName: zombie.typeName,
             portrait: zombiePortrait(zombie.key),
+            mutation: zombie.mutation,
+            color: zombie.color,
           }));
           if (settlementPromise && economy) {
             // The battle is gone and the farm is visible before this event opens.

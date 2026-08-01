@@ -5,6 +5,20 @@ export type MutationReplacement = "body" | "armF" | "head";
 
 const CARROT_MUTATION_BIT = 4;
 
+/** Carrot-eyed and its Eyebiscus visual override are eye attachments, so they
+ * must remain visible above every authored body part, mutation, and actor FX. */
+export const EYE_MUTATION_FOREGROUND_Z = 100;
+
+export function mutationPartZIndex(
+  bit: number,
+  group: "head" | "root",
+  authoredZ: number,
+): number {
+  if (bit === CARROT_MUTATION_BIT) return EYE_MUTATION_FOREGROUND_Z;
+  if (group === "head") return 4.5;
+  return authoredZ;
+}
+
 /**
  * Mutation bits that should contribute artwork for this species. Named special
  * zombies already have authored faces, so the generic carrot-eye attachment is

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareCropMarketOrder } from "./marketOrder";
+import { compareCropMarketOrder, compareItemMarketOrder } from "./marketOrder";
 
 describe("crop market ordering", () => {
   it("puts regular crops before holiday crops regardless of unlock level", () => {
@@ -11,6 +11,20 @@ describe("crop market ordering", () => {
     ];
     expect(entries.sort(compareCropMarketOrder).map((entry) => entry.name)).toEqual([
       "Regular L1", "Regular L20", "Holiday L1", "Holiday L5",
+    ]);
+  });
+});
+
+describe("item market ordering", () => {
+  it("puts normal decor before seasonal decor regardless of unlock level", () => {
+    const entries = [
+      { name: "Seasonal L0", level: 0, seasonal: true },
+      { name: "Normal L20", level: 20 },
+      { name: "Normal L2", level: 2 },
+      { name: "Seasonal L10", level: 10, seasonal: true },
+    ];
+    expect(entries.sort(compareItemMarketOrder).map((entry) => entry.name)).toEqual([
+      "Normal L2", "Normal L20", "Seasonal L0", "Seasonal L10",
     ]);
   });
 });

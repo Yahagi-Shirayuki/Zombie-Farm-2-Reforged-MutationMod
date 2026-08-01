@@ -7,3 +7,12 @@ export function compareCropMarketOrder(
 ): number {
   return Number(!!a.seasonal) - Number(!!b.seasonal) || a.level - b.level;
 }
+
+/** Market item order: permanent items first, seasonal/event items last; unlock
+ * level orders entries within each group. */
+export function compareItemMarketOrder(
+  a: { seasonal?: boolean; level: number },
+  b: { seasonal?: boolean; level: number }
+): number {
+  return Number(!!a.seasonal) - Number(!!b.seasonal) || a.level - b.level;
+}

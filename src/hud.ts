@@ -24,7 +24,7 @@ import { STATS, veterancy, STAT_TILE, VALUE_FILL, VALUE_END, ABILITY_FRAME,
 import { statBreakdown } from "./zombie/statDisplay";
 import { classTierRank } from "./zombie/taxonomy";
 import { BASE } from "./base";
-import { compareCropMarketOrder } from "./marketOrder";
+import { compareCropMarketOrder, compareItemMarketOrder } from "./marketOrder";
 import { fillPartySelection, orderPartyRoster } from "./raid/partySelection";
 import { otherPlayMode, playModeDestinationLabel, type PlayMode } from "./playMode";
 import type { UpdateCheckResult } from "./updateCheck";
@@ -1521,6 +1521,8 @@ export class Hud {
         }));
       if (tab === "Items") {
         let cards = this.objectCards.filter((c) => c.category === ITEM_CAT[sub]);
+        if (sub === "Decors")
+          cards = [...cards].sort((a, b) => compareItemMarketOrder(a.def, b.def));
         // Limited functional items leave the Market once the player owns the
         // allowed number. The callback counts both placed and shed-stored copies.
         cards = cards.filter((c) => placeablePurchaseLimit(c.def) === undefined ||
@@ -4413,7 +4415,15 @@ export class Hud {
   /** One-time farm-return casualty event. The modal cannot be dismissed without
    * resolving it because every unselected zombie is permanently lost. */
   openZombieRevival(
-    zombies: { id: string; name: string; typeName: string; portrait: string }[],
+    zombies: {
+      id: string;
+      key: string;
+      name: string;
+      typeName: string;
+      portrait: string;
+      mutation: number;
+      color?: [number, number, number];
+    }[],
     brains: number,
     onResolve: (reviveIds: string[]) => Promise<boolean> | boolean
   ) {
@@ -4451,6 +4461,11 @@ export class Hud {
       const portrait = document.createElement("img");
       portrait.src = zombie.portrait;
       portrait.alt = "";
+      if (this.zombieMutationPortraitOf) {
+        void this.zombieMutationPortraitOf(zombie.key, zombie.mutation, zombie.color)
+          .then((image) => { if (portrait.isConnected) portrait.src = image; })
+          .catch(() => { /* retain the static species portrait */ });
+      }
       const label = document.createElement("div");
       const name = document.createElement("div");
       name.className = "revive-name";

@@ -5,13 +5,12 @@ import {
   isMutationForegroundPart,
   matchesMutationReplacement,
   mutationBitsForRendering,
+  mutationPartZIndex,
   type MutationReplacement,
 } from "./mutationVisual";
 import { zombiePartTint } from "./appearance";
 import { classify } from "./taxonomy";
 
-const MUT_HEAD_REPLACE_Z = 4.5;
-const MUT_FACE_OVERLAY_Z = 20;
 const MUT_BASE_FOREGROUND_Z = 30;
 
 /** Ensure a renderer extraction contains at least one visible pixel before it is
@@ -102,9 +101,7 @@ export function buildZombiePortraitRig(
         }
       }
     }
-    sprite.zIndex = part.group === "head"
-      ? (slotOf(bit) === "hair_eye" ? MUT_FACE_OVERLAY_Z : MUT_HEAD_REPLACE_Z)
-      : part.z;
+    sprite.zIndex = mutationPartZIndex(bit, part.group, part.z);
     root.addChild(sprite);
   }
 

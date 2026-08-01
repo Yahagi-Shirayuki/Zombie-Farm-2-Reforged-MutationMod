@@ -1,6 +1,7 @@
 [
  {
   "key": "skeletonCouple",
+  "seasonal": true,
   "name": "Skeleton Couple",
   "category": "decor",
   "cost": 3,
@@ -24,6 +25,7 @@
  },
  {
   "key": "boxoLantern",
+  "seasonal": true,
   "name": "Box o' Lantern",
   "category": "decor",
   "cost": 5,
@@ -47,6 +49,7 @@
  },
  {
   "key": "zombieGift",
+  "seasonal": true,
   "name": "Anniversary Gift",
   "category": "decor",
   "cost": 5,
@@ -117,6 +120,7 @@
  },
  {
   "key": "umbrellaYellow",
+  "seasonal": true,
   "name": "Yellow Umbrella",
   "category": "decor",
   "cost": 1,
@@ -140,6 +144,7 @@
  },
  {
   "key": "umbrellaOrange",
+  "seasonal": true,
   "name": "Orange Umbrella",
   "category": "decor",
   "cost": 1,
@@ -163,6 +168,7 @@
  },
  {
   "key": "surfboardBlue",
+  "seasonal": true,
   "name": "Blue Surfboard",
   "category": "decor",
   "cost": 1,
@@ -186,6 +192,7 @@
  },
  {
   "key": "beachBall",
+  "seasonal": true,
   "name": "Beach Ball",
   "category": "decor",
   "cost": 1,
@@ -209,6 +216,7 @@
  },
  {
   "key": "tikiHeadLarge",
+  "seasonal": true,
   "name": "Large Tiki Head",
   "category": "decor",
   "cost": 2,
@@ -232,6 +240,7 @@
  },
  {
   "key": "tikiHeadSmall",
+  "seasonal": true,
   "name": "Small Tiki Head",
   "category": "decor",
   "cost": 2,
@@ -255,6 +264,7 @@
  },
  {
   "key": "surfboardRed",
+  "seasonal": true,
   "name": "Red Surfboard",
   "category": "decor",
   "cost": 2,
@@ -278,6 +288,7 @@
  },
  {
   "key": "lifeguardChair",
+  "seasonal": true,
   "name": "Lifeguard Chair",
   "category": "decor",
   "cost": 3,
@@ -301,6 +312,7 @@
  },
  {
   "key": "sandCastle",
+  "seasonal": true,
   "name": "Sand Castle",
   "category": "decor",
   "cost": 5,
@@ -324,6 +336,7 @@
  },
  {
   "key": "birthdayCakeThirdYearRight",
+  "seasonal": true,
   "name": "Birthday Cake",
   "category": "decor",
   "cost": 10,
@@ -347,6 +360,7 @@
  },
  {
   "key": "heartFountain",
+  "seasonal": true,
   "name": "Heart Fountain",
   "category": "decor",
   "cost": 10,
@@ -370,6 +384,7 @@
  },
  {
   "key": "heartGravestone",
+  "seasonal": true,
   "name": "Heart Gravestone",
   "category": "decor",
   "cost": 15,
@@ -393,6 +408,7 @@
  },
  {
   "key": "cupidStatueA",
+  "seasonal": true,
   "name": "Cupid Statue A",
   "category": "decor",
   "cost": 50,
@@ -416,6 +432,7 @@
  },
  {
   "key": "cupidStatueB",
+  "seasonal": true,
   "name": "Cupid Statue B",
   "category": "decor",
   "cost": 50,
@@ -439,6 +456,7 @@
  },
  {
   "key": "easterEggWhite",
+  "seasonal": true,
   "name": "Egg",
   "category": "decor",
   "cost": 400,
@@ -462,6 +480,7 @@
  },
  {
   "key": "easterEggBlue",
+  "seasonal": true,
   "name": "Blue Easter Egg",
   "category": "decor",
   "cost": 500,
@@ -485,6 +504,7 @@
  },
  {
   "key": "easterEggGreen",
+  "seasonal": true,
   "name": "Green Easter Egg",
   "category": "decor",
   "cost": 500,
@@ -508,6 +528,7 @@
  },
  {
   "key": "easterEggPink",
+  "seasonal": true,
   "name": "Pink Easter Egg",
   "category": "decor",
   "cost": 500,
@@ -531,6 +552,7 @@
  },
  {
   "key": "easterEggPurple",
+  "seasonal": true,
   "name": "Purple Easter Egg",
   "category": "decor",
   "cost": 500,
@@ -554,6 +576,7 @@
  },
  {
   "key": "peepPink",
+  "seasonal": true,
   "name": "Pink Peep",
   "category": "decor",
   "cost": 800,
@@ -577,6 +600,7 @@
  },
  {
   "key": "peepYellow",
+  "seasonal": true,
   "name": "Yellow Peep",
   "category": "decor",
   "cost": 800,
@@ -600,6 +624,7 @@
  },
  {
   "key": "easterGrass",
+  "seasonal": true,
   "name": "Easter Grass",
   "category": "decor",
   "cost": 1500,
@@ -623,6 +648,7 @@
  },
  {
   "key": "pailAndShovel",
+  "seasonal": true,
   "name": "Pail and Shovel",
   "category": "decor",
   "cost": 4000,
@@ -646,6 +672,7 @@
  },
  {
   "key": "heartHedge",
+  "seasonal": true,
   "name": "Heart Hedge",
   "category": "decor",
   "cost": 5000,
@@ -669,6 +696,7 @@
  },
  {
   "key": "heartCandle",
+  "seasonal": true,
   "name": "Heart Candle",
   "category": "decor",
   "cost": 5000,
@@ -692,6 +720,7 @@
  },
  {
   "key": "bigEasterEggBlue",
+  "seasonal": true,
   "name": "Big Blue Egg",
   "category": "decor",
   "cost": 1,
@@ -715,6 +744,7 @@
  },
  {
   "key": "bigEasterEggGreen",
+  "seasonal": true,
   "name": "Big Green Egg",
   "category": "decor",
   "cost": 1,
@@ -738,6 +768,7 @@
  },
  {
   "key": "bigEasterEggPink",
+  "seasonal": true,
   "name": "Big Pink Egg",
   "category": "decor",
   "cost": 1,
@@ -761,6 +792,7 @@
  },
  {
   "key": "eggBush",
+  "seasonal": true,
   "name": "Egg Bush",
   "category": "decor",
   "cost": 1,
@@ -784,6 +816,7 @@
  },
  {
   "key": "powderKeg",
+  "seasonal": true,
   "name": "Powder Keg",
   "category": "decor",
   "cost": 1,
@@ -807,6 +840,7 @@
  },
  {
   "key": "pirateCrate",
+  "seasonal": true,
   "name": "Pirate Crate",
   "category": "decor",
   "cost": 1,
@@ -830,6 +864,7 @@
  },
  {
   "key": "drinksCooler",
+  "seasonal": true,
   "name": "Drinks Cooler",
   "category": "decor",
   "cost": 1,
@@ -853,6 +888,7 @@
  },
  {
   "key": "bbqGrill",
+  "seasonal": true,
   "name": "BBQ Grill",
   "category": "decor",
   "cost": 1,
@@ -876,6 +912,7 @@
  },
  {
   "key": "shipWheel",
+  "seasonal": true,
   "name": "Ship Wheel",
   "category": "decor",
   "cost": 2,
@@ -899,6 +936,7 @@
  },
  {
   "key": "easterBasket",
+  "seasonal": true,
   "name": "Easter Basket",
   "category": "decor",
   "cost": 2,
@@ -922,6 +960,7 @@
  },
  {
   "key": "cannon",
+  "seasonal": true,
   "name": "Cannon",
   "category": "decor",
   "cost": 2,
@@ -945,6 +984,7 @@
  },
  {
   "key": "cursedChest",
+  "seasonal": true,
   "name": "Cursed Chest",
   "category": "decor",
   "cost": 2,
@@ -968,6 +1008,7 @@
  },
  {
   "key": "libertySnareDrum",
+  "seasonal": true,
   "name": "Liberty Drum",
   "category": "decor",
   "cost": 2,
@@ -991,6 +1032,7 @@
  },
  {
   "key": "eggLamp",
+  "seasonal": true,
   "name": "Egg Lamp",
   "category": "decor",
   "cost": 3,
@@ -1014,6 +1056,7 @@
  },
  {
   "key": "gibbetCage",
+  "seasonal": true,
   "name": "Gibbet Cage",
   "category": "decor",
   "cost": 3,
@@ -1037,6 +1080,7 @@
  },
  {
   "key": "spaceWormHoleA",
+  "seasonal": true,
   "name": "Worm Hole A",
   "category": "decor",
   "cost": 3,
@@ -1060,6 +1104,7 @@
  },
  {
   "key": "spaceWormHoleB",
+  "seasonal": true,
   "name": "Worm Hole B",
   "category": "decor",
   "cost": 3,
@@ -1083,6 +1128,7 @@
  },
  {
   "key": "fancyFireplace",
+  "seasonal": true,
   "name": "Fireplace",
   "category": "decor",
   "cost": 3,
@@ -1106,6 +1152,7 @@
  },
  {
   "key": "goldEgg",
+  "seasonal": true,
   "name": "Mechanical Egg",
   "category": "decor",
   "cost": 5,
@@ -1129,6 +1176,7 @@
  },
  {
   "key": "sculptureOfLiberty",
+  "seasonal": true,
   "name": "Liberty Statue",
   "category": "decor",
   "cost": 5,
@@ -1152,6 +1200,7 @@
  },
  {
   "key": "libertyBell",
+  "seasonal": true,
   "name": "Liberty Bell",
   "category": "decor",
   "cost": 5,
@@ -1176,6 +1225,7 @@
  },
  {
   "key": "stPatricksFountain",
+  "seasonal": true,
   "name": "Irish Spring",
   "category": "decor",
   "cost": 5,
@@ -1199,6 +1249,7 @@
  },
  {
   "key": "spaceSolarSystem",
+  "seasonal": true,
   "name": "Solar System",
   "category": "decor",
   "cost": 5,
@@ -1222,6 +1273,7 @@
  },
  {
   "key": "holidayChocolateFountain",
+  "seasonal": true,
   "name": "Chocolate Fountain",
   "category": "decor",
   "cost": 10,
@@ -1314,6 +1366,7 @@
  },
  {
   "key": "pirateCratePlain",
+  "seasonal": true,
   "name": "Pirate Crate Plain",
   "category": "decor",
   "cost": 2000,
@@ -1337,6 +1390,7 @@
  },
  {
   "key": "rumBarrel",
+  "seasonal": true,
   "name": "Small Keg",
   "category": "decor",
   "cost": 2000,
@@ -1360,6 +1414,7 @@
  },
  {
   "key": "rope",
+  "seasonal": true,
   "name": "Rope",
   "category": "decor",
   "cost": 2000,
@@ -1383,6 +1438,7 @@
  },
  {
   "key": "pirateSack",
+  "seasonal": true,
   "name": "Pirate Sack",
   "category": "decor",
   "cost": 2000,
@@ -1406,6 +1462,7 @@
  },
  {
   "key": "pirateBag",
+  "seasonal": true,
   "name": "Pirate Bag",
   "category": "decor",
   "cost": 2000,
@@ -1429,6 +1486,7 @@
  },
  {
   "key": "starTopiary",
+  "seasonal": true,
   "name": "Star Topiary",
   "category": "decor",
   "cost": 3000,
@@ -1452,6 +1510,7 @@
  },
  {
   "key": "cannonBalls",
+  "seasonal": true,
   "name": "Cannon Balls",
   "category": "decor",
   "cost": 5000,
@@ -1475,6 +1534,7 @@
  },
  {
   "key": "pirateBarrel",
+  "seasonal": true,
   "name": "Pirate Barrel",
   "category": "decor",
   "cost": 10000,
@@ -1498,6 +1558,7 @@
  },
  {
   "key": "barrelOfFireworks",
+  "seasonal": true,
   "name": "Fireworks",
   "category": "decor",
   "cost": 10000,
@@ -1521,6 +1582,7 @@
  },
  {
   "key": "stPatricksIrishFlag",
+  "seasonal": true,
   "name": "Irish Flag",
   "category": "decor",
   "cost": 10000,
@@ -1544,6 +1606,7 @@
  },
  {
   "key": "islandRelic",
+  "seasonal": true,
   "name": "Island Relic",
   "category": "decor",
   "cost": 20000,
@@ -1567,6 +1630,7 @@
  },
  {
   "key": "libertyMonument",
+  "seasonal": true,
   "name": "Liberty Monument",
   "category": "decor",
   "cost": 100000,

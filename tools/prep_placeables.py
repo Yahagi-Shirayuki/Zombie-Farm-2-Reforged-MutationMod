@@ -92,6 +92,36 @@ SEASONAL_DECOR_EXCLUDED = {
     "xmasGingerbreadHouse", "xmasTree", "xmasWreath", "yellowSatchet"
 }
 
+# Seasonal/event decor that IS intentionally sold in Reforged. Source Market
+# rows have no seasonal flag, so keep this classification explicit just like the
+# excluded catalog above. The Market uses it to group permanent decor first and
+# these limited-theme sets afterward, with each group ordered by unlock level.
+SEASONAL_MARKET_DECOR = {
+    # Halloween, anniversary, and Valentine's Day
+    "skeletonCouple", "boxoLantern", "zombieGift", "birthdayCakeThirdYearRight",
+    "cupidStatueA", "cupidStatueB", "heartGravestone", "heartHedge",
+    "heartCandle", "heartFountain", "holidayChocolateFountain",
+    # Summer/beach
+    "umbrellaYellow", "umbrellaOrange", "tikiHeadSmall", "tikiHeadLarge",
+    "sandCastle", "lifeguardChair", "surfboardRed", "surfboardBlue",
+    "beachBall", "pailAndShovel",
+    # Easter
+    "easterEggBlue", "easterEggGreen", "easterEggPink", "easterEggPurple",
+    "easterEggWhite", "easterGrass", "peepPink", "peepYellow", "goldEgg",
+    "bigEasterEggBlue", "bigEasterEggGreen", "bigEasterEggPink", "easterBasket",
+    "eggBush", "eggLamp",
+    # Pirate event
+    "powderKeg", "cannon", "pirateCratePlain", "shipWheel", "rumBarrel", "rope",
+    "pirateCrate", "gibbetCage", "pirateBarrel", "cannonBalls", "cursedChest",
+    "islandRelic", "pirateSack", "pirateBag",
+    # Independence Day
+    "drinksCooler", "starTopiary", "bbqGrill", "libertySnareDrum",
+    "libertyMonument", "barrelOfFireworks", "sculptureOfLiberty", "libertyBell",
+    # St. Patrick's Day, space event, and winter holiday
+    "stPatricksIrishFlag", "stPatricksFountain", "spaceWormHoleA",
+    "spaceWormHoleB", "spaceSolarSystem", "fancyFireplace",
+}
+
 # Hand-set premium brain prices. These deliberately skip the brainflation retune —
 # they are meant to read as expensive showpieces rather than land in the typical
 # 1-5 brain band.
@@ -388,6 +418,7 @@ def main():
             "key": key,
             "name": e["name"],
             "category": category,
+            **({"seasonal": True} if key in SEASONAL_MARKET_DECOR else {}),
             "cost": cost,
             "level": -1 if reward_only else e.get("level", 1),
             # Fruit-tree rows omit `xp`, and some ordinary gold decor rows carry
