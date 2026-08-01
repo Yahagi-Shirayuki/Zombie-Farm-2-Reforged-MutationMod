@@ -164,12 +164,30 @@
 #hud .fr-gsi { flex: 0 0 auto; }
 #hud .fr-inbox-h { margin-top: 12px; margin-bottom: 4px; font-weight: 800; font-size: 13px; color: #ffd98a; }
 #hud .fr-inbox-row { background: rgba(255,193,60,.12); box-shadow: inset 0 0 0 1px rgba(255,193,60,.3); }
-#hud .fr-friend-toggle { appearance: none; border: 0; padding: 0; text-align: left;
-  font-family: inherit; background: transparent; cursor: default; }
-#hud .fr-friend-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-#hud .fr-friend-more { display: none; margin-left: auto; flex: 0 0 auto; letter-spacing: 1px; }
-#hud .fr-friend-menu { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
-#hud .fr-friend-level { display: none; }
+/* Every device uses the same name-first disclosure card. The name is a styled
+   div rather than a native button so global/game button art cannot mask it. */
+#hud .fr-friend-row { display: block; padding: 0; overflow: hidden; }
+#hud .fr-friend-header { display: flex; align-items: center; min-width: 0; }
+#hud .fr-friend-toggle { min-height: 46px; padding: 10px 8px 10px 12px;
+  box-sizing: border-box; cursor: pointer; outline: none; }
+#hud .fr-friend-toggle:focus-visible { box-shadow: inset 0 0 0 2px #d9ff9b; }
+#hud .fr-friend-name { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  color: #f4e9cf; -webkit-text-fill-color: #f4e9cf; }
+#hud .fr-friend-more { display: grid; place-items: center; flex: 0 0 auto;
+  width: 38px; height: 32px; margin-right: 8px; padding: 0 0 6px;
+  border: 2px solid #1e1207; border-radius: 8px; cursor: pointer;
+  color: #f4e9cf; background: linear-gradient(#7a5220, #5e3d15);
+  font: 900 17px/1 system-ui, sans-serif; letter-spacing: 1px; text-shadow: 0 1px 1px #000; }
+#hud .fr-friend-more:hover { filter: brightness(1.12); }
+#hud .fr-friend-menu { display: none; padding: 0 10px 10px;
+  border-top: 1px solid rgba(216,188,132,.22); }
+#hud .fr-friend-row.expanded .fr-friend-menu { display: flex; flex-direction: column;
+  align-items: stretch; gap: 8px; }
+#hud .fr-friend-level { display: block; padding-top: 8px; color: #d8bc84;
+  font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+#hud .fr-friend-row .prof-actions { display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 7px; }
+#hud .fr-friend-row .prof-btn { width: 100%; min-height: 38px; }
 /* quest-complete toast */
 #hud .qtoast { position: fixed; top: 72px; left: 50%; transform: translate(-50%, -12px);
   pointer-events: none; background: linear-gradient(#3c5a10, #2a3f0b);
@@ -1348,21 +1366,6 @@
   #hud .mkt-bg:not(.bm-bg) > .mkt > .mkt-tabs { margin-top: 24px; }
   #hud .mkt-bg:not(.bm-bg) > .mkt.search-expanded > .mkt-tabs { margin-top: 58px; }
 
-  /* Friend rows prioritize the display name in portrait. Tapping the name/more
-     control reveals one compact action drawer at a time. */
-  #hud .fr-friend-row { display: block; padding: 0; overflow: hidden; }
-  #hud .fr-friend-toggle { width: 100%; min-height: 44px; padding: 10px 12px;
-    cursor: pointer; font-size: 16px; }
-  #hud .fr-friend-more { display: block; color: #d8bc84; }
-  #hud .fr-friend-menu { display: none; padding: 0 10px 10px;
-    border-top: 1px solid rgba(216,188,132,.22); }
-  #hud .fr-friend-row.expanded .fr-friend-menu { display: flex; flex-direction: column;
-    align-items: stretch; gap: 8px; }
-  #hud .fr-friend-level { display: block; padding-top: 8px; color: #d8bc84;
-    font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
-  #hud .fr-friend-row .prof-actions { display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
-  #hud .fr-friend-row .prof-btn { width: 100%; min-height: 38px; }
 }
 
 /* A phone held sideways has enough width for a two-column card but very little
