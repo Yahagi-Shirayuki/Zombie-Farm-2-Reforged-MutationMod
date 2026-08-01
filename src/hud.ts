@@ -2993,15 +2993,17 @@ export class Hud {
         list.appendChild(empty);
       }
       for (const f of friends) {
-        const row = document.createElement("details");
+        const row = document.createElement("div");
         row.className = "prof-row fr-friend-row";
-        const summary = document.createElement("summary");
+        const summary = document.createElement("button");
         summary.className = "fr-friend-summary";
+        summary.type = "button";
+        summary.setAttribute("aria-expanded", "false");
         const nm = document.createElement("span");
         nm.className = "fr-friend-name-wrap";
         const nameText = document.createElement("span");
         nameText.className = "fr-friend-name";
-        nameText.textContent = f.name;
+        nameText.textContent = f.name?.trim() || "Unnamed friend";
         nm.appendChild(nameText);
         if (!online() && f.giftsSent > 0) {
           const b = document.createElement("span");
@@ -3012,10 +3014,14 @@ export class Hud {
         }
         const more = document.createElement("span");
         more.className = "fr-friend-more";
-        more.textContent = "•••";
+        more.textContent = "Actions";
         more.setAttribute("aria-hidden", "true");
         const menu = document.createElement("div");
         menu.className = "fr-friend-menu";
+        menu.hidden = true;
+        const menuId = `friend-actions-${f.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+        menu.id = menuId;
+        summary.setAttribute("aria-controls", menuId);
         const level = document.createElement("div");
         level.className = "fr-friend-level";
         level.textContent = f.level == null ? "Level unavailable" : `Level ${f.level}`;
@@ -3090,6 +3096,12 @@ export class Hud {
         }
         menu.append(level, acts);
         summary.append(nm, more);
+        summary.onclick = () => {
+          const opening = !row.classList.contains("is-open");
+          row.classList.toggle("is-open", opening);
+          summary.setAttribute("aria-expanded", String(opening));
+          menu.hidden = !opening;
+        };
         row.append(summary, menu);
         list.appendChild(row);
       }
