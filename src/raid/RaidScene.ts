@@ -28,6 +28,9 @@ import {
 import { advanceRaidArmy, raidArmyHasExited } from "./raidOutro";
 import { zombieRaidHeightScale } from "../zombie/displayScale";
 import { zombieBasicAttackName } from "./zombieAttackPresentation";
+import { isMobile } from "../platform";
+import { readSafeAreaInsets } from "../safeArea";
+import { computeRaidHudLayout } from "./raidHudLayout";
 
 type RaidInputDraft =
   | { type: "bubble"; unitId: string }
@@ -1027,6 +1030,7 @@ export class RaidScene {
   // was drawn for; layout() skips those redraws while the size is unchanged.
   private chromeW = -1;
   private chromeH = -1;
+  private chromeSafeKey = "";
   // Countdown to the next ability-strip content recompute (ms); see layout().
   private abilityRefreshMs = 0;
   private bgRectCache: {
@@ -1131,13 +1135,16 @@ export class RaidScene {
     const W = this.app.screen.width;
     const H = this.app.screen.height;
     const r = this.bgRect();
-    const mx = W * 0.05; // screen margin for the top HUD bars
+    const safeArea = readSafeAreaInsets();
+    const hudLayout = computeRaidHudLayout(W, H, safeArea, isMobile());
+    const safeKey = `${safeArea.top},${safeArea.right},${safeArea.bottom},${safeArea.left},${hudLayout.hidePortraits}`;
     // Everything that depends only on the viewport (stage layers, letterbox fills,
     // HUD chrome) is drawn once per resize, not per frame: each Graphics.clear()
     // re-tessellates and re-uploads geometry, which mobile GPUs pay dearly for.
-    const resized = W !== this.chromeW || H !== this.chromeH;
+    const resized = W !== this.chromeW || H !== this.chromeH || safeKey !== this.chromeSafeKey;
     this.chromeW = W;
     this.chromeH = H;
+    this.chromeSafeKey = safeKey;
 
     if (resized) {
     // Position every stage layer in the 480x320 design space (cocos2d Y-up anchors),
@@ -1628,25 +1635,30 @@ export class RaidScene {
     }
 
     // Team bars, top corners.
-    const barW = Math.min(W * 0.32, 350);
+    const barW = hudLayout.barWidth;
     const barH = 17;
-    const topY = Math.max(9, H * 0.04);
-    const topHudH = Math.max(62, topY + barH + 26);
+    const topY = hudLayout.topY;
+    const topHudH = hudLayout.topHudHeight;
     if (resized) {
       this.topHudBack.clear()
         .rect(0, 0, W, topHudH).fill({ color: 0x15130f, alpha: 0.78 })
         .rect(0, topHudH - 4, W, 4).fill({ color: 0x090a08, alpha: 0.5 })
         .moveTo(0, topHudH - 1).lineTo(W, topHudH - 1)
         .stroke({ width: 2, color: 0xc7b78b, alpha: 0.48 });
-      this.pWrap.position.set(mx, topY);
-      this.eWrap.position.set(W - mx - barW, topY);
-      // Face badges just outside each bar (clamped on-screen): zombie left, enemy right.
-      const faceY = topY + barH / 2 + 3;
-      this.pFace.position.set(Math.max(25, mx - 27), faceY);
-      this.eFace.position.set(Math.min(W - 25, W - mx + 27), faceY);
+      this.pWrap.position.set(hudLayout.leftBarX, topY);
+      this.eWrap.position.set(hudLayout.rightBarX, topY);
+      // Portraits stay inside side notches in landscape and disappear on cramped
+      // mobile portrait raids; the health bars and counts remain available.
+      this.pFace.position.set(hudLayout.leftFaceX, hudLayout.faceY);
+      this.eFace.position.set(hudLayout.rightFaceX, hudLayout.faceY);
+      this.pFace.visible = !hudLayout.hidePortraits;
+      this.eFace.visible = !hudLayout.hidePortraits;
       this.roundLabel.position.set(W / 2, topY);
-      this.retreatBtn.position.set(W - mx - this.retreatBtn.width, H - this.retreatBtn.height - 18);
-      this.abilityStrip.position.set(mx + 24, topHudH + 30);
+      this.retreatBtn.position.set(
+        W - hudLayout.retreatRightMargin - this.retreatBtn.width,
+        H - this.retreatBtn.height - hudLayout.retreatBottomMargin,
+      );
+      this.abilityStrip.position.set(hudLayout.abilityX, topHudH + 30);
     }
     // Both team bars read green when full (drain as the team loses HP).
     this.drawTeamBar(this.pBar, this.pFill, barW, barH, pHp / this.maxPlayerHp, PLAYER_COLOR, this.pBarState);
