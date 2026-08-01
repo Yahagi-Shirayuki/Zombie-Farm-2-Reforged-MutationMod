@@ -132,7 +132,7 @@ describe("Garden healing and formation depth", () => {
     expect(restoredFighter.hp).toBe(0);
   });
 
-  it("holds a healer behind the line and restores a damaged deployed ally", () => {
+  it("holds a healer behind the line and restores any damaged deployed ally", () => {
     const fighter = unit({ id: "fighter", sourceKey: "ZombieActorRegularTier1", team: "player" });
     const healer = unit({
       id: "healer", sourceKey: "ZombieActorGardenTier1", team: "player",
@@ -146,11 +146,11 @@ describe("Garden healing and formation depth", () => {
     h.state = "advance";
     f.formOrder = 0;
     h.formOrder = 1;
-    f.hp = 1400; // below the binary's 50%-Life Heal threshold
+    f.hp = 2900; // injured, but still well above half Life
 
     sim.step(50);
     expect(h.slotX).toBeLessThan(f.slotX - 200);
-    expect(f.hp).toBe(1425); // healer Power 50 × 0.5
+    expect(f.hp).toBe(2925); // healer Power 50 × 0.5
     expect(f.healFxSeq).toBe(1);
     expect(h.healCastSeq).toBe(1);
   });

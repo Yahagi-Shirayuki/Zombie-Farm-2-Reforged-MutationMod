@@ -408,3 +408,7 @@ Deploy / migration notes for this pass
   timestamp translation degrades safely to a zero offset when serverTime is absent.
 - Database migration: none added and none needed. The invalid legacy raid_state write
   was removed rather than recreating a table protocol v3 does not use.
+
+
+Additional Features/Fixes
+- 

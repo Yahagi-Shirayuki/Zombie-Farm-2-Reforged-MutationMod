@@ -908,7 +908,7 @@ export class BattleSim {
   }
 
   /** Authentic Garden support. Heal selects the most injured OTHER deployed
-   *  zombie at or below half Life and restores 50% of the healer's Power.
+   *  zombie with missing Life and restores 50% of the healer's Power.
    *  Heal All independently fires every 20 seconds for the same amount. */
   private stepHealing(dtMs: number) {
     const deployed = this.players.filter(
@@ -927,7 +927,7 @@ export class BattleSim {
         healer.healTimerMs -= dtMs;
         if (healer.healTimerMs <= 0) {
           const candidates = deployed.filter(
-            (p) => p.id !== healer.id && p.hp > 0 && p.hp / p.maxHp <= 0.5
+            (p) => p.id !== healer.id && p.hp > 0 && p.hp < p.maxHp
           );
           if (candidates.length) {
             const target = candidates.reduce(
