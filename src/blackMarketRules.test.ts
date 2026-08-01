@@ -7,36 +7,41 @@ import {
 } from "./blackMarketRules";
 
 describe("Black Market purchase requirements", () => {
-  const noGraves = () => false;
-
   it("allows ordinary zombies without applying their planting level", () => {
-    expect(blackMarketPurchaseLock({ category: "normal" }, 1, noGraves)).toBeNull();
+    expect(blackMarketPurchaseLock({ category: "normal" }, 1)).toBeNull();
   });
 
-  it("requires the matching colored gravestone to be placed", () => {
+  it("unlocks colored zombies at the matching gravestone's level", () => {
     expect(blackMarketPurchaseLock(
       { category: "normal", unlockGrave: "Red" },
-      1,
-      () => false
-    )).toMatchObject({ kind: "grave", grave: "Red" });
+      14
+    )).toMatchObject({ kind: "level", level: 15 });
     expect(blackMarketPurchaseLock(
       { category: "normal", unlockGrave: "Red" },
-      1,
-      (grave) => grave === "Red"
+      15
+    )).toBeNull();
+    expect(blackMarketPurchaseLock(
+      { category: "normal", unlockGrave: "Silver" },
+      25
     )).toBeNull();
   });
 
   it("unlocks special-zombie purchases at level 20", () => {
     expect(blackMarketPurchaseLock(
       { category: "special" },
-      BLACK_MARKET_SPECIAL_LEVEL - 1,
-      noGraves
+      BLACK_MARKET_SPECIAL_LEVEL - 1
     )).toMatchObject({ kind: "level", level: 20 });
     expect(blackMarketPurchaseLock(
       { category: "special" },
-      BLACK_MARKET_SPECIAL_LEVEL,
-      noGraves
+      BLACK_MARKET_SPECIAL_LEVEL
     )).toBeNull();
+  });
+
+  it("uses the stricter requirement for a special colored zombie", () => {
+    expect(blackMarketPurchaseLock(
+      { category: "special", unlockGrave: "Red" },
+      19
+    )).toMatchObject({ kind: "level", level: 20 });
   });
 
   it("ORs requested mutations in one slot and ANDs requirements across slots", () => {

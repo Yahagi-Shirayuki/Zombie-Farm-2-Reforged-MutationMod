@@ -92,6 +92,76 @@ describe("finished combat input", () => {
 });
 
 describe("Garden healing and formation depth", () => {
+  it("fills a headless zombie's front slot from the next row after knockback", () => {
+    const players = [
+      unit({ id: "headless", sourceKey: "ZombieActorHeadlessTier1", team: "player", isHeadless: true }),
+      ...Array.from({ length: 4 }, (_, i) =>
+        unit({ id: `regular-${i}`, sourceKey: "ZombieActorRegularTier1", team: "player" })
+      ),
+    ];
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000, attackCooldownMs: 100_000,
+    });
+    const sim = new BattleSim(players, [enemy], null, true);
+    const deployed = sim.units.filter((candidate) => candidate.team === "player");
+    deployed.forEach((candidate, i) => {
+      candidate.state = "advance";
+      candidate.formOrder = i;
+    });
+    (sim as unknown as { releaseSeq: number }).releaseSeq = deployed.length;
+    const foe = sim.units.find((candidate) => candidate.id === "enemy")!;
+    foe.state = "hold";
+
+    sim.step(50);
+    const headless = deployed[0];
+    const replacement = deployed[4];
+    expect(headless.slotX).toBeGreaterThan(replacement.slotX);
+
+    const replacementStartX = replacement.x;
+    (sim as unknown as { knockBackZombie(unit: typeof headless): void }).knockBackZombie(headless);
+    sim.step(50);
+
+    expect(replacement.slotX).toBeGreaterThan(headless.slotX);
+    expect(replacement.x).toBeGreaterThan(replacementStartX);
+
+    for (let elapsed = 0; elapsed < 10_000 && !headless.frontPriority; elapsed += 50) sim.step(50);
+    sim.step(50); // apply the restored priority to the next formation assignment
+    expect(headless.frontPriority).toBe(true);
+    expect(headless.slotX).toBeGreaterThan(replacement.slotX);
+  });
+
+  it("fills a front slot when its occupant dies", () => {
+    const players = Array.from({ length: 5 }, (_, i) =>
+      unit({ id: `player-${i}`, sourceKey: "ZombieActorRegularTier1", team: "player" })
+    );
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000, attackCooldownMs: 100_000,
+    });
+    const sim = new BattleSim(players, [enemy], null, true);
+    const deployed = sim.units.filter((candidate) => candidate.team === "player");
+    deployed.forEach((candidate, i) => {
+      candidate.state = "advance";
+      candidate.formOrder = i;
+    });
+    const foe = sim.units.find((candidate) => candidate.id === "enemy")!;
+    foe.state = "hold";
+
+    sim.step(50);
+    const fallen = deployed[0];
+    const replacement = deployed[4];
+    expect(fallen.slotX).toBeGreaterThan(replacement.slotX);
+    const openSlotX = fallen.slotX;
+    const replacementStartX = replacement.x;
+    fallen.alive = false;
+    fallen.state = "dead";
+
+    sim.step(50);
+    expect(replacement.slotX).toBe(openSlotX);
+    expect(replacement.x).toBeGreaterThan(replacementStartX);
+  });
+
   it("does not let healing re-arm consumed one-shot protection", () => {
     const fighter = unit({
       id: "fighter", sourceKey: "ZombieActorRegularTier1", team: "player",

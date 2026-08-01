@@ -1,33 +1,32 @@
 export const BLACK_MARKET_SPECIAL_LEVEL = 20;
+export const BLACK_MARKET_COLOR_LEVELS = {
+  Blue: 1,
+  Red: 15,
+  Silver: 25,
+} as const;
 
-export type BlackMarketPurchaseLock =
-  | { kind: "level"; level: number; label: string }
-  | { kind: "grave"; grave: "Blue" | "Red" | "Silver"; label: string };
+export type BlackMarketPurchaseLock = { kind: "level"; level: number; label: string };
 
 export interface BlackMarketZombieRequirement {
   category?: "normal" | "special" | "mutant";
   unlockGrave?: "Blue" | "Red" | "Silver";
 }
 
-/** Black Market purchases ignore ordinary crop unlock levels. Colored-class zombies
- * still need their grave placed, while every special zombie shares the level-20 gate. */
+/** Black Market purchases ignore ordinary crop unlock levels. Colored classes unlock
+ * at their gravestone's level, while every special zombie also has a level-20 gate. */
 export function blackMarketPurchaseLock(
   zombie: BlackMarketZombieRequirement,
-  playerLevel: number,
-  hasGrave: (grave: "Blue" | "Red" | "Silver") => boolean
+  playerLevel: number
 ): BlackMarketPurchaseLock | null {
-  if (zombie.category === "special" && playerLevel < BLACK_MARKET_SPECIAL_LEVEL) {
+  const requiredLevel = Math.max(
+    zombie.category === "special" ? BLACK_MARKET_SPECIAL_LEVEL : 0,
+    zombie.unlockGrave ? BLACK_MARKET_COLOR_LEVELS[zombie.unlockGrave] : 0
+  );
+  if (playerLevel < requiredLevel) {
     return {
       kind: "level",
-      level: BLACK_MARKET_SPECIAL_LEVEL,
-      label: `Level ${BLACK_MARKET_SPECIAL_LEVEL} required`,
-    };
-  }
-  if (zombie.unlockGrave && !hasGrave(zombie.unlockGrave)) {
-    return {
-      kind: "grave",
-      grave: zombie.unlockGrave,
-      label: `${zombie.unlockGrave} Gravestone required`,
+      level: requiredLevel,
+      label: `Level ${requiredLevel} required`,
     };
   }
   return null;

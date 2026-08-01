@@ -28,7 +28,10 @@ import type { RaidOutcome } from "./types";
 // zombies below level 25 are substantially stronger than under v10. (b) The 10 raids
 // that are not McDonnell now field their AUTHORED single wave at every level instead of
 // an extrapolated per-level ladder, so both the enemy count and composition change.
-export const RAID_RULESET_VERSION = 11;
+// 12: formation vacancies now refill correctly after knockback. A displaced Headless
+// zombie temporarily yields its priority so the next row can advance, then resumes its
+// defining push-to-front behavior after reaching its recovery slot.
+export const RAID_RULESET_VERSION = 12;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

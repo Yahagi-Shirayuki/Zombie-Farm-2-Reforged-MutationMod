@@ -76,13 +76,13 @@ the fulfillment transaction (`server/src/rosterCatalog.ts`, `server/src/v3/black
 
 - **Player level 20** for any `special`-category zombie (`BLACK_MARKET_SPECIAL_LEVEL`); a failure
   returns `403 black_market_level_locked`.
-- **A matching gravestone placed on the farm** for the Blue/Red/Silver colored classes (29 units
-  across the catalog carry a `className`). The check requires `status: 'placed'` — merely owning
-  a stored gravestone is not enough. A failure returns `403 black_market_grave_required`.
+- **Player level 1/15/25** for the Blue/Red/Silver colored classes (29 units across the catalog
+  carry a `className`), matching the level that unlocks each class's gravestone. The gravestone
+  does not need to be owned or placed. A failure returns `403 black_market_level_locked`.
 
 Note the framing difference from the rest of this document: the Black Market **bypasses ordinary
-crop unlock levels entirely**. Level 20 and the gravestone are the *only* gates, so a zombie whose
-planting route would be locked can still arrive by trade.
+crop unlock levels entirely**. Level 20 for specials and the class-level thresholds for colored
+zombies are the *only* gates, so a zombie whose planting route would be locked can still arrive by trade.
 
 ## Combining
 

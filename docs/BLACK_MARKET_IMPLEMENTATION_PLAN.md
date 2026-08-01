@@ -5,8 +5,9 @@
 > server-authoritative; the nav reshuffle described below (Social hub, Epic Bosses moved out
 > of the standalone Boss button) is done. Two things have changed since: buy orders can now
 > demand **specific mutations** (`mutation_required`, migration `0030`), and delivery is gated
-> on the recipient (level 20 for special zombies, a matching placed gravestone for colored
-> classes). For current behavior read `../SECURITY.md` (Black Market section) and
+> on the recipient (level 20 for special zombies; levels 1/15/25 for Blue/Red/Silver classes,
+> matching their gravestone unlocks but not requiring grave ownership). For current behavior read
+> `../SECURITY.md` (Black Market section) and
 > `../server/README.md`; where this plan and those disagree, they win.
 
 ## Objective

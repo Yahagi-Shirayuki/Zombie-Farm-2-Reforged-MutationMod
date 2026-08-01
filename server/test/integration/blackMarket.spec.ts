@@ -119,16 +119,16 @@ describe("Black Market", () => {
     expect(fulfilled.status).toBe(200);
   });
 
-  it("requires the zombie's colored gravestone to be placed before purchase", async () => {
-    const seller = await signIn(uniqueSub("market-grave-seller"));
-    const buyer = await signIn(uniqueSub("market-grave-buyer"));
-    const unitId = `market-red-${crypto.randomUUID()}`;
-    await grantRoster(seller, [{ id: unitId, key: "ZombieActorRegularTier3" }]);
-    await grantBalance(buyer, { brains: 20, xp: xpForLevel(20) });
+  it("unlocks a colored zombie at its gravestone level without requiring the gravestone", async () => {
+    const seller = await signIn(uniqueSub("market-color-level-seller"));
+    const buyer = await signIn(uniqueSub("market-color-level-buyer"));
+    const unitId = `market-silver-${crypto.randomUUID()}`;
+    await grantRoster(seller, [{ id: unitId, key: "ZombieActorLargeTier4" }]);
+    await grantBalance(buyer, { brains: 20, xp: xpForLevel(24) });
 
     const sellerBefore = await bootstrap(seller);
     const created = await call<any>("POST", "/black-market/orders", seller.token, {
-      operationId: operation("red-sale"),
+      operationId: operation("silver-sale"),
       expectedAccountVersion: sellerBefore.accountVersion,
       kind: "SELL_ZOMBIE", unitId, priceBrains: 1,
     });
@@ -136,37 +136,19 @@ describe("Black Market", () => {
 
     const buyerBefore = await bootstrap(buyer);
     const locked = await call("POST", `/black-market/orders/${created.body.order.id}/fulfill`, buyer.token, {
-      operationId: operation("red-no-grave"),
+      operationId: operation("silver-level-24"),
       expectedAccountVersion: buyerBefore.accountVersion,
     });
     expect(locked).toMatchObject({
       status: 403,
-      body: { error: "black_market_grave_required" },
+      body: { error: "black_market_level_locked" },
     });
 
-    const graveBatch = await call<any>("POST", "/commands", buyer.token, {
-      protocolVersion: 3,
-      deviceId: "device-aaaaaaaa",
-      batchId: operation("red-grave-batch"),
-      firstSequence: 1,
-      expectedAccountVersion: buyerBefore.accountVersion,
-      writerGeneration: buyerBefore.writerGeneration,
-      commands: [{
-        sequence: 1,
-        command: {
-          type: "object.buy",
-          catalogKey: "gravestoneRed",
-          clientInstanceId: operation("red-grave"),
-        },
-      }],
-    });
-    expect(graveBatch.status, JSON.stringify(graveBatch.body)).toBe(200);
-    expect(graveBatch.body.results[0]).toMatchObject({ status: "applied" });
-
-    const buyerWithGrave = await bootstrap(buyer);
+    await grantBalance(buyer, { xp: xpForLevel(25) });
+    const buyerAt25 = await bootstrap(buyer);
     const fulfilled = await call("POST", `/black-market/orders/${created.body.order.id}/fulfill`, buyer.token, {
-      operationId: operation("red-with-grave"),
-      expectedAccountVersion: buyerWithGrave.accountVersion,
+      operationId: operation("silver-level-25-no-grave"),
+      expectedAccountVersion: buyerAt25.accountVersion,
     });
     expect(fulfilled.status).toBe(200);
   });

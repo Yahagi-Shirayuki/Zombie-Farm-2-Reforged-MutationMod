@@ -108,14 +108,6 @@ async function purchaseRequirementFailure(
       return { status: 403, error: "black_market_level_locked" };
     }
   }
-  if (requirement.graveKey) {
-    const grave = await db.prepare(`SELECT 1 present
-      FROM object_documents_v3 documents, json_each(documents.current_json) entry
-      WHERE documents.account_id=? AND json_extract(entry.value,'$.catalogKey')=?
-        AND json_extract(entry.value,'$.status')='placed' LIMIT 1`)
-      .bind(accountId, requirement.graveKey).first<{ present: number }>();
-    if (!grave) return { status: 403, error: "black_market_grave_required" };
-  }
   return null;
 }
 
@@ -128,13 +120,6 @@ function purchaseRequirementGuard(
   if (requirement.minLevel) {
     clauses.push("EXISTS(SELECT 1 FROM balances WHERE account_id=? AND xp>=?)");
     binds.push(accountId, XP_THRESHOLDS[requirement.minLevel - 1] ?? Number.MAX_SAFE_INTEGER);
-  }
-  if (requirement.graveKey) {
-    clauses.push(`EXISTS(SELECT 1 FROM object_documents_v3 documents,
-      json_each(documents.current_json) entry WHERE documents.account_id=?
-      AND json_extract(entry.value,'$.catalogKey')=?
-      AND json_extract(entry.value,'$.status')='placed')`);
-    binds.push(accountId, requirement.graveKey);
   }
   return { sql: clauses.length ? clauses.join(" AND ") : "1=1", binds };
 }

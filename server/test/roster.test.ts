@@ -31,10 +31,10 @@ describe("rosterCatalog", () => {
   });
   it("defines Black Market gates independently of planting levels", () => {
     expect(blackMarketPurchaseRequirement("ZombieActorRegularTier1")).toEqual({});
-    expect(blackMarketPurchaseRequirement("ZombieActorRegularTier3")).toMatchObject({
-      grave: "Red",
-      graveKey: "gravestoneRed",
-    });
+    expect(blackMarketPurchaseRequirement("ZombieActorSmallTier2")).toEqual({ minLevel: 1 });
+    expect(blackMarketPurchaseRequirement("ZombieActorRegularTier3")).toEqual({ minLevel: 15 });
+    expect(blackMarketPurchaseRequirement("ZombieActorLargeTier4")).toEqual({ minLevel: 25 });
+    expect(blackMarketPurchaseRequirement("ZombieActorGardenTier3GreenFlower")).toEqual({ minLevel: 20 });
     expect(blackMarketPurchaseRequirement("ZombieActorZomBetty")).toEqual({ minLevel: 20 });
     expect(blackMarketPurchaseRequirement("ZombieActorMadeUp")).toBeNull();
   });

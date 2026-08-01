@@ -2583,8 +2583,7 @@ export class Hud {
       if (!card) return null;
       return blackMarketPurchaseLock(
         { category: card.category, unlockGrave: card.cfg.unlockGrave },
-        this.state.level,
-        (grave) => this.hasGrave?.(grave) ?? false
+        this.state.level
       );
     };
     const selectedMutationMask = () => mutationChecks.reduce(
@@ -2723,9 +2722,7 @@ export class Hud {
                 if (code.startsWith("insufficient_brains"))
                   this.showToast(`You need ${order.priceBrains} brains to buy this zombie.`);
                 else if (code.startsWith("black_market_level_locked"))
-                  this.showToast("Special zombies can be purchased at level 20.");
-                else if (code.startsWith("black_market_grave_required"))
-                  this.showToast("Place this zombie's required gravestone on your farm first.");
+                  this.showToast("Reach the required level before purchasing this zombie.");
                 else if (code.startsWith("counterparty_busy"))
                   this.showToast("The seller is syncing. Try the trade again in a moment.");
                 else this.showToast("That trade is no longer available. Market refreshed.");
@@ -2789,9 +2786,7 @@ export class Hud {
         else if (code.startsWith("insufficient_brains"))
           this.showToast("You do not have enough brains for that request.");
         else if (code.startsWith("black_market_level_locked"))
-          this.showToast("Special zombies can be purchased at level 20.");
-        else if (code.startsWith("black_market_grave_required"))
-          this.showToast("Place this zombie's required gravestone on your farm first.");
+          this.showToast("Reach the required level before requesting this zombie.");
         else this.showToast("Could not create that post. Refresh and try again.");
       }
       finally { refreshComposeStatus(); }

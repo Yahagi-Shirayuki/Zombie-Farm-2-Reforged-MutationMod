@@ -320,6 +320,9 @@ export interface SimUnit {
   homeY: number;
   mill: number; // per-unit wander phase
   formOrder: number; // release order (formation priority tiebreak)
+  /** Headless units push to the front. Sending one to the back temporarily clears
+   * this flag so the row behind can fill the vacancy while it recovers. */
+  frontPriority: boolean;
   lineupIndex: number; // front-to-back rank among committed zombies (0 = front) → damage band
   slotX: number; // assigned formation position
   slotY: number;
@@ -522,6 +525,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     homeY: home.y,
     mill: hash(i * 3 + 2) * Math.PI * 2,
     formOrder: 0,
+    frontPriority: isPlayer && !!u.isHeadless,
     lineupIndex: 0,
     slotX: home.x,
     slotY: home.y,
@@ -731,6 +735,7 @@ export class BattleSim {
       // An old checkpoint parked at the 1-HP floor has necessarily consumed
       // its protection. New checkpoints persist the explicit latch.
       oneShotProtectionUsed: u.oneShotProtectionUsed ?? (u.team === "player" && u.hp <= 1),
+      frontPriority: u.frontPriority ?? false,
       passedWall: u.passedWall ?? false,
       mirrorsOpponentSpeed: u.mirrorsOpponentSpeed ?? false,
     })));
@@ -1131,6 +1136,7 @@ export class BattleSim {
     p.windupMs = 0;
     p.x = Math.max(CHARGE_X, p.x - KNOCKBACK_PX);
     p.formOrder = this.releaseSeq++; // last in the formation → back column
+    p.frontPriority = false;
     p.state = "advance";
     p.timerMs = this.cycleMs(p, null);
   }
@@ -1169,6 +1175,7 @@ export class BattleSim {
     defeated.prevX = defeated.x;
     defeated.prevY = defeated.y;
     defeated.formOrder = this.releaseSeq++;
+    defeated.frontPriority = false;
     defeated.timerMs = this.cycleMs(defeated, null);
     defeated.windupKey = null;
     defeated.windupMs = 0;
@@ -1327,7 +1334,7 @@ export class BattleSim {
     const rear = front.length ? support : [];
 
     frontline.sort(
-      (a, b) => Number(b.isHeadless) - Number(a.isHeadless) || a.formOrder - b.formOrder
+      (a, b) => Number(b.frontPriority) - Number(a.frontPriority) || a.formOrder - b.formOrder
     );
     rear.sort((a, b) => a.formOrder - b.formOrder);
 
@@ -1464,6 +1471,10 @@ export class BattleSim {
           const enemyArrived = !!foe && (foe.state === "hold" || foe.state === "fight");
           const inCombatZone = p.x >= frontX - MAX_ROWS * COL_GAP - 12;
           const atSlot = Math.hypot(destinationX - p.x, p.slotY - p.y) <= 2;
+          // Knockback and carry/drop effects send a Headless zombie to the rear long
+          // enough for another row to fill the open front slot. Once it reaches that
+          // recovery slot, restore its defining behavior: it pushes forward again.
+          if (p.isHeadless && !p.frontPriority && atSlot) p.frontPriority = true;
           if (p.buddyId && enemyArrived && atSlot) this.deployMiniBuddy(p, foe);
           const atBlockingWall = !!blockingWall &&
             Math.abs(blockingWall.x - p.x) <= WALL_MELEE_GAP + 2;
@@ -2052,6 +2063,7 @@ export class BattleSim {
         z.timerMs = this.cycleMs(z, null);
         z.stunMs = 0;
         z.formOrder = this.releaseSeq++;
+        z.frontPriority = false;
       }
       c.grabbedId = null;
       c.state = "gone";
@@ -2152,6 +2164,7 @@ export class BattleSim {
         z.timerMs = this.cycleMs(z, null);
         z.stunMs = 0;
         z.formOrder = this.releaseSeq++; // re-enters at the back of the formation
+        z.frontPriority = false;
       }
       g.grabbedId = null;
       g.state = "gone";

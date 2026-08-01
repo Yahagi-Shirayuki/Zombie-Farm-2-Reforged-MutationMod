@@ -1,5 +1,6 @@
 import { EPIC_QUEST_ZOMBIE_REWARDS } from "../../src/epicBoss/rewards";
 import zombieRows from "../../public/assets/zombies.json";
+import { OBJECTS } from "./objectCatalog";
 
 // Server-side zombie catalog. Mirrors the `cost` of each unit in
 // public/assets/zombies.json so the server can price a SELL exactly (sell = the
@@ -105,25 +106,33 @@ export const BLACK_MARKET_SPECIAL_LEVEL = 20;
 
 export interface BlackMarketPurchaseRequirement {
   minLevel?: number;
-  grave?: "Blue" | "Red" | "Silver";
-  graveKey?: "gravestoneBlue" | "gravestoneRed" | "gravestoneSilver";
 }
+
+const BLACK_MARKET_COLOR_GRAVESTONES = {
+  Blue: "gravestoneBlue",
+  Red: "gravestoneRed",
+  Silver: "gravestoneSilver",
+} as const;
 
 const BLACK_MARKET_REQUIREMENTS = new Map(
   (zombieRows as Array<{ key: string; category?: string; className?: string }>).map((zombie) => {
-    const grave = zombie.className === "Blue" || zombie.className === "Red" || zombie.className === "Silver"
+    const color = zombie.className === "Blue" || zombie.className === "Red" || zombie.className === "Silver"
       ? zombie.className
       : undefined;
+    const colorLevel = color ? OBJECTS[BLACK_MARKET_COLOR_GRAVESTONES[color]].level : 0;
+    const minLevel = Math.max(
+      zombie.category === "special" ? BLACK_MARKET_SPECIAL_LEVEL : 0,
+      colorLevel
+    );
     return [zombie.key, {
-      ...(zombie.category === "special" ? { minLevel: BLACK_MARKET_SPECIAL_LEVEL } : {}),
-      ...(grave ? { grave, graveKey: `gravestone${grave}` } : {}),
+      ...(minLevel > 0 ? { minLevel } : {}),
     } satisfies BlackMarketPurchaseRequirement] as const;
   })
 );
 
 /** Requirements for receiving a zombie through the Black Market. Ordinary catalog
- * level requirements intentionally do not apply; only colored graves and level-20
- * access to special zombies gate a purchase. */
+ * level requirements intentionally do not apply. Colored classes use the level that
+ * unlocks their gravestone; special zombies additionally require level 20. */
 export function blackMarketPurchaseRequirement(key: string): BlackMarketPurchaseRequirement | null {
   return BLACK_MARKET_REQUIREMENTS.get(key) ?? null;
 }
