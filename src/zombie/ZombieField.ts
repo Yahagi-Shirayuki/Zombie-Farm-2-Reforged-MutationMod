@@ -35,6 +35,8 @@ export class ZombieField {
   private selected: ZombieUnit | null = null;
   private nextId = 1;
   private pots = new Map<string, ZombiePot>(); // one independent job per placed pot
+  /** Jobs optimistically collected locally but not yet accepted by the server. */
+  private collectedPots = new Map<string, ZombiePotSave>();
 
   // ---- server-owned roster hooks (P12) ----
   // ONLINE only. Fire when a unit is CREATED (onGrant) or REMOVED as a casualty /
@@ -435,8 +437,11 @@ export class ZombieField {
     if (!targetPotId) return null;
     // Like a ripe zombie crop, a ready Pot waits until the active farm has room.
     if (!this.canAdd()) return null;
-    const result = this.potFor(targetPotId).collect();
+    const pot = this.potFor(targetPotId);
+    const pending = pot.pending ? { ...pot.pending } : null;
+    const result = pot.collect();
     if (!result) return null;
+    if (pending) this.collectedPots.set(targetPotId, pending);
     const def = this.resolve(result.key);
     if (!def) return null;
     const mutation = def.mutation ? addMutation(result.mutation, def.mutation) : result.mutation;
@@ -452,6 +457,20 @@ export class ZombieField {
       else this.onGrant?.({ id: data.id, key: data.key, mutation: data.mutation, invasions: data.invasions });
     }
     return data;
+  }
+
+  /** Restore an optimistically collected job after authoritative rejection. */
+  rollbackCombineCollection(potId: string): boolean {
+    const pending = this.collectedPots.get(potId);
+    if (!pending) return false;
+    this.potFor(potId).restore(pending);
+    this.collectedPots.delete(potId);
+    return true;
+  }
+
+  /** Forget the rollback snapshot once the authoritative collection has settled. */
+  confirmCombineCollection(potId: string): void {
+    this.collectedPots.delete(potId);
   }
 
   /** Roll back a rejected authoritative combine start. Server reconciliation then
@@ -575,11 +594,59 @@ export class ZombieField {
   }
   restorePots(saves?: Record<string, ZombiePotSave>, legacy?: ZombiePotSave) {
     this.pots.clear();
+    this.collectedPots.clear();
     const entries = Object.entries(saves ?? {});
     for (const [id, save] of entries) this.potFor(id).restore(this.hydratePotSave(save));
     if (!entries.length && legacy) {
       this.potFor(this.field.zombiePotId() ?? "legacy").restore(this.hydratePotSave(legacy));
     }
+  }
+
+  /** Reconstruct jobs whose authoritative parent reservations survived after the
+   * local presentation lost its Pot save. Recovered jobs are immediately ready:
+   * the server reservation proves the combine started, but does not own its timer. */
+  recoverServerPotReservations(roster: {
+    id: string; key: string; mutation: number; lockedByRaid?: string;
+  }[]): { potId: string; parentAId: string; parentBId: string; playerLevel: number }[] {
+    const reserved = new Map<string, typeof roster>();
+    for (const unit of roster) {
+      if (!unit.lockedByRaid?.startsWith("pot:")) continue;
+      const potId = unit.lockedByRaid.slice(4);
+      if (!potId) continue;
+      const group = reserved.get(potId) ?? [];
+      group.push(unit);
+      reserved.set(potId, group);
+    }
+
+    const recovered: { potId: string; parentAId: string; parentBId: string; playerLevel: number }[] = [];
+    for (const [potId, parents] of reserved) {
+      if (parents.length !== 2) continue;
+      const [a, b] = parents;
+      const current = this.potFor(potId).pending;
+      const sameParents = current?.parentAId && current.parentBId &&
+        new Set([current.parentAId, current.parentBId]).size === 2 &&
+        [current.parentAId, current.parentBId].every((id) => id === a.id || id === b.id);
+      if (!sameParents) {
+        this.potFor(potId).restore(this.hydratePotSave({
+          parentAId: a.id,
+          parentBId: b.id,
+          keyA: a.key,
+          keyB: b.key,
+          maskA: a.mutation,
+          maskB: b.mutation,
+          playerLevel: this.state.level,
+          startedAt: 0,
+          finishAt: 0,
+        }));
+      }
+      recovered.push({
+        potId,
+        parentAId: a.id,
+        parentBId: b.id,
+        playerLevel: sameParents ? current.playerLevel ?? this.state.level : this.state.level,
+      });
+    }
+    return recovered;
   }
   /** Fill fields absent from pre-special-rule saves from the authoritative catalog.
    * The current level is safe as the legacy start-level fallback because levels do

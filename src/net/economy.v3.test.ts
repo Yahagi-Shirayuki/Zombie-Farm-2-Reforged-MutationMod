@@ -748,6 +748,18 @@ describe("v3 raid dependency ids", () => {
     expect(enqueue).toHaveBeenNthCalledWith(2, { type: "roster.combine", potId: "pot-a", parentAId: "a1", parentBId: "a2" });
   });
 
+  it("keeps Pot parents available while collection awaits authority", () => {
+    const economy = new EconomyClient(new GameState(), "combine-retry-account");
+    vi.spyOn((economy as any).queue, "enqueue").mockReturnValueOnce(1);
+    economy.restoreCombineParents("pot", "a", "b", 12);
+
+    economy.submitRoster({ type: "combineCollect", potId: "pot", unitId: "child", key: "ignored" });
+
+    expect((economy as any).combineParents.get("pot")).toEqual({
+      parentAId: "a", parentBId: "b", playerLevel: 12,
+    });
+  });
+
   it("carries the persisted combine-start level into collection", () => {
     const economy = new EconomyClient(new GameState(), "combine-level-account");
     const enqueue = vi.spyOn((economy as any).queue, "enqueue").mockReturnValueOnce(1);

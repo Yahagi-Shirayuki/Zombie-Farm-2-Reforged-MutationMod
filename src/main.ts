@@ -1372,6 +1372,9 @@ async function main() {
       state.syncCapacities(baseZombieMax + armyBonus, itemCap);
     };
     economy.onRosterState = (roster, aliases) => {
+      for (const pot of zombies.recoverServerPotReservations(roster)) {
+        economy!.restoreCombineParents(pot.potId, pot.parentAId, pot.parentBId, pot.playerLevel);
+      }
       const hidden = new Set(zombies.pendingPotParents().flatMap((pot) => [pot.parentAId, pot.parentBId]));
       zombies.reconcileServerRoster(roster.filter((unit) => !hidden.has(unit.id)), aliases);
     };
@@ -1475,6 +1478,16 @@ async function main() {
     economy.onCommandRejected = (command, error) => {
       if (command?.type === "roster.combine_start") {
         zombies.cancelCombine(command.potId);
+        saveManager.flushCritical();
+      }
+      if (command?.type === "roster.combine" && command.potId &&
+          zombies.rollbackCombineCollection(command.potId)) {
+        economy!.restoreCombineParents(
+          command.potId,
+          command.parentAId,
+          command.parentBId,
+          command.playerLevel,
+        );
         saveManager.flushCritical();
       }
       const subject = command?.type.startsWith("roster.") ? "Zombie action"
@@ -2124,9 +2137,10 @@ async function main() {
   hud.onCollectCombine = async () => {
     if (onlineGameplayBlocked()) return null;
     if (!activePotId) return null;
-    const pending = zombies.potFor(activePotId).pending;
+    const targetPotId = activePotId;
+    const pending = zombies.potFor(targetPotId).pending;
     const combined = pending ? combinedPotSubjects(pending) : null;
-    const z = zombies.collectCombine(walk.tile.col, walk.tile.row, activePotId);
+    const z = zombies.collectCombine(walk.tile.col, walk.tile.row, targetPotId);
     if (z) {
       if (combined?.subject) {
         questBus.post(QuestEvent.CombinerCombined, combined.subject, 1, combined.aliases);
@@ -2136,6 +2150,7 @@ async function main() {
       floatText(c.x, c.y, z.mutation ? `${z.name}!` : z.name);
       try { await economy?.settleBeforeDependency(); }
       catch { hud.showToast("The combine result is waiting for the server to reconnect."); }
+      zombies.confirmCombineCollection(targetPotId);
       saveManager.flushCritical();
     }
     return z ? z.name : null;

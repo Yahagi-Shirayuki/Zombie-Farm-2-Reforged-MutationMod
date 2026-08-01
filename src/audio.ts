@@ -102,9 +102,11 @@ function zombieGroupFromKey(key: string): string {
 }
 
 interface StoredSettings {
+  master?: boolean;
   music?: boolean;
   sfx?: boolean;
   ambience?: boolean;
+  masterVolume?: number;
   musicVolume?: number;
   sfxVolume?: number;
   ambienceVolume?: number;
@@ -117,9 +119,11 @@ const clampVolume = (value: unknown, fallback = 1): number =>
     : fallback;
 
 export class AudioManager {
+  masterOn = true;
   musicOn = true;
   sfxOn = true;
   ambienceOn = true;
+  masterVolume = 1;
   musicVolume = 1;
   sfxVolume = 1;
   ambienceVolume = 1;
@@ -156,15 +160,16 @@ export class AudioManager {
     // interacts, so arm a one-shot gesture listener to (re)start any looping
     // channel that couldn't begin immediately.
     const s = this.read();
+    this.masterOn = s.master ?? true;
     this.musicOn = s.music ?? true;
     this.sfxOn = s.sfx ?? true;
     this.ambienceOn = s.ambience ?? true;
+    this.masterVolume = clampVolume(s.masterVolume);
     this.musicVolume = clampVolume(s.musicVolume);
     this.sfxVolume = clampVolume(s.sfxVolume);
     this.ambienceVolume = clampVolume(s.ambienceVolume);
     this.muteWhenUnfocused = s.muteWhenUnfocused ?? false;
-    this.bgm.volume = 0.4 * this.musicVolume;
-    this.ambBed.volume = 0.25 * this.ambienceVolume;
+    this.applyLoopVolumes();
 
     // Hidden/backgrounded pages always stop audio. Focus events additionally
     // support the optional visible-desktop-window mute behavior. Mobile browsers
@@ -190,7 +195,9 @@ export class AudioManager {
   }
   private persist() {
     const data: StoredSettings = {
+      master: this.masterOn,
       music: this.musicOn, sfx: this.sfxOn, ambience: this.ambienceOn,
+      masterVolume: this.masterVolume,
       musicVolume: this.musicVolume, sfxVolume: this.sfxVolume,
       ambienceVolume: this.ambienceVolume,
       muteWhenUnfocused: this.muteWhenUnfocused,
@@ -237,7 +244,16 @@ export class AudioManager {
   }
 
   private canPlay(): boolean {
-    return !document.hidden && (!this.muteWhenUnfocused || document.hasFocus());
+    return this.masterOn && !document.hidden &&
+      (!this.muteWhenUnfocused || document.hasFocus());
+  }
+
+  // The looping channels' final element volumes: authored base level × per-channel
+  // slider × the master slider. One-shots apply the same product in playOneShot.
+  private applyLoopVolumes() {
+    this.bgm.volume = 0.4 * this.musicVolume * this.masterVolume;
+    if (this.raidBgm) this.raidBgm.volume = 0.4 * this.musicVolume * this.masterVolume;
+    this.ambBed.volume = 0.25 * this.ambienceVolume * this.masterVolume;
   }
 
   private pauseForBackground = () => {
@@ -265,6 +281,20 @@ export class AudioManager {
     this.persist();
   }
 
+  // Master kill switch over every channel: off pauses all loops and suppresses
+  // one-shots (via canPlay), on resumes whichever loop toggles are enabled.
+  setMaster(on: boolean) {
+    this.masterOn = on;
+    this.syncFocusAudio();
+    this.persist();
+  }
+
+  setMasterVolume(value: number) {
+    this.masterVolume = clampVolume(value);
+    this.applyLoopVolumes();
+    this.persist();
+  }
+
   setMusic(on: boolean) {
     this.musicOn = on;
     if (on && this.canPlay()) void this.activeBgm().play().catch(() => this.arm());
@@ -274,8 +304,7 @@ export class AudioManager {
 
   setMusicVolume(value: number) {
     this.musicVolume = clampVolume(value);
-    this.bgm.volume = 0.4 * this.musicVolume;
-    if (this.raidBgm) this.raidBgm.volume = 0.4 * this.musicVolume;
+    this.applyLoopVolumes();
     this.persist();
   }
 
@@ -289,7 +318,7 @@ export class AudioManager {
       this.bgm.pause();     // farm bed steps aside for the whole raid
       const a = new Audio(A(file));
       a.loop = true;
-      a.volume = 0.4 * this.musicVolume;
+      a.volume = 0.4 * this.musicVolume * this.masterVolume;
       this.raidBgm = a;
       this.raidFile = file;
     }
@@ -312,7 +341,7 @@ export class AudioManager {
       const audio = this.victoryBgm ?? new Audio(A(file));
       audio.currentTime = 0;
       audio.loop = false;
-      audio.volume = 0.4 * this.musicVolume;
+      audio.volume = 0.4 * this.musicVolume * this.masterVolume;
       this.raidBgm = audio;
       this.raidFile = file;
     }
@@ -383,7 +412,7 @@ export class AudioManager {
   private playOneShot(file: string, volume: number, channelVolume = this.sfxVolume) {
     const url = A(file);
     const a = this.oneShotPool.get(url)?.pop() ?? new Audio(url);
-    a.volume = volume * channelVolume;
+    a.volume = volume * channelVolume * this.masterVolume;
     this.oneShots.add(a);
     let settled = false;
     const done = () => {
@@ -414,7 +443,7 @@ export class AudioManager {
 
   setAmbienceVolume(value: number) {
     this.ambienceVolume = clampVolume(value);
-    this.ambBed.volume = 0.25 * this.ambienceVolume;
+    this.applyLoopVolumes();
     this.persist();
   }
 

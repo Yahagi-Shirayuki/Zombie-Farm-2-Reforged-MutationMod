@@ -161,6 +161,54 @@ describe("AudioManager focus muting", () => {
     });
   });
 
+  it("scales every channel by the master volume", () => {
+    storage.set(SETTINGS_KEY, JSON.stringify({
+      masterVolume: 0.5, musicVolume: 0.5, sfxVolume: 0.25, ambienceVolume: 0.4,
+    }));
+    const audio = new AudioManager();
+    const [music, ambience] = MockAudio.instances;
+
+    expect(music.volume).toBeCloseTo(0.4 * 0.5 * 0.5);
+    expect(ambience.volume).toBeCloseTo(0.25 * 0.4 * 0.5);
+
+    audio.play("buy");
+    expect(MockAudio.instances[MockAudio.instances.length - 1].volume)
+      .toBeCloseTo(0.55 * 0.25 * 0.5);
+
+    audio.setMasterVolume(1);
+    expect(music.volume).toBeCloseTo(0.2);
+    expect(ambience.volume).toBeCloseTo(0.1);
+    expect(JSON.parse(storage.get(SETTINGS_KEY)!)).toMatchObject({ masterVolume: 1 });
+  });
+
+  it("silences everything when the master toggle is off and resumes when re-enabled", () => {
+    const audio = new AudioManager();
+    const [music, ambience] = MockAudio.instances;
+    expect(music.paused).toBe(false);
+
+    audio.setMaster(false);
+    expect(music.paused).toBe(true);
+    expect(ambience.paused).toBe(true);
+
+    const count = MockAudio.instances.length;
+    audio.play("buy");
+    expect(MockAudio.instances).toHaveLength(count);
+
+    audio.setMaster(true);
+    expect(music.paused).toBe(false);
+    expect(ambience.paused).toBe(false);
+    expect(JSON.parse(storage.get(SETTINGS_KEY)!)).toMatchObject({ master: true });
+  });
+
+  it("stays silent on boot when the master toggle was saved off", () => {
+    storage.set(SETTINGS_KEY, JSON.stringify({ master: false }));
+    new AudioManager();
+    const [music, ambience] = MockAudio.instances;
+
+    expect(music.playCalls).toBe(0);
+    expect(ambience.playCalls).toBe(0);
+  });
+
   it("resumes enabled loops from the explicit start gesture after autoplay is blocked", async () => {
     MockAudio.rejectPlay = true;
     const audio = new AudioManager();

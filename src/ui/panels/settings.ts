@@ -379,6 +379,8 @@ export function openSettings(hud: Hud): void {
     farmMode,
     farmModeNote,
     ...localStorageControls,
+    row("All Audio", hud.audio.masterOn, (v) => hud.audio.setMaster(v)),
+    volumeRow("Master Volume", hud.audio.masterVolume, (v) => hud.audio.setMasterVolume(v)),
     row("Music", hud.audio.musicOn, (v) => hud.audio.setMusic(v)),
     volumeRow("Music Volume", hud.audio.musicVolume, (v) => hud.audio.setMusicVolume(v)),
     row("Sound Effects", hud.audio.sfxOn, (v) => hud.audio.setSfx(v)),

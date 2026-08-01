@@ -80,4 +80,29 @@ describe("ZombieField combine save migration", () => {
     expect(zombies.collectCombine(0, 0, "pot")).toBeNull();
     expect(zombies.potFor("pot").pending).not.toBeNull();
   });
+
+  it("recovers an orphaned authoritative Pot reservation as ready", () => {
+    const state = new GameState();
+    const defs = new Map<string, Partial<ZombieDef>>([
+      ["ordinary", { key: "ordinary", tier: 1, category: "normal" }],
+      ["mutant", { key: "mutant", tier: 1, category: "mutant" }],
+    ]);
+    const field = { zombiePotId: () => "pot" } as unknown as Field;
+    const zombies = new ZombieField(
+      {} as GameAssets, field, state, (key) => defs.get(key) as ZombieDef | undefined
+    );
+
+    const recovered = zombies.recoverServerPotReservations([
+      { id: "a", key: "ordinary", mutation: 0, lockedByRaid: "pot:pot" },
+      { id: "b", key: "mutant", mutation: 1, lockedByRaid: "pot:pot" },
+    ]);
+
+    expect(recovered).toEqual([{
+      potId: "pot", parentAId: "a", parentBId: "b", playerLevel: state.level,
+    }]);
+    expect(zombies.potFor("pot").ready).toBe(true);
+    expect(zombies.potFor("pot").pending).toMatchObject({
+      parentAId: "a", parentBId: "b", keyA: "ordinary", keyB: "mutant",
+    });
+  });
 });

@@ -382,7 +382,6 @@ export class EconomyClient {
         parentBId: this.authoritativeUnitId(parents.parentBId),
         ...(parents.playerLevel === undefined ? {} : { playerLevel: parents.playerLevel }),
       }, { localUnitId: input.unitId });
-      this.combineParents.delete(potId);
       return;
     }
     if (input.type === "sell") this.enqueue({ type: "roster.sell", unitId: this.authoritativeUnitId(input.unitId) }, optimistic);
@@ -731,6 +730,9 @@ export class EconomyClient {
       if ((result.status === "rejected" || result.status === "dependency_failed") && result.error) {
         if (command?.type === "roster.combine_start") this.combineParents.delete(command.potId);
         this.onCommandRejected?.(command, result.error);
+      }
+      if (result.status === "applied" && command?.type === "roster.combine") {
+        this.combineParents.delete(command.potId ?? "legacy");
       }
       if (pending?.localUnitId && result.status === "applied" && result.createdIds?.[0]) {
         aliases[result.createdIds[0]] = pending.localUnitId;
