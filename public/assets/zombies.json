@@ -1278,26 +1278,6 @@
   "marketHidden": false
  },
  {
-  "key": "ZombieActorGardenTier3",
-  "name": "Flower Zombie",
-  "cost": 225,
-  "growMs": 86400000,
-  "category": "normal",
-  "level": 20,
-  "xp": 2,
-  "brainsNeeded": false,
-  "group": "Garden",
-  "className": "Red",
-  "classColor": "#ff5a4a",
-  "str": 4.0,
-  "dex": 2.0,
-  "con": 4.0,
-  "focus": 60.0,
-  "mutation": 0,
-  "tier": 3,
-  "marketHidden": false
- },
- {
   "key": "ZombieActorRegularTier3VenusFlytrap",
   "name": "Flytrap Zombie",
   "cost": 150,

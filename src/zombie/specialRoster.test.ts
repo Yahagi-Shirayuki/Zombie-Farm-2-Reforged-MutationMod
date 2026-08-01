@@ -9,6 +9,10 @@ const zombies = zombieRows as ZombieDef[];
 const boosts = boostRows as BoostDef[];
 
 describe("complete special-zombie roster", () => {
+  it("has a unique catalog key for every zombie", () => {
+    expect(new Set(zombies.map((zombie) => zombie.key)).size).toBe(zombies.length);
+  });
+
   it("implements every recovered named special with its dedicated art", () => {
     const named = zombies.filter((zombie) => zombie.specialSprite);
     expect(named).toHaveLength(40);

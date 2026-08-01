@@ -6,8 +6,7 @@
 // The server prices the plant + gates the harvest by real server grow time + grants the
 // resulting unit into the roster — so a client can no longer fast-grow zombies or spawn
 // an unearned (then sellable) unit. Veggie crops live in catalog.ts; the two key-sets are
-// disjoint, so a plot is a zombie crop iff its key is in THIS table. (zombies.json has one
-// duplicate key, ZombieActorGardenTier3 — deduped last-wins, matching the client catalog.)
+// disjoint, so a plot is a zombie crop iff its key is in THIS table.
 
 export interface ZombieCropEcon {
   cost: number;    // plant cost
