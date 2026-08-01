@@ -4,10 +4,11 @@
 // The scene positions it and tells it whether it's moving each frame.
 import { Container, Sprite } from "pixi.js";
 import { GameAssets, ZombieModel } from "../assets";
-import { bitsOf, slotOf } from "../zombie/mutations";
+import { slotOf } from "../zombie/mutations";
 import {
   isMutationForegroundPart,
   matchesMutationReplacement,
+  mutationBitsForRendering,
   type MutationReplacement,
 } from "../zombie/mutationVisual";
 import {
@@ -128,7 +129,7 @@ export class RaidActor {
   private build(assets: GameAssets, key: string, mutation: number, group: string) {
     const m: ZombieModel =
       assets.zombieModels[key] ?? assets.zombieModels["ZombieActorRegularTier1"];
-    const mutationParts = bitsOf(mutation).flatMap((bit) => {
+    const mutationParts = mutationBitsForRendering(assets.zombies, key, mutation).flatMap((bit) => {
       const partKey = m.mutationOverrides?.[String(bit)] ?? String(bit);
       const part = assets.mutationParts[partKey];
       const texture = part ? assets.zombiePartTex[part.file] : undefined;

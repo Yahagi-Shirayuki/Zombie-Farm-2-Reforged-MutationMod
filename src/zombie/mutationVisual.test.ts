@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { matchesMutationReplacement } from "./mutationVisual";
+import { matchesMutationReplacement, mutationBitsForRendering } from "./mutationVisual";
 
 describe("mutation visual replacements", () => {
+  it("omits carrot-eye artwork from special zombies without changing other mutations", () => {
+    const zombies = [
+      { key: "regular", category: "normal" as const },
+      { key: "special", category: "special" as const },
+    ];
+
+    expect(mutationBitsForRendering(zombies, "regular", 4 | 8)).toEqual([4, 8]);
+    expect(mutationBitsForRendering(zombies, "special", 4 | 8)).toEqual([8]);
+  });
+
   it("matches every base body silhouette without hiding unrelated decorations", () => {
     expect(matchesMutationReplacement("defaultBody", "body")).toBe(true);
     expect(matchesMutationReplacement("bellydancerBody", "body")).toBe(true);

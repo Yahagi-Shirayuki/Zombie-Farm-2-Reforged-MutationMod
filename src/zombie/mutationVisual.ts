@@ -1,4 +1,26 @@
+import type { ZombieDef } from "../assets";
+import { bitsOf } from "./mutations";
+
 export type MutationReplacement = "body" | "armF" | "head";
+
+const CARROT_MUTATION_BIT = 4;
+
+/**
+ * Mutation bits that should contribute artwork for this species. Named special
+ * zombies already have authored faces, so the generic carrot-eye attachment is
+ * intentionally omitted there. The bit remains on the zombie and still affects
+ * stats; this only controls the rendered rig.
+ */
+export function mutationBitsForRendering(
+  zombies: readonly Pick<ZombieDef, "key" | "category">[] | undefined,
+  key: string,
+  mutation: number,
+): number[] {
+  const isSpecial = zombies?.some((zombie) =>
+    zombie.key === key && zombie.category === "special"
+  ) ?? false;
+  return bitsOf(mutation).filter((bit) => !(isSpecial && bit === CARROT_MUTATION_BIT));
+}
 
 /**
  * Authored face/accessory layers that remain in front when a crop mutation

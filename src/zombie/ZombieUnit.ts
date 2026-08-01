@@ -13,10 +13,11 @@ import { depth, screenToGrid, tileCenter } from "../iso";
 import { setFootprint } from "../depthSort";
 import { findPath } from "../pathfind";
 import { OwnedZombie } from "./types";
-import { bitsOf, slotOf } from "./mutations";
+import { slotOf } from "./mutations";
 import {
   isMutationForegroundPart,
   matchesMutationReplacement,
+  mutationBitsForRendering,
   type MutationReplacement,
 } from "./mutationVisual";
 import {
@@ -288,7 +289,7 @@ export class ZombieUnit {
     headForeground: Sprite[],
   ) {
     const neck = model.neck;
-    for (const bit of bitsOf(this.data.mutation)) {
+    for (const bit of mutationBitsForRendering(assets.zombies, this.data.key, this.data.mutation)) {
       const partKey = model.mutationOverrides?.[String(bit)] ?? String(bit);
       const mp = assets.mutationParts[partKey];
       if (!mp) continue;

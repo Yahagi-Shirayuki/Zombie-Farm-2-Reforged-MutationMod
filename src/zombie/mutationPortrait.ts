@@ -1,9 +1,10 @@
 import { Container, Rectangle, Sprite, type Renderer } from "pixi.js";
 import type { GameAssets, ZombieModel } from "../assets";
-import { bitsOf, slotOf } from "./mutations";
+import { slotOf } from "./mutations";
 import {
   isMutationForegroundPart,
   matchesMutationReplacement,
+  mutationBitsForRendering,
   type MutationReplacement,
 } from "./mutationVisual";
 import { zombiePartTint } from "./appearance";
@@ -79,7 +80,7 @@ export function buildZombiePortraitRig(
     }
   }
 
-  for (const bit of bitsOf(mutation)) {
+  for (const bit of mutationBitsForRendering(assets.zombies, key, mutation)) {
     const partKey = model.mutationOverrides?.[String(bit)] ?? String(bit);
     const part = assets.mutationParts[partKey];
     const texture = part ? assets.zombiePartTex[part.file] : undefined;
