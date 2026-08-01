@@ -390,11 +390,13 @@ def main():
             "category": category,
             "cost": cost,
             "level": -1 if reward_only else e.get("level", 1),
-            # Fruit-tree rows omit `xp`, but the binary's
-            # +[MarketDataManager xpFromItem:] awards normal gold tree/decor
-            # purchases floor(cost / 100) XP. Preserve authored XP elsewhere.
+            # Fruit-tree rows omit `xp`, and some ordinary gold decor rows carry
+            # zero. The binary's +[MarketDataManager xpFromItem:] awards those
+            # normal gold purchases floor(cost / 100) XP. Preserve positive
+            # authored XP and the informational source XP on brain purchases.
             "xp": (0 if reward_only
-                   else e.get("cost", 0) // 100 if category == "tree"
+                   else cost // 100 if category == "tree"
+                   else cost // 100 if not brains and e.get("xp", 0) <= 0
                    else e.get("xp", 0)),
             "brainsNeeded": brains,
             # The original game passes this Market RGB through

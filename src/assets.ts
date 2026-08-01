@@ -234,7 +234,7 @@ export interface PlaceableDef {
   category: "tree" | "decor" | "functional" | "reward"; // Items section ("reward" = raid loot, not sold)
   cost: number;
   level: number; // player level required to unlock
-  xp: number; // authored XP for gold buys; brain-buy XP is derived from cost
+  xp: number; // gold-buy XP; zero falls back to cost / 100, brain XP is cost-derived
   brainsNeeded?: boolean;
   /** Original Market RGB, applied multiplicatively to the object sprite. */
   color?: [number, number, number];

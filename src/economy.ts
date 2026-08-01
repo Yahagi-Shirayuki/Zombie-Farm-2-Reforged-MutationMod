@@ -5,7 +5,8 @@
 // balance is easy to find, reason about, and adjust.
 //
 // Design intent (placeable items — decor / trees / functional):
-//   - Gold purchases retain the XP authored in the source Market catalog.
+//   - Gold purchases retain authored XP, falling back to floor(cost / 100)
+//     when the source Market row omits it.
 //   - Brain purchases derive XP from cost using the recovered binary formula.
 //   - SELLING an item refunds only a small fraction of its price, so churning
 //     buy->sell is a real loss, not a free way to farm money.
@@ -29,7 +30,8 @@ export type PlaceablePurchaseCategory = "tree" | "decor" | "functional" | "rewar
  * decor/tree items grant binary-era cost*10 and functional (`special`) items
  * grant binary-era cost*8. Reforged undid brainflation by dividing brain prices
  * by ten, so the equivalent formulas against current prices are cost*100 and
- * cost*80 respectively. Gold purchases keep their authored XP. */
+ * cost*80 respectively. Gold purchases keep positive authored XP; source rows
+ * with missing/zero XP use the normal floor(cost / 100) gold-value award. */
 export function buyXp(
   cost: number,
   sourceXp = 0,
@@ -39,7 +41,8 @@ export function buyXp(
   if (brainsNeeded) {
     return Math.max(0, Math.trunc(cost)) * (category === "functional" ? 80 : 100);
   }
-  return Math.max(0, sourceXp);
+  const authoredXp = Math.max(0, sourceXp);
+  return authoredXp > 0 ? authoredXp : Math.floor(Math.max(0, cost) / 100);
 }
 
 /** Gold paid when selling an item bought for `cost`. Brain prices convert at

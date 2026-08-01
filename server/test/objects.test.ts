@@ -30,11 +30,23 @@ describe("objectCatalog — mirror of placeables.json", () => {
     expect(objectRefund(3, true)).toBe(3_000);
     expect(objectRefund(0)).toBe(1); // owned free rewards keep the game's minimum sell value
   });
-  it("keeps source XP for gold and derives brain XP from cost + category", () => {
+  it("keeps positive source XP for gold, falls back to cost, and derives brain XP", () => {
     expect(objectBuyXp(10, 0)).toBe(0);
     expect(objectBuyXp(900, 9)).toBe(9);
+    expect(objectBuyXp(20_000, 0)).toBe(200);
     expect(objectBuyXp(10, 6000, true, false)).toBe(1000); // Heart Fountain
     expect(objectBuyXp(12, 6000, true, true)).toBe(960); // Clay Monolith
+  });
+  it("gives every priced gold placeable authored XP or the cost-based fallback", () => {
+    const goldItems = placeables.filter((row) =>
+      row.category !== "reward" && !row.brainsNeeded && row.cost > 0);
+    for (const placeable of goldItems) {
+      const plan = planObjectBuy(objectEcon(placeable.key), bal(1_000_000, 0), 0, MAX_LEVEL);
+      expect(plan, placeable.key).toMatchObject({
+        ok: true,
+        xp: placeable.xp > 0 ? placeable.xp : Math.floor(placeable.cost / 100),
+      });
+    }
   });
   it("applies the recovered formula to every brain-priced placeable", () => {
     const brainItems = placeables.filter((row) =>
@@ -64,6 +76,7 @@ describe("planObjectBuy — exact price + xp", () => {
     expect(planObjectBuy(objectEcon("daisy"), bal(100, 0), 0, MAX_LEVEL)).toEqual({ ok: true, currency: "gold", cost: 10, xp: 0 });
     expect(planObjectBuy(objectEcon("skeletonCouple"), bal(0, 100), 0, MAX_LEVEL)).toEqual({ ok: true, currency: "brains", cost: 3, xp: 300 });
     expect(planObjectBuy(objectEcon("zombieCombiner"), bal(1000, 0), 0, MAX_LEVEL)).toEqual({ ok: true, currency: "gold", cost: 500, xp: 5 });
+    expect(planObjectBuy(objectEcon("islandRelic"), bal(20_000, 0), 0, MAX_LEVEL)).toEqual({ ok: true, currency: "gold", cost: 20_000, xp: 200 });
   });
   it("rejects unknown, unaffordable, and free/promo (not purchasable) objects", () => {
     expect(planObjectBuy(objectEcon("nope"), bal(), 0, MAX_LEVEL)).toMatchObject({ ok: false, error: "bad_item" });

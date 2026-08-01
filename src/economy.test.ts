@@ -27,8 +27,9 @@ describe("item economy helpers", () => {
   });
   it("buyXp retains authoritative source XP for gold purchases", () =>
     expect(buyXp(1000, 42, false, "decor")).toBe(42));
-  it("buyXp grants zero to a gold purchase when the source has no XP", () => {
-    expect(buyXp(1000)).toBe(0);
+  it("buyXp derives gold XP from cost when the source has no XP", () => {
+    expect(buyXp(1000)).toBe(10);
+    expect(buyXp(20_000, 0)).toBe(200);
     expect(buyXp(1, 0)).toBe(0);
   });
   it("derives brain decor/tree XP from the current price", () => {

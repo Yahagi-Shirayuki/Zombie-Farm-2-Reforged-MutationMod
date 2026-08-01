@@ -16,7 +16,7 @@ export const BRAIN_SELL_GOLD_RATE = 1_000; // mirrors src/economy.ts
 export interface ObjectEcon {
   cost: number;
   brains: boolean; // cost paid in brains, not gold
-  xp: number;      // source XP retained for gold purchases
+  xp: number;      // source XP for gold purchases; zero falls back to cost / 100
   /** Player level required to buy. -1 means NO requirement (59 seasonal/promo items),
    *  matching the client's `state.level < def.level` check, which -1 passes for free. */
   level: number;
@@ -152,7 +152,7 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "iceCreamTruck": { cost: 0, brains: false, xp: 0, level: -1 },
   "ironGate_01_closed": { cost: 1800, brains: false, xp: 18, level: 23 },
   "ironGate_01_open": { cost: 1800, brains: false, xp: 18, level: 23 },
-  "islandRelic": { cost: 20000, brains: false, xp: 0, level: 1 },
+  "islandRelic": { cost: 20000, brains: false, xp: 200, level: 1 },
   "koiPond": { cost: 5, brains: true, xp: 500, level: 44 },
   "lawnmower": { cost: 7000, brains: false, xp: 70, level: 45 },
   "leafPile": { cost: 10, brains: false, xp: 0, level: 11 },
@@ -306,9 +306,10 @@ export function objectRefund(cost: number, brains = false): number {
  * (`+[MarketDataManager xpFromItem:]`): decor/tree purchases grant binary-era
  * cost*10 and functional/special purchases grant binary-era cost*8. Reforged
  * divided brain prices by ten when undoing brainflation, so current-price
- * equivalents are cost*100 and cost*80. Gold purchases retain their authored
- * Market XP. `brains` is explicit because the Zombie Pot changes from a first
- * gold purchase to subsequent brain purchases at runtime. */
+ * equivalents are cost*100 and cost*80. Gold purchases retain positive authored
+ * Market XP, falling back to floor(cost / 100) when it is missing. `brains` is
+ * explicit because the Zombie Pot changes from a first gold purchase to subsequent
+ * brain purchases at runtime. */
 export function objectBuyXp(
   cost: number,
   sourceXp: number,
@@ -316,7 +317,8 @@ export function objectBuyXp(
   functional = false
 ): number {
   if (brains) return Math.max(0, Math.trunc(cost)) * (functional ? 80 : 100);
-  return Math.max(0, sourceXp);
+  const authoredXp = Math.max(0, sourceXp);
+  return authoredXp > 0 ? authoredXp : Math.floor(Math.max(0, cost) / 100);
 }
 
 /** Per-key ownership ceiling — a plausibility bound (matches the save object cap). */
