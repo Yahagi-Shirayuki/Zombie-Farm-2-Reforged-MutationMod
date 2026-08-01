@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { resolveCropMutations } from "./cropMutations";
+import { resolveCropMutations, touchingPlotOffsets } from "./cropMutations";
 
 describe("crop-adjacency mutations", () => {
+  it("enumerates all eight touching plots and excludes the center", () => {
+    expect(touchingPlotOffsets(4)).toEqual([
+      [-4, -4], [0, -4], [4, -4],
+      [-4, 0],           [4, 0],
+      [-4, 4],  [0, 4],  [4, 4],
+    ]);
+  });
+
   it("gives one adjacent crop a 25% roll", () => {
     expect(resolveCropMutations(0, ["carrot"], { random: () => 0.249 })).toBe(4);
     expect(resolveCropMutations(0, ["carrot"], { random: () => 0.25 })).toBe(0);

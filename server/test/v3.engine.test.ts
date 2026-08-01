@@ -435,7 +435,7 @@ describe("protocol v3 command engine", () => {
     expect(result.state.balance.xp).toBe(1);
   });
 
-  it("authoritatively stacks four cardinal mutation crops to 100% at zombie harvest", () => {
+  it("authoritatively stacks touching mutation crops to 100% at zombie harvest", () => {
     const state = freshGameplayState();
     state.farm.plots = {
       "4:4": { state: "planted", cropKey: "ZombieActorRegularTier1", plantedAt: 0, growMs: 1, sell: 0, xp: 1, fertilized: false, zombie: true },
@@ -458,6 +458,24 @@ describe("protocol v3 command engine", () => {
     expect(result.state.roster).toContainEqual(expect.objectContaining({
       id: "mutated-zombie", mutation: 4,
     }));
+  });
+
+  it("allows mutation crops on all four diagonal plots", () => {
+    const state = freshGameplayState();
+    state.farm.plots = {
+      "4:4": { state: "planted", cropKey: "ZombieActorRegularTier1", plantedAt: 0, growMs: 1, sell: 0, xp: 1, fertilized: false, zombie: true },
+      "0:0": { state: "planted", cropKey: "tomato", plantedAt: 999, growMs: 99_999, sell: 1, xp: 1, fertilized: false, zombie: false },
+      "8:0": { state: "planted", cropKey: "carrot", plantedAt: 999, growMs: 99_999, sell: 1, xp: 1, fertilized: false, zombie: false },
+      "0:8": { state: "planted", cropKey: "celery", plantedAt: 999, growMs: 99_999, sell: 1, xp: 1, fertilized: false, zombie: false },
+      "8:8": { state: "planted", cropKey: "lima_beans", plantedAt: 999, growMs: 99_999, sell: 1, xp: 1, fertilized: false, zombie: false },
+      // Two plots away does not touch and must not contribute.
+      "12:12": { state: "planted", cropKey: "dragon_fruit", plantedAt: 999, growMs: 99_999, sell: 1, xp: 1, fertilized: false, zombie: false },
+    };
+    const result = applyCommandBatch(state, commands(
+      { type: "farm.harvest", oc: 4, or: 4 },
+    ), { now: 1_000, random: () => 0.1, id: () => "diagonal-mutant" });
+
+    expect(result.state.roster[0].mutation).toBe(1 | 4 | 64 | 1024);
   });
 
   it("rolls multiple non-conflicting adjacent crops independently", () => {
@@ -500,6 +518,21 @@ describe("protocol v3 command engine", () => {
       { type: "power.use", key: "insta_harvest" },
     ), { now: 1_000, random: () => 0.1, id: () => "power-mutant" });
     expect(result.state.farm.plots["0:4"].state).toBe("spent");
+    expect(result.state.roster[0].mutation).toBe(4);
+  });
+
+  it("snapshots diagonal mutation crops for atomic Insta-Harvest", () => {
+    const state = freshGameplayState();
+    state.inventory.insta_harvest = 1;
+    state.farm.plots = {
+      "0:0": { state: "planted", cropKey: "carrot", plantedAt: 0, growMs: 1, sell: 16, xp: 1, fertilized: false, zombie: false },
+      "4:4": { state: "planted", cropKey: "ZombieActorRegularTier1", plantedAt: 1, growMs: 1, sell: 0, xp: 1, fertilized: false, zombie: true },
+    };
+    const result = applyCommandBatch(state, commands(
+      { type: "power.use", key: "insta_harvest" },
+    ), { now: 1_000, random: () => 0.1, id: () => "diagonal-power-mutant" });
+
+    expect(result.state.farm.plots["0:0"].state).toBe("spent");
     expect(result.state.roster[0].mutation).toBe(4);
   });
 

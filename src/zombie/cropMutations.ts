@@ -22,6 +22,15 @@ export const CROP_MUTATIONS: Readonly<Record<string, number>> = {
 
 export const CROP_MUTATION_CHANCE = 0.25;
 
+/** Origin offsets for the eight plots whose edges or corners touch a plot. */
+export function touchingPlotOffsets(plotSize: number): readonly (readonly [number, number])[] {
+  return [
+    [-plotSize, -plotSize], [0, -plotSize], [plotSize, -plotSize],
+    [-plotSize, 0],                         [plotSize, 0],
+    [-plotSize, plotSize],  [0, plotSize],  [plotSize, plotSize],
+  ];
+}
+
 export interface CropMutationOptions {
   guaranteed?: boolean;
   headless?: boolean;

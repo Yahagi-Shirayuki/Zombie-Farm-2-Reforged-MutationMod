@@ -24,7 +24,7 @@ import { zombieCropEcon } from "../zombieCropCatalog";
 import { farmerGold, farmerZombieGrowMs } from "../../../src/farmer";
 import { dropsEpicBossToken } from "../../../src/epicBoss/tokens";
 import { combineMasks } from "../../../src/zombie/mutations";
-import { resolveCropMutations } from "../../../src/zombie/cropMutations";
+import { resolveCropMutations, touchingPlotOffsets } from "../../../src/zombie/cropMutations";
 import { createCombineRandom, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
 import { harvestXp, plowXp } from "../../../src/farmRewards";
 import { questSubjectMatches } from "../../../src/quest/matching";
@@ -217,14 +217,14 @@ function hasMutationMonolith(state: MutableGameplayState): boolean {
   );
 }
 
-/** Cardinal plots touching this 4x4 plot. Crop age is deliberately ignored. */
+/** All eight plots touching this 4x4 plot. Crop age is deliberately ignored. */
 function adjacentCropKeys(
   plots: Record<string, FarmPlotProjection>,
   oc: number,
   or: number
 ): string[] {
   const keys: string[] = [];
-  for (const [dc, dr] of [[-PLOT_SIZE, 0], [PLOT_SIZE, 0], [0, -PLOT_SIZE], [0, PLOT_SIZE]] as const) {
+  for (const [dc, dr] of touchingPlotOffsets(PLOT_SIZE)) {
     const plot = plots[plotKey(oc + dc, or + dr)];
     if (plot?.state === "planted" && !plot.zombie) keys.push(plot.cropKey);
   }

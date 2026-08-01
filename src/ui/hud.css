@@ -1192,7 +1192,8 @@
 #hud .pm-subtab.sel { border-image-source: url("/assets/ui/market/subtab.png"); filter: brightness(.72);
   color: #f6ecc8; text-shadow: 0 1px 1px rgba(0,0,0,.55); }
 #hud .pm-list { flex: 1 1 auto; overflow-y: auto; display: flex; flex-direction: column;
-  gap: 8px; padding: 2px; min-height: 0; }
+  gap: 8px; padding: 2px; min-height: 0; scrollbar-width: none; -ms-overflow-style: none; }
+#hud .pm-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
 #hud .pm-card { display: grid; grid-template-columns: 1fr auto;
   grid-template-rows: auto 1fr auto; grid-template-areas: "name right" "port right" "cost cost";
   gap: 2px 6px; background: #efe4bf; border: 2px solid #b98b4a; border-radius: 8px;

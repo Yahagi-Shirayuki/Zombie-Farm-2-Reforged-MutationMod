@@ -11,6 +11,7 @@ import { setFootprint, sortLayer } from "./depthSort";
 import { makeLight, OBJECT_GLOWS } from "./lighting";
 import { leafTexture, ParticleConfig, ParticleField } from "./raid/Particles";
 import type { PlacedObjectSave, PlotSave } from "./save/schema";
+import { touchingPlotOffsets } from "./zombie/cropMutations";
 
 export const PLOT = 4; // tiles per plot side
 
@@ -713,11 +714,11 @@ export class Field {
       zombieKey: cfg.isZombie ? cfg.key : undefined, mutationContext };
   }
 
-  /** Mutation crops in the four cardinal plots around a zombie plot. Only the
+  /** Mutation crops in all eight touching plots around a zombie plot. Only the
    * planted crop key matters; its age and visual growth stage intentionally do not. */
   zombieMutationContextAt(oc: number, or: number): ZombieMutationContext {
     const cropKeys: string[] = [];
-    for (const [dc, dr] of [[-PLOT, 0], [PLOT, 0], [0, -PLOT], [0, PLOT]] as const) {
+    for (const [dc, dr] of touchingPlotOffsets(PLOT)) {
       const crop = this.plots.get(this.key(oc + dc, or + dr))?.crop;
       if (crop && !crop.cfg.isZombie) cropKeys.push(crop.cfg.key);
     }

@@ -17,7 +17,7 @@ const REGULAR = "ZombieActorRegularTier1";
 const PLOT = 4; // a crop occupies a 4x4 base-tile plot
 
 /** Level 3+ (quest 55's gate) with a ripe plain-zombie crop at (0,0) and one
- *  mutation-bearing vegetable cardinally adjacent to it. */
+ *  touching mutation-bearing vegetable. */
 function farmWithNeighbour(cropKey: string): MutableGameplayState {
   const state = freshGameplayState();
   state.balance.xp = 200; // comfortably past quest 55's level 3 gate
