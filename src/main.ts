@@ -2711,6 +2711,7 @@ async function main() {
     }
     const paidRun = state.epicBossRun ?? gate.run;
     const setup = buildEpicBossSetup(def, paidRun, party, assets, state);
+    jobs.setPaused(true);
     raidActive = true;
     world.visible = false;
     hud.setRaiding(true);
@@ -2778,6 +2779,7 @@ async function main() {
         hud.openRaidResult(view, () => {
           if (raidScene) { app.stage.removeChild(raidScene.container); raidScene.destroy(); raidScene = null; }
           raidActive = false;
+          jobs.setPaused(false);
           world.visible = true;
           hud.setRaiding(false);
           audio.exitRaid();
@@ -2805,7 +2807,7 @@ async function main() {
           }).catch(() => {
             hud.showToast("The fight result could not be verified. Reconnecting will recover it.");
             if (raidScene) { app.stage.removeChild(raidScene.container); raidScene.destroy(); raidScene = null; }
-            raidActive = false; world.visible = true; hud.setRaiding(false); audio.exitRaid();
+            raidActive = false; jobs.setPaused(false); world.visible = true; hud.setRaiding(false); audio.exitRaid();
             flushQuestCompletions();
           });
           return;
@@ -2917,6 +2919,7 @@ async function main() {
     // Offline play has no server timestamp, but uses the same gentle relaunch delay.
     if (setup && !onlineFarm) raidLaunchLockedUntil = Date.now() + 15_000;
     if (!setup) return false; // gated (cooldown/army) — the army screen stays up
+    jobs.setPaused(true);
     raidActive = true;
     world.visible = false;
     hud.setRaiding(true); // battle scene takes over the screen
@@ -3032,6 +3035,7 @@ async function main() {
             raidScene = null;
           }
           raidActive = false;
+          jobs.setPaused(false);
           world.visible = true;
           hud.setRaiding(false);
           audio.exitRaid(); // battle over — hand the farm bed back

@@ -139,6 +139,31 @@ describe("JobSystem elapsed-time catch-up", () => {
     expect(jobs.busy).toBe(true);
   });
 
+  it("pauses queued farm work during a raid and resumes without replaying raid time", () => {
+    const walk = new FakeWalk();
+    const jobs = new JobSystem(
+      {} as never,
+      {} as never,
+      walk as never,
+      {} as never,
+      () => {},
+    );
+
+    jobs.enqueueWalk(10, 10);
+    jobs.setPaused(true);
+    jobs.advanceElapsed(30);
+    jobs.update(30);
+
+    expect(walk.arrivals).toEqual([]);
+    expect(jobs.busy).toBe(true);
+
+    jobs.setPaused(false);
+    jobs.advanceElapsed(1);
+
+    expect(walk.arrivals).toEqual([10]);
+    expect(jobs.busy).toBe(false);
+  });
+
   it("suppresses one-shot audio while completing background catch-up work", () => {
     const walk = new FakeWalk();
     const sounds: string[] = [];

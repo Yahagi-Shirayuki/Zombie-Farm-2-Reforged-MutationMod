@@ -60,6 +60,8 @@ export class JobSystem {
   private workMs = 0;
   private workTotal = WORK_MS; // duration of the active job's work phase
   private pending = new Set<string>(); // dedupe key "kind:bc,br"
+  // Raids own the screen and suspend farm mutations/audio behind the battle.
+  private paused = false;
   // While elapsed background time is replayed, actions must use the replay
   // cursor rather than Date.now(). Otherwise every planting completed by one
   // catch-up pass receives the same (late) timestamp.
@@ -194,6 +196,11 @@ export class JobSystem {
     return this.active !== null || this.queue.length > 0;
   }
 
+  /** Suspend/resume queued farmer work without cancelling or replaying it. */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+  }
+
   /** Persist action intent, not Pixi animation state. A partially-walked/worked
    * action safely restarts from its target and elapsed wall time replays it. */
   serializePending(): FarmJobQueueSave | undefined {
@@ -259,6 +266,7 @@ export class JobSystem {
    * actual duration rather than the time spent away.
    */
   advanceElapsed(elapsedSec: number, suppressAudio = false) {
+    if (this.paused) return;
     let remaining = Number.isFinite(elapsedSec) ? Math.max(0, elapsedSec) : 0;
     const endAt = Date.now();
     let cursor = endAt - remaining * 1000;
@@ -347,6 +355,7 @@ export class JobSystem {
   }
 
   update(dt: number) {
+    if (this.paused) return;
     if (!this.active) {
       const next = this.queue.shift();
       if (!next) return;

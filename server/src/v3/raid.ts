@@ -9,7 +9,7 @@ import raidRows from "../../../public/assets/raids/raids.json";
 import { farmerCooldownMs } from "../../../src/farmer";
 import { buildPinnedV3Raid, verifyRaid, RAID_RULESET_VERSION, type PinnedRaidConfig, type RaidReplayInput } from "../raidVerifier";
 import { rollBrainDrop } from "../../../src/raid/brainDrops";
-import { dropsOldMcZombie, OLD_MC_ZOMBIE_KEY, OLD_MC_ZOMBIE_NAME } from "../../../src/raid/zombieDrops";
+import { rollRaidZombieDrop } from "../../../src/raid/zombieDrops";
 import objectRows from "../../../public/assets/placeables.json";
 import { shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
 
@@ -374,6 +374,7 @@ export async function finishRaid(
     : pinnedBrains ?? legacyBrainDrop(session.id, econ.recLevel, config.enemyUnits.some((unit) => unit.isBoss));
   let loot: { name: string; kind: "gold" | "boost" | "item" } | null = null;
   let newZombie: { id: string; key: string; stored: boolean } | null = null;
+  let newZombieName: string | null = null;
   let lootGold = 0;
   if (win) {
     progress[String(raidId)] = (progress[String(raidId)] ?? 0) + 1;
@@ -386,7 +387,8 @@ export async function finishRaid(
     if (grant.kind === "gold") { lootGold = grant.gold; loot = { name: grant.name, kind: "gold" }; }
     else if (grant.kind === "boost") { core.inventory[grant.key] = (core.inventory[grant.key] ?? 0) + 1; loot = { name: grant.name, kind: "boost" }; }
     else if (grant.kind === "item") { core.storage.received[grant.name] = (core.storage.received[grant.name] ?? 0) + 1; loot = { name: grant.name, kind: "item" }; }
-    if (dropsOldMcZombie(raidId, true, Math.random())) {
+    const zombieDrop = rollRaidZombieDrop(raidId, true, Math.random());
+    if (zombieDrop) {
       const activeCapacity = (core.zombieMax ?? 16) + objects.reduce(
         (total, object) => total +
           (object.status === "placed" ? objectArmyCapacity.get(object.catalogKey) ?? 0 : 0),
@@ -398,9 +400,10 @@ export async function finishRaid(
       );
       newZombie = {
         id: crypto.randomUUID(),
-        key: OLD_MC_ZOMBIE_KEY,
+        key: zombieDrop.key,
         stored: shouldStoreEpicReward(activeCount, activeCapacity),
       };
+      newZombieName = zombieDrop.name;
     }
   }
   const nextBalance = { gold: balance.gold + baseGold + lootGold, brains: balance.brains + brains, xp: balance.xp + xp };
@@ -412,7 +415,7 @@ export async function finishRaid(
     { type: "kInvasionSuccessfulNotification", subject: raidNames.get(raidId) ?? String(raidId) },
     ...(losses.length === 0 ? [{ type: "kInvasionPerfectGameNotification", subject: raidNames.get(raidId) ?? String(raidId) }] : []),
     ...(loot ? [{ type: "kLootItemWonNotification", subject: loot.name }] : []),
-    ...(newZombie ? [{ type: "kLootItemWonNotification", subject: OLD_MC_ZOMBIE_NAME }] : []),
+    ...(newZombieName ? [{ type: "kLootItemWonNotification", subject: newZombieName }] : []),
   ] : [];
   const questChanges = applyQuestEvents(nextBalance, quests, questEvents);
   const levelBefore = levelForXp(balance.xp);

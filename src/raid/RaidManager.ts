@@ -35,7 +35,7 @@ import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, Ra
 import { rollLootTier } from "./LootTable";
 import { rollBrainDrop } from "./brainDrops";
 import { orderPartyRoster } from "./partySelection";
-import { dropsOldMcZombie, OLD_MC_ZOMBIE_KEY, OLD_MC_ZOMBIE_NAME } from "./zombieDrops";
+import { rollRaidZombieDrop } from "./zombieDrops";
 
 /** Real grab-hazard art per raid id. Circus = the trapeze girl (extracted from the
  *  stage atlas). */
@@ -636,9 +636,10 @@ export class RaidManager {
         // applied by the server only after deterministic replay verifies the boss win.
         brains = brainDrop;
         if (brains > 0) this.state.addBrains(brains);
-        if (dropsOldMcZombie(raid.id, true, Math.random())) {
-          this.hooks.grantZombie?.(OLD_MC_ZOMBIE_KEY);
-          loot.push({ name: OLD_MC_ZOMBIE_NAME, icon: zombiePortrait(OLD_MC_ZOMBIE_KEY) });
+        const zombieDrop = rollRaidZombieDrop(raid.id, true, Math.random());
+        if (zombieDrop) {
+          this.hooks.grantZombie?.(zombieDrop.key);
+          loot.push({ name: zombieDrop.name, icon: zombiePortrait(zombieDrop.key) });
         }
       }
       // Beating a tier boss unlocks ONE still-locked ability of that tier (the next
