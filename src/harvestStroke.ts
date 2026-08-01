@@ -1,5 +1,6 @@
 export type HarvestTarget =
   | { kind: "plot"; oc: number; or: number; isZombie: boolean }
+  | { kind: "replow"; oc: number; or: number }
   | { kind: "tree"; instanceId: string };
 
 export interface StrokePoint {
@@ -7,11 +8,11 @@ export interface StrokePoint {
   y: number;
 }
 
-export const harvestTargetKey = (target: HarvestTarget): string => target.kind === "plot"
-  ? `plot:${target.oc},${target.or}`
-  : `tree:${target.instanceId}`;
+export const harvestTargetKey = (target: HarvestTarget): string => target.kind === "tree"
+  ? `tree:${target.instanceId}`
+  : `${target.kind}:${target.oc},${target.or}`;
 
-/** Append a harvest target once while retaining the order in which the stroke
+/** Append a select-tool farm target once while retaining the order in which the stroke
  * first crossed it. JobSystem performs its own pending-job deduplication too;
  * this set keeps backtracking from producing redundant previews/enqueue calls. */
 export function appendHarvestTarget(

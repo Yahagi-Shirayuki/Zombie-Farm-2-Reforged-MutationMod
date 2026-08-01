@@ -7,23 +7,27 @@ import {
 } from "./harvestStroke";
 
 describe("harvest stroke", () => {
-  it("uses canonical keys for plots and trees", () => {
+  it("uses canonical keys for harvests, re-plows, and trees", () => {
     expect(harvestTargetKey({ kind: "plot", oc: 4, or: 8, isZombie: false }))
       .toBe("plot:4,8");
     expect(harvestTargetKey({ kind: "tree", instanceId: "apple-1" }))
       .toBe("tree:apple-1");
+    expect(harvestTargetKey({ kind: "replow", oc: 12, or: 16 }))
+      .toBe("replow:12,16");
   });
 
   it("retains first-crossed order and ignores backtracking duplicates", () => {
     const crop: HarvestTarget = { kind: "plot", oc: 0, or: 0, isZombie: false };
     const tree: HarvestTarget = { kind: "tree", instanceId: "pear-1" };
+    const replow: HarvestTarget = { kind: "replow", oc: 4, or: 0 };
     const targets: HarvestTarget[] = [];
     const seen = new Set<string>();
 
     expect(appendHarvestTarget(crop, targets, seen)).toBe(true);
     expect(appendHarvestTarget(tree, targets, seen)).toBe(true);
+    expect(appendHarvestTarget(replow, targets, seen)).toBe(true);
     expect(appendHarvestTarget(crop, targets, seen)).toBe(false);
-    expect(targets).toEqual([crop, tree]);
+    expect(targets).toEqual([crop, tree, replow]);
   });
 
   it("samples fast movement without gaps and includes the release position", () => {

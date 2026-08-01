@@ -172,6 +172,11 @@ export class JobSystem {
     return !!at && this.pending.has(this.key("harvest", at.oc, at.or));
   }
 
+  isPlotTillPending(col: number, row: number): boolean {
+    const at = this.field.plotOriginAt(col, row);
+    return !!at && this.pending.has(this.key("till", at.oc, at.or));
+  }
+
   isTreeHarvestPending(objId: string): boolean {
     return this.pending.has(`tree:${objId}`);
   }

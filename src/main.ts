@@ -1708,7 +1708,9 @@ async function main() {
 
   const harvestTargetPending = (target: HarvestTarget): boolean => target.kind === "tree"
     ? jobs.isTreeHarvestPending(target.instanceId)
-    : jobs.isPlotHarvestPending(target.oc, target.or);
+    : target.kind === "replow"
+      ? jobs.isPlotTillPending(target.oc, target.or)
+      : jobs.isPlotHarvestPending(target.oc, target.or);
 
   // A visible ripe tree owns the swipe point before the plot behind its canopy.
   // Else resolve to the canonical 4x4 plot origin so crossing one crop's tiles only
@@ -1725,11 +1727,16 @@ async function main() {
       return harvestTargetPending(target) ? null : target;
     }
     const origin = field.plotOriginAt(col, row);
-    if (!origin || !field.isRipe(col, row)) return null;
-    const target: HarvestTarget = {
-      kind: "plot", oc: origin.oc, or: origin.or,
-      isZombie: field.ripeZombieAt(col, row),
-    };
+    if (!origin) return null; // bare ground never becomes a select-tool plow target
+    const target: HarvestTarget | null = field.isRipe(col, row)
+      ? {
+          kind: "plot", oc: origin.oc, or: origin.or,
+          isZombie: field.ripeZombieAt(col, row),
+        }
+      : field.isSpent(col, row)
+        ? { kind: "replow", oc: origin.oc, or: origin.or }
+        : null;
+    if (!target) return null;
     return harvestTargetPending(target) ? null : target;
   };
 
@@ -1738,6 +1745,10 @@ async function main() {
       if (!field.isObjectReady(target.instanceId)) return false;
       const point = field.objectWorkPoint(target.instanceId);
       return !!point && jobs.enqueueTreeHarvest(target.instanceId, point.x, point.y);
+    }
+    if (target.kind === "replow") {
+      if (!field.isSpent(target.oc, target.or)) return false;
+      return jobs.enqueue("till", target.oc, target.or);
     }
     if (!field.isRipe(target.oc, target.or)) return false;
     if (field.ripeZombieAt(target.oc, target.or) && !zombies.canHarvestZombie()) {
@@ -1756,10 +1767,12 @@ async function main() {
       : { ...field.plotCenterOf(target.oc, target.or), tiles: PLOT };
     if (!area) return;
     const w = area.tiles * HW, h = area.tiles * HH;
+    const color = target.kind === "replow" ? 0x8df25a : 0xffd45a;
+    const stroke = target.kind === "replow" ? 0x8df25a : 0xffe58a;
     const preview = new Graphics();
     preview.moveTo(0, -h).lineTo(w, 0).lineTo(0, h).lineTo(-w, 0).lineTo(0, -h)
-      .fill({ color: 0xffd45a, alpha: 0.24 })
-      .stroke({ width: 3, color: 0xffe58a, alpha: 0.95 });
+      .fill({ color, alpha: 0.24 })
+      .stroke({ width: 3, color: stroke, alpha: 0.95 });
     preview.position.set(area.x, area.y);
     field.highlightLayer.addChild(preview);
     harvestStrokePreviews.set(key, preview);
@@ -3877,7 +3890,8 @@ async function main() {
             hud.openPlantMenu(onPick, { onlyKey: TUTORIAL_ZOMBIE_KEY });
           else hud.openPlantMenu(onPick);
         } else if (field.isSpent(col, row)) {
-          jobs.enqueue("till", col, row); // re-till a harvested dirt/hole plot
+          const origin = field.plotOriginAt(col, row);
+          if (origin) enqueueHarvestTarget({ kind: "replow", oc: origin.oc, or: origin.or });
         } else {
           // Nothing on this tile claimed the tap. On touch that makes an
           // overlapping zombie the obvious target, so away from plots it takes a
