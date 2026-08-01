@@ -77,6 +77,8 @@ export class ParticleField {
   readonly container = new Container();
   private tex: Texture;
   private pool: P[] = [];
+  private liveCount = 0; // running total so burst() doesn't rescan the pool
+  private cursor = 0; // rolling free-slot scan start, so acquire() is O(1) amortised
 
   /** `texture` overrides the default soft radial dot (e.g. a leaf for the farm's
    *  fertilize effect). It is still tinted per-particle by the config's colour. */
@@ -88,9 +90,8 @@ export class ParticleField {
    *  wants far fewer than the source's maxParticles); `rainbow` recolours per
    *  particle (confetti). */
   burst(cfg: ParticleConfig, x: number, y: number, scale = 1, rainbow = false) {
-    const live = this.pool.reduce((n, p) => n + (p.live ? 1 : 0), 0);
     const want = Math.max(1, Math.round(cfg.maxParticles * scale));
-    const n = Math.min(want, MAX_LIVE - live);
+    const n = Math.min(want, MAX_LIVE - this.liveCount);
     const additive = cfg.blendFuncDestination === 1;
     for (let i = 0; i < n; i++) {
       const dir = (cfg.angle + rand(cfg.angleVariance)) * (Math.PI / 180);
@@ -118,6 +119,7 @@ export class ParticleField {
       p.sp.rotation = rainbow ? Math.random() * Math.PI : 0;
       p.sp.visible = true;
       p.live = true;
+      this.liveCount++;
     }
   }
 
@@ -128,6 +130,7 @@ export class ParticleField {
       if (p.age >= p.life) {
         p.live = false;
         p.sp.visible = false;
+        this.liveCount--;
         continue;
       }
       const t = p.age / p.life;
@@ -145,7 +148,16 @@ export class ParticleField {
   }
 
   private acquire(): P {
-    for (const p of this.pool) if (!p.live) return p;
+    // Scan from a rolling cursor instead of the pool head: a 140-particle burst
+    // against a warmed 600-slot pool would otherwise walk ~84k slots in one frame.
+    const len = this.pool.length;
+    for (let i = 0; i < len; i++) {
+      const p = this.pool[(this.cursor + i) % len];
+      if (!p.live) {
+        this.cursor = (this.cursor + i + 1) % len;
+        return p;
+      }
+    }
     const sp = new Sprite(this.tex);
     sp.anchor.set(0.5);
     this.container.addChild(sp);

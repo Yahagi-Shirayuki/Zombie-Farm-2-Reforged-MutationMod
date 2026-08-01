@@ -2584,11 +2584,11 @@ async function main() {
     void hud.refreshInbox?.().then(() => {
       const n = hud.getInbox?.().length ?? 0;
       if (n) hud.showToast(`You have ${n} gift${n === 1 ? "" : "s"} waiting! 🎁`);
-    });
+    }).catch(() => { /* best-effort toast; offline boot must not surface an error */ });
     void hud.refreshRequests?.().then(() => {
       const n = hud.getRequests?.().length ?? 0;
       if (n) hud.showToast(`You have ${n} friend request${n === 1 ? "" : "s"}! 👋`);
-    });
+    }).catch(() => { /* best-effort toast; offline boot must not surface an error */ });
   }
 
   // Night lighting toggle (Developer menu). Was the N key; now driven from the HUD.
@@ -2765,7 +2765,7 @@ async function main() {
               hud.showToast(`${zombieDefs.get(unit.key)?.name ?? "Epic reward zombie"} joined your ${unit.stored ? "Mausoleum" : "farm"}!`);
             }
             economy?.adoptEpicBossResult(server);
-            void economy?.refreshAuthoritative();
+            void economy?.refreshAuthoritative().catch(() => { /* reconcile again on next settle */ });
             state.setEpicBossRun(server.event);
             const result = {
               run: server.event,
@@ -4074,12 +4074,19 @@ async function main() {
 
   app.ticker.add((ticker) => {
     const dt = Math.min(ticker.deltaMS / 1000, 0.05);
+    if (raidScene) raidScene.update(dt); // live battle drives itself
+    advanceFarmJobsToNow(); // wall-clock-safe queued work + farmer movement
+    // While a battle owns the screen the farm world is fully hidden, so every
+    // visual update below (depth sorts, rig posing, occlusion masks, the night
+    // light-map render) would be discarded work. Crop growth is wall-clock based,
+    // so the first frame after the raid snaps everything to its true state.
+    if (raidActive) return;
     const modalOpen = !!hud.el.querySelector(".panelbg, .mkt-bg, .st-bg, .pm-bg");
     if (modalOpen && hoveredCrop) {
       hoveredCrop = null;
       hud.showCropHover(null);
     }
-    if (!raidActive && !modalOpen && cameraKeys.size) {
+    if (!modalOpen && cameraKeys.size) {
       const speed = 520 * dt;
       const dx = (cameraKeys.has("a") ? speed : 0) - (cameraKeys.has("d") ? speed : 0);
       const dy = (cameraKeys.has("w") ? speed : 0) - (cameraKeys.has("s") ? speed : 0);
@@ -4119,8 +4126,6 @@ async function main() {
       fx.view.destroy({ children: true });
       bossTokenFx.splice(i, 1);
     }
-    if (raidScene) raidScene.update(dt); // live battle drives itself; farm still ticks behind
-    advanceFarmJobsToNow(); // wall-clock-safe queued work + farmer movement
     petActor?.update(dt, actor.container.x, actor.container.y);
     const penBounds = field.petPenBounds();
     for (const pet of penPetActors) {

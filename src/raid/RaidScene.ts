@@ -278,6 +278,11 @@ interface Token {
   wasSmashWindup: number;
   actorBaseScale: number; // the zombie rig's normal container scale (for the feet-anchored grow)
   actorBaseY: number; // and its normal container y (feet at the token origin)
+  // Last-drawn bar states. Graphics.clear()+redraw forces a re-tessellation and a
+  // GPU geometry upload, so the bars only redraw when their drawn width changes
+  // (-1 = hidden). Keys quantise the fraction to ¼% steps.
+  hpKey: number;
+  chargeKey: number;
   healFxSeq: number; // last heal event rendered for this unit
   healCastSeq: number; // last heal cast rendered for this Garden zombie
   healPose: number; // seconds remaining in the arms-overhead healing pose
@@ -584,6 +589,7 @@ export class RaidScene {
     // The Circus trapeze swings behind the zombies it targets. Add its layer first
     // so every zombie, including the carried one, remains readable in front of it.
     if (this.grabberSprite) this.container.addChild(this.grabLayer);
+    this.tokenLayer.sortableChildren = true; // depth-sorted via per-token zIndex bands
     this.container.addChild(this.tokenLayer);
     for (const u of this.sim.units) this.tokens.set(u.id, this.makeToken(u));
 
@@ -933,7 +939,7 @@ export class RaidScene {
     return {
       root, actor, enemyActor, frameActor, epicActor, epicAnim: epicActor ? epicAnim : undefined,
       hp, charge, base, hpCenterX, topY, pulse: 0, atkCount: 0,
-      deathAnim: -1, emerged: false,
+      deathAnim: -1, emerged: false, hpKey: -1, chargeKey: -1,
       smashSlam: -1, wasSmashWindup: 0, actorBaseScale, actorBaseY,
       healFxSeq: 0, healCastSeq: 0, healPose: 0, laserFxSeq: 0,
     };
@@ -1015,15 +1021,31 @@ export class RaidScene {
 
   // The contain-fit stage rectangle (the 480x320 design space) + ground line,
   // recomputed live so the sim→screen mapping and unit placement track resizes.
+  // Memoised on the screen size: mapX/mapY/sizeScale call this several times per
+  // unit per frame, and a fresh object each call is pure GC pressure.
+  // Last viewport the resize-only chrome (stage layers, letterboxes, HUD backing)
+  // was drawn for; layout() skips those redraws while the size is unchanged.
+  private chromeW = -1;
+  private chromeH = -1;
+  // Countdown to the next ability-strip content recompute (ms); see layout().
+  private abilityRefreshMs = 0;
+  private bgRectCache: {
+    W: number; H: number;
+    r: { left: number; top: number; w: number; h: number; scale: number; groundY: number };
+  } | null = null;
   private bgRect() {
     const W = this.app.screen.width;
     const H = this.app.screen.height;
+    const c = this.bgRectCache;
+    if (c && c.W === W && c.H === H) return c.r;
     const scale = Math.min(W / DESIGN_W, H / DESIGN_H); // CONTAIN — whole scene visible
     const w = DESIGN_W * scale;
     const h = DESIGN_H * scale;
     const left = (W - w) / 2;
     const top = (H - h) / 2;
-    return { left, top, w, h, scale, groundY: top + GROUND_FY * h };
+    const r = { left, top, w, h, scale, groundY: top + GROUND_FY * h };
+    this.bgRectCache = { W, H, r };
+    return r;
   }
 
   // Stand the boss on top of the tallest RIGHT-SIDE structure (barn/silo/front
@@ -1110,7 +1132,14 @@ export class RaidScene {
     const H = this.app.screen.height;
     const r = this.bgRect();
     const mx = W * 0.05; // screen margin for the top HUD bars
+    // Everything that depends only on the viewport (stage layers, letterbox fills,
+    // HUD chrome) is drawn once per resize, not per frame: each Graphics.clear()
+    // re-tessellates and re-uploads geometry, which mobile GPUs pay dearly for.
+    const resized = W !== this.chromeW || H !== this.chromeH;
+    this.chromeW = W;
+    this.chromeH = H;
 
+    if (resized) {
     // Position every stage layer in the 480x320 design space (cocos2d Y-up anchors),
     // contain-fit into the viewport, so the whole scene (backgrounds + structure)
     // stays visible. Fill the letterbox with sky above the ground line, grass below.
@@ -1143,6 +1172,7 @@ export class RaidScene {
     }
     if (r.top > 0) this.stageMatte.rect(r.left, 0, r.w, r.top).fill(LETTERBOX_TOP);
     if (bottom < H) this.stageMatte.rect(r.left, bottom, r.w, H - bottom).fill(LETTERBOX_BOT);
+    }
 
     const toX = (sx: number) => this.mapX(sx);
     const toY = (sy: number) => this.mapY(sy);
@@ -1209,6 +1239,20 @@ export class RaidScene {
       // Queued enemies haven't emerged yet — keep them hidden off the field.
       if (u.state === "queued") {
         tok.root.visible = false;
+        continue;
+      }
+      // A finished corpse is pure cost: Pixi does not cull on alpha, so an
+      // alpha-0 rig (15–25 sprites) would keep being posed, transformed and
+      // batched for the rest of the fight. Once the death fade has played out,
+      // hide the token and skip all of its per-frame work for good.
+      if (!u.alive && tok.deathAnim >= DEATH_FADE) {
+        if (tok.root.visible) {
+          tok.root.visible = false;
+          tok.hp.clear();
+          tok.charge.clear();
+          tok.hpKey = -1;
+          tok.chargeKey = -1;
+        }
         continue;
       }
       tok.root.visible = true;
@@ -1306,7 +1350,12 @@ export class RaidScene {
       // Carried off the field by a crab — gone from this fight (it comes home after).
       tok.root.visible = !u.taken;
       tok.root.position.set(sx, sy);
-      tok.root.zIndex = u.isBoss ? 100000 : u.state === "grabbed" ? 90000 : u.alive ? Math.round(sy * 10) : 0;
+      // Depth-sort in 4-px bands, and only write zIndex when the band changes:
+      // every write marks the whole render group structurally dirty, forcing Pixi
+      // v8 to rebuild its cached instruction set (its main win over v7). A raw
+      // interpolated sy would do that on every frame for every moving unit.
+      const depth = u.isBoss ? 100000 : u.state === "grabbed" ? 90000 : u.alive ? Math.round(sy / 4) : 0;
+      if (tok.root.zIndex !== depth) tok.root.zIndex = depth;
 
       // Track the perched boss's throwing hand so projectiles leave from it (his upper
       // body), not the raw sim origin mapped independently (which read down-left of him).
@@ -1512,34 +1561,47 @@ export class RaidScene {
         }
       }
 
-      const frac = Math.max(0, u.hp / u.maxHp);
-      tok.hp.clear();
       // Enemy bars remain visible for target readability. Owned-zombie bars stay
-      // out of the way until that zombie has actually taken damage.
-      if (u.alive && u.state !== "carried" && (u.team === "enemy" || frac < 1)) {
-        const halfW = u.team === "player" ? ZOMBIE_HP_HALF_W : tok.base;
-        const w = halfW * 2;
-        const fill = u.team === "enemy" ? ENEMY_COLOR : PLAYER_COLOR; // enemies red
-        tok.hp
-          .rect(-halfW, 0, w, 5).fill({ color: 0x000000, alpha: 0.55 })
-          .rect(-halfW, 0, w * frac, 5).fill(fill);
+      // out of the way until that zombie has actually taken damage. Bars redraw
+      // only when the drawn width changes (HP moves on 20 Hz sim ticks, not per
+      // render frame), because clear()+redraw re-uploads geometry to the GPU.
+      const frac = Math.max(0, u.hp / u.maxHp);
+      const hpShown = u.alive && u.state !== "carried" && (u.team === "enemy" || frac < 1);
+      const hpKey = hpShown ? Math.round(frac * 400) : -1;
+      if (hpKey !== tok.hpKey) {
+        tok.hpKey = hpKey;
+        tok.hp.clear();
+        if (hpShown) {
+          const halfW = u.team === "player" ? ZOMBIE_HP_HALF_W : tok.base;
+          const w = halfW * 2;
+          const fill = u.team === "enemy" ? ENEMY_COLOR : PLAYER_COLOR; // enemies red
+          tok.hp
+            .rect(-halfW, 0, w, 5).fill({ color: 0x000000, alpha: 0.55 })
+            .rect(-halfW, 0, w * frac, 5).fill(fill);
+        }
       }
 
       // Focus bar while charging (golden), or the activated-move wind-up (orange).
-      tok.charge.clear();
-      if (this.phase === "fight" && !this.sim.finished && u.state === "charging") {
-        const w = tok.base * 2;
-        tok.charge
-          .rect(-tok.base, 0, w, 4).fill(0x2a2410)
-          .rect(-tok.base, 0, w * Math.max(0, Math.min(1, u.charge)), 4).fill(0xffcf5a);
-      } else if (u.windupKey) {
-        const w = tok.base * 2;
-        tok.charge
-          .rect(-tok.base, 0, w, 4).fill(0x3a1408)
-          .rect(-tok.base, 0, w * windup, 4).fill(0xff6a2a);
+      const charging = this.phase === "fight" && !this.sim.finished && u.state === "charging";
+      const chargeKey = charging
+        ? 1000 + Math.round(Math.max(0, Math.min(1, u.charge)) * 400)
+        : u.windupKey ? 2000 + Math.round(windup * 400) : -1;
+      if (chargeKey !== tok.chargeKey) {
+        tok.chargeKey = chargeKey;
+        tok.charge.clear();
+        if (charging) {
+          const w = tok.base * 2;
+          tok.charge
+            .rect(-tok.base, 0, w, 4).fill(0x2a2410)
+            .rect(-tok.base, 0, w * Math.max(0, Math.min(1, u.charge)), 4).fill(0xffcf5a);
+        } else if (u.windupKey) {
+          const w = tok.base * 2;
+          tok.charge
+            .rect(-tok.base, 0, w, 4).fill(0x3a1408)
+            .rect(-tok.base, 0, w * windup, 4).fill(0xff6a2a);
+        }
       }
     }
-    this.tokenLayer.sortableChildren = true;
 
     // Focus bubble: hover it over the charging zombie while it's distracted (butterfly)
     // or fully charged and awaiting release (brain); hide it otherwise.
@@ -1570,20 +1632,25 @@ export class RaidScene {
     const barH = 17;
     const topY = Math.max(9, H * 0.04);
     const topHudH = Math.max(62, topY + barH + 26);
-    this.topHudBack.clear()
-      .rect(0, 0, W, topHudH).fill({ color: 0x15130f, alpha: 0.78 })
-      .rect(0, topHudH - 4, W, 4).fill({ color: 0x090a08, alpha: 0.5 })
-      .moveTo(0, topHudH - 1).lineTo(W, topHudH - 1)
-      .stroke({ width: 2, color: 0xc7b78b, alpha: 0.48 });
-    this.pWrap.position.set(mx, topY);
-    this.eWrap.position.set(W - mx - barW, topY);
-    // Face badges just outside each bar (clamped on-screen): zombie left, enemy right.
-    const faceY = topY + barH / 2 + 3;
-    this.pFace.position.set(Math.max(25, mx - 27), faceY);
-    this.eFace.position.set(Math.min(W - 25, W - mx + 27), faceY);
+    if (resized) {
+      this.topHudBack.clear()
+        .rect(0, 0, W, topHudH).fill({ color: 0x15130f, alpha: 0.78 })
+        .rect(0, topHudH - 4, W, 4).fill({ color: 0x090a08, alpha: 0.5 })
+        .moveTo(0, topHudH - 1).lineTo(W, topHudH - 1)
+        .stroke({ width: 2, color: 0xc7b78b, alpha: 0.48 });
+      this.pWrap.position.set(mx, topY);
+      this.eWrap.position.set(W - mx - barW, topY);
+      // Face badges just outside each bar (clamped on-screen): zombie left, enemy right.
+      const faceY = topY + barH / 2 + 3;
+      this.pFace.position.set(Math.max(25, mx - 27), faceY);
+      this.eFace.position.set(Math.min(W - 25, W - mx + 27), faceY);
+      this.roundLabel.position.set(W / 2, topY);
+      this.retreatBtn.position.set(W - mx - this.retreatBtn.width, H - this.retreatBtn.height - 18);
+      this.abilityStrip.position.set(mx + 24, topHudH + 30);
+    }
     // Both team bars read green when full (drain as the team loses HP).
-    this.drawTeamBar(this.pBar, this.pFill, barW, barH, pHp / this.maxPlayerHp, PLAYER_COLOR);
-    this.drawTeamBar(this.eBar, this.eFill, barW, barH, eHp / this.maxEnemyHp, PLAYER_COLOR);
+    this.drawTeamBar(this.pBar, this.pFill, barW, barH, pHp / this.maxPlayerHp, PLAYER_COLOR, this.pBarState);
+    this.drawTeamBar(this.eBar, this.eFill, barW, barH, eHp / this.maxEnemyHp, PLAYER_COLOR, this.eBarState);
     this.pLabel.text = `Zombies  ${pAlive}`;
     this.eLabel.text = `${this.raid.bossName || "Enemies"}  ${eAlive}`;
     this.eLabel.x = barW - this.eLabel.width;
@@ -1600,38 +1667,44 @@ export class RaidScene {
     } else {
       this.roundLabel.text = "";
     }
-    this.roundLabel.position.set(W / 2, topY);
 
     // Retreat occupies the bottom-right action slot used by the farm quest control,
     // which is hidden while a battle owns the screen.
     this.retreatBtn.visible = (this.phase === "intro" || this.phase === "fight")
       && !this.sim.finished && !this.retreatRequested;
-    this.retreatBtn.position.set(W - mx - this.retreatBtn.width, H - this.retreatBtn.height - 18);
 
     // Ability strip remains below the top-left health bar. Activated badges show how
     // many zombies are ready right now; dim a move when none can perform it.
+    // The strip's contents change on sim events (deploys, readiness), not per render
+    // frame, so the Map/Set/filter recompute is throttled; only the tap-press scale
+    // easing runs every frame.
     const CELL = 52;
-    this.abilityStrip.position.set(mx + 24, topHudH + 30);
-    const status = new Map(this.sim.activatedStatus().map((s) => [s.key, s.ready]));
-    const deployedAbilityKeys = new Set(
-      this.sim.units
-        .filter((u) => u.team === "player" && u.alive &&
-          (u.state === "advance" || u.state === "fight"))
-        .flatMap((u) => u.abilities)
-    );
-    let visibleAbilityIndex = 0;
+    this.abilityRefreshMs -= dtSec * 1000;
+    if (this.abilityRefreshMs <= 0 || resized) {
+      this.abilityRefreshMs = 150;
+      const status = new Map(this.sim.activatedStatus().map((s) => [s.key, s.ready]));
+      const deployedAbilityKeys = new Set(
+        this.sim.units
+          .filter((u) => u.team === "player" && u.alive &&
+            (u.state === "advance" || u.state === "fight"))
+          .flatMap((u) => u.abilities)
+      );
+      let visibleAbilityIndex = 0;
+      this.abilityCells.forEach((c) => {
+        // Activated moves retain their authored timing (Mini Buddy is chosen during
+        // deployment). Passive team effects such as Chivalry and Grace appear only
+        // once a carrier has actually advanced onto the battlefield.
+        c.cell.visible = c.activated || deployedAbilityKeys.has(c.key);
+        if (c.cell.visible) c.cell.y = visibleAbilityIndex++ * CELL;
+        if (c.activated) {
+          const ready = status.get(c.key) ?? 0;
+          if (c.badge) c.badge.text = String(ready);
+          c.cell.alpha = ready > 0 ? 1 : 0.5;
+        }
+      });
+    }
     this.abilityCells.forEach((c) => {
-      // Activated moves retain their authored timing (Mini Buddy is chosen during
-      // deployment). Passive team effects such as Chivalry and Grace appear only
-      // once a carrier has actually advanced onto the battlefield.
-      c.cell.visible = c.activated || deployedAbilityKeys.has(c.key);
-      if (c.cell.visible) c.cell.y = visibleAbilityIndex++ * CELL;
       if (c.cell.scale.x < 1) c.cell.scale.set(Math.min(1, c.cell.scale.x + dtSec * 4)); // ease tap-press back
-      if (c.activated) {
-        const ready = status.get(c.key) ?? 0;
-        if (c.badge) c.badge.text = String(ready);
-        c.cell.alpha = ready > 0 ? 1 : 0.5;
-      }
     });
 
     this.syncProjectiles();
@@ -1962,14 +2035,30 @@ export class RaidScene {
     }
   }
 
-  private drawTeamBar(bar: Graphics, fill: Graphics, w: number, h: number, frac: number, color: number) {
+  // Last-drawn geometry per team bar, so the rounded frame (3 roundRects) is only
+  // re-tessellated on resize and the fill only when the HP fraction moves.
+  private pBarState = { w: -1, h: -1, f: -1 };
+  private eBarState = { w: -1, h: -1, f: -1 };
+  private drawTeamBar(
+    bar: Graphics, fill: Graphics, w: number, h: number, frac: number, color: number,
+    state: { w: number; h: number; f: number },
+  ) {
     const f = Math.max(0, Math.min(1, frac));
-    bar.clear()
-      .roundRect(-5, -5, w + 10, h + 10, 7).fill({ color: 0x11130f, alpha: 0.94 })
-      .roundRect(0, 0, w, h, 4).fill({ color: 0x050505, alpha: 0.82 })
-      .roundRect(-5, -5, w + 10, h + 10, 7).stroke({ width: 2, color: 0xd9e2c4, alpha: 0.8 });
-    fill.clear();
-    if (f > 0) fill.roundRect(0, 0, w * f, h, 4).fill(color);
+    const fq = Math.round(f * 400); // ¼% steps — sub-pixel for a ≤350 px bar
+    const sized = state.w !== w || state.h !== h;
+    if (sized) {
+      bar.clear()
+        .roundRect(-5, -5, w + 10, h + 10, 7).fill({ color: 0x11130f, alpha: 0.94 })
+        .roundRect(0, 0, w, h, 4).fill({ color: 0x050505, alpha: 0.82 })
+        .roundRect(-5, -5, w + 10, h + 10, 7).stroke({ width: 2, color: 0xd9e2c4, alpha: 0.8 });
+    }
+    if (sized || state.f !== fq) {
+      fill.clear();
+      if (f > 0) fill.roundRect(0, 0, w * f, h, 4).fill(color);
+    }
+    state.w = w;
+    state.h = h;
+    state.f = fq;
   }
 
   /** Drive the scene forward. Called from the app ticker with seconds. */

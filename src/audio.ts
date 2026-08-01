@@ -128,6 +128,10 @@ export class AudioManager {
   private ambBed: HTMLAudioElement;
   private ambTimer: ReturnType<typeof setTimeout> | null = null;
   private oneShots = new Set<HTMLAudioElement>();
+  // Finished one-shot elements, pooled per file for reuse. Raid combat fires up to
+  // ~20 cues/s; a fresh `new Audio()` per cue makes iOS re-enter its media-loading
+  // pipeline every time, a reliable source of main-thread jank and audio stutter.
+  private oneShotPool = new Map<string, HTMLAudioElement[]>();
   private armed = false; // whether a user-gesture resume listener is pending
   // While a raid is up, its looping stage BGM replaces the farm bgm. `raidBgm`
   // holds the active raid track (and `raidFile` its filename); the farm bgm is
@@ -377,12 +381,26 @@ export class AudioManager {
   }
 
   private playOneShot(file: string, volume: number, channelVolume = this.sfxVolume) {
-    const a = new Audio(A(file));
+    const url = A(file);
+    const a = this.oneShotPool.get(url)?.pop() ?? new Audio(url);
     a.volume = volume * channelVolume;
     this.oneShots.add(a);
-    const done = () => this.oneShots.delete(a);
-    a.addEventListener("ended", done, { once: true });
-    a.addEventListener("error", done, { once: true });
+    let settled = false;
+    const done = () => {
+      if (settled) return; // `ended` and a late `error` must not pool twice
+      settled = true;
+      this.oneShots.delete(a);
+      const pool = this.oneShotPool.get(url) ?? [];
+      if (pool.length < 6) {
+        pool.push(a);
+        this.oneShotPool.set(url, pool);
+      }
+    };
+    // Property handlers (not addEventListener) so reuse replaces the previous
+    // play's callbacks instead of stacking them.
+    a.onended = done;
+    a.onerror = done;
+    if (a.currentTime > 0) a.currentTime = 0; // reused element: rewind
     void a.play().catch(done);
   }
 
