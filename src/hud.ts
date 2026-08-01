@@ -2993,15 +2993,12 @@ export class Hud {
         list.appendChild(empty);
       }
       for (const f of friends) {
-        const row = document.createElement("div");
+        const row = document.createElement("details");
         row.className = "prof-row fr-friend-row";
-        const header = document.createElement("div");
-        header.className = "fr-friend-header";
-        const nm = document.createElement("div");
-        nm.className = "prof-name fr-friend-toggle";
-        nm.tabIndex = 0;
-        nm.setAttribute("role", "button");
-        nm.setAttribute("aria-expanded", "false");
+        const summary = document.createElement("summary");
+        summary.className = "fr-friend-summary";
+        const nm = document.createElement("span");
+        nm.className = "fr-friend-name-wrap";
         const nameText = document.createElement("span");
         nameText.className = "fr-friend-name";
         nameText.textContent = f.name;
@@ -3013,18 +3010,12 @@ export class Hud {
           b.title = `${f.giftsSent} brain${f.giftsSent === 1 ? "" : "s"} gifted`;
           nm.appendChild(b);
         }
-        const more = document.createElement("button");
+        const more = document.createElement("span");
         more.className = "fr-friend-more";
-        more.type = "button";
         more.textContent = "•••";
-        more.setAttribute("aria-label", `Show actions for ${f.name}`);
-        more.setAttribute("aria-expanded", "false");
+        more.setAttribute("aria-hidden", "true");
         const menu = document.createElement("div");
         menu.className = "fr-friend-menu";
-        const menuId = `friend-menu-${f.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
-        menu.id = menuId;
-        nm.setAttribute("aria-controls", menuId);
-        more.setAttribute("aria-controls", menuId);
         const level = document.createElement("div");
         level.className = "fr-friend-level";
         level.textContent = f.level == null ? "Level unavailable" : `Level ${f.level}`;
@@ -3098,26 +3089,8 @@ export class Hud {
           acts.appendChild(del);
         }
         menu.append(level, acts);
-        const toggleMenu = () => {
-          const expand = !row.classList.contains("expanded");
-          list.querySelectorAll<HTMLElement>(".fr-friend-row.expanded").forEach((openRow) => {
-            openRow.classList.remove("expanded");
-            openRow.querySelector(".fr-friend-toggle")?.setAttribute("aria-expanded", "false");
-            openRow.querySelector(".fr-friend-more")?.setAttribute("aria-expanded", "false");
-          });
-          row.classList.toggle("expanded", expand);
-          nm.setAttribute("aria-expanded", String(expand));
-          more.setAttribute("aria-expanded", String(expand));
-        };
-        nm.onclick = toggleMenu;
-        nm.onkeydown = (event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          toggleMenu();
-        };
-        more.onclick = toggleMenu;
-        header.append(nm, more);
-        row.append(header, menu);
+        summary.append(nm, more);
+        row.append(summary, menu);
         list.appendChild(row);
       }
       // Add-friend row: by code online, by name offline.

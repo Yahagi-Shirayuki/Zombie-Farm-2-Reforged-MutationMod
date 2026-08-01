@@ -164,24 +164,28 @@
 #hud .fr-gsi { flex: 0 0 auto; }
 #hud .fr-inbox-h { margin-top: 12px; margin-bottom: 4px; font-weight: 800; font-size: 13px; color: #ffd98a; }
 #hud .fr-inbox-row { background: rgba(255,193,60,.12); box-shadow: inset 0 0 0 1px rgba(255,193,60,.3); }
-/* Every device uses the same name-first disclosure card. The name is a styled
-   div rather than a native button so global/game button art cannot mask it. */
+/* Native disclosure cards keep names visible and action menus reliable across
+   desktop and touch browsers without inheriting any of the game's button art. */
 #hud .fr-friend-row { display: block; padding: 0; overflow: hidden; }
-#hud .fr-friend-header { display: flex; align-items: center; min-width: 0; }
-#hud .fr-friend-toggle { min-height: 46px; padding: 10px 8px 10px 12px;
-  box-sizing: border-box; cursor: pointer; outline: none; }
-#hud .fr-friend-toggle:focus-visible { box-shadow: inset 0 0 0 2px #d9ff9b; }
-#hud .fr-friend-name { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+#hud .fr-friend-summary { display: flex; align-items: center; min-width: 0;
+  min-height: 46px; padding: 7px 8px 7px 12px; box-sizing: border-box;
+  cursor: pointer; list-style: none; outline: none; }
+#hud .fr-friend-summary::-webkit-details-marker { display: none; }
+#hud .fr-friend-summary:focus-visible { box-shadow: inset 0 0 0 2px #d9ff9b; }
+#hud .fr-friend-name-wrap { display: flex; align-items: center; gap: 8px;
+  flex: 1 1 auto; min-width: 0; color: #f4e9cf; }
+#hud .fr-friend-name { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 15px; line-height: 24px; font-weight: 700;
   color: #f4e9cf; -webkit-text-fill-color: #f4e9cf; }
 #hud .fr-friend-more { display: grid; place-items: center; flex: 0 0 auto;
-  width: 38px; height: 32px; margin-right: 8px; padding: 0 0 6px;
+  width: 38px; height: 32px; padding: 0 0 6px;
   border: 2px solid #1e1207; border-radius: 8px; cursor: pointer;
   color: #f4e9cf; background: linear-gradient(#7a5220, #5e3d15);
   font: 900 17px/1 system-ui, sans-serif; letter-spacing: 1px; text-shadow: 0 1px 1px #000; }
-#hud .fr-friend-more:hover { filter: brightness(1.12); }
+#hud .fr-friend-summary:hover .fr-friend-more { filter: brightness(1.12); }
 #hud .fr-friend-menu { display: none; padding: 0 10px 10px;
   border-top: 1px solid rgba(216,188,132,.22); }
-#hud .fr-friend-row.expanded .fr-friend-menu { display: flex; flex-direction: column;
+#hud .fr-friend-row[open] .fr-friend-menu { display: flex; flex-direction: column;
   align-items: stretch; gap: 8px; }
 #hud .fr-friend-level { display: block; padding-top: 8px; color: #d8bc84;
   font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
