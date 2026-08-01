@@ -19,6 +19,11 @@ export type UpdateCheckResult =
  *  this the player gets the update toast on their next visit instead. */
 const INSTALL_TIMEOUT_MS = 20_000;
 
+/** iOS can take several seconds to promote a waiting worker after SKIP_WAITING.
+ *  Never reload on this timeout: doing so can load the old cached shell and present
+ *  the same update again, which looks like an update loop. */
+const ACTIVATION_TIMEOUT_MS = 30_000;
+
 /** Ask the service worker to re-check the network for a new build.
  *
  *  `getRegistration` is injected so tests (and callers without a service worker)
@@ -68,6 +73,52 @@ function workerSettled(worker: ServiceWorker, timeoutMs: number): Promise<void> 
     };
     const timer = setTimeout(finish, timeoutMs);
     worker.addEventListener("statechange", onChange);
+  });
+}
+
+/** Ask a waiting worker to take control and resolve only after the browser confirms
+ *  activation. A false result means the caller should leave the page in place and
+ *  offer another try; reloading before activation can serve the old app shell. */
+export function activateWaitingWorker(
+  worker: ServiceWorker,
+  serviceWorkers: Pick<ServiceWorkerContainer, "addEventListener" | "removeEventListener">,
+  timeoutMs = ACTIVATION_TIMEOUT_MS,
+): Promise<boolean> {
+  if (worker.state === "activated") return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (activated: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      worker.removeEventListener("statechange", onWorkerStateChange);
+      serviceWorkers.removeEventListener("controllerchange", onControllerChange);
+      resolve(activated);
+    };
+    const onControllerChange = () => finish(true);
+    const onWorkerStateChange = () => {
+      if (worker.state === "activated") finish(true);
+      else if (worker.state === "redundant") finish(false);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+
+    worker.addEventListener("statechange", onWorkerStateChange);
+    serviceWorkers.addEventListener("controllerchange", onControllerChange);
+    // Close the small race between the state check above and attaching listeners.
+    if (worker.state === "activated") {
+      finish(true);
+      return;
+    }
+    if (worker.state === "redundant") {
+      finish(false);
+      return;
+    }
+    try {
+      worker.postMessage({ type: "SKIP_WAITING" });
+    } catch {
+      finish(false);
+    }
   });
 }
 

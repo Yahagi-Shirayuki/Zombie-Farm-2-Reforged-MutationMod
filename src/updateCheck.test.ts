@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { checkRegistrationForUpdate, updateCheckMessage } from "./updateCheck";
+import {
+  activateWaitingWorker,
+  checkRegistrationForUpdate,
+  updateCheckMessage,
+} from "./updateCheck";
 
 // Minimal stand-ins for the bits of the service-worker API the poll touches.
 function fakeWorker(state: ServiceWorker["state"]) {
@@ -11,9 +15,24 @@ function fakeWorker(state: ServiceWorker["state"]) {
       const i = listeners.indexOf(fn);
       if (i >= 0) listeners.splice(i, 1);
     },
+    postMessage: vi.fn(),
     /** Move the worker on and fire statechange, as the browser would. */
     settle(next: ServiceWorker["state"]) {
       this.state = next;
+      for (const fn of [...listeners]) fn();
+    },
+  };
+}
+
+function fakeServiceWorkers() {
+  const listeners: (() => void)[] = [];
+  return {
+    addEventListener: (_: string, fn: () => void) => { listeners.push(fn); },
+    removeEventListener: (_: string, fn: () => void) => {
+      const i = listeners.indexOf(fn);
+      if (i >= 0) listeners.splice(i, 1);
+    },
+    controllerChanged() {
       for (const fn of [...listeners]) fn();
     },
   };
@@ -87,5 +106,50 @@ describe("manual update check", () => {
 
   it("tells the player when nothing new was found", () => {
     expect(updateCheckMessage("up-to-date")).toBe("No new updates detected.");
+  });
+});
+
+describe("update activation", () => {
+  it("waits for confirmed activation before allowing a reload", async () => {
+    const worker = fakeWorker("installed");
+    const serviceWorkers = fakeServiceWorkers();
+    const pending = activateWaitingWorker(
+      worker as unknown as ServiceWorker,
+      serviceWorkers as unknown as ServiceWorkerContainer,
+    );
+
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: "SKIP_WAITING" });
+    worker.settle("activated");
+    await expect(pending).resolves.toBe(true);
+  });
+
+  it("does not permit an old-shell reload when activation times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = fakeWorker("installed");
+      const serviceWorkers = fakeServiceWorkers();
+      const pending = activateWaitingWorker(
+        worker as unknown as ServiceWorker,
+        serviceWorkers as unknown as ServiceWorkerContainer,
+        5_000,
+      );
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(pending).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("accepts controllerchange as activation confirmation", async () => {
+    const worker = fakeWorker("installed");
+    const serviceWorkers = fakeServiceWorkers();
+    const pending = activateWaitingWorker(
+      worker as unknown as ServiceWorker,
+      serviceWorkers as unknown as ServiceWorkerContainer,
+    );
+
+    serviceWorkers.controllerChanged();
+    await expect(pending).resolves.toBe(true);
   });
 });

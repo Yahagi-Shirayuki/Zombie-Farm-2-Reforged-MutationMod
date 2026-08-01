@@ -12,7 +12,11 @@
 // player tap "Reload" when they're ready.
 import { registerSW } from "virtual:pwa-register";
 import type { PlayMode } from "./playMode";
-import { checkRegistrationForUpdate, type UpdateCheckResult } from "./updateCheck";
+import {
+  activateWaitingWorker,
+  checkRegistrationForUpdate,
+  type UpdateCheckResult,
+} from "./updateCheck";
 
 /** Retained so a non-service-worker caller (the ruleset-skew check) can reuse the
  *  SW's activate-and-reload path when an update is genuinely waiting. Null in dev,
@@ -20,14 +24,19 @@ import { checkRegistrationForUpdate, type UpdateCheckResult } from "./updateChec
 let updateSW: ((reloadPage?: boolean) => Promise<void>) | null = null;
 let reloadRequested = false;
 
-/** Promote the waiting worker before reloading. Reloading immediately after the
- *  SKIP_WAITING message can race activation and serve the old precached shell again,
- *  which makes the update button appear to do nothing. */
+/** Promote the waiting worker before reloading. Reloading before confirmed activation
+ *  can serve the old precached shell again and create an apparent update loop. */
 async function activateWaitingWorkerAndReload(): Promise<void> {
   if (reloadRequested) return;
   reloadRequested = true;
 
-  const registration = await navigator.serviceWorker.getRegistration();
+  let registration: ServiceWorkerRegistration | undefined;
+  try {
+    registration = await navigator.serviceWorker.getRegistration();
+  } catch {
+    showUpdateRetryToast("The update couldn't start. Check your connection, then try again.");
+    return;
+  }
   const waiting = registration?.waiting;
   if (!waiting) {
     // Ruleset-skew prompts can reuse this path when no update is waiting.
@@ -35,15 +44,20 @@ async function activateWaitingWorkerAndReload(): Promise<void> {
     return;
   }
 
-  await new Promise<void>((resolve) => {
-    const timeout = window.setTimeout(resolve, 5_000);
-    navigator.serviceWorker.addEventListener("controllerchange", () => {
-      window.clearTimeout(timeout);
-      resolve();
-    }, { once: true });
-    waiting.postMessage({ type: "SKIP_WAITING" });
-  });
-  location.reload();
+  const activated = await activateWaitingWorker(waiting, navigator.serviceWorker);
+  if (activated) {
+    location.reload();
+    return;
+  }
+
+  showUpdateRetryToast(
+    "The update is taking longer than expected. Keep the game open, then try again.",
+  );
+}
+
+function showUpdateRetryToast(message: string): void {
+  reloadRequested = false;
+  showUpdateToast(message, () => void activateWaitingWorkerAndReload());
 }
 
 /** Wire up the service worker. Call once at startup. Safe to call in dev. */
@@ -54,6 +68,7 @@ export function initPwa(mode: PlayMode): void {
 
   updateSW = registerSW({
     onNeedRefresh() {
+      if (reloadRequested) return;
       showUpdateToast("A new version is ready.", () => void activateWaitingWorkerAndReload());
     },
     onOfflineReady() {
@@ -73,7 +88,7 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
 
   const result = await checkRegistrationForUpdate(() =>
     navigator.serviceWorker.getRegistration());
-  if (result === "update-ready") {
+  if (result === "update-ready" && !reloadRequested) {
     showUpdateToast("A new version is ready.", () => void activateWaitingWorkerAndReload());
   }
   return result;
@@ -134,6 +149,7 @@ function showUpdateToast(message: string, onReload: () => void): void {
   const label = document.createElement("span");
   label.textContent = message;
   label.style.flex = "1";
+  label.setAttribute("aria-live", "polite");
 
   const reload = document.createElement("button");
   reload.textContent = "Reload";
@@ -146,7 +162,17 @@ function showUpdateToast(message: string, onReload: () => void): void {
     color: "#fff",
     font: '700 13px/1 "Trebuchet MS", system-ui, sans-serif',
   } as CSSStyleDeclaration);
-  reload.addEventListener("click", onReload);
+  reload.addEventListener("click", () => {
+    if (reload.disabled) return;
+    reload.disabled = true;
+    reload.textContent = "Updating…";
+    reload.style.cursor = "wait";
+    reload.style.opacity = "0.75";
+    dismiss.disabled = true;
+    dismiss.style.visibility = "hidden";
+    label.textContent = "Installing update… The game will reload automatically.";
+    onReload();
+  });
 
   const dismiss = document.createElement("button");
   dismiss.textContent = "×"; // ×
