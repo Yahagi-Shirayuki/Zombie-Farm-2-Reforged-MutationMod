@@ -25,13 +25,27 @@ export interface Footprint {
 }
 
 const FP = Symbol("depthFootprint");
+// Bumped whenever any footprint actually CHANGES (moved tile, re-laid-out, or a
+// fresh entity registering). sortLayer skips its whole O(n²) pass while a layer's
+// last-sorted epoch still matches — on an idle farm (actors between tile
+// crossings) that makes the per-frame sort free.
+let footprintEpoch = 1;
+const SORTED_EPOCH = Symbol("depthSortedEpoch");
+const SORTED_COUNT = Symbol("depthSortedCount");
 
 /** Register the tile footprint an entity occupies (call whenever it moves/relays).
- *  A point entity (actor/zombie) passes the same tile for both corners. */
+ *  A point entity (actor/zombie) passes the same tile for both corners. Callers
+ *  pass rounded tile coords, so per-frame calls for an actor mid-tile are no-ops
+ *  here and don't dirty the sort. */
 export function setFootprint(
   node: Container, c0: number, r0: number, c1: number, r1: number, bias = 0
 ) {
-  (node as unknown as { [FP]?: Footprint })[FP] = { c0, r0, c1, r1, bias };
+  const holder = node as unknown as { [FP]?: Footprint };
+  const prev = holder[FP];
+  if (prev && prev.c0 === c0 && prev.r0 === r0 && prev.c1 === c1 && prev.r1 === r1
+    && prev.bias === bias) return;
+  holder[FP] = { c0, r0, c1, r1, bias };
+  footprintEpoch++;
 }
 
 function getFootprint(node: Container): Footprint | undefined {
@@ -64,8 +78,19 @@ function before(a: Footprint, b: Footprint): boolean {
 
 /** Assign zIndex to every footprint-registered child of `layer` so painter's order
  *  respects isometric footprints (multi-tile objects and moving actors alike).
- *  Children without a footprint are ignored (they keep whatever zIndex they had). */
+ *  Children without a footprint are ignored (they keep whatever zIndex they had).
+ *
+ *  Cheap when nothing changed: the whole pass is skipped while no footprint has
+ *  changed since this layer was last sorted (and its child count is stable — a
+ *  child re-added with an unchanged footprint keeps its still-valid zIndex), and
+ *  even when it runs, zIndexes are only written when the paint order actually
+ *  moved. That matters beyond CPU: a zIndex write sets Pixi v8's
+ *  `structureDidChange`, which throws away the retained render-instruction set
+ *  and re-batches the layer, so no-op frames must not touch zIndex at all. */
 export function sortLayer(layer: Container) {
+  const stamps = layer as unknown as { [SORTED_EPOCH]?: number; [SORTED_COUNT]?: number };
+  if (stamps[SORTED_EPOCH] === footprintEpoch
+    && stamps[SORTED_COUNT] === layer.children.length) return;
   const kids = layer.children as Container[];
   const nodes: Container[] = [];
   const fps: Footprint[] = [];
@@ -74,6 +99,8 @@ export function sortLayer(layer: Container) {
     if (fp) { nodes.push(k); fps.push(fp); }
   }
   const n = nodes.length;
+  stamps[SORTED_EPOCH] = footprintEpoch;
+  stamps[SORTED_COUNT] = layer.children.length;
   if (n === 0) return;
 
   // "after[i]" = entities that must be drawn AFTER i (i is behind them).
@@ -92,9 +119,8 @@ export function sortLayer(layer: Container) {
   // (interlocking footprints — rare on a farm) we break it by the same order among
   // all leftovers.
   const done = new Array<boolean>(n).fill(false);
-  let placed = 0;
-  let z = 0;
-  while (placed < n) {
+  const order: number[] = []; // node indices in paint order (back to front)
+  while (order.length < n) {
     let pick = -1;
     let cycleFallback = -1;
     for (let i = 0; i < n; i++) {
@@ -105,8 +131,20 @@ export function sortLayer(layer: Container) {
     }
     if (pick === -1) pick = cycleFallback; // cycle: force-place the most-behind leftover
     done[pick] = true;
-    placed++;
-    nodes[pick].zIndex = z++;
+    order.push(pick);
     for (const b of after[pick]) indeg[b]--;
   }
+
+  // If the current zIndexes already realise this paint order (strictly increasing
+  // along it), leave them untouched — writing would needlessly re-batch the layer.
+  let increasing = true;
+  let last = -Infinity;
+  for (const i of order) {
+    const zi = nodes[i].zIndex;
+    if (zi <= last) { increasing = false; break; }
+    last = zi;
+  }
+  if (increasing) return;
+  let z = 0;
+  for (const i of order) nodes[i].zIndex = z++;
 }

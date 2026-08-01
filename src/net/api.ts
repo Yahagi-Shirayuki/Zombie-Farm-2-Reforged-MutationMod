@@ -531,7 +531,8 @@ export const getFriendSave = (accountId: string) =>
 export const addFriend = (code: string) =>
   req<{ ok: true }>("POST", "/friends/add", { code });
 
-/** Send a brain. Throws ApiError(429) if the daily limit is hit. */
+/** Send a brain. The first two daily sends are free; later sends cost 100 gold.
+ * Throws ApiError(409) without enough gold or ApiError(429) at the daily limit. */
 export const sendGift = (toAccountId: string) =>
   req<{ ok: true; xpAwarded?: number; giftsRemaining?: number; balance?: Balance; accountVersion?: number; lastRaidAt?: number; serverTime?: number }>(
     "POST", "/gifts", { toAccountId }

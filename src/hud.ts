@@ -2822,6 +2822,9 @@ export class Hud {
     x.onclick = () => bg.remove();
     const h = document.createElement("h2");
     h.textContent = "Friends";
+    const giftCostNote = document.createElement("div");
+    giftCostNote.className = "fr-note";
+    giftCostNote.textContent = "Gifting a brain costs 100 gold, but provides 5 exp";
     const note = document.createElement("div");
     note.className = "fr-note";
     const acctBar = document.createElement("div");
@@ -2830,7 +2833,7 @@ export class Hud {
     const inboxWrap = document.createElement("div");
     const list = document.createElement("div");
     list.className = "prof-list";
-    panel.append(x, h, note, acctBar, requestsWrap, inboxWrap, list);
+    panel.append(x, h, giftCostNote, note, acctBar, requestsWrap, inboxWrap, list);
 
     const canOnline = this.onlineAvailable?.() ?? false;
     const online = () => this.socialOnline?.() ?? false;
@@ -2838,7 +2841,8 @@ export class Hud {
     const giftErr = (e: string | null): string | null =>
       e === null ? null
         : e === "already_gifted_today" ? "You already gifted them today."
-        : e === "daily_gift_limit" ? "You've sent both of today's gifts."
+        : e === "daily_gift_limit" ? "You've sent all 10 of today's gifts."
+        : e === "insufficient_gold" ? "You need 100 gold to send another gift today."
         : e === "not_friends" ? "You're not friends yet."
         : e === "recipient_inbox_full" ? "Their gift inbox is full right now."
         : e === "rate_limited" ? "Slow down a moment, then try again."

@@ -67,33 +67,54 @@ describe("protocol v3 API", () => {
     expect(immediate.status, JSON.stringify(immediate.body)).toBe(200);
   });
 
-  it("awards 5 XP per send and caps the sender at two gifts per UTC day", async () => {
+  it("makes two gifts free, charges 100 gold for gifts 3-10, and caps the day at ten", async () => {
     const sender = await signIn(uniqueSub("gift-xp-sender"));
-    const recipients = await Promise.all([
-      signIn(uniqueSub("gift-xp-recipient")),
-      signIn(uniqueSub("gift-xp-recipient")),
-      signIn(uniqueSub("gift-xp-recipient")),
-    ]);
+    await grantBalance(sender, { gold: 800 });
+    const recipients = await Promise.all(
+      Array.from({ length: 11 }, () => signIn(uniqueSub("gift-xp-recipient")))
+    );
     for (const recipient of recipients) await befriend(sender, recipient);
 
-    const first = await call<any>(
+    const sends = [];
+    for (const recipient of recipients) {
+      sends.push(await call<any>(
+        "POST", "/gifts", sender.token, { toAccountId: recipient.accountId }
+      ));
+    }
+
+    expect(sends.slice(0, 10).every((send) => send.status === 200)).toBe(true);
+    expect(sends[0].body).toMatchObject({ xpAwarded: 5, giftsRemaining: 9, balance: { gold: 800, xp: 5 } });
+    expect(sends[1].body).toMatchObject({ xpAwarded: 5, giftsRemaining: 8, balance: { gold: 800, xp: 10 } });
+    expect(sends[2].body).toMatchObject({ xpAwarded: 5, giftsRemaining: 7, balance: { gold: 700, xp: 15 } });
+    expect(sends[9].body).toMatchObject({ xpAwarded: 5, giftsRemaining: 0, balance: { gold: 0, xp: 50 } });
+    expect(sends[10]).toMatchObject({ status: 429, body: { error: "daily_gift_limit" } });
+
+    const after = await call<any>("POST", "/bootstrap", sender.token, {});
+    expect(after.body.gameplay.balance).toMatchObject({ gold: 0, xp: 50 });
+  });
+
+  it("does not send, charge, or award XP when a paid gift lacks 100 gold", async () => {
+    const sender = await signIn(uniqueSub("gift-cost-sender"));
+    await grantBalance(sender, { gold: 99 });
+    const recipients = await Promise.all(
+      Array.from({ length: 3 }, () => signIn(uniqueSub("gift-cost-recipient")))
+    );
+    for (const recipient of recipients) await befriend(sender, recipient);
+
+    expect((await call<any>(
       "POST", "/gifts", sender.token, { toAccountId: recipients[0].accountId }
-    );
-    const second = await call<any>(
+    )).status).toBe(200);
+    expect((await call<any>(
       "POST", "/gifts", sender.token, { toAccountId: recipients[1].accountId }
-    );
-    const third = await call<any>(
+    )).status).toBe(200);
+    const paid = await call<any>(
       "POST", "/gifts", sender.token, { toAccountId: recipients[2].accountId }
     );
 
-    expect(first.status).toBe(200);
-    expect(first.body).toMatchObject({ xpAwarded: 5, giftsRemaining: 1, balance: { xp: 5 } });
-    expect(second.status).toBe(200);
-    expect(second.body).toMatchObject({ xpAwarded: 5, giftsRemaining: 0, balance: { xp: 10 } });
-    expect(third).toMatchObject({ status: 429, body: { error: "daily_gift_limit" } });
-
+    expect(paid).toMatchObject({ status: 409, body: { error: "insufficient_gold" } });
+    expect((await call<any>("GET", "/gifts/inbox", recipients[2].token)).body).toEqual([]);
     const after = await call<any>("POST", "/bootstrap", sender.token, {});
-    expect(after.body.gameplay.balance.xp).toBe(10);
+    expect(after.body.gameplay.balance).toMatchObject({ gold: 99, xp: 10 });
   });
 
   it("resets the invasion cooldown when gift XP crosses a level", async () => {

@@ -410,8 +410,18 @@ export async function blockedEitherWay(
 }
 
 /** Gift sending remains once per UTC day per recipient and is additionally capped
- * at two total recipients per sender/day. Successful sends credit 5 authoritative XP. */
-export type GiftSendStatus = "sent" | "already_gifted_today" | "daily_gift_limit" | "conflict";
+ * per sender/day. The first two sends each day are free; later sends cost gold. */
+export const DAILY_GIFT_LIMIT = 10;
+export const FREE_DAILY_GIFTS = 2;
+export const GIFT_GOLD_COST = 100;
+export const GIFT_XP_REWARD = 5;
+
+export type GiftSendStatus =
+  | "sent"
+  | "already_gifted_today"
+  | "daily_gift_limit"
+  | "insufficient_gold"
+  | "conflict";
 
 export interface GiftSendResult {
   status: GiftSendStatus;
@@ -421,9 +431,9 @@ export interface GiftSendResult {
   lastRaidAt: number;
 }
 
-/** Atomically create a gift and award its sender XP. The conditional INSERT
- * enforces two total sends per UTC day, while idx_gifts_once still prevents two
- * sends to the same recipient. */
+/** Atomically create a gift, charge any post-free-tier cost, and award sender XP.
+ * The conditional INSERT enforces both the daily cap and sufficient gold, while
+ * idx_gifts_once still prevents two sends to the same recipient. */
 export async function sendGiftWithReward(
   db: D1Database,
   from: string,
@@ -431,7 +441,7 @@ export async function sendGiftWithReward(
   bucket: number,
   now: number,
   seed: Balance,
-  xpAward = 5
+  xpAward = GIFT_XP_REWARD
 ): Promise<GiftSendResult> {
   await getOrSeedBalance(db, from, seed);
   const id = idFromBytes(rand(16));
@@ -440,11 +450,30 @@ export async function sendGiftWithReward(
     db.prepare(
       `INSERT INTO gifts (id, from_id, to_id, type, created_at, day_bucket)
        SELECT ?, ?, ?, 'brain', ?, ?
-       WHERE (SELECT COUNT(*) FROM gifts WHERE from_id = ? AND day_bucket = ?) < 2
+       WHERE (SELECT COUNT(*) FROM gifts WHERE from_id = ? AND day_bucket = ?) < ?
+         AND (
+           (SELECT COUNT(*) FROM gifts WHERE from_id = ? AND day_bucket = ?) < ?
+           OR EXISTS (SELECT 1 FROM balances WHERE account_id = ? AND gold >= ?)
+         )
        ON CONFLICT (from_id, to_id, day_bucket) DO NOTHING`
-    ).bind(id, from, to, now, bucket, from, bucket),
-    db.prepare(`UPDATE balances SET xp=xp+? WHERE account_id=? AND ${guard}`)
-      .bind(xpAward, from, id, from),
+    ).bind(
+      id, from, to, now, bucket,
+      from, bucket, DAILY_GIFT_LIMIT,
+      from, bucket, FREE_DAILY_GIFTS,
+      from, GIFT_GOLD_COST
+    ),
+    db.prepare(`UPDATE balances SET
+      gold=gold-CASE WHEN (
+        SELECT COUNT(*) FROM gifts WHERE from_id=? AND day_bucket=?
+      ) > ? THEN ? ELSE 0 END,
+      xp=xp+?
+      WHERE account_id=? AND ${guard}`)
+      .bind(from, bucket, FREE_DAILY_GIFTS, GIFT_GOLD_COST, xpAward, from, id, from),
+    db.prepare(`INSERT INTO ledger (id,account_id,currency,delta,reason,created_at)
+      SELECT ?,?,'gold',?,'gift_sent',? WHERE ${guard} AND (
+        SELECT COUNT(*) FROM gifts WHERE from_id=? AND day_bucket=?
+      ) > ?`)
+      .bind(`${id}#gold`, from, -GIFT_GOLD_COST, now, id, from, from, bucket, FREE_DAILY_GIFTS),
     db.prepare(`INSERT INTO ledger (id,account_id,currency,delta,reason,created_at)
       SELECT ?,?,'xp',?,'gift_sent',? WHERE ${guard}`)
       .bind(id, from, xpAward, now, id, from),
@@ -468,7 +497,8 @@ export async function sendGiftWithReward(
   ]);
   const sentToday = daily?.n ?? 0;
   const status: GiftSendStatus = sent ? "sent" : duplicate ? "already_gifted_today" :
-    sentToday >= 2 ? "daily_gift_limit" : "conflict";
+    sentToday >= DAILY_GIFT_LIMIT ? "daily_gift_limit" :
+      sentToday >= FREE_DAILY_GIFTS && balance.gold < GIFT_GOLD_COST ? "insufficient_gold" : "conflict";
   return {
     status,
     balance,

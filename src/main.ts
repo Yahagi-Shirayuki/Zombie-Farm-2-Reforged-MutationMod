@@ -124,6 +124,10 @@ async function main() {
     resolution: Math.min(window.devicePixelRatio || 1, 2),
     autoDensity: true,
   });
+  // The game is designed around a 60 Hz cadence; without a cap Pixi redraws the
+  // whole scene at the monitor's refresh rate (165+ Hz on gaming displays), which
+  // saturates the GPU and starves other applications even while the farm idles.
+  app.ticker.maxFPS = 60;
   document.getElementById("app")!.appendChild(app.canvas);
 
   const assets = await loadAssets();

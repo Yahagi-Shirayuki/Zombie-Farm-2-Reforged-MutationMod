@@ -202,9 +202,11 @@ the README in the same change.
 - Friendships require consent; blocks are checked in both directions.
 - Brain gifts require friendship and are doubly capped in SQL: a `(from_id, to_id, day_bucket)`
   uniqueness constraint allows one gift per friend per day (`already_gifted_today`), and the
-  insert's own `WHERE` clause caps a sender at two gifts per day overall (`daily_gift_limit`).
-  Both are enforced in the statement, not in application code, so a race cannot exceed them. A
-  unique grant record prevents duplicate claims.
+  insert's own `WHERE` clause caps a sender at 10 gifts per day overall (`daily_gift_limit`).
+  The first two daily sends are free; the same statement requires at least 100 authoritative gold
+  before inserting sends 3–10, and successful paid sends atomically debit that gold. These rules
+  are enforced in SQL, so failed, duplicate, or racing sends cannot bypass the cap or overdraw the
+  sender. A unique grant record prevents duplicate claims.
 - All routes have a global body ceiling. Presentation and command batches have tighter semantic
   limits.
 - Cloudflare rate-limit bindings protect authentication, read, and write tiers before gameplay
