@@ -83,6 +83,14 @@ export interface SaveGame {
   social?: SocialSave;
   /** First-run Tim Buckwheat guided tutorial progress. Absent = never started. */
   tutorial?: TutorialSave;
+  /** Zombie Almanac: lifetime obtained count per species key. Absent in saves
+   *  written before the Almanac existed — backfilled from ownedZombies on load. */
+  almanac?: AlmanacSave;
+}
+
+/** Zombie Almanac collection progress (cosmetic; counts never decrease). */
+export interface AlmanacSave {
+  discovered: Record<string, number>;
 }
 
 export interface FarmJobSave {

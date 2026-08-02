@@ -4,12 +4,11 @@
 // bottom-center. Resize-safe (fixed positioning).
 import { GameState } from "./GameState";
 import { CropConfig } from "./Field";
-import { zombieSellValue } from "./economy";
 import { PlaceableDef, BoostDef, FarmSizeUpgrade, ClimateUpgrade, upgradeIcon, placeablePurchaseLimit } from "./assets";
 import type { FarmerBodyDef, FarmerCatalog, FarmerHeadDef, PetCatalog, PetDef } from "./assets";
 import { EPIC_BOSS_FIGHT_BRAIN_COST, type EpicBossPayment } from "./epicBoss/tokens";
 import { AudioManager } from "./audio";
-import { MAX_ZOMBIE_NAME_LENGTH, RosterEntry } from "./zombie/types";
+import { RosterEntry } from "./zombie/types";
 import { ALL_BITS, MUTATIONS, mutationLabel, mutationBonus } from "./zombie/mutations";
 import { QuestView } from "./quest/types";
 import type { RaidCardView, RaidPartyView, RaidResultView, RaidLaunchOpts, LootDrop } from "./raid/RaidManager";
@@ -19,10 +18,7 @@ import { isMobile } from "./platform";
 import { type DayNightMode, type FarmBackground } from "./prefs";
 import { fmtCooldown, MCDONNELL_ID, VOUCHER_KEY } from "./raid/RaidCatalog";
 import { marketPageSize } from "./marketPageSize";
-import { STATS, veterancy, STAT_TILE, VALUE_FILL, VALUE_END, ABILITY_FRAME,
-  ABILITY_POOL, unitAbilityAt, TIER_BOSS, MAX_ABILITY_TIER } from "./zombie/traits";
-import { statBreakdown } from "./zombie/statDisplay";
-import { classTierRank } from "./zombie/taxonomy";
+import { veterancy } from "./zombie/traits";
 import { BASE } from "./base";
 import { compareCropMarketOrder, compareItemMarketOrder } from "./marketOrder";
 import { fillPartySelection, orderPartyRoster } from "./raid/partySelection";
@@ -51,6 +47,10 @@ import {
   buildAccountBlock, buildDevicesBlock,
 } from "./ui/panels/settings";
 import { openStorage as openStoragePanel } from "./ui/panels/storage";
+import {
+  buildZombieCard, buildRosterCard, openZombieInfo as openZombieInfoPanel,
+  openZombiesPanel, rosterInfo, type ZombiesPanelTab,
+} from "./ui/panels/zombies";
 import { openFarmersGuide } from "./ui/panels/farmersGuide";
 import { showTimNotice } from "./ui/TimNotice";
 // View-model types + the grave classifier live in hudTypes so panel modules can
@@ -58,7 +58,7 @@ import { showTimNotice } from "./ui/TimNotice";
 // existing `from "./hud"` importers (main.ts).
 import type {
   Mode, ObjCard, MenuCard, EpicBossMarketView, ZombieInfo, ObjectActions,
-  LevelUpView, QuestCompleteView, ReceivedView,
+  AlmanacEntryView, LevelUpView, QuestCompleteView, ReceivedView,
 } from "./ui/hudTypes";
 export { graveNeededFor } from "./ui/hudTypes";
 export type {
@@ -1199,6 +1199,8 @@ export class Hud {
   // ---- zombie management + storage hooks (set by main) ----
   /** The current owned-zombie roster (deployed + stored). */
   getRoster: (() => RosterEntry[]) | null = null;
+  /** The Zombie Almanac's entry list (every obtainable species + discovery counts). */
+  getAlmanac: (() => AlmanacEntryView[]) | null = null;
   /** Portrait image URL for a zombie type key (per-type composite). */
   zombiePortraitOf: ((key: string) => string) | null = null;
   /** Render one owned zombie with its complete individual mutation mask. */
@@ -2533,7 +2535,7 @@ export class Hud {
     panel.append(choices);
   }
 
-  private openBlackMarket(initialKind: BlackMarketOrderKind = "BUY_ZOMBIE", selectedUnitId?: string) {
+  openBlackMarket(initialKind: BlackMarketOrderKind = "BUY_ZOMBIE", selectedUnitId?: string) {
     this.closeMarket();
     const bg = document.createElement("div");
     bg.className = "mkt-bg bm-bg";
@@ -2933,7 +2935,7 @@ export class Hud {
       for (const zombie of matches) {
         const row = document.createElement("div");
         row.className = "zl-row";
-        row.appendChild(this.buildZombieCard(this.rosterInfo(zombie), modal.panel));
+        row.appendChild(buildZombieCard(this, rosterInfo(this, zombie), modal.panel));
         const choose = document.createElement("button");
         choose.className = "zbtn sell";
         choose.textContent = `Sell this zombie for ${order.priceBrains} brains`;
@@ -2976,7 +2978,7 @@ export class Hud {
     const { panel, close } = openModal({
       host: this.el, bgClass: "bm-zombie-bg", panelClass: "zpanel",
     });
-    panel.appendChild(this.buildZombieCard(info, panel));
+    panel.appendChild(buildZombieCard(this, info, panel));
     const note = document.createElement("div");
     note.className = lockLabel ? "bm-lock" : "bm-meta";
     note.textContent = lockLabel ?? `${order.priceBrains} brains · ${order.creatorName}`;
@@ -3358,329 +3360,9 @@ export class Hud {
     this.el.appendChild(bg);
   }
 
-  // A closeable modal: the zombie's trading-card (portrait, name board, veterancy /
-  // type / invasions) on the LEFT, and its stats (icon row) over abilities (icon
-  // row) on the RIGHT. Tapping a stat or ability icon shows a small tooltip that
-  // any further interaction dismisses.
-  /** Build the inspect "card" (trading card + stats + abilities) for one zombie.
-   *  Stat/ability tooltips attach to the modal backdrop so a scrolling panel
-   *  cannot clip them. Shared by the single-zombie modal and the Zombies list. */
-  private buildZombieCard(info: ZombieInfo, host: HTMLElement): HTMLElement {
-    // --- tooltip: one small popup at a time; any interaction dismisses it ---
-    let tip: HTMLElement | null = null;
-    const closeTip = () => { tip?.remove(); tip = null; };
-    const showTip = (anchor: HTMLElement, title: string, body: string) => {
-      closeTip();
-      tip = document.createElement("div");
-      tip.className = "ztip";
-      tip.innerHTML = `<b>${title}</b><span>${body}</span>`;
-      // On compact layouts the panel itself scrolls. Put the popup beside the
-      // panel in its full-viewport backdrop so it can extend beyond the card.
-      const portal = host.parentElement ?? host;
-      portal.appendChild(tip);
-      const ar = anchor.getBoundingClientRect();
-      const tr = tip.getBoundingClientRect();
-      const edge = 8;
-      const gap = 8;
-      const halfWidth = tr.width / 2;
-      const anchorCenter = ar.left + ar.width / 2;
-      const left = Math.min(
-        window.innerWidth - edge - halfWidth,
-        Math.max(edge + halfWidth, anchorCenter)
-      );
-      tip.style.left = `${left}px`;
-
-      // Prefer the familiar above-anchor position, but flip below when needed.
-      // If neither side alone is tall enough, detach just enough from the anchor
-      // to keep the whole popup inside the viewport.
-      const roomAbove = ar.top - gap - edge;
-      const roomBelow = window.innerHeight - ar.bottom - gap - edge;
-      const below = roomAbove < tr.height;
-      tip.classList.toggle("below", below);
-      if (!below) {
-        tip.style.top = `${ar.top - gap}px`;
-      } else if (roomBelow >= tr.height) {
-        tip.style.top = `${ar.bottom + gap}px`;
-      } else {
-        tip.style.top = `${Math.max(edge, window.innerHeight - edge - tr.height)}px`;
-      }
-      // The NEXT pointer-down anywhere closes it (this click's down already fired).
-      document.addEventListener("pointerdown", closeTip, { capture: true, once: true });
-    };
-
-    const wrap = document.createElement("div");
-    wrap.className = "zdetail";
-
-    // ---- LEFT: the card ----
-    const card = document.createElement("div");
-    card.className = "zcard";
-    const nailL = document.createElement("span");
-    nailL.className = "zcard-nail tl";
-    const nailR = document.createElement("span");
-    nailR.className = "zcard-nail tr";
-    const board = document.createElement("div");
-    board.className = "zcard-board";
-    board.textContent = info.name;
-    card.append(nailL, nailR, board);
-    if (info.id && this.onZombieRename) {
-      board.classList.add("renameable");
-      board.title = "Click to rename";
-      board.tabIndex = 0;
-      const edit = () => {
-        if (!board.isConnected) return;
-        const input = document.createElement("input");
-        input.className = "zcard-name-input";
-        input.value = info.name;
-        input.maxLength = MAX_ZOMBIE_NAME_LENGTH;
-        board.replaceWith(input);
-        let active = true;
-        const cancel = () => {
-          if (!active) return;
-          active = false;
-          input.replaceWith(board);
-        };
-        const commit = () => {
-          if (!active) return;
-          active = false;
-          const renamed = this.onZombieRename?.(info.id!, input.value);
-          if (renamed) info.name = renamed;
-          board.textContent = info.name;
-          input.replaceWith(board);
-        };
-        input.onkeydown = (event) => {
-          if (event.key === "Enter") { event.preventDefault(); commit(); }
-          else if (event.key === "Escape") { event.preventDefault(); cancel(); }
-        };
-        input.onblur = commit;
-        input.focus();
-        input.select();
-      };
-      board.onclick = edit;
-      board.onkeydown = (event) => {
-        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); edit(); }
-      };
-    }
-    const port = document.createElement("div");
-    port.className = "zcard-port";
-    port.style.backgroundImage = `url(${info.portrait})`;
-    // Use the static catalog portrait immediately, then replace it with the cached
-    // individual rig once its mutation-aware render is available.
-    if (this.zombieMutationPortraitOf) {
-      void this.zombieMutationPortraitOf(info.key, info.mutation, info.color)
-        .then((portrait) => {
-          if (port.isConnected) port.style.backgroundImage = `url(${portrait})`;
-        })
-        .catch(() => { /* retain the static species portrait if extraction fails */ });
-    }
-    const meta = document.createElement("div");
-    meta.className = "zcard-meta";
-    meta.innerHTML =
-      `<div class="zvet">${veterancy(info.invasions)}</div>` +
-      `<div class="ztype">${info.typeName}</div>` +
-      `<div class="zinv">Invasions: ${info.invasions}</div>`;
-    card.append(port, meta);
-
-    // ---- RIGHT: stats (top) + abilities (bottom), both horizontal ----
-    const right = document.createElement("div");
-    right.className = "zright";
-
-    const statsHdr = document.createElement("div");
-    statsHdr.className = "zsec-h";
-    statsHdr.textContent = "Stats";
-    const statsRow = document.createElement("div");
-    statsRow.className = "zrow zstats";
-    // Each tile shows the stat's 0–100 bar with EVERY always-on bonus folded in
-    // (mutation + veterancy + the zombie's own passive stat abilities); hovering opens
-    // the per-modifier breakdown. See zombie/statDisplay.statBreakdown.
-    const abilityUnlocked = (k: string) => this.state.abilityUnlocked(k);
-    // Which stats a mutation is boosting — those tiles render green (permanent species bonus).
-    const mutBonus = mutationBonus(info.mutation);
-    for (const s of STATS) {
-      const bd = statBreakdown(info, s.key, abilityUnlocked);
-      const boosted = ((mutBonus as Record<string, number>)[s.key] ?? 0) > 0;
-      const cell = document.createElement("button");
-      cell.className = "zstat";
-      cell.innerHTML =
-        `<span class="zstat-tile" style="background-image:url(${STAT_TILE})">` +
-        `<img src="${s.icon}" alt=""></span>` +
-        `<span class="zstat-val${boosted ? " boosted" : ""}" style="background-image:url(${VALUE_END}),url(${VALUE_FILL})">` +
-        `${bd.total}</span>`;
-      cell.onclick = (e) => {
-        e.stopPropagation();
-        // desc, then Base → each modifier (dim if +0) → Total, as aligned rows.
-        const rows = [`<span class="zbd-row"><span>Base</span><span>${bd.base}</span></span>`]
-          .concat(
-            bd.lines.map(
-              (l) =>
-                `<span class="zbd-row${l.zero ? " zbd-zero" : ""}"><span>${l.label}</span><span>${l.amount}</span></span>`
-            )
-          )
-          .concat(`<span class="zbd-row zbd-total"><span>Total</span><span>${bd.total}</span></span>`)
-          .join("");
-        showTip(cell, s.label, `${s.desc}<span class="zbd">${rows}</span>`);
-      };
-      statsRow.appendChild(cell);
-    }
-
-    const abilHdr = document.createElement("div");
-    abilHdr.className = "zsec-h";
-    abilHdr.textContent = "Abilities";
-    const abilRow = document.createElement("div");
-    abilRow.className = "zrow zabils";
-    // A zombie shows its GROUP's one ability per tier, for tiers 1..(colour-class
-    // rank): Green=t1, Blue=t1-2, Red=t1-3, Silver+ = t1-4 (so never more than 4).
-    // An ability that's been unlocked shows the real icon; still-locked ones show a
-    // padlock naming the boss. Some groups (Small) have no ability at low tiers, so
-    // their abilities only appear on higher-class units.
-    const rank = Math.min(MAX_ABILITY_TIER, classTierRank(info.className));
-    for (let t = 1; t <= rank; t++) {
-      const key = unitAbilityAt(info.key, info.group, t);
-      if (!key) continue; // no ability at this tier for this unit
-      const meta = ABILITY_POOL[key];
-      if (!meta) continue;
-      const cell = document.createElement("button");
-      cell.style.backgroundImage = `url(${ABILITY_FRAME})`;
-      if (this.state.abilityUnlocked(key)) {
-        cell.className = "zabil";
-        cell.innerHTML = `<img src="${meta.icon}" alt="">`;
-        cell.onclick = (e) => {
-          e.stopPropagation();
-          // Skip the effect line when it just repeats the name (stat buffs).
-          const body = meta.effect && meta.effect !== meta.label
-            ? `<span class="zeff">${meta.effect}</span> ${meta.desc}`
-            : meta.desc;
-          showTip(cell, meta.label, body);
-        };
-      } else {
-        cell.className = "zabil locked";
-        cell.innerHTML = `<span class="zlock">🔒</span>`;
-        const boss = TIER_BOSS[t];
-        cell.onclick = (e) => {
-          e.stopPropagation();
-          showTip(cell, meta.label, `Defeat ${boss} to unlock this ability.`);
-        };
-      }
-      abilRow.appendChild(cell);
-    }
-    if (!abilRow.childElementCount) {
-      const none = document.createElement("div");
-      none.className = "zabil-none";
-      none.textContent = "No abilities at this rank.";
-      abilRow.appendChild(none);
-    }
-
-    right.append(statsHdr, statsRow, abilHdr, abilRow);
-    wrap.append(card, right);
-    return wrap;
-  }
-
+  /** Single-zombie inspect modal (used by main.ts taps and the Mausoleum). */
   openZombieInfo(info: ZombieInfo, refresh?: () => void) {
-    const { panel, close } = openModal({ host: this.el, panelClass: "zpanel" });
-
-    const wrap = this.buildZombieCard(info, panel);
-    panel.append(wrap);
-    if (info.id) panel.appendChild(this.buildZombieActions(info, close, refresh));
-  }
-
-  private buildZombieActions(info: ZombieInfo, close: () => void, refresh?: () => void): HTMLElement {
-    const btns = document.createElement("div");
-    btns.className = "zbtns";
-    const mk = (label: string, cls: string, enabled: boolean, fn: () => void | Promise<void>, reopen = true) => {
-      const button = document.createElement("button");
-      button.className = `zbtn ${cls}`;
-      button.textContent = label;
-      button.disabled = !enabled;
-      button.onclick = async () => {
-        button.disabled = true;
-        close();
-        await fn();
-        if (reopen) refresh?.();
-      };
-      return button;
-    };
-    if (info.stored) {
-      const canDeploy = this.canDeployZombie ? this.canDeployZombie() : true;
-      btns.appendChild(mk(canDeploy ? "Deploy to farm" : "Farm full", "deploy", canDeploy,
-        () => this.onZombieDeploy?.(info.id!)));
-    } else {
-      const canStore = this.canStoreZombies ? this.canStoreZombies() : true;
-      btns.appendChild(mk("Locate", "locate", true, () => this.onZombieLocate?.(info.id!), false));
-      btns.appendChild(mk(canStore ? "Store" : "Need Mausoleum", "store", canStore,
-        () => this.onZombieStore?.(info.id!)));
-    }
-    const value = zombieSellValue(
-      this.zombieBaseCost?.(info.key) ?? 0,
-      this.zombieCostsBrains?.(info.key) ?? false
-    );
-    const sell = document.createElement("button");
-    sell.className = "zbtn sell";
-    sell.textContent = "Sell";
-    sell.onclick = () => {
-      close();
-      this.openZombieSellChoices(info, value, refresh);
-    };
-    btns.appendChild(sell);
-    return btns;
-  }
-
-  private openZombieSellChoices(info: ZombieInfo, value: number, refresh?: () => void) {
-    if (!this.socialOnline?.()) { this.confirmSellZombie(info, value, refresh); return; }
-    const { panel, close } = openModal({ host: this.el, panelClass: "confirm-panel", title: "Sell this zombie" });
-    const message = document.createElement("p");
-    message.className = "confirm-msg";
-    message.textContent = "Sell immediately for gold, or create a Black Market post for brains.";
-    const actions = document.createElement("div");
-    actions.className = "zbtns";
-    const gold = document.createElement("button");
-    gold.className = "zbtn sell";
-    gold.textContent = `Sell now +${value}g`;
-    gold.onclick = () => { close(); this.confirmSellZombie(info, value, refresh); };
-    const market = document.createElement("button");
-    market.className = "zbtn deploy";
-    market.textContent = "Sell on Black Market";
-    market.onclick = () => { close(); this.openBlackMarket("SELL_ZOMBIE", info.id); };
-    actions.append(gold, market);
-    panel.append(message, actions);
-  }
-
-  // Confirmation window for selling a zombie. Names the unit, shows the gold it
-  // fetches, and warns that the sale is permanent — so a valuable zombie is not
-  // sold by a single stray tap. Confirm sells; Cancel backs out to the roster.
-  private confirmSellZombie(info: ZombieInfo, value: number, refresh?: () => void) {
-    const { panel, close } = openModal({ host: this.el, panelClass: "confirm-panel", title: "Sell this zombie?" });
-
-    const por = document.createElement("div");
-    por.className = "obj-por";
-    if (info.portrait) por.style.backgroundImage = `url(${info.portrait})`;
-    const msg = document.createElement("p");
-    msg.className = "confirm-msg";
-    msg.append("Sell ");
-    const zombieName = document.createElement("b"); zombieName.textContent = info.name;
-    const valueText = document.createElement("b"); valueText.textContent = `+${value}g`;
-    msg.append(zombieName, ` (${info.typeName}) for `, valueText, "?", document.createElement("br"));
-    const warning = document.createElement("span");
-    warning.className = "confirm-warn";
-    warning.textContent = "This is permanent — the zombie is gone for good.";
-    msg.appendChild(warning);
-
-    const btns = document.createElement("div");
-    btns.className = "zbtns";
-    const cancel = document.createElement("button");
-    cancel.className = "zbtn locate";
-    cancel.textContent = "Cancel";
-    cancel.onclick = () => close();
-    const confirm = document.createElement("button");
-    confirm.className = "zbtn sell";
-    confirm.textContent = `Sell +${value}g`;
-    confirm.onclick = async () => {
-      confirm.disabled = true;
-      close();
-      await this.onZombieSell?.(info.id!);
-      refresh?.();
-    };
-    btns.append(cancel, confirm);
-
-    panel.append(por, msg, btns);
+    openZombieInfoPanel(this, info, refresh);
   }
 
   // Info popup for the crop/zombie still growing in the plot at (col,row): its
@@ -3775,64 +3457,10 @@ export class Hud {
     if (boost) panel.append(grow);
   }
 
-  /** Convert a roster entry into the inspectable ZombieInfo shape. */
-  private rosterInfo(z: RosterEntry): ZombieInfo {
-    return {
-      name: z.name, typeName: z.typeName, key: z.key, group: z.group,
-      className: z.className, classColor: z.classColor,
-      str: z.str * this.state.farmerZombieStrengthMult(), dex: z.dex,
-      con: z.con * this.state.farmerZombieLifeMult(), focus: z.focus, mutation: z.mutation,
-      invasions: z.invasions,
-      portrait: this.zombiePortraitOf ? this.zombiePortraitOf(z.key) : "",
-      color: z.color,
-      id: z.id, stored: z.stored,
-    };
-  }
-
-  // The "Zombies" tab (right bar): a scrollable list where every owned zombie is
-  // represented by its full inspect card (the same one shown when tapping a zombie).
-  openZombieList() {
-    // position:relative host (zl-panel) for card tooltips
-    const { panel, close } = openModal({
-      host: this.el, bgClass: "zl-bg", panelClass: "zl-panel", replaceSelector: ".zl-bg",
-    });
-
-    const head = document.createElement("div");
-    head.className = "zr-head";
-    const list = document.createElement("div");
-    list.className = "zl-list";
-    panel.append(head, list);
-
-    // Show the complete owned roster here as a safety net for earned zombies. A boss
-    // reward sent to storage remains visible and deployable even before the player
-    // opens (or has room in) the physical Mausoleum panel.
-    const roster = this.getRoster ? this.getRoster() : [];
-    const onFarm = roster.filter((r) => !r.stored).length;
-    const stored = roster.length - onFarm;
-    const title = document.createElement("h2");
-    title.textContent = "Your Zombies";
-    const cnt = document.createElement("span");
-    cnt.className = "zr-total";
-    cnt.textContent = `${onFarm} on farm${stored ? ` · ${stored} stored` : ""}`;
-    head.append(title, cnt);
-
-    if (!roster.length) {
-      const e = document.createElement("div");
-      e.className = "zr-empty";
-      e.textContent = "You do not own any zombies yet.";
-      list.appendChild(e);
-      return;
-    }
-    for (const z of roster) {
-      const row = document.createElement("div");
-      // Use the exact same panel/card composition as the single-zombie modal;
-      // the Zombies menu only adds the vertically scrolling list around it.
-      row.className = "panel zpanel zl-row";
-      const info = this.rosterInfo(z);
-      row.appendChild(this.buildZombieCard(info, panel));
-      row.appendChild(this.buildZombieActions(info, close, () => this.openZombieList()));
-      list.appendChild(row);
-    }
+  // The "Zombies" tab (right bar): the My Zombies roster + the Zombie Almanac
+  // collection, both rendered by ui/panels/zombies.ts.
+  openZombieList(tab: ZombiesPanelTab = "roster") {
+    openZombiesPanel(this, tab);
   }
 
   // The Mausoleum (tap the building): a fixed set of storage slots. Filled slots
@@ -3868,7 +3496,7 @@ export class Hud {
       for (let i = 0; i < Math.max(cap, stored.length); i++) {
         const z = stored[i];
         if (z) {
-          grid.appendChild(this.buildRosterCard(z, () => this.openZombieInfo(this.rosterInfo(z), render)));
+          grid.appendChild(buildRosterCard(this, z, () => this.openZombieInfo(rosterInfo(this, z), render)));
         } else {
           const slot = document.createElement("div");
           slot.className = "zr-card zr-slot-empty";
@@ -3909,7 +3537,7 @@ export class Hud {
     }
     for (const z of onFarm) {
       grid.appendChild(
-        this.buildRosterCard(z, async () => {
+        buildRosterCard(this, z, async () => {
           await this.onZombieStore?.(z.id);
           close();
           afterStore();
@@ -4150,36 +3778,6 @@ export class Hud {
   }
 
   /** A framed zombie tile (storage-shed slot style). `onClick` is the tap action. */
-  private buildRosterCard(z: RosterEntry, onClick: () => void): HTMLElement {
-    const card = document.createElement("div");
-    card.className = "zr-card";
-    const por = document.createElement("div");
-    por.className = "zr-por"; // framed slot (matches the storage-shed item tiles)
-    const portrait = this.zombiePortraitOf ? this.zombiePortraitOf(z.key) : "";
-    const pim = document.createElement("img");
-    pim.className = "zr-por-img";
-    if (portrait) pim.src = portrait;
-    por.appendChild(pim);
-    // Show the SAME rig the inspect card shows: the static species portrait first,
-    // replaced by this individual's mutation-aware render once it is available. The
-    // Mausoleum grid used to keep the species art, so a stored mutant looked plain.
-    if (this.zombieMutationPortraitOf) {
-      void this.zombieMutationPortraitOf(z.key, z.mutation, z.color)
-        .then((mutated) => { if (pim.isConnected) pim.src = mutated; })
-        .catch(() => { /* retain the static species portrait */ });
-    }
-    const name = document.createElement("div");
-    name.className = "zr-name";
-    name.textContent = z.name;
-    const cls = document.createElement("span");
-    cls.className = "zr-cls";
-    cls.textContent = z.className;
-    cls.style.background = z.classColor;
-    card.append(por, name, cls);
-    card.onclick = onClick;
-    return card;
-  }
-
   // ---- Raids / Invasions ----
   /** In-game confirmation for purchasing the cooldown-bypass ticket. The purchase
    *  remains a normal catalog buy; `onBought` advances to army ordering only after

@@ -191,6 +191,7 @@ export class ZombieField {
     // omitted, a market mutant grows in with its guaranteed bit.
     const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutation);
     const unit = this.addUnit(data);
+    this.state.recordZombieDiscovered(data.key);
     this.syncCount();
     return unit;
   }
@@ -210,6 +211,7 @@ export class ZombieField {
       if (!def) return null;
       const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutation);
       this.stored.push(data);
+      this.state.recordZombieDiscovered(data.key);
       return data;
     } finally {
       this.harvesting = false;
@@ -417,6 +419,7 @@ export class ZombieField {
       // preserve the earned zombie in the Mausoleum instead of dropping the reward.
       if (serverStored !== true && this.canAdd()) { this.addUnit(data); this.syncCount(); }
       else this.stored.push(data);
+      this.state.recordZombieDiscovered(data.key);
     } finally { this.harvesting = false; }
     return data;
   }
@@ -454,6 +457,7 @@ export class ZombieField {
     // two parents), NOT the generic onGrant — so suppress the latter while adding.
     this.combining = true;
     this.addUnit(data);
+    this.state.recordZombieDiscovered(data.key);
     this.syncCount();
     this.combining = false;
     if (this.rosterLive) {
@@ -756,6 +760,11 @@ export class ZombieField {
         const data = makeOwned(save.id, def, source?.col ?? 0, source?.row ?? 0, save.invasions, save.mutation, source?.color, source?.name);
         if (save.stored) this.stored.push(data);
         else this.addUnit(data);
+        // A server unit with no local counterpart arriving AFTER go-live is a real
+        // acquisition this client never created itself (e.g. a Black Market
+        // purchase reconciled from the authoritative roster) — count it for the
+        // Almanac. Pre-live reconciles are the initial bootstrap, not new grants.
+        if (this.rosterLive && !source) this.state.recordZombieDiscovered(data.key);
       }
     } finally {
       this.harvesting = false;

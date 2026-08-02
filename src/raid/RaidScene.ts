@@ -432,7 +432,13 @@ export class RaidScene {
   // Top-left ability strip: tappable activated moves (Bash/Smash/Explode/Mini) with
   // ready-count badges, plus static team-passive icons (Heal/Protect/Chivalry/…).
   private abilityStrip = new Container();
-  private abilityCells: { key: string; cell: Container; badge?: Text; activated: boolean }[] = [];
+  private abilityCells: {
+    key: string;
+    cell: Container;
+    badge?: Text;
+    badgeDot?: Graphics;
+    activated: boolean;
+  }[] = [];
 
   // Focus bubble hovering over the charging zombie: the source game's own thought-
   // bubble art — a butterfly while distracted (tap to refocus), a brain when the
@@ -717,7 +723,7 @@ export class RaidScene {
   }
 
   /** One ability cell: a framed icon. Activated cells are tappable (fire the move
-   *  on one ready zombie) and carry a ready-count badge; team cells are static. */
+   *  on one ready zombie); every cell can carry a deployed/ready count badge. */
   private makeAbilityCell(key: string, tex: Texture | null, activated: boolean) {
     const R = 22;
     const cell = new Container();
@@ -733,8 +739,10 @@ export class RaidScene {
       cell.addChild(sp);
     }
     let badge: Text | undefined;
-    if (activated) {
+    let badgeDot: Graphics | undefined;
+    {
       const dot = new Graphics().circle(R - 4, -R + 4, 9).fill(0xc0392b);
+      badgeDot = dot;
       badge = new Text({
         text: "0",
         style: { fontFamily: "sans-serif", fontSize: 12, fontWeight: "800", fill: 0xffffff },
@@ -742,17 +750,22 @@ export class RaidScene {
       badge.anchor.set(0.5);
       badge.position.set(R - 4, -R + 4);
       cell.addChild(dot, badge);
-      cell.eventMode = "static";
-      cell.cursor = "pointer";
-      cell.on("pointertap", () => {
-        if (this.sim.finished) return;
-        if (this.sim.activate(key)) {
-          this.recordInput({ type: "ability", abilityKey: key });
-          cell.scale.set(0.86); // tap feedback (eased back in layout)
-        }
-      });
+      if (!activated) {
+        dot.visible = false;
+        badge.visible = false;
+      } else {
+        cell.eventMode = "static";
+        cell.cursor = "pointer";
+        cell.on("pointertap", () => {
+          if (this.sim.finished) return;
+          if (this.sim.activate(key)) {
+            this.recordInput({ type: "ability", abilityKey: key });
+            cell.scale.set(0.86); // tap feedback (eased back in layout)
+          }
+        });
+      }
     }
-    return { cell, badge };
+    return { cell, badge, badgeDot };
   }
 
   /** A circular framed portrait badge for a team bar (feet-agnostic head-ish crop). */
@@ -1726,23 +1739,24 @@ export class RaidScene {
     if (this.abilityRefreshMs <= 0 || resized) {
       this.abilityRefreshMs = 150;
       const status = new Map(this.sim.activatedStatus().map((s) => [s.key, s.ready]));
-      const deployedAbilityKeys = new Set(
-        this.sim.units
-          .filter((u) => u.team === "player" && u.alive &&
-            (u.state === "advance" || u.state === "fight"))
-          .flatMap((u) => u.abilities)
-      );
+      const teamStatus = new Map(this.sim.teamAbilityStatus().map((s) => [s.key, s.count]));
       let visibleAbilityIndex = 0;
       this.abilityCells.forEach((c) => {
         // Activated moves retain their authored timing (Mini Buddy is chosen during
         // deployment). Passive team effects such as Chivalry and Grace appear only
         // once a carrier has actually advanced onto the battlefield.
-        c.cell.visible = c.activated || deployedAbilityKeys.has(c.key);
+        const deployedCount = teamStatus.get(c.key) ?? 0;
+        c.cell.visible = c.activated || deployedCount > 0;
         if (c.cell.visible) c.cell.y = visibleAbilityIndex++ * CELL;
         if (c.activated) {
           const ready = status.get(c.key) ?? 0;
           if (c.badge) c.badge.text = String(ready);
           c.cell.alpha = ready > 0 ? 1 : 0.5;
+        } else if (c.badge) {
+          c.badge.text = String(deployedCount);
+          c.badge.visible = deployedCount > 1;
+          if (c.badgeDot) c.badgeDot.visible = deployedCount > 1;
+          c.cell.alpha = 1;
         }
       });
     }

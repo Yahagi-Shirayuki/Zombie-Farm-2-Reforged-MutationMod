@@ -177,6 +177,18 @@ export interface CombatUnit {
   /** Fractional damage reduction 0..1, applied after armor (binary
    *  `finalDamageReduction`). 0/absent = none. */
   damageReduction?: number;
+  /** Pre-team-aura stats plus the additive contribution from one matching deployed
+   *  carrier. BattleSim uses this to turn Chivalry/Grace/Protect/Fortitude on only
+   *  while their holder is actually deployed; headless/instant resolvers can keep
+   *  using the already-combined public stats above. */
+  teamAuraStats?: {
+    baseStr: number;
+    baseDex: number;
+    baseCon: number;
+    strPerCarrier: number;
+    dexPerCarrier: number;
+    conPerCarrier: number;
+  };
   /** Walking-only multiplier. Turbo Walking Speed changes this without changing
    *  DEX or the attack interval. */
   walkingSpeedMult?: number;

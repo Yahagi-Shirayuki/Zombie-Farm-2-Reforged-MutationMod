@@ -24,7 +24,7 @@ export const VALENTINES_DAY_RAID_ID = 11;
 
 export const EVENT_ZOMBIE_DROP_RATE = 0.8 / 100;
 
-const RAID_ZOMBIE_DROPS: Readonly<Record<number, RaidZombieDrop>> = {
+export const RAID_ZOMBIE_DROPS: Readonly<Record<number, RaidZombieDrop>> = {
   [OLD_MC_ZOMBIE_RAID_ID]: {
     key: OLD_MC_ZOMBIE_KEY,
     name: OLD_MC_ZOMBIE_NAME,

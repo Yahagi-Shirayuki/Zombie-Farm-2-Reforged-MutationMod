@@ -272,6 +272,25 @@ describe("buildPlayerUnits — binary-authentic zombie abilities", () => {
     expect(buffed.maxHp).toBeCloseTo(solo.maxHp * 1.10);
   });
 
+  it("stacks duplicate Chivalry and Grace carriers additively", () => {
+    const girl = owned("girl", "Female", "Green");
+    const knightA = owned("knight-a", "Regular", "Blue");
+    const knightB = owned("knight-b", "Regular", "Blue");
+    const regular = owned("regular", "Regular", "Green");
+    const graceA = owned("grace-a", "Female", "Blue");
+    const graceB = owned("grace-b", "Female", "Blue");
+    const girlSolo = buildPlayerUnits([girl], { abilityUnlocked: unlocked })[0];
+    const regularSolo = buildPlayerUnits([regular], { abilityUnlocked: unlocked })[0];
+    const [buffedGirl] = buildPlayerUnits([girl, knightA, knightB], { abilityUnlocked: unlocked });
+    const [buffedRegular] = buildPlayerUnits([regular, graceA, graceB], { abilityUnlocked: unlocked });
+    expect(buffedGirl.str).toBeCloseTo(girlSolo.str * 1.20);
+    expect(buffedGirl.dex).toBeCloseTo(girlSolo.dex * 1.20);
+    expect(buffedGirl.maxHp).toBeCloseTo(girlSolo.maxHp * 1.20);
+    expect(buffedRegular.str).toBeCloseTo(regularSolo.str * 1.20);
+    expect(buffedRegular.dex).toBeCloseTo(regularSolo.dex * 1.20);
+    expect(buffedRegular.maxHp).toBeCloseTo(regularSolo.maxHp * 1.20);
+  });
+
   it("Protect reduces damage for every group except Headless", () => {
     const regular = owned("regular", "Regular", "Green");
     const headless = owned("protector", "Headless", "Blue");
@@ -280,12 +299,29 @@ describe("buildPlayerUnits — binary-authentic zombie abilities", () => {
     expect(built[1].damageReduction).toBe(0);
   });
 
+  it("stacks duplicate Protect carriers additively", () => {
+    const regular = owned("regular", "Regular", "Green");
+    const protectA = owned("protector-a", "Headless", "Blue");
+    const protectB = owned("protector-b", "Headless", "Blue");
+    const [buffed] = buildPlayerUnits([regular, protectA, protectB], { abilityUnlocked: unlocked });
+    expect(buffed.damageReduction).toBeCloseTo(0.40);
+  });
+
   it("Fortitude gives Headless zombies 10% Life", () => {
     const headless = owned("headless", "Headless", "Green");
     const garden = owned("garden", "Garden", "Blue");
     const solo = buildPlayerUnits([headless], { abilityUnlocked: unlocked })[0];
     const [buffed] = buildPlayerUnits([headless, garden], { abilityUnlocked: unlocked });
     expect(buffed.maxHp).toBeCloseTo(solo.maxHp * 1.10);
+  });
+
+  it("stacks duplicate Fortitude carriers additively", () => {
+    const headless = owned("headless", "Headless", "Green");
+    const gardenA = owned("garden-a", "Garden", "Blue");
+    const gardenB = owned("garden-b", "Garden", "Blue");
+    const solo = buildPlayerUnits([headless], { abilityUnlocked: unlocked })[0];
+    const [buffed] = buildPlayerUnits([headless, gardenA, gardenB], { abilityUnlocked: unlocked });
+    expect(buffed.maxHp).toBeCloseTo(solo.maxHp * 1.20);
   });
 
   it("Turbo doubles walking only, without changing DEX or attack cadence", () => {

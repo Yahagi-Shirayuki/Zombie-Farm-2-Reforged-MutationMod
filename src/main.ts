@@ -13,6 +13,7 @@ import { WalkController } from "./WalkController";
 import { ZombieField } from "./zombie/ZombieField";
 import { makeOwned, type OwnedZombie } from "./zombie/types";
 import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
+import { almanacEntries, obtainHint } from "./zombie/almanac";
 import { POT_DURATION_MS } from "./zombie/ZombiePot";
 import { GameState } from "./GameState";
 import { takeStoredObject } from "./storedObjectOwnership";
@@ -2102,6 +2103,26 @@ async function main() {
   // Zombies are stored in the Mausoleum (capped at mausoleumCap slots); the army
   // cap limits only the count deployed on the farm.
   hud.getRoster = () => zombies.roster();
+  // Zombie Almanac: every obtainable species with its lifetime-obtained count.
+  // Base catalog stats only — deliberately no farmer/veterancy/mutation modifiers.
+  const almanacSources = {
+    raidNameById: (raidId: number) => assets.raids.find((raid) => raid.id === raidId)?.name,
+    epicBossNameByQuestId: (questId: string) =>
+      EPIC_BOSSES.find((boss) => boss.questIds.includes(questId))?.name,
+  };
+  hud.getAlmanac = () =>
+    almanacEntries(assets.zombies, state.zombieDiscovered).map((def) => ({
+      key: def.key,
+      name: def.name,
+      portrait: zombiePortrait(def.key),
+      group: def.group,
+      className: def.className,
+      classColor: def.classColor,
+      category: def.category,
+      str: def.str, dex: def.dex, con: def.con, focus: def.focus,
+      obtained: state.zombieDiscovered[def.key] ?? 0,
+      hint: obtainHint(def, almanacSources),
+    }));
   hud.zombiePortraitOf = (key) => zombiePortrait(key);
   hud.mausoleumCap = zombies.mausoleumCap;
   hud.canStoreZombies = () => !!field.mausoleumId() && !zombies.mausoleumFull;

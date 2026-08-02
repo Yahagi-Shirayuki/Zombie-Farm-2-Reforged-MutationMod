@@ -36,7 +36,9 @@ import {
   ALIEN_LASER_DAMAGE,
   applyDamage,
   BURN_MAX_HP_FRACTION_PER_SEC,
+  deriveAttackIntervalMs,
   deriveHitDamage,
+  deriveMaxHp,
   SOURCE_FRAME_SEC,
   lineupDamageBand,
   lineupSpeedBand,
@@ -293,6 +295,9 @@ export interface SimUnit {
   hp: number;
   maxHp: number;
   damageReduction: number;
+  teamAuraStats: CombatUnit["teamAuraStats"] | null;
+  attackMultiplier: number;
+  walkingSpeedMult: number;
   alive: boolean;
   oneShotProtectionUsed: boolean; // remains consumed through healing and replay checkpoints
   state: UnitState;
@@ -497,6 +502,9 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     hp: Math.max(0, Math.min(u.maxHp, u.hp)),
     maxHp: u.maxHp,
     damageReduction: u.damageReduction ?? 0,
+    teamAuraStats: u.teamAuraStats ? { ...u.teamAuraStats } : null,
+    attackMultiplier: mult,
+    walkingSpeedMult: u.walkingSpeedMult ?? 1,
     alive: true,
     oneShotProtectionUsed: false,
     state: isPlayer ? "waiting" : "queued",
@@ -685,11 +693,16 @@ export class BattleSim {
       ...new Set(this.players.flatMap((p) => p.abilities.filter((k) => !!ACTIVATED_ABILITY[k]))),
     ];
     this.teamKeys = [...new Set(this.players.flatMap((p) => teamAbilitiesIn(p.abilities)))];
+    this.refreshTeamAuras();
   }
 
   snapshot(): BattleSimSnapshot {
     return {
-      units: this.units.map((u) => ({ ...u, abilities: [...u.abilities] })),
+      units: this.units.map((u) => ({
+        ...u,
+        abilities: [...u.abilities],
+        teamAuraStats: u.teamAuraStats ? { ...u.teamAuraStats } : null,
+      })),
       projectiles: this.projectiles.map((p) => ({ ...p })),
       bossId: this.boss?.id ?? null,
       actionCd: this.actionCd,
@@ -722,6 +735,9 @@ export class BattleSim {
     this.units.splice(0, this.units.length, ...snapshot.units.map((u) => ({
       ...u,
       abilities: [...u.abilities],
+      teamAuraStats: u.teamAuraStats ? { ...u.teamAuraStats } : null,
+      attackMultiplier: u.attackMultiplier ?? Math.max(0.1, u.power ? u.damage / u.power : 1),
+      walkingSpeedMult: u.walkingSpeedMult ?? 1,
       healCastSeq: u.healCastSeq ?? 0,
       healAoeTimerMs: u.healAoeTimerMs ??
         (u.abilities.includes("healAOE") ? HEAL_AOE_MS : 0),
@@ -827,6 +843,47 @@ export class BattleSim {
       key,
       ready: this.players.filter((p) => this.readyToActivate(p, key)).length,
     }));
+  }
+
+  /** Active deployed-holder count per team ability. Waiting, dead, grabbed, and
+   *  carried zombies do not project team effects. */
+  teamAbilityStatus(): { key: string; count: number }[] {
+    const deployed = this.players.filter(
+      (p) => p.alive && (p.state === "advance" || p.state === "fight")
+    );
+    return this.teamKeys.map((key) => ({
+      key,
+      count: deployed.filter((p) => p.abilities.includes(key)).length,
+    }));
+  }
+
+  /** Recompute type auras from currently deployed carriers. Their source behavior
+   *  adds percentages, so two holders contribute +20%, three +30%, and so on. */
+  private refreshTeamAuras(): void {
+    const counts = new Map(this.teamAbilityStatus().map(({ key, count }) => [key, count]));
+    const chivalry = counts.get("chivalry") ?? 0;
+    const grace = counts.get("grace") ?? 0;
+    const protect = counts.get("protect") ?? 0;
+    const fortitude = counts.get("tankHitPointsBuff") ?? 0;
+    for (const p of this.players) {
+      const stats = p.teamAuraStats;
+      p.damageReduction = p.group === "Headless" ? 0 : Math.min(0.95, protect * 0.20);
+      if (!stats) continue;
+      const statCarriers = p.group === "Female" ? chivalry : p.group === "Regular" ? grace : 0;
+      const lifeCarriers = statCarriers + (p.group === "Headless" ? fortitude : 0);
+      const oldMaxHp = p.maxHp;
+      const oldCooldown = p.cooldownMs;
+      const str = stats.baseStr + stats.strPerCarrier * statCarriers;
+      const dex = stats.baseDex + stats.dexPerCarrier * statCarriers;
+      const con = stats.baseCon + stats.conPerCarrier * lifeCarriers;
+      p.maxHp = Math.max(1, Math.round(deriveMaxHp(con)));
+      p.hp = Math.max(0, Math.min(p.maxHp, p.hp + (p.maxHp - oldMaxHp)));
+      p.power = str * POWER_PER_STR;
+      p.damage = Math.max(1, Math.round(deriveHitDamage(p.power, p.attackMultiplier)));
+      p.cooldownMs = deriveAttackIntervalMs(dex, "player");
+      if (oldCooldown > 0 && p.timerMs > 0) p.timerMs *= p.cooldownMs / oldCooldown;
+      p.moveSpeed = advanceSpeed(dex) * p.walkingSpeedMult;
+    }
   }
 
   /** Trigger an activated move on ONE eligible zombie (the front-most). Returns
@@ -1163,7 +1220,8 @@ export class BattleSim {
   private tryResurrect(defeated: SimUnit): boolean {
     if (this.isSmall(defeated)) return false;
     const healer = this.players.find(
-      (p) => p.alive && p.abilities.includes("ressurect") && !p.resurrectUsed
+      (p) => p.alive && (p.state === "advance" || p.state === "fight") &&
+        p.abilities.includes("ressurect") && !p.resurrectUsed
     );
     if (!healer) return false;
     healer.resurrectUsed = true;
@@ -1372,6 +1430,7 @@ export class BattleSim {
     for (const g of this.grabbers) g.struckThisTick = false;
 
     this.promote(dtMs);
+    this.refreshTeamAuras();
     this.stepEnrage(dtMs);
 
     // Throws and specials draw from ONE action budget (ground truth: the boss rolls a

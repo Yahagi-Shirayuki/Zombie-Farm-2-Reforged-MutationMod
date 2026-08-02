@@ -14,6 +14,7 @@ import { epicBossById } from "../epicBoss/catalog";
 import { GAMEPLAY_PROTOCOL } from "../net/protocol";
 import { epicBossRunToClient, serverTimestampToClient } from "../net/clock";
 import { reconcileTutorialCompletion } from "../tutorial/steps";
+import { backfillDiscovered, sanitizeDiscovered } from "../zombie/almanac";
 import type { PlayMode } from "../playMode";
 import type { JobSystem } from "../JobSystem";
 
@@ -38,6 +39,9 @@ type PresentationData = {
   zombiePots?: SaveGame["zombiePots"];
   tutorial?: SaveGame["tutorial"];
   ui?: { attackOrder?: string[] };
+  /** Zombie Almanac lifetime-discovery counts. Cosmetic and client-authored, so
+   * online it rides the presentation blob rather than a server table. */
+  almanac?: SaveGame["almanac"];
 };
 type ObjectLayout = NonNullable<PresentationData["objectLayout"]>[number];
 
@@ -202,6 +206,7 @@ export class SaveManager {
       epicBoss: this.state.epicBossRun ?? undefined,
       social: { friends: this.state.friends },
       tutorial: this.state.tutorial,
+      almanac: { discovered: this.state.zombieDiscovered },
       ...(farmJobs ? { farmJobs } : {}),
     };
   }
@@ -237,6 +242,7 @@ export class SaveManager {
       zombiePots: blob.zombiePots,
       tutorial: blob.tutorial,
       ui: { attackOrder: blob.raids?.attackOrder ?? [] },
+      almanac: blob.almanac,
     };
   }
 
@@ -513,6 +519,7 @@ export class SaveManager {
       epicBoss: epicBossRunToClient(boot.gameplay.epicBoss, boot.serverTime, clientTime) ?? undefined,
       social: { friends: boot.social.friends.map((friend) => ({ id: friend.accountId, name: friend.name, addedAt: boot.serverTime, giftsSent: 0 })) },
       tutorial: reconcileTutorialCompletion(p.tutorial, boot.gameplay.tutorialRewarded),
+      almanac: p.almanac,
       farmJobs: this.readJobJournal(),
     };
   }
@@ -574,6 +581,13 @@ export class SaveManager {
     this.state.epicBossRun = data.epicBoss ? { ...data.epicBoss, attackOrder: [...data.epicBoss.attackOrder] } : null;
     this.state.friends = (data.social?.friends ?? []).map((friend) => ({ ...friend, giftsSent: friend.giftsSent ?? 0 }));
     this.state.tutorial = data.tutorial;
+    // Almanac discovery counts. A save written before the Almanac existed has
+    // none — seed them from the roster it carries, so a long-running farm does
+    // not open its collection to a wall of silhouettes it obviously earned.
+    const discovered = sanitizeDiscovered(data.almanac?.discovered);
+    this.state.zombieDiscovered = Object.keys(discovered).length
+      ? discovered
+      : backfillDiscovered(data.ownedZombies ?? []);
     if (data.farm.w && data.farm.h) this.field.resize(data.farm.w, data.farm.h);
     this.state.ownedClimates = data.farm.ownedClimates ?? ["grass"];
     if (!this.state.ownedClimates.includes("grass")) this.state.ownedClimates.unshift("grass");

@@ -82,6 +82,26 @@ export interface ZombieInfo {
   stored?: boolean;
 }
 
+// One species entry in the Zombie Almanac (the Zombies menu's collection tab).
+export interface AlmanacEntryView {
+  key: string;
+  name: string;
+  portrait: string;
+  group: string;
+  className: string;
+  classColor: string;
+  category: "normal" | "special" | "mutant";
+  // BASE stats straight from the catalog — no farmer/veterancy/mutation modifiers.
+  str: number;
+  dex: number;
+  con: number;
+  focus: number;
+  /** Lifetime obtained count. 0 = undiscovered (rendered as a silhouette). */
+  obtained: number;
+  /** How to acquire this species — the only detail an undiscovered entry reveals. */
+  hint: string;
+}
+
 // Object-tap action popup (Move / Store / Sell) for a placed farm object.
 export interface ObjectActions {
   name: string;

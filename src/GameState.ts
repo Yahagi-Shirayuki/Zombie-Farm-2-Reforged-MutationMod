@@ -29,6 +29,11 @@ export class GameState {
   storageItemCap = 8; // Shabby Shed default; a bigger shed raises it (+8/tier)
   storedItems: { key: string; count: number }[] = [];
   received: string[] = []; // raid loot, unlimited
+  // ---- Zombie Almanac: lifetime obtained count per species key ----
+  // Cosmetic collection data. Incremented by ZombieField at every unit-creation
+  // path (grow, Pot, reward, Black Market, gift); never decremented — selling or
+  // losing a zombie does not un-discover its species.
+  zombieDiscovered: Record<string, number> = {};
   // ---- ground/climate skins owned (Market Upgrade → Ground) ----
   // "grass" is the free default; buying a skin adds its terrain key here so it can
   // be re-applied for free later. The current applied skin lives on Field.climate.
@@ -294,6 +299,12 @@ export class GameState {
     if (e.count <= 0) this.storedItems.splice(idx, 1);
     this.emit();
     return true;
+  }
+
+  /** Record one obtained zombie of `key` in the Almanac's lifetime counter. */
+  recordZombieDiscovered(key: string) {
+    this.zombieDiscovered[key] = (this.zombieDiscovered[key] ?? 0) + 1;
+    this.emit();
   }
 
   /** Add a looted/rewarded item to the Received bucket (unlimited). */

@@ -205,11 +205,14 @@ export function buildPlayerUnits(
     const bCon = lvl == null ? rawCon : levelScaleStat(z.group, "con", rawCon, lvl);
     const statAura = z.group === "Female" ? chivalry : z.group === "Regular" ? grace : 0;
     const lifeAura = statAura + (z.group === "Headless" ? fortitude : 0);
-    const str = bStr * v * eff.allStatsMult * eff.selfDamageMult * (1 + statAura * 0.10) *
-      (opts.farmerStrengthMult ?? 1) + mut.str;
-    const dex = bDex * v * eff.allStatsMult * eff.selfSpeedMult * (1 + statAura * 0.10) + mut.dex;
-    const con = bCon * v * eff.allStatsMult * eff.selfHpMult * (1 + lifeAura * 0.10) *
-      (opts.farmerLifeMult ?? 1) + mut.con;
+    const auraBaseStr = bStr * v * eff.allStatsMult * eff.selfDamageMult *
+      (opts.farmerStrengthMult ?? 1);
+    const auraBaseDex = bDex * v * eff.allStatsMult * eff.selfSpeedMult;
+    const auraBaseCon = bCon * v * eff.allStatsMult * eff.selfHpMult *
+      (opts.farmerLifeMult ?? 1);
+    const str = auraBaseStr * (1 + statAura * 0.10) + mut.str;
+    const dex = auraBaseDex * (1 + statAura * 0.10) + mut.dex;
+    const con = auraBaseCon * (1 + lifeAura * 0.10) + mut.con;
     const focus = base * v * eff.allStatsMult;
     // Distraction resistance keys off the unit's real focus stat. Damage abilities
     // are already part of finalPower (`str`) so lasers and healing see them too.
@@ -224,6 +227,14 @@ export function buildPlayerUnits(
     u.className = z.className;
     u.mutation = z.mutation;
     u.damageReduction = z.group === "Headless" ? 0 : Math.min(0.95, protect * 0.20);
+    u.teamAuraStats = {
+      baseStr: auraBaseStr + mut.str,
+      baseDex: auraBaseDex + mut.dex,
+      baseCon: auraBaseCon + mut.con,
+      strPerCarrier: auraBaseStr * 0.10,
+      dexPerCarrier: auraBaseDex * 0.10,
+      conPerCarrier: auraBaseCon * 0.10,
+    };
     u.walkingSpeedMult = keys.includes("turboSpeed") ? 2 : 1;
     u.abilities = keys; // carried into the live scene (strip + activated moves)
     return u;

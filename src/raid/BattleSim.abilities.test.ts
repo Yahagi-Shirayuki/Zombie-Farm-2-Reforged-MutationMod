@@ -91,6 +91,60 @@ describe("finished combat input", () => {
   });
 });
 
+describe("deployed team ability counts", () => {
+  it("counts only living carriers on the battlefield", () => {
+    const first = unit({
+      id: "first", sourceKey: "ZombieActorRegularTier2", team: "player",
+      group: "Regular", abilities: ["chivalry"],
+    });
+    const second = unit({
+      id: "second", sourceKey: "ZombieActorRegularTier2", team: "player",
+      group: "Regular", abilities: ["chivalry"],
+    });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
+    const sim = new BattleSim([first, second], [enemy], null, true);
+    const [a, b] = sim.units.filter((candidate) => candidate.team === "player");
+
+    expect(sim.teamAbilityStatus()).toContainEqual({ key: "chivalry", count: 0 });
+    a.state = "advance";
+    expect(sim.teamAbilityStatus()).toContainEqual({ key: "chivalry", count: 1 });
+    b.state = "fight";
+    expect(sim.teamAbilityStatus()).toContainEqual({ key: "chivalry", count: 2 });
+    a.alive = false;
+    expect(sim.teamAbilityStatus()).toContainEqual({ key: "chivalry", count: 1 });
+  });
+
+  it("activates and stacks aura stats only as carriers deploy", () => {
+    const girl = unit({
+      id: "girl", sourceKey: "ZombieActorFemaleTier1", team: "player", group: "Female",
+      str: 12, dex: 6, con: 36, hp: 3600, maxHp: 3600, attackCooldownMs: 2000 / 6,
+      teamAuraStats: {
+        baseStr: 10, baseDex: 5, baseCon: 30,
+        strPerCarrier: 1, dexPerCarrier: 0.5, conPerCarrier: 3,
+      },
+    });
+    const carriers = ["a", "b"].map((id) => unit({
+      id, sourceKey: `ZombieActorRegular${id}`, team: "player",
+      group: "Regular", abilities: ["chivalry"],
+    }));
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000,
+    });
+    const sim = new BattleSim([girl, ...carriers], [enemy], null, true);
+    const liveGirl = sim.units.find((candidate) => candidate.id === "girl")!;
+    const [a, b] = carriers.map(({ id }) => sim.units.find((candidate) => candidate.id === id)!);
+
+    expect(liveGirl.maxHp).toBe(3000);
+    a.state = "advance";
+    sim.step(1);
+    expect(liveGirl.maxHp).toBe(3300);
+    b.state = "advance";
+    sim.step(1);
+    expect(liveGirl.maxHp).toBe(3600);
+  });
+});
+
 describe("Garden healing and formation depth", () => {
   it("fills a headless zombie's front slot from the next row after knockback", () => {
     const players = [
@@ -462,12 +516,29 @@ describe("lasers, resurrection, and activated attacks", () => {
     const f = sim.units.find((u) => u.id === "fighter")!;
     const h = sim.units.find((u) => u.id === "healer")!;
 
+    h.state = "advance";
     (sim as any).dealDamage(f, f.maxHp, false);
     expect(f.alive).toBe(true);
     expect(f.hp).toBe(f.maxHp);
     expect(h.resurrectUsed).toBe(true);
     (sim as any).dealDamage(f, f.maxHp, false);
     expect(f.alive).toBe(false);
+  });
+
+  it("does not resurrect until its holder is deployed", () => {
+    const fighter = unit({ id: "fighter", sourceKey: "ZombieActorRegularTier1", team: "player" });
+    const healer = unit({
+      id: "healer", sourceKey: "ZombieActorGardenTier3", team: "player",
+      isGarden: true, abilities: ["ressurect"],
+    });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
+    const sim = new BattleSim([fighter, healer], [enemy], null, true);
+    const f = sim.units.find((u) => u.id === "fighter")!;
+    const h = sim.units.find((u) => u.id === "healer")!;
+
+    (sim as any).dealDamage(f, f.maxHp, false);
+    expect(f.alive).toBe(false);
+    expect(h.resurrectUsed).toBe(false);
   });
 
   it("does not spend Resurrect on a Small zombie", () => {
