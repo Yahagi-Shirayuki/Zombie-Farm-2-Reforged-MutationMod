@@ -2903,7 +2903,9 @@ export class Hud {
       focus: zombie.focus, mutation: mask, invasions: order.invasions ?? 0,
       portrait: card.portrait,
     };
-    const { panel, close } = openModal({ host: this.el, panelClass: "zpanel" });
+    const { panel, close } = openModal({
+      host: this.el, bgClass: "bm-zombie-bg", panelClass: "zpanel",
+    });
     panel.appendChild(this.buildZombieCard(info, panel));
     const note = document.createElement("div");
     note.className = lockLabel ? "bm-lock" : "bm-meta";
@@ -3753,7 +3755,9 @@ export class Hud {
     }
     for (const z of roster) {
       const row = document.createElement("div");
-      row.className = "zl-row";
+      // Use the exact same panel/card composition as the single-zombie modal;
+      // the Zombies menu only adds the vertically scrolling list around it.
+      row.className = "panel zpanel zl-row";
       const info = this.rosterInfo(z);
       row.appendChild(this.buildZombieCard(info, panel));
       row.appendChild(this.buildZombieActions(info, close, () => this.openZombieList()));
