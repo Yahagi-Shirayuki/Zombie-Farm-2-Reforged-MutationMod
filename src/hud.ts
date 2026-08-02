@@ -33,6 +33,7 @@ import type {
   BlackMarketOrderView,
 } from "./net/protocol";
 import {
+  blackMarketComposeDefaults,
   blackMarketMutationRequirementLabel,
   blackMarketPurchaseLock,
   matchesBlackMarketMutation,
@@ -2555,6 +2556,12 @@ export class Hud {
     composeTitle.textContent = "Create Post";
     const composeKind = document.createElement("select");
     composeKind.append(new Option("Request a Zombie", "BUY_ZOMBIE"), new Option("Sell a Zombie", "SELL_ZOMBIE"));
+    const composeDefaults = blackMarketComposeDefaults(
+      initialKind,
+      selectedUnitId,
+      (this.getRoster?.() ?? []).map((zombie) => zombie.id),
+    );
+    composeKind.value = composeDefaults.kind;
     const assetLabel = document.createElement("label");
     const assetCaption = document.createElement("span");
     const asset = document.createElement("select");
@@ -2640,8 +2647,9 @@ export class Hud {
           asset.append(option);
         }
       }
-      if (selling && selectedUnitId && [...asset.options].some((option) => option.value === selectedUnitId)) {
-        asset.value = selectedUnitId;
+      if (selling && composeDefaults.assetId &&
+          [...asset.options].some((option) => option.value === composeDefaults.assetId)) {
+        asset.value = composeDefaults.assetId;
       }
       mutationLabelEl.style.display = selling ? "none" : "flex";
       submit.textContent = selling ? "Post Zombie Sale" : "Post Request";

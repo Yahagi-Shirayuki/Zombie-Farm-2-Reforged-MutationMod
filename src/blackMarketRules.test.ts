@@ -1,10 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
   BLACK_MARKET_SPECIAL_LEVEL,
+  blackMarketComposeDefaults,
   blackMarketMutationRequirementLabel,
   blackMarketPurchaseLock,
   matchesBlackMarketMutation,
 } from "./blackMarketRules";
+
+describe("Black Market compose defaults", () => {
+  it("opens a roster-originated sale with that zombie selected", () => {
+    expect(blackMarketComposeDefaults("SELL_ZOMBIE", "unit-2", ["unit-1", "unit-2"]))
+      .toEqual({ kind: "SELL_ZOMBIE", assetId: "unit-2" });
+  });
+
+  it("does not carry an unavailable unit into the form", () => {
+    expect(blackMarketComposeDefaults("SELL_ZOMBIE", "missing", ["unit-1"]))
+      .toEqual({ kind: "SELL_ZOMBIE" });
+  });
+});
 
 describe("Black Market purchase requirements", () => {
   it("allows ordinary zombies without applying their planting level", () => {

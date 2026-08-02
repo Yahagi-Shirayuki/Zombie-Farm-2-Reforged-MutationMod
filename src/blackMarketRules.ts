@@ -12,6 +12,23 @@ export interface BlackMarketZombieRequirement {
   unlockGrave?: "Blue" | "Red" | "Silver";
 }
 
+export type BlackMarketComposeKind = "BUY_ZOMBIE" | "SELL_ZOMBIE";
+
+/** Initial values for the Create Post form. A roster-originated sale keeps the
+ * concrete unit selected when the Black Market opens. */
+export function blackMarketComposeDefaults(
+  kind: BlackMarketComposeKind,
+  selectedUnitId: string | undefined,
+  availableUnitIds: readonly string[],
+): { kind: BlackMarketComposeKind; assetId?: string } {
+  return {
+    kind,
+    ...(kind === "SELL_ZOMBIE" && selectedUnitId && availableUnitIds.includes(selectedUnitId)
+      ? { assetId: selectedUnitId }
+      : {}),
+  };
+}
+
 /** Black Market purchases ignore ordinary crop unlock levels. Colored classes unlock
  * at their gravestone's level, while every special zombie also has a level-20 gate. */
 export function blackMarketPurchaseLock(
