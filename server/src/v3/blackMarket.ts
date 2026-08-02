@@ -1,9 +1,15 @@
 import type {
+  BlackMarketCollectResponse,
+  BlackMarketFulfillmentsResponse,
+  BlackMarketFulfillmentView,
+  BlackMarketHistoryEntry,
+  BlackMarketHistoryResponse,
   BlackMarketListResponse,
   BlackMarketMutationResponse,
   BlackMarketOrderKind,
   BlackMarketOrderView,
   BlackMarketSummary,
+  BlackMarketTradeStats,
 } from "../../../src/net/protocol";
 import objectRows from "../../../public/assets/placeables.json";
 import { ALL_BITS, SLOTS, SLOT_MASK } from "../../../src/zombie/mutations";
@@ -192,6 +198,153 @@ export async function list(
     nextCursor: rows.length > PAGE_SIZE ? String(offset + PAGE_SIZE) : null,
     summary: await summary(db, accountId, now),
   };
+}
+
+const FULFILLMENT_PAGE = 50;
+
+interface FulfillmentRow {
+  id: string;
+  kind: BlackMarketOrderKind;
+  zombie_key: string;
+  mutated_required: number;
+  price_brains: number;
+  created_at: number;
+  closed_at: number;
+  escrow_mutation: number | null;
+  escrow_invasions: number | null;
+  fulfilled_by_name: string | null;
+}
+
+/** The caller's fulfilled-but-uncollected orders, newest first. Settlement has
+ * already happened for these; they exist so the creator finally hears about it. */
+export async function fulfillments(
+  db: D1Database,
+  accountId: string
+): Promise<BlackMarketFulfillmentsResponse> {
+  const result = await db.prepare(`SELECT o.id,o.kind,o.zombie_key,o.mutated_required,o.price_brains,
+      o.created_at,o.closed_at,o.escrow_mutation,o.escrow_invasions,a.username AS fulfilled_by_name
+    FROM black_market_orders o LEFT JOIN accounts a ON a.id=o.fulfilled_by_account_id
+    WHERE o.creator_account_id=? AND o.status='FULFILLED' AND o.acknowledged_at IS NULL
+    ORDER BY o.closed_at DESC LIMIT ?`).bind(accountId, FULFILLMENT_PAGE).all<FulfillmentRow>();
+  const views: BlackMarketFulfillmentView[] = (result.results ?? []).map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    zombieKey: row.zombie_key,
+    mutated: !!row.mutated_required,
+    ...(row.kind === "SELL_ZOMBIE" && row.escrow_mutation !== null
+      ? { mutation: row.escrow_mutation, invasions: row.escrow_invasions ?? 0 }
+      : {}),
+    priceBrains: row.price_brains,
+    createdAt: row.created_at,
+    fulfilledAt: row.closed_at,
+    fulfilledBy: row.fulfilled_by_name ?? "Player",
+  }));
+  return { fulfillments: views };
+}
+
+/** Acknowledge one fulfilled order so it stops surfacing as uncollected. Pure
+ * bookkeeping — no balances, roster, or account version involved — so plain
+ * idempotent UPDATE semantics are enough. */
+export async function collect(
+  db: D1Database,
+  accountId: string,
+  orderId: string,
+  now: number
+): Promise<BlackMarketCollectResponse | MarketFailure> {
+  if (!validId(orderId)) return { status: 400, error: "bad_market_collect" };
+  const updated = await db.prepare(`UPDATE black_market_orders SET acknowledged_at=?
+    WHERE id=? AND creator_account_id=? AND status='FULFILLED' AND acknowledged_at IS NULL`)
+    .bind(now, orderId, accountId).run();
+  if ((updated.meta.changes ?? 0) === 1) return { ok: true, alreadyCollected: false };
+  const row = await orderRow(db, orderId);
+  if (!row) return { status: 404, error: "order_not_found" };
+  if (row.creator_account_id !== accountId) return { status: 403, error: "not_order_owner" };
+  if (row.status !== "FULFILLED") return { status: 409, error: "order_not_fulfilled" };
+  return { ok: true, alreadyCollected: true };
+}
+
+const HISTORY_PAGE = 100;
+
+// A completed trade always has one brain-earning side and one brain-spending
+// side. Which account sits on which side depends on the order kind: a sale's
+// creator earns and its fulfiller spends; a request's creator spends and its
+// fulfiller earns.
+const EARNED_SIDE_SQL = `status='FULFILLED' AND
+  ((kind='SELL_ZOMBIE' AND creator_account_id=?1) OR (kind='BUY_ZOMBIE' AND fulfilled_by_account_id=?1))`;
+const SPENT_SIDE_SQL = `status='FULFILLED' AND
+  ((kind='SELL_ZOMBIE' AND fulfilled_by_account_id=?1) OR (kind='BUY_ZOMBIE' AND creator_account_id=?1))`;
+
+interface HistoryRow {
+  id: string;
+  kind: BlackMarketOrderKind;
+  zombie_key: string;
+  price_brains: number;
+  closed_at: number;
+  delivered_mutation: number | null;
+  delivered_invasions: number | null;
+  creator_account_id: string;
+  creator_name: string | null;
+  fulfiller_name: string | null;
+}
+
+/** The caller's completed trades (both roles), newest first, plus lifetime
+ * aggregates computed over the full set — not just the returned page. */
+export async function history(
+  db: D1Database,
+  accountId: string
+): Promise<BlackMarketHistoryResponse> {
+  const [entries, earnedTotals, bestSale, spentTotals, mostTraded] = await Promise.all([
+    db.prepare(`SELECT o.id,o.kind,o.zombie_key,o.price_brains,o.closed_at,
+        o.delivered_mutation,o.delivered_invasions,o.creator_account_id,
+        ca.username AS creator_name, fa.username AS fulfiller_name
+      FROM black_market_orders o
+      JOIN accounts ca ON ca.id=o.creator_account_id
+      LEFT JOIN accounts fa ON fa.id=o.fulfilled_by_account_id
+      WHERE o.status='FULFILLED' AND (o.creator_account_id=?1 OR o.fulfilled_by_account_id=?1)
+      ORDER BY o.closed_at DESC, o.id LIMIT ${HISTORY_PAGE}`)
+      .bind(accountId).all<HistoryRow>(),
+    db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(price_brains),0) brains
+      FROM black_market_orders WHERE ${EARNED_SIDE_SQL}`)
+      .bind(accountId).first<{ n: number; brains: number }>(),
+    db.prepare(`SELECT zombie_key, price_brains, delivered_mutation
+      FROM black_market_orders WHERE ${EARNED_SIDE_SQL}
+      ORDER BY price_brains DESC, closed_at DESC LIMIT 1`)
+      .bind(accountId).first<{ zombie_key: string; price_brains: number; delivered_mutation: number | null }>(),
+    db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(price_brains),0) brains
+      FROM black_market_orders WHERE ${SPENT_SIDE_SQL}`)
+      .bind(accountId).first<{ n: number; brains: number }>(),
+    db.prepare(`SELECT zombie_key, COUNT(*) n FROM black_market_orders
+      WHERE status='FULFILLED' AND (creator_account_id=?1 OR fulfilled_by_account_id=?1)
+      GROUP BY zombie_key ORDER BY n DESC, zombie_key LIMIT 1`)
+      .bind(accountId).first<{ zombie_key: string; n: number }>(),
+  ]);
+  const stats: BlackMarketTradeStats = {
+    sold: {
+      count: earnedTotals?.n ?? 0,
+      brains: earnedTotals?.brains ?? 0,
+      best: bestSale
+        ? { zombieKey: bestSale.zombie_key, priceBrains: bestSale.price_brains, mutation: bestSale.delivered_mutation }
+        : null,
+    },
+    bought: { count: spentTotals?.n ?? 0, brains: spentTotals?.brains ?? 0 },
+    mostTraded: mostTraded ? { zombieKey: mostTraded.zombie_key, count: mostTraded.n } : null,
+  };
+  const views: BlackMarketHistoryEntry[] = (entries.results ?? []).map((row) => {
+    const mine = row.creator_account_id === accountId;
+    return {
+      id: row.id,
+      kind: row.kind,
+      mine,
+      earned: (row.kind === "SELL_ZOMBIE") === mine,
+      zombieKey: row.zombie_key,
+      mutation: row.delivered_mutation,
+      invasions: row.delivered_invasions ?? 0,
+      priceBrains: row.price_brains,
+      counterparty: (mine ? row.fulfiller_name : row.creator_name) ?? "Player",
+      fulfilledAt: row.closed_at,
+    };
+  });
+  return { stats, entries: views };
 }
 
 const fingerprint = (action: string, input: Record<string, unknown>): string =>
@@ -429,14 +582,22 @@ export async function fulfill(
         row.zombie_key,
         ...(row.mutation_required === null ? [row.mutated_required] : mutationAsset.binds),
       ];
+  // Stamp the actually-traded unit on the order so trade history can show it —
+  // a request's escrow columns hold brains, so the offered unit has nowhere
+  // else to live once the fulfiller's roster row is deleted.
+  const delivered = row.kind === "SELL_ZOMBIE"
+    ? { mutation: row.escrow_mutation ?? 0, invasions: row.escrow_invasions ?? 0 }
+    : { mutation: offered!.mutation, invasions: offered!.invasions };
   const claim = db.prepare(`UPDATE black_market_orders SET status='FULFILLED',closed_at=?,
-      closed_operation_id=?,fulfilled_by_account_id=? WHERE id=? AND status='OPEN'
+      closed_operation_id=?,fulfilled_by_account_id=?,delivered_mutation=?,delivered_invasions=?
+      WHERE id=? AND status='OPEN'
       AND creator_account_id!=? AND ${actorAsset}
       AND EXISTS(SELECT 1 FROM account_runtime_v3 WHERE account_id=? AND account_version=? AND active_batch_id IS NOT NULL)
       AND NOT EXISTS(SELECT 1 FROM account_runtime_v3 WHERE account_id=black_market_orders.creator_account_id
         AND active_batch_id IS NOT NULL AND active_batch_expires_at>?)
       AND ${recipientRequirement.sql}`)
-    .bind(now, operationId, accountId, orderId, accountId, ...actorAssetBinds,
+    .bind(now, operationId, accountId, delivered.mutation, delivered.invasions,
+      orderId, accountId, ...actorAssetBinds,
       accountId, expectedVersion, now, ...recipientRequirement.binds);
   const guard = "EXISTS(SELECT 1 FROM black_market_orders WHERE id=? AND status='FULFILLED' AND closed_operation_id=?)";
   const statements: D1PreparedStatement[] = [claim];

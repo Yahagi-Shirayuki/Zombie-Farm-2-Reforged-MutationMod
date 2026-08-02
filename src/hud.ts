@@ -25,8 +25,8 @@ import { fillPartySelection, orderPartyRoster } from "./raid/partySelection";
 import { otherPlayMode, playModeDestinationLabel, type PlayMode } from "./playMode";
 import type { UpdateCheckResult } from "./updateCheck";
 import type {
-  BlackMarketListResponse, BlackMarketMutationResponse, BlackMarketOrderKind,
-  BlackMarketOrderView,
+  BlackMarketFulfillmentView, BlackMarketHistoryResponse, BlackMarketListResponse,
+  BlackMarketMutationResponse, BlackMarketOrderKind, BlackMarketOrderView,
 } from "./net/protocol";
 import {
   blackMarketComposeDefaults,
@@ -1235,6 +1235,12 @@ export class Hud {
   ) => Promise<BlackMarketMutationResponse>) | null = null;
   onCancelBlackMarketOrder: ((orderId: string) => Promise<BlackMarketMutationResponse>) | null = null;
   onFulfillBlackMarketOrder: ((order: BlackMarketOrderView, unitId?: string) => Promise<BlackMarketMutationResponse>) | null = null;
+  /** The player's own fulfilled-but-uncollected posts (trade already settled). */
+  getBlackMarketFulfillments: (() => Promise<BlackMarketFulfillmentView[]>) | null = null;
+  /** Acknowledge one fulfilled post so it stops surfacing as uncollected. */
+  onCollectBlackMarketOrder: ((orderId: string) => Promise<void>) | null = null;
+  /** Completed-trade ledger (both roles) + lifetime aggregates. */
+  getBlackMarketHistory: (() => Promise<BlackMarketHistoryResponse>) | null = null;
   /** The speed-grow (Insta-Grow) boost + a live owned-count getter, for the
    *  growing-crop info window. Null when no grow boost exists in the catalog. */
   getSpeedGrowBoost: (() => { name: string; icon: string; count: () => number } | null) | null = null;
@@ -2559,9 +2565,11 @@ export class Hud {
     tabs.className = "mkt-tabs";
     const requestTab = document.createElement("button");
     const salesTab = document.createElement("button");
-    requestTab.className = salesTab.className = "mkt-tab";
+    const historyTab = document.createElement("button");
+    requestTab.className = salesTab.className = historyTab.className = "mkt-tab";
     requestTab.textContent = "Requests";
     salesTab.textContent = "Zombie Sales";
+    historyTab.textContent = "History";
     // Compact screens cannot show the browse list AND the compose form at once —
     // side by side they leave the list about three cards tall. There the form
     // becomes a third tab; on a roomy screen this button is hidden by CSS and the
@@ -2569,7 +2577,7 @@ export class Hud {
     const composeTab = document.createElement("button");
     composeTab.className = "mkt-tab bm-tab-compose";
     composeTab.textContent = "Create Post";
-    tabs.append(requestTab, salesTab, composeTab);
+    tabs.append(requestTab, salesTab, historyTab, composeTab);
 
     const toolbar = document.createElement("div");
     toolbar.className = "bm-toolbar";
@@ -2595,6 +2603,19 @@ export class Hud {
     refresh.className = "prof-btn play";
     refresh.textContent = "Refresh";
     toolbar.append(typeFilter, mutationFilter, sort, mineLabel, refresh);
+
+    // Fulfilled posts awaiting collection. The trade already settled server-side
+    // (brains/zombie landed when the counterparty accepted); this strip is where
+    // the post's creator finally hears about it and dismisses the notice.
+    const fulfillStrip = document.createElement("div");
+    fulfillStrip.className = "bm-fulfillments";
+    fulfillStrip.hidden = true;
+
+    // The trade ledger. Replaces the browse content while the History tab is
+    // selected; the toolbar's filters only apply to open orders, so it hides too.
+    const historyView = document.createElement("div");
+    historyView.className = "bm-history";
+    historyView.hidden = true;
 
     const content = document.createElement("div");
     content.className = "bm-content";
@@ -2651,6 +2672,7 @@ export class Hud {
 
     let kind = initialKind;
     let composing = false;
+    let viewingHistory = false;
     let renderGeneration = 0;
     const cardFor = (key: string) => catalog.find((entry) => entry.cfg.key === key);
     const purchaseLockFor = (key: string) => {
@@ -2708,12 +2730,162 @@ export class Hud {
     };
 
     const setTabs = () => {
-      requestTab.classList.toggle("sel", !composing && kind === "BUY_ZOMBIE");
-      salesTab.classList.toggle("sel", !composing && kind === "SELL_ZOMBIE");
+      requestTab.classList.toggle("sel", !composing && !viewingHistory && kind === "BUY_ZOMBIE");
+      salesTab.classList.toggle("sel", !composing && !viewingHistory && kind === "SELL_ZOMBIE");
+      historyTab.classList.toggle("sel", !composing && viewingHistory);
       composeTab.classList.toggle("sel", composing);
       // Only the compact layout acts on this; the wide one shows both halves.
       panel.classList.toggle("bm-composing", composing);
+      toolbar.hidden = viewingHistory && !composing;
+      content.hidden = viewingHistory && !composing;
+      historyView.hidden = !(viewingHistory && !composing);
     };
+    const renderFulfillments = async () => {
+      if (!this.socialOnline?.() || !this.getBlackMarketFulfillments) return;
+      let rows: BlackMarketFulfillmentView[];
+      try { rows = await this.getBlackMarketFulfillments(); }
+      catch { return; /* best-effort: on any failure the strip just stays hidden */ }
+      if (!bg.isConnected) return;
+      fulfillStrip.replaceChildren();
+      fulfillStrip.hidden = !rows.length;
+      if (!rows.length) return;
+      const header = document.createElement("div");
+      header.className = "bm-fulfill-title";
+      header.textContent = "Your posts went through! Collect to dismiss.";
+      const rail = document.createElement("div");
+      rail.className = "bm-fulfill-rail";
+      fulfillStrip.append(header, rail);
+      for (const entry of rows) {
+        const sold = entry.kind === "SELL_ZOMBIE";
+        const zombieName = cardFor(entry.zombieKey)?.name ?? entry.zombieKey;
+        const card = document.createElement("div");
+        card.className = "bm-card bm-fulfilled";
+        const portrait = document.createElement("img");
+        portrait.src = this.zombiePortraitOf?.(entry.zombieKey) ?? cardFor(entry.zombieKey)?.portrait ?? "";
+        if (sold && this.zombieMutationPortraitOf) {
+          void this.zombieMutationPortraitOf(entry.zombieKey, entry.mutation ?? 0)
+            .then((source) => { if (card.isConnected) portrait.src = source; })
+            .catch(() => { /* retain the static species portrait */ });
+        }
+        const body = document.createElement("div");
+        const name = document.createElement("div");
+        name.className = "bm-name";
+        name.textContent = sold ? `${zombieName} — Sold!` : `${zombieName} — Request filled!`;
+        const meta = document.createElement("div");
+        meta.className = "bm-meta";
+        const when = new Date(entry.fulfilledAt).toLocaleDateString();
+        meta.textContent = sold
+          ? `Bought by ${entry.fulfilledBy} · ${when}\nThe brains are already in your balance.`
+          : `Delivered by ${entry.fulfilledBy} · ${when}\nThe zombie is on your farm (or stored if it was full).`;
+        const cost = document.createElement("div");
+        cost.className = "bm-price";
+        cost.append(String(entry.priceBrains));
+        const brain = document.createElement("img");
+        brain.src = UI("topbar_brain_icon.png");
+        cost.appendChild(brain);
+        body.append(name, meta, cost);
+        const action = document.createElement("button");
+        action.textContent = "Collect";
+        action.onclick = async () => {
+          action.disabled = true;
+          try {
+            await this.onCollectBlackMarketOrder?.(entry.id);
+            card.remove();
+            if (!rail.childElementCount) fulfillStrip.hidden = true;
+            this.showToast(sold
+              ? `Cha-ching! ${zombieName} sold to ${entry.fulfilledBy} for ${entry.priceBrains} brains. 🧠`
+              : `${zombieName} has joined your horde! 🧟`);
+          } catch {
+            this.showToast("Could not collect that just now. Try again in a moment.");
+            action.disabled = false;
+          }
+        };
+        card.append(portrait, body, action);
+        rail.appendChild(card);
+      }
+    };
+
+    const renderHistory = async () => {
+      historyView.innerHTML = `<div class="bm-empty">Opening the ledger…</div>`;
+      if (!this.socialOnline?.() || !this.getBlackMarketHistory) {
+        historyView.innerHTML = `<div class="bm-empty">Sign in to see your trade history.</div>`;
+        return;
+      }
+      let result: BlackMarketHistoryResponse;
+      try { result = await this.getBlackMarketHistory(); }
+      catch {
+        historyView.innerHTML = `<div class="bm-empty">The ledger is unavailable right now.</div>`;
+        return;
+      }
+      if (!bg.isConnected) return;
+      historyView.replaceChildren();
+      const nameOf = (key: string) => cardFor(key)?.name ?? key;
+
+      const statsRow = document.createElement("div");
+      statsRow.className = "bm-stats";
+      const stat = (text: string) => {
+        const chip = document.createElement("div");
+        chip.className = "bm-stat";
+        chip.textContent = text;
+        statsRow.appendChild(chip);
+      };
+      const { sold, bought, mostTraded } = result.stats;
+      stat(`🧟 Sold ${sold.count} · earned ${sold.brains} 🧠`);
+      stat(`🛒 Bought ${bought.count} · spent ${bought.brains} 🧠`);
+      if (sold.best) stat(`🏆 Best sale: ${nameOf(sold.best.zombieKey)} for ${sold.best.priceBrains} 🧠`);
+      if (mostTraded) stat(`⭐ Most traded: ${nameOf(mostTraded.zombieKey)} ×${mostTraded.count}`);
+      historyView.appendChild(statsRow);
+
+      if (!result.entries.length) {
+        const empty = document.createElement("div");
+        empty.className = "bm-empty";
+        empty.textContent = "No completed trades yet. Post something on the market!";
+        historyView.appendChild(empty);
+        return;
+      }
+      const ledger = document.createElement("div");
+      ledger.className = "bm-ledger";
+      historyView.appendChild(ledger);
+      for (const entry of result.entries) {
+        const row = document.createElement("div");
+        row.className = "bm-ledger-row";
+        const portrait = document.createElement("img");
+        portrait.src = this.zombiePortraitOf?.(entry.zombieKey) ?? cardFor(entry.zombieKey)?.portrait ?? "";
+        if (entry.mutation && this.zombieMutationPortraitOf) {
+          void this.zombieMutationPortraitOf(entry.zombieKey, entry.mutation)
+            .then((source) => { if (row.isConnected) portrait.src = source; })
+            .catch(() => { /* retain the static species portrait */ });
+        }
+        const body = document.createElement("div");
+        body.className = "bm-meta";
+        const title = document.createElement("div");
+        title.className = "bm-name";
+        // Four trade shapes: my sale sold / I bought their sale / my request was
+        // filled / I filled their request.
+        title.textContent = entry.earned
+          ? entry.mine
+            ? `Sold ${nameOf(entry.zombieKey)} to ${entry.counterparty}`
+            : `Filled ${entry.counterparty}'s request — ${nameOf(entry.zombieKey)}`
+          : entry.mine
+            ? `${entry.counterparty} filled your request — ${nameOf(entry.zombieKey)}`
+            : `Bought ${nameOf(entry.zombieKey)} from ${entry.counterparty}`;
+        const detailBits = [new Date(entry.fulfilledAt).toLocaleDateString()];
+        if (entry.mutation) detailBits.push(mutationLabel(entry.mutation));
+        if (entry.invasions) detailBits.push(veterancy(entry.invasions));
+        const detail = document.createElement("div");
+        detail.textContent = detailBits.join(" · ");
+        body.append(title, detail);
+        const delta = document.createElement("div");
+        delta.className = entry.earned ? "bm-ledger-gain" : "bm-ledger-loss";
+        delta.append(`${entry.earned ? "+" : "−"}${entry.priceBrains}`);
+        const brain = document.createElement("img");
+        brain.src = UI("topbar_brain_icon.png");
+        delta.appendChild(brain);
+        row.append(portrait, body, delta);
+        ledger.appendChild(row);
+      }
+    };
+
     const renderOrders = async () => {
       const generation = ++renderGeneration;
       list.innerHTML = `<div class="bm-empty">Refreshing market…</div>`;
@@ -2775,7 +2947,12 @@ export class Hud {
               event.stopPropagation();
               if (!await this.confirmInGame("Cancel this post?", "The escrowed zombie or brains will be returned.", "Cancel Post")) return;
               action.disabled = true;
-              try { await this.onCancelBlackMarketOrder?.(order.id); refreshBalance(); await renderOrders(); }
+              try {
+                await this.onCancelBlackMarketOrder?.(order.id);
+                refreshBalance();
+                this.showToast("Post cancelled — your escrow was returned.");
+                await renderOrders();
+              }
               catch { this.showToast("Could not cancel that post. Refresh and try again."); action.disabled = false; }
             };
             marketCard.appendChild(action);
@@ -2799,7 +2976,15 @@ export class Hud {
               }
               if (!await this.confirmInGame("Complete this trade?", detail, "Trade")) return;
               if (rowAction) rowAction.disabled = true;
-              try { await this.onFulfillBlackMarketOrder?.(order, unitId); refreshBalance(); await renderOrders(); }
+              try {
+                await this.onFulfillBlackMarketOrder?.(order, unitId);
+                refreshBalance();
+                const zombieName = cardFor(order.zombieKey)?.name ?? order.zombieKey;
+                this.showToast(order.kind === "SELL_ZOMBIE"
+                  ? `Bought ${zombieName} for ${order.priceBrains} brains! 🧟`
+                  : `Sold your ${zombieName} for ${order.priceBrains} brains! 🧠`);
+                await renderOrders();
+              }
               catch (error) {
                 const code = error instanceof Error ? error.message : "";
                 if (code.startsWith("insufficient_brains"))
@@ -2844,11 +3029,12 @@ export class Hud {
       }
     };
 
-    requestTab.onclick = () => { composing = false; kind = "BUY_ZOMBIE"; setTabs(); void renderOrders(); };
-    salesTab.onclick = () => { composing = false; kind = "SELL_ZOMBIE"; setTabs(); void renderOrders(); };
+    requestTab.onclick = () => { composing = false; viewingHistory = false; kind = "BUY_ZOMBIE"; setTabs(); void renderOrders(); };
+    salesTab.onclick = () => { composing = false; viewingHistory = false; kind = "SELL_ZOMBIE"; setTabs(); void renderOrders(); };
+    historyTab.onclick = () => { composing = false; viewingHistory = true; setTabs(); void renderHistory(); };
     composeTab.onclick = () => { composing = true; setTabs(); };
     for (const control of [typeFilter, mutationFilter, sort, mine]) control.onchange = () => void renderOrders();
-    refresh.onclick = () => void renderOrders();
+    refresh.onclick = () => { void renderOrders(); void renderFulfillments(); };
     composeKind.onchange = updateCompose;
     asset.onchange = refreshComposeStatus;
     mutationMode.onchange = refreshComposeStatus;
@@ -2882,7 +3068,9 @@ export class Hud {
         // Land the player back on the board the new post just joined, so on a
         // compact layout the post they created is what they see next.
         composing = false;
+        viewingHistory = false;
         kind = selling ? "SELL_ZOMBIE" : "BUY_ZOMBIE";
+        this.showToast(selling ? "Sale posted to the Black Market!" : "Request posted to the Black Market!");
         setTabs(); updateCompose(); refreshBalance(); price.value = ""; await renderOrders();
       } catch (error) {
         const code = error instanceof Error ? error.message : "";
@@ -2904,10 +3092,11 @@ export class Hud {
     };
 
     setTabs(); updateCompose();
-    panel.append(title, close, balance, tabs, toolbar, content);
+    panel.append(title, close, balance, tabs, toolbar, fulfillStrip, content, historyView);
     bg.appendChild(panel);
     this.el.appendChild(bg);
     void renderOrders();
+    void renderFulfillments();
   }
 
   /** Show every owned unit that satisfies a wanted order and return the one the

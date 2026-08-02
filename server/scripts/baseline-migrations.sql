@@ -39,4 +39,6 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0028_gift_rewards.sql'),
   ('0029_restore_ledger.sql'),
   ('0030_black_market_specific_mutations.sql'),
-  ('0031_account_last_online.sql');
+  ('0031_account_last_online.sql'),
+  ('0032_black_market_collection.sql'),
+  ('0033_black_market_history.sql');

@@ -588,6 +588,13 @@ CREATE TABLE IF NOT EXISTS black_market_orders (
   escrow_mutation INTEGER,
   escrow_invasions INTEGER,
   escrow_brains INTEGER NOT NULL DEFAULT 0,
+  -- Set when the creator collects (acknowledges) a FULFILLED order; NULL on a
+  -- fulfilled row means the outcome has not been shown to its creator yet.
+  acknowledged_at INTEGER,
+  -- The actually-traded unit, stamped at fulfillment (mirrors escrow for sales;
+  -- records the offered unit for filled requests). Drives the History tab.
+  delivered_mutation INTEGER,
+  delivered_invasions INTEGER,
   CHECK ((kind='SELL_ZOMBIE' AND source_unit_id IS NOT NULL AND escrow_mutation IS NOT NULL AND
     escrow_invasions IS NOT NULL AND escrow_brains=0) OR (kind='BUY_ZOMBIE' AND
     source_unit_id IS NULL AND escrow_mutation IS NULL AND escrow_invasions IS NULL AND
@@ -597,6 +604,8 @@ CREATE INDEX IF NOT EXISTS idx_black_market_browse ON black_market_orders(status
 CREATE INDEX IF NOT EXISTS idx_black_market_filter ON black_market_orders(status,kind,zombie_key,mutated_required,created_at DESC,id);
 CREATE INDEX IF NOT EXISTS idx_black_market_owner ON black_market_orders(creator_account_id,status,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_black_market_daily ON black_market_orders(creator_account_id,created_day);
+CREATE INDEX IF NOT EXISTS idx_black_market_uncollected ON black_market_orders(creator_account_id,status,acknowledged_at);
+CREATE INDEX IF NOT EXISTS idx_black_market_fulfiller ON black_market_orders(fulfilled_by_account_id,status,closed_at DESC);
 CREATE TABLE IF NOT EXISTS black_market_receipts (
   operation_id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

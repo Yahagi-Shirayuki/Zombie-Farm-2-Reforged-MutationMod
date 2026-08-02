@@ -15,6 +15,9 @@ import {
   type BootstrapResponse,
   type CommandBatchRequest,
   type CommandBatchResponse,
+  type BlackMarketCollectResponse,
+  type BlackMarketFulfillmentsResponse,
+  type BlackMarketHistoryResponse,
   type BlackMarketListResponse,
   type BlackMarketMutationResponse,
   type BlackMarketOrderKind,
@@ -424,6 +427,15 @@ export const fulfillBlackMarketOrder = (
 ) => req<BlackMarketMutationResponse>("POST", `/black-market/orders/${encodeURIComponent(id)}/fulfill`, {
   operationId, expectedAccountVersion, ...(unitId ? { unitId } : {}),
 });
+
+export const blackMarketFulfillments = () =>
+  req<BlackMarketFulfillmentsResponse>("GET", "/black-market/fulfillments");
+
+export const collectBlackMarketOrder = (id: string) =>
+  req<BlackMarketCollectResponse>("POST", `/black-market/orders/${encodeURIComponent(id)}/collect`, {});
+
+export const blackMarketHistory = () =>
+  req<BlackMarketHistoryResponse>("GET", "/black-market/history");
 
 /** Set this account's chosen display name. Updates the stored session, returns the
  *  normalized value. Throws ApiError(400, "bad_username") if it doesn't validate. */

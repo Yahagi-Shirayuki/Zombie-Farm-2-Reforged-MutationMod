@@ -270,3 +270,70 @@ export interface BlackMarketMutationResponse {
   order: BlackMarketOrderView;
   summary: BlackMarketSummary;
 }
+
+/** One of the caller's own orders that a counterparty fulfilled and the caller
+ * has not yet collected (acknowledged). The trade itself already settled —
+ * brains/zombie landed the moment it was fulfilled — so collecting only
+ * dismisses the notice. */
+export interface BlackMarketFulfillmentView {
+  id: string;
+  kind: BlackMarketOrderKind;
+  zombieKey: string;
+  mutated: boolean;
+  /** Escrowed unit details, present on fulfilled SELL_ZOMBIE posts. */
+  mutation?: number;
+  invasions?: number;
+  priceBrains: number;
+  createdAt: number;
+  fulfilledAt: number;
+  /** Display name of the player who completed the trade. */
+  fulfilledBy: string;
+}
+
+export interface BlackMarketFulfillmentsResponse {
+  fulfillments: BlackMarketFulfillmentView[];
+}
+
+export interface BlackMarketCollectResponse {
+  ok: true;
+  alreadyCollected: boolean;
+}
+
+/** One completed trade from the caller's perspective (they were creator OR
+ * fulfiller of the order). */
+export interface BlackMarketHistoryEntry {
+  id: string;
+  kind: BlackMarketOrderKind;
+  /** True when the caller created the post; false when they fulfilled it. */
+  mine: boolean;
+  /** True when the caller received the brains (they sold a zombie either via
+   * their own sale post or by filling someone's request). */
+  earned: boolean;
+  zombieKey: string;
+  /** The delivered unit's mutation mask. Null on filled requests that predate
+   * delivered-unit recording (migration 0033). */
+  mutation: number | null;
+  invasions: number;
+  priceBrains: number;
+  /** Display name of the other party in the trade. */
+  counterparty: string;
+  fulfilledAt: number;
+}
+
+/** Lifetime aggregates over ALL of the caller's completed trades (not just the
+ * page of entries returned alongside). */
+export interface BlackMarketTradeStats {
+  sold: {
+    count: number;
+    brains: number;
+    best: { zombieKey: string; priceBrains: number; mutation: number | null } | null;
+  };
+  bought: { count: number; brains: number };
+  mostTraded: { zombieKey: string; count: number } | null;
+}
+
+export interface BlackMarketHistoryResponse {
+  stats: BlackMarketTradeStats;
+  /** Most recent completed trades, newest first (capped server-side). */
+  entries: BlackMarketHistoryEntry[];
+}

@@ -845,6 +845,23 @@ app.get("/black-market/summary", async (c) => {
   return c.json(await blackMarket.summary(c.env.DB, c.get("accountId"), Date.now()));
 });
 
+app.get("/black-market/fulfillments", async (c) => {
+  if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
+  return c.json(await blackMarket.fulfillments(c.env.DB, c.get("accountId")));
+});
+
+app.get("/black-market/history", async (c) => {
+  if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
+  return c.json(await blackMarket.history(c.env.DB, c.get("accountId")));
+});
+
+app.post("/black-market/orders/:id/collect", async (c) => {
+  if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
+  const result = await blackMarket.collect(c.env.DB, c.get("accountId"), c.req.param("id"), Date.now());
+  if (!("ok" in result)) return c.json({ error: result.error }, result.status);
+  return c.json(result);
+});
+
 app.post("/black-market/orders", async (c) => {
   if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
   if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);

@@ -102,10 +102,23 @@ Mausoleum is full. (Trades deliberately keep this overflow. Quest, Epic Boss and
 rewards no longer do — those route through Received and take a real Mausoleum slot when
 claimed — because the recipient of a trade is not present to make room.)
 
-Fulfillment settles both sides automatically. There is no proceeds inbox or separate
-claim step. If the order creator is offline, the server updates that account and bumps
-its account version. A stale active client will then reload authoritative state through
-the normal conflict path.
+Fulfillment settles both sides automatically. There is no proceeds inbox or escrowed
+claim step — if the order creator is offline, the server updates that account and bumps
+its account version, and a stale active client reloads authoritative state through the
+normal conflict path. What the creator *does* get (added with migration `0032`) is a
+collection acknowledgment: a fulfilled order keeps `acknowledged_at IS NULL` until its
+creator collects it via `POST /black-market/orders/:id/collect`. The client fetches
+`GET /black-market/fulfillments` at sign-in (toast) and when the market panel opens
+(collection strip); collecting only dismisses the notice, never gates the assets.
+
+Completed trades also feed a permanent ledger (migration `0033` + the panel's History
+tab). Fulfillment stamps the actually-traded unit into `delivered_mutation` /
+`delivered_invasions` (a request's escrow columns hold brains, so the offered unit has
+nowhere else to live once the fulfiller's roster row is deleted). `GET
+/black-market/history` returns the caller's last 100 completed trades from both roles
+plus lifetime aggregates (sold/bought counts and brains, best sale, most-traded
+species) computed over the full set. Filled requests fulfilled before `0033` have no
+recorded delivered unit and render species-only.
 
 The recipient receives a new server-generated unit ID. Preserve authoritative gameplay
 traits (`zombie_key`, `mutation`, and `invasions`) and retain the source unit ID only in

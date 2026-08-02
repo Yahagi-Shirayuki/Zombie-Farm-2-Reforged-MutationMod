@@ -323,6 +323,152 @@ describe("Black Market", () => {
     await cancelSale("market-cancel-full", 16, true);
   });
 
+  it("surfaces a fulfilled post to its creator until collected", async () => {
+    const seller = await signIn(uniqueSub("market-collect-seller"));
+    const buyer = await signIn(uniqueSub("market-collect-buyer"));
+    await grantBalance(buyer, { brains: 5 });
+    const unitId = `market-collect-${crypto.randomUUID()}`;
+    await grantRoster(seller, [{ id: unitId, key: "ZombieActorRegularTier1", mutation: 4, invasions: 2 }]);
+
+    const sellerBefore = await bootstrap(seller);
+    const created = await call<any>("POST", "/black-market/orders", seller.token, {
+      operationId: operation("collect-create"), expectedAccountVersion: sellerBefore.accountVersion,
+      kind: "SELL_ZOMBIE", unitId, priceBrains: 5,
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    const orderId = created.body.order.id;
+
+    // Nothing to collect while the post is still open, and an open post can't be collected.
+    const empty = await call<any>("GET", "/black-market/fulfillments", seller.token);
+    expect(empty.status).toBe(200);
+    expect(empty.body.fulfillments).toEqual([]);
+    const early = await call<any>("POST", `/black-market/orders/${orderId}/collect`, seller.token, {});
+    expect(early).toMatchObject({ status: 409, body: { error: "order_not_fulfilled" } });
+
+    const buyerBefore = await bootstrap(buyer);
+    const fulfilled = await call<any>("POST", `/black-market/orders/${orderId}/fulfill`, buyer.token, {
+      operationId: operation("collect-fulfill"), expectedAccountVersion: buyerBefore.accountVersion,
+    });
+    expect(fulfilled.status, JSON.stringify(fulfilled.body)).toBe(200);
+
+    // The creator sees the fulfillment with the escrowed unit's details; the
+    // fulfilling buyer has nothing to collect and cannot collect the seller's notice.
+    const pending = await call<any>("GET", "/black-market/fulfillments", seller.token);
+    expect(pending.status).toBe(200);
+    expect(pending.body.fulfillments).toHaveLength(1);
+    expect(pending.body.fulfillments[0]).toMatchObject({
+      id: orderId, kind: "SELL_ZOMBIE", zombieKey: "ZombieActorRegularTier1",
+      mutated: true, mutation: 4, invasions: 2, priceBrains: 5,
+    });
+    expect((await call<any>("GET", "/black-market/fulfillments", buyer.token)).body.fulfillments).toEqual([]);
+    const foreign = await call<any>("POST", `/black-market/orders/${orderId}/collect`, buyer.token, {});
+    expect(foreign).toMatchObject({ status: 403, body: { error: "not_order_owner" } });
+
+    const collected = await call<any>("POST", `/black-market/orders/${orderId}/collect`, seller.token, {});
+    expect(collected).toMatchObject({ status: 200, body: { ok: true, alreadyCollected: false } });
+    const again = await call<any>("POST", `/black-market/orders/${orderId}/collect`, seller.token, {});
+    expect(again).toMatchObject({ status: 200, body: { ok: true, alreadyCollected: true } });
+    expect((await call<any>("GET", "/black-market/fulfillments", seller.token)).body.fulfillments).toEqual([]);
+  });
+
+  it("surfaces a filled request to the requester with the fulfiller's delivery", async () => {
+    const requester = await signIn(uniqueSub("market-collect-requester"));
+    const filler = await signIn(uniqueSub("market-collect-filler"));
+    await grantBalance(requester, { brains: 3 });
+    const unitId = `market-collect-offer-${crypto.randomUUID()}`;
+    await grantRoster(filler, [{ id: unitId, key: "ZombieActorRegularTier1" }]);
+
+    const requesterBefore = await bootstrap(requester);
+    const created = await call<any>("POST", "/black-market/orders", requester.token, {
+      operationId: operation("collect-request"), expectedAccountVersion: requesterBefore.accountVersion,
+      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated: false, priceBrains: 3,
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+
+    const fillerBefore = await bootstrap(filler);
+    const fulfilled = await call<any>("POST", `/black-market/orders/${created.body.order.id}/fulfill`, filler.token, {
+      operationId: operation("collect-fill"), expectedAccountVersion: fillerBefore.accountVersion, unitId,
+    });
+    expect(fulfilled.status, JSON.stringify(fulfilled.body)).toBe(200);
+
+    const pending = await call<any>("GET", "/black-market/fulfillments", requester.token);
+    expect(pending.body.fulfillments).toHaveLength(1);
+    expect(pending.body.fulfillments[0]).toMatchObject({
+      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", priceBrains: 3,
+    });
+    const collected = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, requester.token, {});
+    expect(collected).toMatchObject({ status: 200, body: { ok: true, alreadyCollected: false } });
+  });
+
+  it("records completed trades in both accounts' history with lifetime stats", async () => {
+    const alice = await signIn(uniqueSub("market-history-alice"));
+    const bob = await signIn(uniqueSub("market-history-bob"));
+    await grantBalance(alice, { brains: 20 });
+    await grantBalance(bob, { brains: 20 });
+    const saleUnitId = `history-sale-${crypto.randomUUID()}`;
+    const offerUnitId = `history-offer-${crypto.randomUUID()}`;
+    await grantRoster(alice, [{ id: saleUnitId, key: "ZombieActorRegularTier1", mutation: 4, invasions: 2 }]);
+    await grantRoster(bob, [{ id: offerUnitId, key: "ZombieActorGirlTier1", mutation: 8, invasions: 1 }]);
+
+    // Trade 1: Alice sells her mutated Regular to Bob for 7.
+    const aliceBoot1 = await bootstrap(alice);
+    const sale = await call<any>("POST", "/black-market/orders", alice.token, {
+      operationId: operation("history-sale"), expectedAccountVersion: aliceBoot1.accountVersion,
+      kind: "SELL_ZOMBIE", unitId: saleUnitId, priceBrains: 7,
+    });
+    expect(sale.status, JSON.stringify(sale.body)).toBe(200);
+    const bobBoot1 = await bootstrap(bob);
+    const saleDone = await call<any>("POST", `/black-market/orders/${sale.body.order.id}/fulfill`, bob.token, {
+      operationId: operation("history-sale-buy"), expectedAccountVersion: bobBoot1.accountVersion,
+    });
+    expect(saleDone.status, JSON.stringify(saleDone.body)).toBe(200);
+
+    // Trade 2: Alice requests a mutated Girl for 3; Bob fills it with his unit.
+    const aliceBoot2 = await bootstrap(alice);
+    const request = await call<any>("POST", "/black-market/orders", alice.token, {
+      operationId: operation("history-request"), expectedAccountVersion: aliceBoot2.accountVersion,
+      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorGirlTier1", mutated: true, priceBrains: 3,
+    });
+    expect(request.status, JSON.stringify(request.body)).toBe(200);
+    const bobBoot2 = await bootstrap(bob);
+    const requestDone = await call<any>("POST", `/black-market/orders/${request.body.order.id}/fulfill`, bob.token, {
+      operationId: operation("history-request-fill"), expectedAccountVersion: bobBoot2.accountVersion,
+      unitId: offerUnitId,
+    });
+    expect(requestDone.status, JSON.stringify(requestDone.body)).toBe(200);
+
+    const aliceHistory = await call<any>("GET", "/black-market/history", alice.token);
+    expect(aliceHistory.status).toBe(200);
+    expect(aliceHistory.body.stats).toMatchObject({
+      sold: { count: 1, brains: 7, best: { zombieKey: "ZombieActorRegularTier1", priceBrains: 7, mutation: 4 } },
+      bought: { count: 1, brains: 3 },
+    });
+    expect(aliceHistory.body.entries).toHaveLength(2);
+    const aliceSale = aliceHistory.body.entries.find((entry: any) => entry.kind === "SELL_ZOMBIE");
+    expect(aliceSale).toMatchObject({
+      mine: true, earned: true, zombieKey: "ZombieActorRegularTier1",
+      mutation: 4, invasions: 2, priceBrains: 7,
+    });
+    // The delivered unit is stamped on a filled request too, so the requester's
+    // ledger shows what actually arrived.
+    const aliceRequest = aliceHistory.body.entries.find((entry: any) => entry.kind === "BUY_ZOMBIE");
+    expect(aliceRequest).toMatchObject({
+      mine: true, earned: false, zombieKey: "ZombieActorGirlTier1",
+      mutation: 8, invasions: 1, priceBrains: 3,
+    });
+
+    const bobHistory = await call<any>("GET", "/black-market/history", bob.token);
+    expect(bobHistory.status).toBe(200);
+    expect(bobHistory.body.stats).toMatchObject({
+      sold: { count: 1, brains: 3, best: { zombieKey: "ZombieActorGirlTier1", priceBrains: 3, mutation: 8 } },
+      bought: { count: 1, brains: 7 },
+    });
+    const bobBuy = bobHistory.body.entries.find((entry: any) => entry.kind === "SELL_ZOMBIE");
+    expect(bobBuy).toMatchObject({ mine: false, earned: false, priceBrains: 7 });
+    const bobFill = bobHistory.body.entries.find((entry: any) => entry.kind === "BUY_ZOMBIE");
+    expect(bobFill).toMatchObject({ mine: false, earned: true, priceBrains: 3 });
+  });
+
   it("allows exactly one winner when buyers race for a sale", async () => {
     const seller = await signIn(uniqueSub("market-race-seller"));
     const buyerA = await signIn(uniqueSub("market-race-a"));

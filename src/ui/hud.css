@@ -1115,6 +1115,31 @@
   gap: 5px; padding: 2px 0; font-size: 11px; }
 #hud .bm-mutation-choices input { margin: 0; }
 #hud .bm-empty { grid-column: 1/-1; text-align: center; padding: 30px 8px; color: #6e4a1e; font-style: italic; }
+#hud .bm-fulfillments { border: 2px solid #3f8a68; border-radius: 10px; background: #e0edc9;
+  padding: 6px 8px; margin-bottom: 8px; flex: 0 0 auto; }
+#hud .bm-fulfillments[hidden] { display: none; }
+#hud .bm-fulfill-title { font-size: 12px; font-weight: 800; color: #2c6248; margin-bottom: 6px; }
+#hud .bm-fulfill-rail { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+#hud .bm-fulfill-rail .bm-card { flex: 0 0 220px; border-color: #3f8a68; }
+/* The explicit display rules on toolbar/content outrank the UA [hidden] rule,
+   so the History tab's visibility switching needs these. */
+#hud .bm-toolbar[hidden], #hud .bm-content[hidden] { display: none; }
+#hud .bm-history { min-height: 0; flex: 1; overflow: auto; display: flex;
+  flex-direction: column; gap: 8px; }
+#hud .bm-history[hidden] { display: none; }
+#hud .bm-stats { display: flex; flex-wrap: wrap; gap: 6px; }
+#hud .bm-stat { border: 2px solid #aa7a3d; border-radius: 8px; background: #efe4bf;
+  padding: 4px 8px; font-size: 12px; font-weight: 700; color: #4a3014; }
+#hud .bm-ledger { display: flex; flex-direction: column; gap: 6px; }
+#hud .bm-ledger-row { display: flex; align-items: center; gap: 8px; border: 2px solid #b98b4a;
+  border-radius: 9px; background: #efe4bf; padding: 5px 8px; }
+#hud .bm-ledger-row > img { width: 40px; height: 44px; object-fit: contain; }
+#hud .bm-ledger-row .bm-meta { flex: 1; min-width: 0; }
+#hud .bm-ledger-gain, #hud .bm-ledger-loss { font-weight: 800; white-space: nowrap;
+  display: flex; align-items: center; gap: 3px; }
+#hud .bm-ledger-gain { color: #2c7a2c; }
+#hud .bm-ledger-loss { color: #a33328; }
+#hud .bm-ledger-gain img, #hud .bm-ledger-loss img { width: 15px; height: 15px; }
 /* Wide layout: the compose form is permanently docked beside the list, so its tab
    would be a button that toggles nothing. */
 #hud .bm-tab-compose { display: none; }

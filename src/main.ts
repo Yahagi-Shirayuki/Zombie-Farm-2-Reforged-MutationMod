@@ -2582,6 +2582,13 @@ async function main() {
     saveManager.flushCritical();
     return result;
   };
+  hud.getBlackMarketFulfillments = async () => (await api.blackMarketFulfillments()).fulfillments;
+  hud.onCollectBlackMarketOrder = async (orderId) => {
+    // Collection is pure acknowledgment — the trade settled when it happened —
+    // so no writer preparation or authoritative refresh is needed.
+    await api.collectBlackMarketOrder(orderId);
+  };
+  hud.getBlackMarketHistory = () => api.blackMarketHistory();
   hud.refreshFriends = async () => {
     const list = await api.getFriends();
     state.friends = list.map(api.toFriend); // server list becomes the cache
@@ -2690,6 +2697,12 @@ async function main() {
       const n = hud.getRequests?.().length ?? 0;
       if (n) hud.showToast(`You have ${n} friend request${n === 1 ? "" : "s"}! 👋`);
     }).catch(() => { /* best-effort toast; offline boot must not surface an error */ });
+    void hud.getBlackMarketFulfillments?.().then((rows) => {
+      const n = rows.length;
+      if (n) hud.showToast(n === 1
+        ? "One of your Black Market posts was fulfilled! Visit the market to collect. 💰"
+        : `${n} of your Black Market posts were fulfilled! Visit the market to collect. 💰`);
+    }).catch(() => { /* best-effort toast; a market-disabled server must not surface an error */ });
   }
 
   // Night lighting toggle (Developer menu). Was the N key; now driven from the HUD.

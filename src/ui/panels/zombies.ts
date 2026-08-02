@@ -495,6 +495,45 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
   show(initialTab);
 }
 
+// Undiscovered portraits must not expose the real art: a CSS filter only blacks
+// out the on-screen pixels, so "Save image" / long-press would still save the
+// full-colour PNG. Instead we bake a genuinely black copy through a canvas and
+// use that data-URL as the img src — the silhouette IS the image.
+const silhouetteCache = new Map<string, Promise<string>>();
+function silhouetteOf(url: string): Promise<string> {
+  let p = silhouetteCache.get(url);
+  if (!p) {
+    p = new Promise<string>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        const ctx = c.getContext("2d")!;
+        ctx.drawImage(img, 0, 0);
+        ctx.globalCompositeOperation = "source-in";
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, c.width, c.height);
+        resolve(c.toDataURL("image/png"));
+      };
+      img.onerror = () => reject(new Error(`portrait load failed: ${url}`));
+      img.src = url;
+    });
+    silhouetteCache.set(url, p);
+  }
+  return p;
+}
+
+/** An <img> showing only the black silhouette of the portrait at `url`. The
+ *  real art is never assigned as src, so saving the image saves the shadow. */
+function silhouetteImg(url: string): HTMLImageElement {
+  const pim = document.createElement("img");
+  pim.className = "zr-por-img alm-sil";
+  pim.draggable = false;
+  if (url) silhouetteOf(url).then((src) => { pim.src = src; }).catch(() => {});
+  return pim;
+}
+
 /** One Almanac tile: the species portrait (a black silhouette until obtained),
  *  its name, and the lifetime count. Tapping opens the entry detail. */
 function buildAlmanacCard(hud: Hud, entry: AlmanacEntryView): HTMLElement {
@@ -502,10 +541,14 @@ function buildAlmanacCard(hud: Hud, entry: AlmanacEntryView): HTMLElement {
   card.className = "zr-card alm-card";
   const por = document.createElement("div");
   por.className = "zr-por";
-  const pim = document.createElement("img");
-  pim.className = "zr-por-img";
-  if (entry.portrait) pim.src = entry.portrait;
-  if (!entry.obtained) pim.classList.add("alm-sil");
+  let pim: HTMLImageElement;
+  if (entry.obtained) {
+    pim = document.createElement("img");
+    pim.className = "zr-por-img";
+    if (entry.portrait) pim.src = entry.portrait;
+  } else {
+    pim = silhouetteImg(entry.portrait);
+  }
   por.appendChild(pim);
   if (entry.obtained) {
     const count = document.createElement("span");
@@ -561,10 +604,7 @@ function openAlmanacEntry(hud: Hud, entry: AlmanacEntryView) {
   wrap.className = "alm-detail";
   const por = document.createElement("div");
   por.className = "zr-por alm-detail-por";
-  const pim = document.createElement("img");
-  pim.className = "zr-por-img alm-sil";
-  if (entry.portrait) pim.src = entry.portrait;
-  por.appendChild(pim);
+  por.appendChild(silhouetteImg(entry.portrait));
   const title = document.createElement("h2");
   title.textContent = entry.name;
   const status = document.createElement("div");
