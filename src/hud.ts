@@ -2763,11 +2763,11 @@ export class Hud {
           cost.append(String(order.priceBrains));
           const brain = document.createElement("img"); brain.src = UI("topbar_brain_icon.png"); cost.appendChild(brain);
           body.append(name, meta, cost); marketCard.append(portrait, body);
-          const action = document.createElement("button");
           // Filled in for other players' listings: inspecting one offers the trade.
           let inspectLock: string | undefined;
           let inspectTrade: (() => Promise<void>) | undefined;
           if (order.mine) {
+            const action = document.createElement("button");
             action.className = "cancel"; action.textContent = "Cancel Post";
             action.onclick = async (event) => {
               event.stopPropagation();
@@ -2776,8 +2776,8 @@ export class Hud {
               try { await this.onCancelBlackMarketOrder?.(order.id); refreshBalance(); await renderOrders(); }
               catch { this.showToast("Could not cancel that post. Refresh and try again."); action.disabled = false; }
             };
+            marketCard.appendChild(action);
           } else {
-            action.textContent = order.kind === "SELL_ZOMBIE" ? "Buy Zombie" : "Sell Matching Zombie";
             const purchaseLock = order.kind === "SELL_ZOMBIE" ? purchaseLockFor(order.zombieKey) : null;
             if (purchaseLock) {
               marketCard.classList.add("locked");
@@ -2785,10 +2785,8 @@ export class Hud {
               lockNote.className = "bm-lock";
               lockNote.textContent = purchaseLock.label;
               body.appendChild(lockNote);
-              action.textContent = purchaseLock.label;
-              action.disabled = true;
             }
-            const completeTrade = async () => {
+            const completeTrade = async (rowAction?: HTMLButtonElement) => {
               if (purchaseLock) { this.showToast(purchaseLock.label); return; }
               let unitId: string | undefined;
               let detail = `Spend ${order.priceBrains} brains for this zombie?`;
@@ -2798,7 +2796,7 @@ export class Hud {
                 unitId = match.id; detail = `Trade ${match.name} for ${order.priceBrains} brains?`;
               }
               if (!await this.confirmInGame("Complete this trade?", detail, "Trade")) return;
-              action.disabled = true;
+              if (rowAction) rowAction.disabled = true;
               try { await this.onFulfillBlackMarketOrder?.(order, unitId); refreshBalance(); await renderOrders(); }
               catch (error) {
                 const code = error instanceof Error ? error.message : "";
@@ -2812,7 +2810,15 @@ export class Hud {
                 await renderOrders();
               }
             };
-            action.onclick = (event) => { event.stopPropagation(); void completeTrade(); };
+            // Sale listings carry no row-level Buy button: tapping the listing opens
+            // the zombie card, and the purchase happens from there. Wanted posts keep
+            // their row action.
+            if (order.kind === "BUY_ZOMBIE") {
+              const action = document.createElement("button");
+              action.textContent = "Sell Matching Zombie";
+              action.onclick = (event) => { event.stopPropagation(); void completeTrade(action); };
+              marketCard.appendChild(action);
+            }
             inspectLock = purchaseLock?.label;
             inspectTrade = completeTrade;
           }
@@ -2829,7 +2835,7 @@ export class Hud {
               inspect();
             };
           }
-          marketCard.appendChild(action); list.appendChild(marketCard);
+          list.appendChild(marketCard);
         }
       } catch {
         if (generation === renderGeneration) list.innerHTML = `<div class="bm-empty">Black Market is unavailable right now.</div>`;
