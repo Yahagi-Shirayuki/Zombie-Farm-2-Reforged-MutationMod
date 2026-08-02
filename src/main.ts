@@ -5,7 +5,7 @@ import { snapPlowOrigin } from "./plowSelection";
 // blocks — no 'unsafe-eval'). Side-effect import; must run before `new Application()`.
 // pixi.js lists ./lib/unsafe-eval/init.* under "sideEffects", so it survives bundling.
 import "pixi.js/unsafe-eval";
-import { loadAssets, ensureObjectTexture, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, lootImage, purchasableZombies, placeablePurchaseLimit } from "./assets";
+import { loadAssets, ensureObjectTexture, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit } from "./assets";
 import { Field, CARROT, CropConfig, PLOT } from "./Field";
 import { Actor } from "./Actor";
 import { PetActor } from "./PetActor";
@@ -3185,7 +3185,7 @@ async function main() {
       if (drop?.brains)
         return { index, name: entry, icon: BASE + "assets/ui/topbar_brain_icon.png", kind: "brains", actionLabel: "Claim" };
       const pdef = receivedDef(entry);
-      const dropArt = drop?.icon ? lootImage(drop.icon) : "";
+      const dropArt = raidRewardImage(assets, entry);
       if (pdef)
         return {
           index, name: entry, icon: dropArt || `${BASE}assets/objects/${pdef.sprite}`,

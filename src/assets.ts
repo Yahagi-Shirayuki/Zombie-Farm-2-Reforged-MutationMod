@@ -418,6 +418,23 @@ export interface DropDef {
 /** URL of a loot item's picture. */
 export const lootImage = (file: string) => `${BASE}assets/raids/loot/${file}`;
 
+/** Picture shown for a raid reward. Placeable rewards use their canonical object
+ *  sprite—the same image Storage shows after the object has been placed and packed
+ *  away. The recovered loot-atlas indexes are unreliable for several drops. */
+export function raidRewardImage(
+  assets: Pick<GameAssets, "drops" | "placeables" | "boosts">,
+  name: string,
+): string {
+  const drop = assets.drops[name];
+  if (drop?.tile) {
+    const placeable = assets.placeables.find((candidate) => candidate.key === drop.tile);
+    if (placeable) return `${BASE}assets/objects/${placeable.sprite}`;
+  }
+  if (drop?.icon) return lootImage(drop.icon);
+  const boost = assets.boosts.find((candidate) => candidate.name === name);
+  return boost?.icon ? `${BASE}assets/boosts/${boost.icon}` : "";
+}
+
 /** A Farm Size expansion (from tools/prep_upgrades.py). Payable in gold OR brains
  *  (the source ships each size as a gold entry + a brains entry, merged here). */
 export interface FarmSizeUpgrade {

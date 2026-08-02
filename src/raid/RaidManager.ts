@@ -5,7 +5,7 @@
 // The game ALWAYS plays raids in the live scene (beginRaid + finishRaid). `start()` is a
 // headless instant-resolve (beginRaid + resolveRaid + finishRaid) retained ONLY for the
 // ZF.runRaid dev hook and tests — it is not wired to any player-facing control.
-import { GameAssets, zombiePortrait, raidImage, lootImage } from "../assets";
+import { GameAssets, zombiePortrait, raidImage, raidRewardImage } from "../assets";
 import { GameState } from "../GameState";
 import { ZombieField } from "../zombie/ZombieField";
 import { OwnedZombie } from "../zombie/types";
@@ -28,7 +28,6 @@ import {
   raidTier,
   rewardPreview,
 } from "./RaidCatalog";
-import { BASE } from "../base";
 import { ABILITY_TIER, ABILITY_POOL } from "../zombie/traits";
 import { displayTotals } from "../zombie/statDisplay";
 import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidOutcome, RaidStage } from "./types";
@@ -717,11 +716,7 @@ export class RaidManager {
   }
 
   private lootIcon(name: string): string {
-    const d = this.assets.drops[name];
-    if (d && d.icon) return lootImage(d.icon);
-    const b = this.assets.boosts.find((x) => x.name === name);
-    if (b && b.icon) return `${BASE}assets/boosts/${b.icon}`;
-    return "";
+    return raidRewardImage(this.assets, name);
   }
 
   /** Headless instant-resolve: commit, resolve the fight instantly, apply rewards.
