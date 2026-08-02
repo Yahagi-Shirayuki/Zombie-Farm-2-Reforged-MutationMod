@@ -23,8 +23,9 @@ export const EPIC_QUEST_ZOMBIE_REWARDS: Readonly<Record<string, string>> = {
 export const epicQuestZombieReward = (questId: string): string | null =>
   EPIC_QUEST_ZOMBIE_REWARDS[questId] ?? null;
 
-/** Farm first; once the authoritative deployed cap is full, preserve the earned
- * unit in zombie storage. Storage overflow remains protected and visible. */
+/** Farm first; once the authoritative deployed cap is full, the earned unit is filed
+ * in Received instead of being destroyed. It is not yet in the roster — claiming it
+ * from Received later takes a real Mausoleum slot (see storage.claim). */
 export const shouldStoreEpicReward = (activeCount: number, activeCapacity: number): boolean =>
   activeCount >= Math.max(0, activeCapacity);
 

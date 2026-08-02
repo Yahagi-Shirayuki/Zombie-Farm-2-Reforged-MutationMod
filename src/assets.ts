@@ -200,7 +200,7 @@ export interface ZombieDef {
   dex: number;
   con: number;
   focus: number;
-  tier?: number; // 0..5 combat tier; drives Zombie Pot species selection (higher wins)
+  tier?: number; // 0..5 combat tier; retained for combat and persisted Pot compatibility
   specialSprite?: string; // named source zombie rendered from its dedicated sheet
   rewardOnly?: boolean; // earned from an event/quest; never shown as a plantable Market crop
   marketHidden?: boolean; // obtained through a voucher/gift rather than planted directly

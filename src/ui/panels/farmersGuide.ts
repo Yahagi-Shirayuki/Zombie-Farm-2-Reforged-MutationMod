@@ -93,7 +93,7 @@ export const FARMERS_GUIDE_PAGES: GuidePage[] = [
       },
       {
         title: "Zombie Pot",
-        body: "The Zombie Pot can also combine two zombies and inherit compatible traits. At higher levels, this comes with a low chance of mutating into powerful special zombies.",
+        body: "The Zombie Pot can also combine two zombies and inherit compatible traits. The zombie you place in Slot 1 decides what type comes out — Slot 2 only donates its mutations, and where two mutations compete for the same body part the stronger one wins. Special zombies fit in Slot 1 only, and are always passed on. At higher levels, this comes with a low chance of mutating into powerful special zombies.",
       },
     ],
   },
@@ -110,6 +110,10 @@ export const FARMERS_GUIDE_PAGES: GuidePage[] = [
       {
         title: "Epic Bosses",
         body: "Starting at level 24, you can begin limited 14-day boss events from Market → Epic Boss. Boss damage carries between attempts. Harvesting crops during an event provides fight tokens, which allow you to take another attempt at the boss. Defeating the boss provides escalating special rewards, including extremely powerful special zombies.",
+      },
+      {
+        title: "Earned Zombies",
+        body: "A zombie you win from a quest, an invasion, or a boss joins the farm right away when there is an open army slot. If your farm is full it waits in Storage → Received instead, and is never lost. Claiming it from there moves it into the Mausoleum, so you will need a Mausoleum with a free space before it can join your roster.",
       },
     ],
   },

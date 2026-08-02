@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { SequencedCommand } from "../../src/net/protocol";
 import { createCombineRandom } from "../../src/zombie/combineSpecies";
+import { encodeReceivedZombie } from "../../src/zombie/receivedReward";
 import plantRows from "../../public/assets/plants.json";
 import {
   applyCommandBatch,
   applyQuestEvents,
   freshGameplayState,
   zombieDefaultMutation,
+  type MutableGameplayState,
 } from "../src/v3/engine";
 import { QUEST_DEFINITIONS } from "../src/questCatalog";
 
@@ -1010,6 +1012,90 @@ describe("protocol v3 command engine", () => {
     expect(result.state.roster[0].key).toBe("ZombieActorRegularCrazy");
   });
 
+  it("claims a Received zombie only into an available Mausoleum slot", () => {
+    const marker = encodeReceivedZombie({
+      id: "received-zombie", key: "ZombieActorGirlTier1", mutation: 4, invasions: 3,
+    });
+    const withoutMausoleum = freshGameplayState();
+    withoutMausoleum.storage.received[marker] = 1;
+    const rejected = applyCommandBatch(withoutMausoleum, commands(
+      { type: "storage.claim", itemName: marker },
+    ), { now: 1 });
+    expect(rejected.results[0]).toMatchObject({ status: "rejected", error: "need_mausoleum" });
+
+    const state = freshGameplayState();
+    state.objects.objects.push({ instanceId: "mausoleum", catalogKey: "mausoleum3", status: "placed" });
+    state.storage.received[marker] = 1;
+    const result = applyCommandBatch(state, commands(
+      { type: "storage.claim", itemName: marker },
+    ), { now: 1 });
+    expect(result.results[0]).toMatchObject({ status: "applied", createdIds: ["received-zombie"] });
+    expect(result.state.storage.received[marker]).toBe(0);
+    expect(result.state.roster).toContainEqual({
+      id: "received-zombie", key: "ZombieActorGirlTier1", mutation: 4, invasions: 3, stored: true,
+    });
+  });
+
+  it("refuses to move a Received zombie into the item shed", () => {
+    const marker = encodeReceivedZombie({
+      id: "received-zombie", key: "ZombieActorGirlTier1", mutation: 0, invasions: 0,
+    });
+    const state = freshGameplayState();
+    state.storage.received[marker] = 1;
+    const result = applyCommandBatch(state, commands(
+      { type: "storage.move", itemKey: marker, quantity: 1, direction: "store" },
+    ), { now: 1 });
+    expect(result.results[0]).toMatchObject({ status: "rejected", error: "bad_item" });
+    expect(result.state.storage.received[marker]).toBe(1);
+    expect(result.state.storage.stored[marker]).toBeUndefined();
+  });
+
+  const specialPair = (): MutableGameplayState => {
+    const state = freshGameplayState();
+    state.roster = [
+      { id: "regular", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: false },
+      { id: "bombie", key: "ZombieActorBombie", mutation: 0, invasions: 0, stored: false },
+    ];
+    return state;
+  };
+
+  it("refuses to START a combine with the special in Zombie Pot slot 2", () => {
+    const state = specialPair();
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine_start", potId: "pot-1", parentAId: "regular", parentBId: "bombie" }
+    ), { now: 1 });
+    expect(result.results[0]).toMatchObject({ status: "rejected", error: "special_slot" });
+    expect(result.state.roster.every((unit) => !unit.lockedByRaid)).toBe(true);
+  });
+
+  it("still collects a slot-2 special from a job started before the rule", () => {
+    // The client has already consumed both parents for this job, and the species
+    // picker preserves the special from either slot — rejecting it at collect would
+    // destroy the result rather than enforce anything.
+    const state = specialPair();
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", parentAId: "regular", parentBId: "bombie" }
+    ), { now: 1, id: () => "child" });
+    expect(result.results[0]).toMatchObject({ status: "applied" });
+    expect(result.state.roster).toContainEqual(expect.objectContaining({
+      id: "child", key: "ZombieActorBombie",
+    }));
+  });
+
+  it("always outputs the slot-1 ordinary species when no special evolution occurs", () => {
+    const state = freshGameplayState();
+    state.roster = [
+      { id: "left", key: "ZombieActorRegularTier1", mutation: 1, invasions: 0, stored: false },
+      { id: "right", key: "ZombieActorLargeTier4", mutation: 8, invasions: 0, stored: false },
+    ];
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", parentAId: "left", parentBId: "right", playerLevel: 24 }
+    ), { now: 1, id: () => "child" });
+    expect(result.state.roster).toContainEqual(expect.objectContaining({
+      id: "child", key: "ZombieActorRegularTier1", mutation: 9,
+    }));
+  });
+
   it("awards the matching combining special on a successful level-25 roll", () => {
     const state = freshGameplayState();
     state.balance.xp = 20_500;
@@ -1035,7 +1121,7 @@ describe("protocol v3 command engine", () => {
     const result = applyCommandBatch(state, commands(
       { type: "roster.combine", parentAId, parentBId, playerLevel: 24 }
     ), { now: 1, id: () => "child" });
-    expect(result.state.roster[0].key).toBe("ZombieActorHeadlessTier3");
+    expect(result.state.roster[0].key).toBe("ZombieActorHeadlessTier1");
   });
 
   it("advances the parent-pair combine quest when the result is collected", () => {

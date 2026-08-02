@@ -32,6 +32,12 @@ export interface MenuCard {
   category?: "normal" | "special" | "mutant"; // zombies only
   description?: string; // optional Market magnifier copy
   cfg: CropConfig;
+  /** Zombie catalog data used to inspect a Black Market listing through the
+   * current player's own ability unlocks. */
+  zombie?: {
+    group: string; className: string; classColor: string;
+    str: number; dex: number; con: number; focus: number; mutation: number;
+  };
 }
 
 export interface EpicBossMarketView {
@@ -122,7 +128,7 @@ export interface ReceivedView {
   index: number;
   name: string;
   icon: string; // image URL ("" = no art)
-  kind: "placeable" | "boost" | "brains" | "trophy";
+  kind: "placeable" | "boost" | "brains" | "zombie" | "trophy";
   actionLabel: string; // "Place" | "Claim" | "" (trophy: display only)
   sellable?: boolean;
 }

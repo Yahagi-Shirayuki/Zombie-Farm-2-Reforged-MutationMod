@@ -88,32 +88,31 @@ describe("species selection (determineBaseClass)", () => {
     return pot.collect()!.key;
   };
 
-  it("mixed veggie + non-veggie: the NON-veggie parent wins", () => {
-    expect(collectKey(snap("veg", { isBaseClass: true }), snap("special", { isBaseClass: false }))).toBe("special");
-    expect(collectKey(snap("special", { isBaseClass: false }), snap("veg", { isBaseClass: true }))).toBe("special");
+  it("uses the first parent species regardless of mutant or combat tier", () => {
+    expect(collectKey(snap("veg", { isBaseClass: true }), snap("ordinary", { tier: 5 }))).toBe("veg");
+    expect(collectKey(snap("low", { tier: 1 }), snap("high", { tier: 5 }))).toBe("low");
   });
 
-  it("both non-veggie: the higher combat tier wins (deterministic)", () => {
-    expect(
-      collectKey(snap("hi", { isBaseClass: false, tier: 3 }), snap("lo", { isBaseClass: false, tier: 1 }))
-    ).toBe("hi");
-  });
-
-  it("equal-tier non-veggie: the ONLY coin flip in the system", () => {
+  it("does not use the ordinary-species random source", () => {
     const a = snap("A", { isBaseClass: false, tier: 2 });
     const b = snap("B", { isBaseClass: false, tier: 2 });
-    expect(collectKey(a, b, 0.4)).toBe("A"); // rng < 0.5 -> A
-    expect(collectKey(a, b, 0.6)).toBe("B"); // rng >= 0.5 -> B
+    expect(collectKey(a, b, 0.4)).toBe("A");
+    expect(collectKey(a, b, 0.6)).toBe("A");
   });
 
-  it("refuses to start with two special parents", () => {
+  it("allows a special only in slot 1 and always preserves it", () => {
     const { pot } = makePot();
     expect(pot.start(
       snap("A", { isSpecial: true }),
-      snap("B", { isSpecial: true }),
+      snap("B"),
       false
-    )).toBe(false);
-    expect(pot.busy).toBe(false);
+    )).toBe(true);
+    pot.finishNow();
+    expect(pot.collect()?.key).toBe("A");
+
+    const second = makePot().pot;
+    expect(second.start(snap("A"), snap("B", { isSpecial: true }), false)).toBe(false);
+    expect(second.busy).toBe(false);
   });
 
   it("persists the level and type needed for the rare-special roll", () => {
@@ -136,7 +135,7 @@ describe("species selection (determineBaseClass)", () => {
     const a = { ...snap("A", { group: "Regular", tier: 2 }), id: "parent-a" };
     const b = { ...snap("B", { group: "Large", tier: 2 }), id: "parent-b" };
     first.start(a, b, false, 0, 25);
-    second.start(b, a, false, 0, 25);
+    second.start(a, b, false, 0, 25);
     expect(first.collect()?.key).toBe(second.collect()?.key);
   });
 });

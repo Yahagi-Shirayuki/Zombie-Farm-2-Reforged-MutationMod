@@ -11,9 +11,11 @@ import { Actor } from "./Actor";
 import { PetActor } from "./PetActor";
 import { WalkController } from "./WalkController";
 import { ZombieField } from "./zombie/ZombieField";
-import { makeOwned } from "./zombie/types";
+import { makeOwned, type OwnedZombie } from "./zombie/types";
+import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
 import { POT_DURATION_MS } from "./zombie/ZombiePot";
 import { GameState } from "./GameState";
+import { takeStoredObject } from "./storedObjectOwnership";
 import { Hud, graveNeededFor, LevelUpUnlock, ReceivedView, QuestCompleteView, QuestReward, type Mode } from "./hud";
 import { JobSystem } from "./JobSystem";
 import { AudioManager } from "./audio";
@@ -239,6 +241,10 @@ async function main() {
       // exact displayed gain the grown unit's stat tile will show.
       description: mutationMarketDescription(z, z.mutation ?? 0),
       portrait: zombiePortrait(z.key), // per-type composited portrait
+      zombie: {
+        group: z.group, className: z.className, classColor: z.classColor,
+        str: z.str, dex: z.dex, con: z.con, focus: z.focus, mutation: z.mutation ?? 0,
+      },
       cfg,
     };
   });
@@ -839,6 +845,28 @@ async function main() {
     if (!questCompleteShowing) showNextQuestComplete();
   };
 
+  /**
+   * Place a zombie earned outside the crop cycle (quest, voucher, rare raid drop).
+   * A full active farm files it in Received instead of destroying it; claiming it
+   * from there later costs a real Mausoleum slot.
+   *
+   * Returns the deployed unit, or null when the award went to Received.
+   *
+   * ONLINE the Received bucket is server-owned: the authoritative grant already
+   * writes its own marker, and a locally minted one would be erased by the next
+   * storage sync (and could not be claimed, since the server has never seen that
+   * id). So the local marker is written only when this client owns storage.
+   */
+  const grantEarnedZombie = (key: string): OwnedZombie | null => {
+    if (zombies.canAdd()) return zombies.grantReward(key, walk.tile.col, walk.tile.row);
+    if (!onlineFarm) {
+      state.receiveItem(encodeReceivedZombie({
+        id: crypto.randomUUID(), key, mutation: zombieDefs.get(key)?.mutation ?? 0, invasions: 0,
+      }));
+    }
+    return null;
+  };
+
   // The data-driven quest engine (all 96 quests from quests.json). Rewards route to
   // GameState / the roster; the HUD rail and the completion popup come from `hud`.
   const quests = new QuestSystem(
@@ -862,7 +890,7 @@ async function main() {
         else if (key === "Golden Dice") state.addBoost("golden_dice");
         else state.receiveItem(key);
       },
-      grantZombie: (key) => { zombies.grantReward(key, walk.tile.col, walk.tile.row); },
+      grantZombie: (key) => { grantEarnedZombie(key); },
       completed: (def) => celebrateQuest(def),
       requestAuthoritativeCompletionCheck: () => {
         // Some effects post their quest notification just before enqueueing their
@@ -879,8 +907,14 @@ async function main() {
   // that zombie OR already hold an (unused) voucher granting it. The check is keyed
   // by the RESULTING zombie, so ordinary and pink Cupid use independent one-copy
   // limits while duplicate vouchers for the same exact actor still share a limit.
+  // A copy waiting in Received counts as owned (it just hasn't taken its Mausoleum
+  // slot yet), so a full farm can't be used to redeem a second voucher for the same
+  // unique. The server applies the same rule to `power.use`.
   const ownsGiftZombie = (giftKey: string) =>
-    !!giftKey && zombies.roster().some((z) => z.key === giftKey);
+    !!giftKey && (
+      zombies.roster().some((z) => z.key === giftKey) ||
+      state.received.some((entry) => parseReceivedZombie(entry)?.key === giftKey)
+    );
   const holdsGiftVoucher = (giftKey: string) =>
     !!giftKey &&
     assets.boosts.some(
@@ -1083,14 +1117,15 @@ async function main() {
       if (!def.giftZombieKey) return false;
       // 1 per farm: don't spawn a duplicate of a gift zombie you already own.
       if (ownsGiftZombie(def.giftZombieKey)) { floatText(c.x, c.y, `Already have ${def.name}!`); return false; }
+      if (!zombieDefs.has(def.giftZombieKey)) return false;
       // ONLINE, the voucher `use` grants this unit server-side, so spawn it verified
-      // (no onGrant) and hand its id to onUseBoost to send. Awarded zombies overflow
-      // into storage when the army is full, even if storage is already above its cap.
+      // (no onGrant) and hand its id to onUseBoost to send. A full active farm files
+      // the award in Received instead — the server does exactly the same, and reports
+      // no created id for it, so `giftUnitId` must stay null on that path.
       // The server re-checks the catalog key, voucher count, and 1-per-farm rule.
-      const unit = zombies.grantReward(def.giftZombieKey, walk.tile.col, walk.tile.row);
-      if (!unit) return false;
-      giftUnitId = unit.id;
-      floatText(c.x, c.y, `Got ${def.name}!`);
+      const unit = grantEarnedZombie(def.giftZombieKey);
+      giftUnitId = unit?.id ?? null;
+      floatText(c.x, c.y, unit ? `Got ${def.name}!` : `${def.name} sent to Received!`);
       return true;
     }
     // concentration / dice are spent on the Invade screens, not on the farm.
@@ -2129,7 +2164,10 @@ async function main() {
         : null,
     };
   };
-  hud.canCombineZombie = (key) => !zombieDefs.get(key)?.rewardOnly;
+  hud.canCombineZombie = (key, slot) => {
+    const def = zombieDefs.get(key);
+    return !def?.rewardOnly && !(slot === "B" && def?.category === "special");
+  };
   hud.onCombine = async (idA, idB) => {
     if (onlineGameplayBlocked()) return false;
     if (!activePotId) return false;
@@ -2178,8 +2216,10 @@ async function main() {
     {
       save: () => { saveManager.save(); void economy?.flush(); },
       grantZombie: (key) => {
-        zombies.grantReward(key, walk.tile.col, walk.tile.row);
-        hud.showToast(`${zombieDefs.get(key)?.name ?? "Rare zombie"} joined your farm!`);
+        const name = zombieDefs.get(key)?.name ?? "Rare zombie";
+        hud.showToast(grantEarnedZombie(key)
+          ? `${name} joined your farm!`
+          : `${name} was sent to Received.`);
       },
       placedCount: (key) => field.placedCount(key),
     },
@@ -2798,8 +2838,8 @@ async function main() {
             zombies.recordInvasion(server.survivors);
             zombies.removeCasualties(server.losses);
             for (const unit of server.newZombies) {
-              zombies.grantReward(unit.key, walk.tile.col, walk.tile.row, unit.id, unit.stored);
-              hud.showToast(`${zombieDefs.get(unit.key)?.name ?? "Epic reward zombie"} joined your ${unit.stored ? "Mausoleum" : "farm"}!`);
+              if (!unit.received) zombies.grantReward(unit.key, walk.tile.col, walk.tile.row, unit.id, unit.stored);
+              hud.showToast(`${zombieDefs.get(unit.key)?.name ?? "Epic reward zombie"} joined your ${unit.received ? "Received storage" : unit.stored ? "Mausoleum" : "farm"}!`);
             }
             economy?.adoptEpicBossResult(server);
             void economy?.refreshAuthoritative().catch(() => { /* reconcile again on next settle */ });
@@ -2976,19 +3016,21 @@ async function main() {
             tutorial?.onRaidResolved();
             const drops = res.loot ? [{ name: res.loot.name, icon: raids.lootIconFor(res.loot.name) }] : [];
             if (res.newZombie) {
-              zombies.grantReward(
-                res.newZombie.key,
-                walk.tile.col,
-                walk.tile.row,
-                res.newZombie.id,
-                res.newZombie.stored
-              );
+              if (!res.newZombie.received) {
+                zombies.grantReward(
+                  res.newZombie.key,
+                  walk.tile.col,
+                  walk.tile.row,
+                  res.newZombie.id,
+                  res.newZombie.stored
+                );
+              }
               drops.push({
                 name: zombieDefs.get(res.newZombie.key)?.name ?? "Rare zombie",
                 icon: zombiePortrait(res.newZombie.key),
               });
               hud.showToast(
-                `${zombieDefs.get(res.newZombie.key)?.name ?? "Rare zombie"} joined your ${res.newZombie.stored ? "Mausoleum" : "farm"}!`
+                `${zombieDefs.get(res.newZombie.key)?.name ?? "Rare zombie"} joined your ${res.newZombie.received ? "Received storage" : res.newZombie.stored ? "Mausoleum" : "farm"}!`
               );
             }
             hud.setRaidResultLoot(drops, res.gold);
@@ -3128,6 +3170,14 @@ async function main() {
     placeByName.get(entry) ?? placeCatalog.get(assets.drops[entry]?.tile ?? "");
   const receivedViews = (): ReceivedView[] =>
     state.received.map((entry, index): ReceivedView => {
+      const zombie = parseReceivedZombie(entry);
+      if (zombie) {
+        const def = zombieDefs.get(zombie.key);
+        return {
+          index, name: def?.name ?? "Zombie reward", icon: zombiePortrait(zombie.key),
+          kind: "zombie", actionLabel: "Store in Mausoleum",
+        };
+      }
       const boost = assets.boosts.find((b) => b.name === entry);
       if (boost)
         return { index, name: entry, icon: `${BASE}assets/boosts/${boost.icon}`, kind: "boost", actionLabel: "Claim" };
@@ -3150,6 +3200,16 @@ async function main() {
     if (onlineGameplayBlocked()) return;
     const entry = state.received[index];
     if (entry == null) return;
+    const zombie = parseReceivedZombie(entry);
+    if (zombie) {
+      if (!field.mausoleumId()) { hud.showToast("Place a Mausoleum before claiming this zombie."); return; }
+      if (zombies.mausoleumFull) { hud.showToast("Make room in the Mausoleum first."); return; }
+      if (economy && !economy.submitStorageClaim(entry, {})) return;
+      zombies.grantReward(zombie.key, walk.tile.col, walk.tile.row, zombie.id, true);
+      state.takeReceivedAt(index);
+      saveManager.flushCritical();
+      return;
+    }
     const boost = assets.boosts.find((b) => b.name === entry);
     if (boost) {
       // ONLINE: atomically consume Received into the server-owned boost inventory.
@@ -3236,13 +3296,16 @@ async function main() {
     if (!field.canPlaceObject(oc, or, def)) return;
     // Retrieving a stored item: already owned, so it's free and places just one.
     if (retrieving) {
-      field.placeObject(def, oc, or, retrieving.instanceId, undefined, placeFlipped);
+      const selected = retrieving;
+      if (!takeStoredObject(state, storedObjectIds, selected)) {
+        retrieving = null;
+        hud.setPlacing(null);
+        return;
+      }
+      field.placeObject(def, oc, or, selected.instanceId, undefined, placeFlipped);
       audio.play("place");
       if (def.armyMax) state.addZombieMax(def.armyMax); // re-apply functional effect
-      state.retrieveItem(retrieving.key);
-      economy?.submitObjectStatus(retrieving.instanceId, "placed");
-      const ids = storedObjectIds.get(retrieving.key) ?? [];
-      storedObjectIds.set(retrieving.key, ids.filter((id) => id !== retrieving!.instanceId));
+      economy?.submitObjectStatus(selected.instanceId, "placed");
       retrieving = null;
       hud.setPlacing(null); // one at a time
       return;
@@ -3367,9 +3430,11 @@ async function main() {
       `Sell this stored item for ${refund} gold? This cannot be undone.`,
       `Sell +${refund}g`,
     )) return false;
-    if (!state.retrieveItem(key)) return false;
-    const ids = storedObjectIds.get(key) ?? [];
-    storedObjectIds.set(key, ids.filter((id) => id !== instanceId));
+    if (!takeStoredObject(state, storedObjectIds, { key, instanceId })) return false;
+    if (retrieving?.instanceId === instanceId) {
+      retrieving = null;
+      hud.setPlacing(null);
+    }
     objectPurchases.delete(instanceId);
     if (economy) {
       economy.submitObject({ type: "refund", key, instanceId }, { gold: refund });

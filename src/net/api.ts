@@ -865,7 +865,7 @@ export interface RaidFinishResult {
    *  replayed finish. */
   loot?: { name: string; kind: "gold" | "boost" | "item" } | null;
   /** Extremely rare roster reward, placed on the farm or protected in the Mausoleum. */
-  newZombie?: { id: string; key: string; stored: boolean } | null;
+  newZombie?: { id: string; key: string; stored: boolean; received?: boolean } | null;
   outcome?: RaidOutcome;
   questChanges?: QuestChange[];
   inventory?: Record<string, number>;
@@ -931,7 +931,7 @@ export interface EpicBossFinishResult {
   losses: string[];
   quests: import("./protocol").QuestProjection;
   questChanges: QuestChange[];
-  newZombies: { id: string; key: string; stored: boolean }[];
+  newZombies: { id: string; key: string; stored: boolean; received?: boolean }[];
 }
 
 export const epicBossActivate = (activationId: string, bossId: string) => req<{

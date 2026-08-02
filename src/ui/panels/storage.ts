@@ -214,7 +214,7 @@ export function openStorage(hud: Hud, initialTab: string = "Items", managePen = 
       } else {
         const hint = document.createElement("div");
         hint.className = "st-hint";
-        hint.textContent = "Claim rewards, place decorations, or sell sellable decorations.";
+        hint.textContent = "Claim rewards, move zombies into the Mausoleum, place decorations, or sell decorations.";
         body.appendChild(hint);
         const grid = document.createElement("div");
         grid.className = "rcv-grid";

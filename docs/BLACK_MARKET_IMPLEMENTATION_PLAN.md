@@ -96,9 +96,11 @@ Posting immediately removes the offered asset from usable account state:
   in the order.
 
 Cancellation automatically restores the escrowed asset. A returned or purchased zombie
-is delivered as stored and may overflow normal storage capacity, matching protected
-reward delivery; an offline recipient must never lose a fulfilled trade because its
-farm or Mausoleum is full.
+is delivered straight into the roster as stored and may overflow normal Mausoleum
+capacity; an offline recipient must never lose a fulfilled trade because its farm or
+Mausoleum is full. (Trades deliberately keep this overflow. Quest, Epic Boss and raid
+rewards no longer do — those route through Received and take a real Mausoleum slot when
+claimed — because the recipient of a trade is not present to make room.)
 
 Fulfillment settles both sides automatically. There is no proceeds inbox or separate
 claim step. If the order creator is offline, the server updates that account and bumps

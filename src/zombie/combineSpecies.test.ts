@@ -11,21 +11,18 @@ const parent = (
   extra: Partial<CombineSpeciesParent> = {}
 ): CombineSpeciesParent => ({ key, tier: 1, group: "Regular", ...extra });
 
-const sequence = (...values: number[]) => {
-  let index = 0;
-  return () => values[index++] ?? values[values.length - 1] ?? 0;
-};
-
 describe("Zombie Pot species selection", () => {
-  it("uses the same stable roll regardless of parent slot order", () => {
+  it("uses the same stable roll regardless of parent id order", () => {
     const forward = createCombineRandom("parent-a", "parent-b");
     const reverse = createCombineRandom("parent-b", "parent-a");
     expect([forward(), forward(), forward()]).toEqual([reverse(), reverse(), reverse()]);
+  });
 
+  it("uses slot 1 as the output species", () => {
     const garden = parent("garden", { group: "Garden" });
     const large = parent("large", { group: "Large" });
-    expect(selectCombineSpecies(garden, large, 25, sequence(0.05, 0.25)))
-      .toBe(selectCombineSpecies(large, garden, 25, sequence(0.05, 0.25)));
+    expect(selectCombineSpecies(garden, large, 24, () => 0.99)).toBe("garden");
+    expect(selectCombineSpecies(large, garden, 24, () => 0.99)).toBe("large");
   });
 
   it("rejects two specials", () => {
@@ -37,13 +34,36 @@ describe("Zombie Pot species selection", () => {
     )).toBeNull();
   });
 
-  it("always preserves the one special parent's species", () => {
+  it("always preserves a named special parent's species", () => {
     expect(selectCombineSpecies(
       parent("ZombieActorRegularCrazy", { tier: 5, isSpecial: true }),
       parent("ordinary", { tier: 99 }),
       45,
       () => 0
     )).toBe("ZombieActorRegularCrazy");
+    // Backward compatibility for a combine persisted before specials were
+    // restricted to slot 1.
+    expect(selectCombineSpecies(
+      parent("ordinary"),
+      parent("ZombieActorBombie", { isSpecial: true, group: "Headless" }),
+      45,
+      () => 0.99
+    )).toBe("ZombieActorBombie");
+  });
+
+  it("keeps the named special edge cases", () => {
+    expect(selectCombineSpecies(
+      parent("ZombieActorBombie", { isSpecial: true, group: "Headless" }),
+      parent("ordinary", { group: "Regular" }),
+      45,
+      () => 0
+    )).toBe("ZombieActorBombie");
+    expect(selectCombineSpecies(
+      parent("ZombieActorHeadlessTier3", { group: "Headless", tier: 3 }),
+      parent("ordinary", { group: "Regular" }),
+      25,
+      () => 0.099
+    )).toBe("ZombieActorHeadlessTier5");
   });
 
   it("does not make a combining special before level 25", () => {
@@ -52,7 +72,7 @@ describe("Zombie Pot species selection", () => {
       parent("high", { tier: 4 }),
       24,
       () => 0.05
-    )).toBe("high");
+    )).toBe("low");
   });
 
   it("maps every same-type eligible pair to its combining-only special", () => {
@@ -66,12 +86,12 @@ describe("Zombie Pot species selection", () => {
     }
   });
 
-  it("chooses either input type evenly after a successful mixed-type roll", () => {
+  it("promotes the slot-1 type after a successful mixed-type roll", () => {
     const garden = parent("garden", { group: "Garden" });
     const large = parent("large", { group: "Large" });
-    expect(selectCombineSpecies(garden, large, 25, sequence(0.05, 0.49)))
+    expect(selectCombineSpecies(garden, large, 25, () => 0.05))
       .toBe(COMBINE_SPECIAL_BY_GROUP.Garden);
-    expect(selectCombineSpecies(garden, large, 25, sequence(0.05, 0.50)))
+    expect(selectCombineSpecies(large, garden, 25, () => 0.05))
       .toBe(COMBINE_SPECIAL_BY_GROUP.Large);
   });
 
@@ -81,6 +101,6 @@ describe("Zombie Pot species selection", () => {
       parent("ordinary", { tier: 1 }),
       25,
       () => 0.10
-    )).toBe("ordinary");
+    )).toBe("mutant");
   });
 });

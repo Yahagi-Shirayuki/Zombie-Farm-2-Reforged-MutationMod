@@ -12,6 +12,7 @@ import { rollBrainDrop } from "../../../src/raid/brainDrops";
 import { rollRaidZombieDrop } from "../../../src/raid/zombieDrops";
 import objectRows from "../../../public/assets/placeables.json";
 import { shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
+import { encodeReceivedZombie } from "../../../src/zombie/receivedReward";
 
 const DEFAULT_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 const RAID_TTL_MS = 15 * 60 * 1000;
@@ -373,7 +374,7 @@ export async function finishRaid(
   const brains = !win ? 0
     : pinnedBrains ?? legacyBrainDrop(session.id, econ.recLevel, config.enemyUnits.some((unit) => unit.isBoss));
   let loot: { name: string; kind: "gold" | "boost" | "item" } | null = null;
-  let newZombie: { id: string; key: string; stored: boolean } | null = null;
+  let newZombie: { id: string; key: string; stored: boolean; received?: boolean } | null = null;
   let newZombieName: string | null = null;
   let lootGold = 0;
   if (win) {
@@ -403,6 +404,11 @@ export async function finishRaid(
         key: zombieDrop.key,
         stored: shouldStoreEpicReward(activeCount, activeCapacity),
       };
+      if (newZombie.stored) {
+        newZombie.received = true;
+        const marker = encodeReceivedZombie({ id: newZombie.id, key: newZombie.key, mutation: 0, invasions: 0 });
+        core.storage.received[marker] = 1;
+      }
       newZombieName = zombieDrop.name;
     }
   }
@@ -474,7 +480,7 @@ export async function finishRaid(
   for (const id of survivors) statements.push(db.prepare(`UPDATE roster_v3 SET invasions = invasions + 1
     WHERE account_id = ? AND unit_id = ? AND locked_by_raid = ? AND ${guard}`)
     .bind(accountId, id, session.id, session.id, resultJson));
-  if (newZombie) statements.push(db.prepare(`INSERT INTO roster_v3
+  if (newZombie && !newZombie.received) statements.push(db.prepare(`INSERT INTO roster_v3
     (account_id, unit_id, zombie_key, mutation, invasions, stored, created_at)
     SELECT ?, ?, ?, 0, 0, ?, ? WHERE ${guard}`)
     .bind(accountId, newZombie.id, newZombie.key, newZombie.stored ? 1 : 0, now, session.id, resultJson));

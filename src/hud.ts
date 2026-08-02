@@ -1238,8 +1238,8 @@ export class Hud {
     | null = null;
   /** Start combining two owned zombies by id. */
   onCombine: ((idA: string, idB: string) => boolean | Promise<boolean>) | null = null;
-  /** Reward-only actors cannot be consumed or cloned by the Zombie Pot. */
-  canCombineZombie: ((key: string) => boolean) | null = null;
+  /** Reward-only actors cannot be consumed or cloned; specials only fit slot 1. */
+  canCombineZombie: ((key: string, slot?: "A" | "B") => boolean) | null = null;
   /** Collect a finished combine; returns the new zombie's name (or null). */
   onCollectCombine: (() => string | null | Promise<string | null>) | null = null;
 
@@ -1719,6 +1719,21 @@ export class Hud {
 
     prevBtn.onclick = () => { if (page > 0) { page--; this.audio.play("menuClick"); renderGrid(); } };
     nextBtn.onclick = () => { page++; this.audio.play("menuClick"); renderGrid(); };
+    // Desktop wheel navigation mirrors the pager arrows. Trackpads can emit many
+    // tiny events, so require a deliberate accumulated gesture before changing one
+    // page and reset the gesture immediately afterward.
+    let wheelDelta = 0;
+    mkt.addEventListener("wheel", (event) => {
+      if (isMobile() || pager.style.display === "none") return;
+      const target = event.target as HTMLElement;
+      if (target.closest("input,select,textarea,.bm-list,.bm-mutation-choices")) return;
+      wheelDelta += Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+      if (Math.abs(wheelDelta) < 45) return;
+      event.preventDefault();
+      if (wheelDelta > 0 && !nextBtn.disabled) nextBtn.click();
+      else if (wheelDelta < 0 && !prevBtn.disabled) prevBtn.click();
+      wheelDelta = 0;
+    }, { passive: false });
     // Live-filter as the player types; every keystroke returns to the first page.
     const collapseSearch = () => {
       searchRow.classList.remove("expanded");
@@ -2476,7 +2491,7 @@ export class Hud {
     panel.append(choices);
   }
 
-  private openBlackMarket(initialKind: BlackMarketOrderKind = "BUY_ZOMBIE") {
+  private openBlackMarket(initialKind: BlackMarketOrderKind = "BUY_ZOMBIE", selectedUnitId?: string) {
     this.closeMarket();
     const bg = document.createElement("div");
     bg.className = "mkt-bg bm-bg";
@@ -2625,6 +2640,9 @@ export class Hud {
           asset.append(option);
         }
       }
+      if (selling && selectedUnitId && [...asset.options].some((option) => option.value === selectedUnitId)) {
+        asset.value = selectedUnitId;
+      }
       mutationLabelEl.style.display = selling ? "none" : "flex";
       submit.textContent = selling ? "Post Zombie Sale" : "Post Request";
       refreshComposeStatus();
@@ -2686,9 +2704,13 @@ export class Hud {
           const brain = document.createElement("img"); brain.src = UI("topbar_brain_icon.png"); cost.appendChild(brain);
           body.append(name, meta, cost); marketCard.append(portrait, body);
           const action = document.createElement("button");
+          // Filled in for other players' listings: inspecting one offers the trade.
+          let inspectLock: string | undefined;
+          let inspectTrade: (() => Promise<void>) | undefined;
           if (order.mine) {
             action.className = "cancel"; action.textContent = "Cancel Post";
-            action.onclick = async () => {
+            action.onclick = async (event) => {
+              event.stopPropagation();
               if (!await this.confirmInGame("Cancel this post?", "The escrowed zombie or brains will be returned.", "Cancel Post")) return;
               action.disabled = true;
               try { await this.onCancelBlackMarketOrder?.(order.id); refreshBalance(); await renderOrders(); }
@@ -2706,13 +2728,12 @@ export class Hud {
               action.textContent = purchaseLock.label;
               action.disabled = true;
             }
-            action.onclick = async () => {
+            const completeTrade = async () => {
               if (purchaseLock) { this.showToast(purchaseLock.label); return; }
               let unitId: string | undefined;
               let detail = `Spend ${order.priceBrains} brains for this zombie?`;
               if (order.kind === "BUY_ZOMBIE") {
-                const match = (this.getRoster?.() ?? []).find((zombie) => zombie.key === order.zombieKey &&
-                  matchesBlackMarketMutation(zombie.mutation, order.mutated, order.mutationRequired));
+                const match = await this.chooseBlackMarketZombie(order);
                 if (!match) { this.showToast("You do not own a matching available zombie."); return; }
                 unitId = match.id; detail = `Trade ${match.name} for ${order.priceBrains} brains?`;
               }
@@ -2730,6 +2751,22 @@ export class Hud {
                 else this.showToast("That trade is no longer available. Market refreshed.");
                 await renderOrders();
               }
+            };
+            action.onclick = (event) => { event.stopPropagation(); void completeTrade(); };
+            inspectLock = purchaseLock?.label;
+            inspectTrade = completeTrade;
+          }
+          // Only a listing whose species is in the trading catalog can be inspected;
+          // the rest must not advertise a tap that would do nothing.
+          if (this.blackMarketCardFor(order.zombieKey)) {
+            const inspect = () => this.openBlackMarketZombie(order, inspectLock, inspectTrade);
+            marketCard.classList.add("inspect");
+            marketCard.tabIndex = 0;
+            marketCard.onclick = inspect;
+            marketCard.onkeydown = (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              inspect();
             };
           }
           marketCard.appendChild(action); list.appendChild(marketCard);
@@ -2799,6 +2836,87 @@ export class Hud {
     bg.appendChild(panel);
     this.el.appendChild(bg);
     void renderOrders();
+  }
+
+  /** Show every owned unit that satisfies a wanted order and return the one the
+   * player explicitly chooses. */
+  private chooseBlackMarketZombie(order: BlackMarketOrderView): Promise<RosterEntry | null> {
+    const matches = (this.getRoster?.() ?? []).filter((zombie) => zombie.key === order.zombieKey &&
+      matchesBlackMarketMutation(zombie.mutation, order.mutated, order.mutationRequired));
+    if (!matches.length) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      let settled = false;
+      let closeModal = () => {};
+      const finish = (value: RosterEntry | null) => {
+        if (settled) return;
+        settled = true;
+        closeModal();
+        resolve(value);
+      };
+      const modal = openModal({
+        host: this.el, bgClass: "bm-pick-bg", panelClass: "zl-panel",
+        title: "Choose a zombie to sell", onClose: () => finish(null),
+      });
+      closeModal = modal.close;
+      const list = document.createElement("div");
+      list.className = "zl-list";
+      for (const zombie of matches) {
+        const row = document.createElement("div");
+        row.className = "zl-row";
+        row.appendChild(this.buildZombieCard(this.rosterInfo(zombie), modal.panel));
+        const choose = document.createElement("button");
+        choose.className = "zbtn sell";
+        choose.textContent = `Sell this zombie for ${order.priceBrains} brains`;
+        choose.onclick = () => finish(zombie);
+        row.appendChild(choose);
+        list.appendChild(row);
+      }
+      modal.panel.appendChild(list);
+    });
+  }
+
+  /** The trading-catalog card backing a listing's species, or undefined when that
+   * species carries no inspectable stats (the listing is then display-only). */
+  private blackMarketCardFor(zombieKey: string): MenuCard | undefined {
+    const card = this.blackMarketZombieCards.find((entry) => entry.cfg.key === zombieKey);
+    return card?.zombie ? card : undefined;
+  }
+
+  /** Inspect market zombies with the viewing player's own unlocked abilities and
+   * purchase requirements. Locked listings remain inspectable. */
+  private openBlackMarketZombie(
+    order: BlackMarketOrderView,
+    lockLabel?: string,
+    trade?: () => Promise<void>,
+  ) {
+    const card = this.blackMarketCardFor(order.zombieKey);
+    const zombie = card?.zombie;
+    if (!card || !zombie) return;
+    const mask = order.kind === "SELL_ZOMBIE" ? order.mutation ?? 0 : order.mutationRequired ?? 0;
+    const bonus = mutationBonus(mask);
+    const info: ZombieInfo = {
+      name: card.name, typeName: card.name, key: card.cfg.key,
+      group: zombie.group, className: zombie.className, classColor: zombie.classColor,
+      str: (zombie.str + bonus.str) * this.state.farmerZombieStrengthMult(),
+      dex: zombie.dex + bonus.dex,
+      con: (zombie.con + bonus.con) * this.state.farmerZombieLifeMult(),
+      focus: zombie.focus, mutation: mask, invasions: order.invasions ?? 0,
+      portrait: card.portrait,
+    };
+    const { panel, close } = openModal({ host: this.el, panelClass: "zpanel" });
+    panel.appendChild(this.buildZombieCard(info, panel));
+    const note = document.createElement("div");
+    note.className = lockLabel ? "bm-lock" : "bm-meta";
+    note.textContent = lockLabel ?? `${order.priceBrains} brains · ${order.creatorName}`;
+    panel.appendChild(note);
+    if (!order.mine && trade) {
+      const action = document.createElement("button");
+      action.className = "zbtn sell";
+      action.textContent = order.kind === "SELL_ZOMBIE" ? "Buy this zombie" : "Sell a matching zombie";
+      action.disabled = !!lockLabel;
+      action.onclick = () => { close(); void trade(); };
+      panel.appendChild(action);
+    }
   }
 
   // Friends panel. Two modes, chosen at open time:
@@ -3389,51 +3507,68 @@ export class Hud {
 
     const wrap = this.buildZombieCard(info, panel);
     panel.append(wrap);
+    if (info.id) panel.appendChild(this.buildZombieActions(info, close, refresh));
+  }
 
-    // Roster actions (only when this is an owned, id'd unit).
-    if (info.id) {
-      const btns = document.createElement("div");
-      btns.className = "zbtns";
-      const mk = (label: string, cls: string, enabled: boolean, fn: () => void | Promise<void>) => {
-        const b = document.createElement("button");
-        b.className = `zbtn ${cls}`;
-        b.textContent = label;
-        b.disabled = !enabled;
-        b.onclick = async () => {
-          b.disabled = true;
-          close();
-          await fn();
-          refresh?.();
-        };
-        return b;
-      };
-      if (info.stored) {
-        const canDeploy = this.canDeployZombie ? this.canDeployZombie() : true;
-        btns.appendChild(mk(canDeploy ? "Deploy to farm" : "Farm full", "deploy", canDeploy,
-          () => this.onZombieDeploy?.(info.id!)));
-      } else {
-        const canStore = this.canStoreZombies ? this.canStoreZombies() : true;
-        btns.appendChild(mk("Locate", "locate", true, () => this.onZombieLocate?.(info.id!)));
-        btns.appendChild(mk(canStore ? "Store" : "Need Mausoleum", "store", canStore,
-          () => this.onZombieStore?.(info.id!)));
-      }
-      // Selling is permanent, so it routes through a confirmation window (guards
-      // against dumping a rare/veteran unit by mistake). The value is shown up
-      // front on the button so the player sees what the zombie is worth.
-      const value = zombieSellValue(
-        this.zombieBaseCost?.(info.key) ?? 0,
-        this.zombieCostsBrains?.(info.key) ?? false
-      );
-      const sell = document.createElement("button");
-      sell.className = "zbtn sell";
-      sell.textContent = `Sell +${value}g`;
-      sell.onclick = () => {
+  private buildZombieActions(info: ZombieInfo, close: () => void, refresh?: () => void): HTMLElement {
+    const btns = document.createElement("div");
+    btns.className = "zbtns";
+    const mk = (label: string, cls: string, enabled: boolean, fn: () => void | Promise<void>, reopen = true) => {
+      const button = document.createElement("button");
+      button.className = `zbtn ${cls}`;
+      button.textContent = label;
+      button.disabled = !enabled;
+      button.onclick = async () => {
+        button.disabled = true;
         close();
-        this.confirmSellZombie(info, value, refresh);
+        await fn();
+        if (reopen) refresh?.();
       };
-      btns.appendChild(sell);
-      panel.append(btns);
+      return button;
+    };
+    if (info.stored) {
+      const canDeploy = this.canDeployZombie ? this.canDeployZombie() : true;
+      btns.appendChild(mk(canDeploy ? "Deploy to farm" : "Farm full", "deploy", canDeploy,
+        () => this.onZombieDeploy?.(info.id!)));
+    } else {
+      const canStore = this.canStoreZombies ? this.canStoreZombies() : true;
+      btns.appendChild(mk("Locate", "locate", true, () => this.onZombieLocate?.(info.id!), false));
+      btns.appendChild(mk(canStore ? "Store" : "Need Mausoleum", "store", canStore,
+        () => this.onZombieStore?.(info.id!)));
     }
+    const value = zombieSellValue(
+      this.zombieBaseCost?.(info.key) ?? 0,
+      this.zombieCostsBrains?.(info.key) ?? false
+    );
+    const sell = document.createElement("button");
+    sell.className = "zbtn sell";
+    sell.textContent = "Sell";
+    sell.onclick = () => {
+      close();
+      this.openZombieSellChoices(info, value, refresh);
+    };
+    btns.appendChild(sell);
+    return btns;
+  }
+
+  private openZombieSellChoices(info: ZombieInfo, value: number, refresh?: () => void) {
+    if (!this.socialOnline?.()) { this.confirmSellZombie(info, value, refresh); return; }
+    const { panel, close } = openModal({ host: this.el, panelClass: "confirm-panel", title: "Sell this zombie" });
+    const message = document.createElement("p");
+    message.className = "confirm-msg";
+    message.textContent = "Sell immediately for gold, or create a Black Market post for brains.";
+    const actions = document.createElement("div");
+    actions.className = "zbtns";
+    const gold = document.createElement("button");
+    gold.className = "zbtn sell";
+    gold.textContent = `Sell now +${value}g`;
+    gold.onclick = () => { close(); this.confirmSellZombie(info, value, refresh); };
+    const market = document.createElement("button");
+    market.className = "zbtn deploy";
+    market.textContent = "Sell on Black Market";
+    market.onclick = () => { close(); this.openBlackMarket("SELL_ZOMBIE", info.id); };
+    actions.append(gold, market);
+    panel.append(message, actions);
   }
 
   // Confirmation window for selling a zombie. Names the unit, shows the gold it
@@ -3586,7 +3721,7 @@ export class Hud {
   // represented by its full inspect card (the same one shown when tapping a zombie).
   openZombieList() {
     // position:relative host (zl-panel) for card tooltips
-    const { panel } = openModal({
+    const { panel, close } = openModal({
       host: this.el, bgClass: "zl-bg", panelClass: "zl-panel", replaceSelector: ".zl-bg",
     });
 
@@ -3619,7 +3754,9 @@ export class Hud {
     for (const z of roster) {
       const row = document.createElement("div");
       row.className = "zl-row";
-      row.appendChild(this.buildZombieCard(this.rosterInfo(z), panel));
+      const info = this.rosterInfo(z);
+      row.appendChild(this.buildZombieCard(info, panel));
+      row.appendChild(this.buildZombieActions(info, close, () => this.openZombieList()));
       list.appendChild(row);
     }
   }
@@ -3832,12 +3969,14 @@ export class Hud {
       const roster = (this.getRoster?.() ?? []).filter((zombie) =>
         this.canCombineZombie?.(zombie.key) ?? true
       );
+      const canUseInSlot = (key: string, slot: "A" | "B") =>
+        this.canCombineZombie?.(key, slot) ?? true;
       const head = document.createElement("div");
       head.className = "cmb-head";
       head.innerHTML = `<h2>Zombie Pot</h2>`;
       const time = document.createElement("span");
       time.className = "cmb-time";
-      time.textContent = st?.monolith ? "30 min · Monolith ×½" : "1 hour";
+      time.textContent = st?.monolith ? "15 min · Monolith ×¼" : "1 hour";
       head.appendChild(time);
 
       const slots = document.createElement("div");
@@ -3863,7 +4002,7 @@ export class Hud {
         } else {
           const h = document.createElement("div");
           h.className = "cmb-hint";
-          h.textContent = which === "A" ? "Pick zombie 1" : "Pick zombie 2";
+          h.textContent = which === "A" ? "Slot 1 (output type)" : "Slot 2";
           d.appendChild(h);
         }
         return d;
@@ -3872,6 +4011,10 @@ export class Hud {
       plus.className = "cmb-plus";
       plus.textContent = "+";
       slots.append(slotEl("A"), plus, slotEl("B"));
+
+      const ruleNote = document.createElement("div");
+      ruleNote.className = "cmb-rule-note";
+      ruleNote.textContent = "Slot 1 sets the zombie type; mutations can come from both. Special zombies only fit Slot 1 and are always inherited (special evolution rules still apply).";
 
       const list = document.createElement("div");
       list.className = "cmb-list";
@@ -3883,8 +4026,10 @@ export class Hud {
       } else {
         for (const z of roster) {
           const chosen = z.id === pickA || z.id === pickB;
+          const nextSlot: "A" | "B" = pickA ? "B" : "A";
+          const eligible = canUseInSlot(z.key, nextSlot);
           const c = document.createElement("div");
-          c.className = "cmb-z" + (chosen ? " chosen" : "");
+          c.className = "cmb-z" + (chosen ? " chosen" : "") + (!chosen && !eligible ? " disabled" : "");
           const p = document.createElement("div");
           p.className = "cmb-zpor";
           showPortrait(p, z.key, z.mutation, z.color);
@@ -3899,12 +4044,14 @@ export class Hud {
             m.title = mutationLabel(z.mutation);
             c.appendChild(m);
           }
-          if (!chosen) {
+          if (!chosen && eligible) {
             c.onclick = () => {
               if (!pickA) pickA = z.id;
               else if (!pickB) pickB = z.id;
               renderIdle();
             };
+          } else if (!chosen && !eligible) {
+            c.title = "Special zombies can only be placed in Slot 1.";
           }
           list.appendChild(c);
         }
@@ -3921,7 +4068,7 @@ export class Hud {
         if (ok) { pickA = pickB = null; renderBusy(); }
         else renderIdle();
       };
-      wrap.append(head, slots, list, go);
+      wrap.append(head, slots, ruleNote, list, go);
     };
 
     const st0 = this.getPotStatus?.();

@@ -28,11 +28,12 @@ Black Market** — every one of those is `marketHidden: true` and has no plantin
 | Mystical Mamba | 5 | Zomdini |
 | Mystical Mamba | 40 | Zomtar |
 
-These are granted directly to the deployed farm roster when there is room, or to
-zombie storage when the deployed army is full. Earned rewards may overflow the
-storage limit; only manually storing a deployed zombie is blocked when storage is
-full. They cannot be bought, planted, seeded by migration, or used to duplicate
-themselves in the Zombie Pot.
+These are granted directly to the deployed farm roster when there is room. When the
+deployed army is full the reward is filed in **Received** instead: it is not in the
+roster yet, and claiming it from the Storage panel takes a real Mausoleum slot, so a
+player with no Mausoleum (or a full one) must make room before the unit can join. The
+reward is never destroyed — it waits in Received indefinitely. They cannot be bought,
+planted, seeded by migration, or used to duplicate themselves in the Zombie Pot.
 
 ## Market: Special zombie crops (5)
 
@@ -86,13 +87,24 @@ zombies are the *only* gates, so a zombie whose planting route would be locked c
 
 ## Combining
 
-At player level 25 and above, combining two non-special zombies has a 10% chance
-to create the hidden tier-5 special for one input body type: Garden produces
-Zombutterfly, Large produces Zomviking, Small produces Zombricaun, Female produces
-Zombelly Dancer, Regular produces Zombotron, and Headless produces Skull Head.
-Same-type parents select that type; mixed-type parents choose either input type
-with equal probability. On a failed roll, the ordinary mutant-donor and tier rules
-apply.
+**Slot 1 decides the output species.** Whichever zombie the player puts in the Zombie
+Pot's first slot is the type that comes out; slot 2 contributes only its mutations
+(combined per anatomical slot, with the higher-tier bit winning a same-slot conflict).
+Combat tier and mutant/veggie status no longer affect the result, and the promotion
+roll below is the only randomness left in species selection.
 
-A single combinable special forces its own species as the output. Two specials
-cannot be combined, and Epic/event `rewardOnly` zombies cannot enter the pot at all.
+At player level 25 and above, two **non-special** zombies whose body types both map to
+a combining-only special have a 10% chance to promote the output to **slot 1's** tier-5
+special: Garden produces Zombutterfly, Large produces Zomviking, Small produces
+Zombricaun, Female produces Zombelly Dancer, Regular produces Zombotron, and Headless
+produces Skull Head. A failed roll returns slot 1's ordinary species.
+
+A named special is a permanent output type: it may only be placed in **slot 1** (the
+Pot refuses to start otherwise, client and server), and it is always inherited. Two
+specials cannot be combined, and Epic/event `rewardOnly` zombies cannot enter the pot
+at all.
+
+> Note: this replaces the recovered `determineBaseClass` rules (non-veggie parent wins,
+> then higher combat tier, then a coin flip on a tie — see the zombie-pot disassembly
+> notes). Slot-1-wins is a deliberate design divergence from the source game, chosen so
+> the player controls the result instead of the catalog doing it for them.

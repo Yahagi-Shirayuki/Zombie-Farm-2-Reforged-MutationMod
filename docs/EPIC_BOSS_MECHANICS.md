@@ -58,9 +58,10 @@ Captain Zombie (5) and Admiral Zombie (40), Foul Owl grants Christmas Ghost Zomb
 and Scrooge Zombie (40), and Skunkarella's four-card quest grants Diva Zombie. These
 nine named zombies are reward-only catalog units: they never appear as purchasable
 zombie crops and cannot be consumed or cloned through the Zombie Pot. A reward joins
-the farm when an army slot is open, otherwise it is kept
-in the Mausoleum; protected reward overflow remains visible in the complete Zombies
-roster so a full storage building can never destroy an earned unit.
+the farm when an army slot is open; otherwise it is filed in **Received**, where it
+waits until the player claims it into a free Mausoleum slot. A full farm can never
+destroy an earned unit — but it no longer overflows the Mausoleum either, so claiming
+one may mean selling or deploying something first.
 Until exact binary loot selection is recovered, each victory makes one 35% roll,
 preferring unlocked uncollected drops. Within that pool the pick is **weighted by the
 rung that unlocks each prize** (`epicLootWeight` = `1/level`, fed to the binary's

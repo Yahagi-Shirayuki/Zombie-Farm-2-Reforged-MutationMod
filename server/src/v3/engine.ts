@@ -32,6 +32,7 @@ import {
   combineSubject, combineSubjectAliases, mutantSubjectIndex, unitQuestSubjects,
   unitSubjectAliases,
 } from "../../../src/quest/mutantSubjects";
+import { encodeReceivedZombie, parseReceivedZombie } from "../../../src/zombie/receivedReward";
 
 export const MAX_FARM_PLOTS = 225;
 export const MAX_FUNCTIONAL_OBJECTS = 512;
@@ -94,7 +95,7 @@ function combinerCombined(
   };
 }
 
-/** Use the same special override, rare promotion, mutant-donor, and tier rules as
+/** Use the same slot-1 species, permanent-special, and rare-promotion rules as
  * the timed client Zombie Pot. */
 function combinedSpecies(
   a: RosterUnitProjection,
@@ -190,19 +191,36 @@ function placedCapacity(state: MutableGameplayState): { army: number; storage: n
   return { army, storage };
 }
 
-/** Place a zombie awarded by a non-harvest system. Awards are never lost: once the
- * active army is full they overflow into storage, even beyond its displayed cap.
- * The storage cap remains enforced by the explicit roster.status command. */
-function addAwardedZombie(state: MutableGameplayState, key: string, id: string): void {
+/** Does the account already hold this species? A unique award waiting in Received
+ * counts as owned, so a second voucher cannot mint a duplicate in the window before
+ * the first copy is claimed into the Mausoleum. */
+function ownsZombieKey(state: MutableGameplayState, key: string): boolean {
+  if (state.roster.some((unit) => unit.key === key)) return true;
+  return Object.entries(state.storage.received).some(
+    ([name, count]) => count > 0 && parseReceivedZombie(name)?.key === key
+  );
+}
+
+/** Place a zombie awarded by a non-harvest system. A full active farm sends the
+ * unique unit to Received; claiming it later consumes a real Mausoleum slot.
+ * Returns true when the unit entered the roster under `id` — a Received award has
+ * no roster row yet, so its id must not be reported as created. */
+function addAwardedZombie(state: MutableGameplayState, key: string, id: string): boolean {
   const cap = placedCapacity(state);
   const active = state.roster.filter((u) => !u.stored).length;
+  if (active >= cap.army) {
+    const marker = encodeReceivedZombie({ id, key, mutation: zombieDefaultMutation(key), invasions: 0 });
+    state.storage.received[marker] = 1;
+    return false;
+  }
   state.roster.push({
     id,
     key,
     mutation: zombieDefaultMutation(key),
     invasions: 0,
-    stored: active >= cap.army,
+    stored: false,
   });
+  return true;
 }
 
 function hasPlowingMonolith(state: MutableGameplayState): boolean {
@@ -440,10 +458,13 @@ function applyOne(
       const have = state.inventory[command.key] ?? 0;
       if (have < 1) return reject(sequence, "none_owned");
       if (boost?.gift) {
-        if (state.roster.some((unit) => unit.key === boost.gift)) return reject(sequence, "already_owned");
+        if (ownsZombieKey(state, boost.gift)) return reject(sequence, "already_owned");
         const id = options.id();
-        addAwardedZombie(state, boost.gift, id);
+        const placed = addAwardedZombie(state, boost.gift, id);
         state.inventory[command.key] = have - 1;
+        // A voucher zombie filed in Received has no roster row until it is claimed,
+        // so it must not be aliased onto a client-side unit that cannot exist yet.
+        if (!placed) return { sequence, status: "applied" };
         created.push(id);
         return { sequence, status: "applied", createdIds: [id] };
       }
@@ -659,6 +680,10 @@ function applyOne(
       const b = state.roster.find((unit) => unit.id === command.parentBId && !unit.lockedByRaid);
       if (!a || !b) return reject(sequence, "not_owned");
       if (rewardOnlyZombies.has(a.key) || rewardOnlyZombies.has(b.key)) return reject(sequence, "reward_only");
+      const specialA = zombieRuleByKey.get(a.key)?.category === "special";
+      const specialB = zombieRuleByKey.get(b.key)?.category === "special";
+      if (specialA && specialB) return reject(sequence, "special_pair");
+      if (specialB) return reject(sequence, "special_slot");
       const requestedLevel = Number.isInteger(command.playerLevel) && command.playerLevel! >= 1
         ? command.playerLevel!
         : level;
@@ -687,6 +712,11 @@ function applyOne(
       const reserved = !!marker && a.lockedByRaid === marker && b.lockedByRaid === marker;
       if (marker && !reserved && (a.lockedByRaid || b.lockedByRaid)) return reject(sequence, "not_owned");
       if (rewardOnlyZombies.has(a.key) || rewardOnlyZombies.has(b.key)) return reject(sequence, "reward_only");
+      // The slot-1 restriction is enforced when a job STARTS (combine_start). Collection
+      // deliberately does not re-check it: a job persisted before the rule — reserved or
+      // not — has already consumed both parents client-side, and selectCombineSpecies
+      // preserves the special from either slot, so rejecting here would only destroy the
+      // result. Two specials remain impossible (combinedSpecies returns null below).
       // Older clients omit the start level and retain collection-time behavior.
       // New clients send the persisted start level; capping it at the authoritative
       // current level prevents a forged value from unlocking the rare roll early.
@@ -781,6 +811,17 @@ function applyOne(
     }
     case "storage.claim": {
       const have = state.storage.received[command.itemName] ?? 0;
+      const zombie = parseReceivedZombie(command.itemName);
+      if (zombie) {
+        if (have < 1) return reject(sequence, "none_owned");
+        const cap = placedCapacity(state);
+        if (cap.storage <= 0) return reject(sequence, "need_mausoleum");
+        if (state.roster.filter((unit) => unit.stored).length >= cap.storage) return reject(sequence, "storage_full");
+        if (state.roster.some((unit) => unit.id === zombie.id)) return reject(sequence, "already_owned");
+        state.storage.received[command.itemName] = have - 1;
+        state.roster.push({ ...zombie, stored: true });
+        return { sequence, status: "applied", createdIds: [zombie.id] };
+      }
       const plan = planClaim(command.itemName, have);
       if (!plan.ok) return reject(sequence, plan.error);
       if (plan.kind === "boost") {
@@ -804,6 +845,9 @@ function applyOne(
     }
     case "storage.move": {
       if (!Number.isInteger(command.quantity) || command.quantity <= 0 || command.quantity > 225) return reject(sequence, "bad_quantity");
+      // A Received zombie is not a shed item: moving its marker into the item bucket
+      // would strand the unit where nothing can claim it.
+      if (parseReceivedZombie(command.itemKey)) return reject(sequence, "bad_item");
       const from = command.direction === "store" ? state.storage.received : state.storage.stored;
       const to = command.direction === "store" ? state.storage.stored : state.storage.received;
       if ((from[command.itemKey] ?? 0) < command.quantity) return reject(sequence, "insufficient_items");

@@ -98,8 +98,8 @@ export class ZombieField {
     return this.units.length + this.stored.length;
   }
   /** Is there a free on-farm slot to grow/deploy another zombie? The army cap
-   *  limits DEPLOYED units only. Manual storage is capped, but earned rewards may
-   *  overflow the Mausoleum so a full roster can never destroy an award. */
+   *  limits DEPLOYED units only. Callers granting an earned zombie use this to
+   *  decide between the farm and Received (see main.ts grantEarnedZombie). */
   canAdd(): boolean {
     return this.units.length < this.state.zombieMax;
   }
@@ -354,7 +354,9 @@ export class ZombieField {
     const defA = this.resolve(peekA.key);
     const defB = this.resolve(peekB.key);
     if (defA?.rewardOnly || defB?.rewardOnly) return false;
-    if (defA?.category === "special" && defB?.category === "special") return false;
+    // Named specials are permanent output species, so they may only occupy the
+    // first (output-species) slot.
+    if (defB?.category === "special") return false;
     const a = this.takeOwned(idA)!;
     const b = this.takeOwned(idB)!;
     // Both parents are consumed. ONLINE: the server records them as a combine job
@@ -373,10 +375,10 @@ export class ZombieField {
     );
   }
 
-  /** Species-selection traits for a parent fed to the pot: its combat tier and
-   *  whether it's a veggie/mutant-tier "mutation base class" (category "mutant").
-   *  See ZombiePot.pickSpecies (determineBaseClass). Falls back gracefully when
-   *  the catalog lacks the unit (tier 0, non-veggie). */
+  /** Traits recorded for a parent fed to the pot. `group` and `isSpecial` drive
+   *  selection (see selectCombineSpecies); `tier` and `isBaseClass` no longer do —
+   *  they are persisted so a job started by an older client still round-trips.
+   *  Falls back gracefully when the catalog lacks the unit. */
   private speciesTraits(z: OwnedZombie): {
     tier: number; isBaseClass: boolean; group?: string; isSpecial: boolean;
   } {
@@ -398,8 +400,10 @@ export class ZombieField {
     return this.potFor(potId).ready;
   }
 
-  /** Quest/server reward: never lose the unit when the deployed army is full.
-   *  Reward overflow deliberately ignores the manual Mausoleum capacity. */
+  /** Quest/server reward. `serverStored` is the authoritative placement online —
+   *  including a Received zombie being claimed, which the caller has already checked
+   *  against the Mausoleum cap. Offline the caller decides between the farm and
+   *  Received first, so the local fallback here is only reached for a legacy grant. */
   grantReward(
     key: string, col: number, row: number, serverId?: string, serverStored?: boolean
   ): OwnedZombie | null {
@@ -424,8 +428,8 @@ export class ZombieField {
   }
 
   /**
-   * Collect a finished combine: builds the result zombie (species via
-   * determineBaseClass, mutations inherited per-slot deterministically) and adds
+   * Collect a finished combine: builds the result zombie (species from slot 1,
+   * mutations inherited per-slot deterministically) and adds
    * it to the farm at (col,row). Like any zombie crop, collection waits when the
    * active army is full. Returns the new unit's data, or null if nothing is ready
    * or no slot is free. Result species is

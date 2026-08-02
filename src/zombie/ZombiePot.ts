@@ -9,10 +9,14 @@
 //     (getCombineTime checks purchase flag 28; flag 28 = Clay Monolith, whose in-game
 //     tooltip is literally "Zombie Pots combine in 15 minutes". The Mutant Monolith
 //     (flag 15) is a SEPARATE item that halves mutant-zombie GROW times, not this.)
-//   * Result SPECIES extends determineBaseClass with the recovered combining-special
-//     rules: one Special wins, two Specials are refused, and level-25+ non-special
-//     pairs have a 10% chance to become the tier-5 Special for an input body type.
-//     Otherwise mutant donors and combat-tier comparison work as before.
+//   * SPECIES IS A DELIBERATE DIVERGENCE, not recovered behavior. Slot 1 determines
+//     the result species, so the player picks the outcome. Named Specials are
+//     restricted to slot 1 and are always inherited; level-25+ non-special pairs
+//     retain their 10% chance to promote the slot-1 body type to its tier-5 Special.
+//     The recovered `determineBaseClass` instead resolved species from the catalog —
+//     non-veggie parent wins, then higher combat tier, then a coin flip on a tie.
+//     See docs/SPECIAL_ZOMBIE_ACQUISITION.md. Everything else in this list IS
+//     ground truth.
 //   * The result's color is the mixed parent color; identical colors lighten.
 //   * Mutations inherit per-slot (combineMasks): non-conflicting slots carry over; a
 //     same-slot conflict keeps the HIGHER-tier bit — DETERMINISTIC, no RNG.
@@ -44,10 +48,11 @@ type ZombieSnapshot = Pick<OwnedZombieSave, "key"> & {
   id?: string;
   mutation: number;
   color?: [number, number, number];
-  /** Combat tier (0..5). Used to pick the winner when both parents are non-veggie. */
+  /** Combat tier (0..5). No longer used for species selection (slot 1 decides);
+   *  persisted so a job started by an older client still round-trips. */
   tier?: number;
-  /** True if this is a veggie/mutant-tier zombie (a "mutation base class"). Such a
-   *  parent loses its type in a mixed combine and only donates its mutation. */
+  /** True if this is a veggie/mutant-tier zombie (a "mutation base class"). Also no
+   *  longer used for species selection — kept for the same round-trip reason. */
   isBaseClass?: boolean;
   /** Body type and Special-category status used by the rare tier-5 promotion and
    * special-species override rules. */
@@ -132,7 +137,7 @@ export class ZombiePot {
     baseDurationMs: number = POT_DURATION_MS,
     playerLevel = 1
   ): boolean {
-    if (this.job || (a.isSpecial && b.isSpecial)) return false;
+    if (this.job || b.isSpecial) return false;
     const startedAt = this.now();
     const duration = baseDurationMs * (hasMonolith ? MONOLITH_MULT : 1);
     this.job = {
@@ -159,8 +164,8 @@ export class ZombiePot {
   }
 
   /**
-   * Collect the finished result: species via determineBaseClass (see class header),
-   * child mutation mask via deterministic per-slot inheritance. Clears the job.
+   * Collect the finished result: species from slot 1 (see class header), child
+   * mutation mask via deterministic per-slot inheritance. Clears the job.
    * Returns null if no job or it isn't ready yet.
    */
   collect(): PotResult | null {
@@ -175,8 +180,9 @@ export class ZombiePot {
   }
 
   /**
-   * Result species from the shared client/server selector. Older saves without the
-   * Special/group/level fields safely fall back to the original mutant/tier rules.
+   * Result species from the shared client/server selector. A job persisted without the
+   * Special/group/level fields still collects safely: with no group there is no tier-5
+   * promotion to roll, so it yields slot 1's species like any other combine.
    */
   private pickSpecies(j: ZombiePotSave): string | null {
     const random = j.parentAId && j.parentBId

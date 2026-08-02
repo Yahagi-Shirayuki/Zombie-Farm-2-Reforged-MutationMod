@@ -17,10 +17,15 @@ export const COMBINE_SPECIAL_BY_GROUP: Readonly<Record<string, string>> = {
 
 export interface CombineSpeciesParent {
   key: string;
-  tier?: number;
+  /** Body type — the only trait besides `isSpecial` that still affects selection
+   *  (it names the tier-5 the slot-1 parent can promote to). */
   group?: string;
-  isMutant?: boolean;
   isSpecial?: boolean;
+  /** No longer read: slot 1 decides the output species, so combat tier and
+   *  mutant-donor status cannot change it. Both remain on the interface because
+   *  jobs persisted by an older client still carry them (see ZombiePotSave). */
+  tier?: number;
+  isMutant?: boolean;
 }
 
 /** Stable pseudorandom stream for one unordered parent pair. Both the timed
@@ -55,10 +60,10 @@ export function selectCombineSpecies(
   playerLevel: number,
   random: () => number = Math.random
 ): string | null {
-  // Canonicalize candidates so swapping the two pot slots cannot change which
-  // species wins a deterministic coin flip.
-  [a, b] = a.key <= b.key ? [a, b] : [b, a];
   if (a.isSpecial && b.isSpecial) return null;
+  // Named special species are permanent. New combines only allow them in slot 1,
+  // but retaining this symmetric fallback lets an older persisted slot-2 job
+  // finish without losing its special parent.
   if (a.isSpecial !== b.isSpecial) return a.isSpecial ? a.key : b.key;
 
   const specialA = a.group ? COMBINE_SPECIAL_BY_GROUP[a.group] : undefined;
@@ -68,15 +73,11 @@ export function selectCombineSpecies(
     specialA && specialB &&
     random() < COMBINE_SPECIAL_CHANCE
   ) {
-    if (specialA === specialB) return specialA;
-    return random() < 0.5 ? specialA : specialB;
+    // Special evolution follows the output species in slot 1. For example, a
+    // slot-1 Flamehead can promote to Skull Head even though its base species is
+    // otherwise guaranteed.
+    return specialA;
   }
 
-  if (!!a.isMutant !== !!b.isMutant) return a.isMutant ? b.key : a.key;
-  if (!a.isMutant && !b.isMutant) {
-    const tierA = a.tier ?? 0;
-    const tierB = b.tier ?? 0;
-    if (tierA !== tierB) return tierA > tierB ? a.key : b.key;
-  }
-  return random() < 0.5 ? a.key : b.key;
+  return a.key;
 }

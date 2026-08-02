@@ -21,6 +21,7 @@ import objectRows from "../../../public/assets/placeables.json";
 import { EPIC_BOSS_FIGHT_BRAIN_COST } from "../../../src/epicBoss/tokens";
 import { ARMY_CAP } from "../../../src/raid/RaidCatalog";
 import { RAID_RULESET_VERSION } from "../../../src/raid/replay";
+import { encodeReceivedZombie } from "../../../src/zombie/receivedReward";
 
 export interface RunRow {
   run_id: string; boss_id: string; activated_at: number; expires_at: number;
@@ -364,7 +365,7 @@ export async function finish(
   let activeCount = Math.max(0,
     (rosterCounts.results.find((row) => !row.stored)?.count ?? 0) - losses.length
   );
-  const newZombies: { id: string; key: string; stored: boolean }[] = [];
+  const newZombies: { id: string; key: string; stored: boolean; received?: boolean }[] = [];
   for (const id of newlyCompleted) {
     const reward = questDefinition(id);
     if (!reward) continue;
@@ -373,7 +374,12 @@ export async function finish(
     const key = epicQuestZombieReward(id);
     if (key) {
       const stored = shouldStoreEpicReward(activeCount, armyCapacity);
-      newZombies.push({ id: crypto.randomUUID(), key, stored });
+      const zombie = { id: crypto.randomUUID(), key, stored, ...(stored ? { received: true } : {}) };
+      newZombies.push(zombie);
+      if (stored) {
+        const marker = encodeReceivedZombie({ id: zombie.id, key, mutation: 0, invasions: 0 });
+        core.storage.received[marker] = 1;
+      }
       if (!stored) activeCount++;
     }
   }
@@ -406,7 +412,7 @@ export async function finish(
     WHERE account_id=? AND unit_id=? AND locked_by_raid=? AND ${guard}`).bind(accountId,id,session.id,session.id,resultJson)));
   escapedRoster.forEach((id) => statements.push(db.prepare(`UPDATE roster_v3 SET locked_by_raid=NULL
     WHERE account_id=? AND unit_id=? AND locked_by_raid=? AND ${guard}`).bind(accountId,id,session.id,session.id,resultJson)));
-  newZombies.forEach((z) => statements.push(db.prepare(`INSERT INTO roster_v3(account_id,unit_id,zombie_key,stored,created_at)
+  newZombies.filter((z) => !z.received).forEach((z) => statements.push(db.prepare(`INSERT INTO roster_v3(account_id,unit_id,zombie_key,stored,created_at)
     SELECT ?,?,?,?,? WHERE ${guard}`).bind(accountId,z.id,z.key,z.stored ? 1 : 0,now,session.id,resultJson)));
   const committed = await db.batch(statements);
   if ((committed[0]?.meta.changes ?? 0) !== 1) {

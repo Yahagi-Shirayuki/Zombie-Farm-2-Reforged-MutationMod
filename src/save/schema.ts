@@ -286,16 +286,16 @@ export interface ZombiePotSave {
   /** Parent display tints at combine time, used to color the child. */
   colorA?: [number, number, number];
   colorB?: [number, number, number];
-  /** Parent combat tiers (0..5) at combine time — drives species selection when
-   *  both parents are non-veggie (higher tier wins). Optional for old saves. */
+  /** Parent combat tiers (0..5) at combine time. Retained for compatibility with
+   *  saves created before slot 1 became the guaranteed output type. */
   tierA?: number;
   tierB?: number;
-  /** Whether each parent is a mutation-base (veggie/mutant-tier) zombie. The
-   *  species picker treats these as mutation donors (see ZombiePot). */
+  /** Whether each parent is a mutation-base (veggie/mutant-tier) zombie.
+   *  Retained for compatibility with older saves. */
   baseA?: boolean;
   baseB?: boolean;
   /** Parent body types and Special-category flags used by the level-25 rare
-   * combining-special roll and the one-special species override. */
+   *  promotion and permanent-special species override. */
   groupA?: string;
   groupB?: string;
   specialA?: boolean;

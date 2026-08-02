@@ -440,6 +440,11 @@ export class RaidScene {
   private bubbleTexButterfly: Texture | null = null;
   private bubbleTexBrain: Texture | null = null;
   private bubbleUnitId: string | null = null;
+  private bubbleThinking = new Graphics();
+  private bubbleDots = new Text({ text: "...", style: { fill: 0x302310, fontSize: 24, fontWeight: "bold" } });
+  /** Mirrors `bubble.eventMode`. Seeded `true` so the disarm in buildBubble is the
+   *  write that establishes the real (non-interactive) starting state. */
+  private bubbleInteractive = true;
 
   private phase: Phase = "intro";
   private phaseT = 0;
@@ -658,10 +663,17 @@ export class RaidScene {
     s.anchor.set(0.5, 1); // bottom-center: the bubble's tail hangs just over the zombie
     s.scale.set(-BUBBLE_SCALE, BUBBLE_SCALE); // mirror over the vertical axis (tail to the left)
     if (this.bubbleTexButterfly) s.texture = this.bubbleTexButterfly;
-    this.bubble.addChild(s);
+    this.bubbleThinking
+      .ellipse(0, -34, 29, 20).fill({ color: 0xfffbdf })
+      .circle(-18, -12, 6).fill({ color: 0xfffbdf })
+      .circle(-27, -4, 3).fill({ color: 0xfffbdf });
+    this.bubbleDots.anchor.set(0.5);
+    this.bubbleDots.position.set(0, -39);
+    this.bubbleThinking.visible = false;
+    this.bubbleDots.visible = false;
+    this.bubble.addChild(s, this.bubbleThinking, this.bubbleDots);
     this.bubble.visible = false;
-    this.bubble.eventMode = "static";
-    this.bubble.cursor = "pointer";
+    this.setBubbleInteractive(false);
     this.bubble.on("pointertap", () => {
       if (this.sim.finished) return;
       const bubble = this.sim.chargingBubble();
@@ -675,6 +687,15 @@ export class RaidScene {
       }
     });
     this.container.addChild(this.bubble); // above tokens so it's tappable
+  }
+
+  /** Arm or disarm the focus bubble's tap target (and its pointer affordance).
+   *  Called every frame, so it no-ops unless the state actually flips. */
+  private setBubbleInteractive(on: boolean) {
+    if (this.bubbleInteractive === on) return;
+    this.bubbleInteractive = on;
+    this.bubble.eventMode = on ? "static" : "none";
+    this.bubble.cursor = on ? "pointer" : "default";
   }
 
   /** Build the top-left ability strip from the army's abilities: one tappable cell
@@ -1613,14 +1634,28 @@ export class RaidScene {
     // Focus bubble: hover it over the charging zombie while it's distracted (butterfly)
     // or fully charged and awaiting release (brain); hide it otherwise.
     const bub = this.phase === "fight" && !this.sim.finished ? this.sim.chargingBubble() : null;
-    const bubTok = bub ? this.tokens.get(bub.id) : undefined;
-    if (bub && bubTok) {
-      this.bubbleUnitId = bub.id;
+    const thinking = this.phase === "fight" && !this.sim.finished
+      ? this.sim.units.find((unit) => unit.team === "player" && unit.alive &&
+          unit.state === "charging" && !unit.distracted && !unit.awaitRelease)
+      : undefined;
+    const bubbleId = bub?.id ?? thinking?.id;
+    const bubTok = bubbleId ? this.tokens.get(bubbleId) : undefined;
+    if (bubbleId && bubTok) {
+      this.bubbleUnitId = bubbleId;
       this.bubble.visible = true;
-      const tex = bub.kind === "brain" ? this.bubbleTexBrain : this.bubbleTexButterfly;
+      const tex = bub?.kind === "brain" ? this.bubbleTexBrain : this.bubbleTexButterfly;
       if (tex) this.bubbleSprite.texture = tex;
       const szs = this.sizeScale();
       this.bubbleSprite.scale.set(-BUBBLE_SCALE * szs, BUBBLE_SCALE * szs); // track unit size
+      this.bubbleSprite.visible = !!bub;
+      this.bubbleThinking.visible = !!thinking;
+      this.bubbleDots.visible = !!thinking;
+      // Only a distracted / awaiting-release bubble can be popped. The thinking
+      // bubble is pure feedback: leaving it interactive would show a tap affordance
+      // that does nothing and would swallow taps meant for the zombie under it.
+      this.setBubbleInteractive(!!bub);
+      this.bubbleThinking.scale.set(szs);
+      this.bubbleDots.scale.set(szs);
       const bob = Math.sin(this.phaseT / 260) * 3 * szs;
       this.bubble.position.set(
         bubTok.root.x + BUBBLE_DX * szs,
@@ -1630,6 +1665,10 @@ export class RaidScene {
       this.bubble.scale.set(s + (1 - s) * Math.min(1, dtSec * 14)); // ease tap-feedback back
     } else {
       this.bubble.visible = false;
+      this.bubbleSprite.visible = true;
+      this.bubbleThinking.visible = false;
+      this.bubbleDots.visible = false;
+      this.setBubbleInteractive(false);
       this.bubble.scale.set(1);
       this.bubbleUnitId = null;
     }
