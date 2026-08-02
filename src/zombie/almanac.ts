@@ -44,13 +44,17 @@ const CATEGORY_ORDER: Record<string, number> = { normal: 0, mutant: 1, special: 
 
 /** The almanac's entry list: every obtainable species, plus any species the
  *  player has already discovered even if it has no current source (a legacy or
- *  event grant must never vanish from the collection). Sorted for display:
- *  normal -> mutant -> special, then by unlock level, then name. */
+ *  event grant must never vanish from the collection). Mutant BASE species are
+ *  excluded for now: players usually acquire mutations indirectly (mutation
+ *  crops / Pot masks on other species), so a dex of mutant gravestones reads
+ *  strangely — revisit alongside the future mutation almanac. Sorted for
+ *  display: normal -> special, then by unlock level, then name. */
 export function almanacEntries(
   zombies: readonly ZombieDef[],
   discovered: DiscoveredMap
 ): ZombieDef[] {
   return zombies
+    .filter((def) => def.category !== "mutant")
     .filter((def) => isObtainable(def) || (discovered[def.key] ?? 0) > 0)
     .sort(
       (a, b) =>

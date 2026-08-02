@@ -41,12 +41,16 @@ describe("almanacEntries", () => {
 
   it("keeps obtainable species sorted by category, then level, then name", () => {
     expect(almanacEntries(zombies, {}).map((z) => z.key)).toEqual([
-      "norm1", "norm2", "mut", "ZombieActorDrZombie",
+      "norm1", "norm2", "ZombieActorDrZombie",
     ]);
   });
 
   it("keeps an unobtainable species the player has already discovered", () => {
     expect(almanacEntries(zombies, { special: 1 }).map((z) => z.key)).toContain("special");
+  });
+
+  it("excludes mutant base species entirely (even discovered) while the section is off", () => {
+    expect(almanacEntries(zombies, { mut: 3 }).map((z) => z.key)).not.toContain("mut");
   });
 });
 
