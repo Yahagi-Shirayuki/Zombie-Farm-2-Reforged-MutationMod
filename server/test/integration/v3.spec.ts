@@ -630,10 +630,24 @@ describe("protocol v3 API", () => {
       });
       expect(malformed.status).toBe(400);
     }
+    for (const discovered of [
+      { "ZombieActorRegularTier1": 0 },      // counts start at 1
+      { "ZombieActorRegularTier1": 1.5 },    // integers only
+      { "bad key!": 2 },                     // key charset
+      [1],                                   // must be a record
+    ]) {
+      const malformed = await call("PUT", "/presentation", session.token, {
+        protocolVersion: 3, expectedVersion: 0, data: { almanac: { discovered } },
+      });
+      expect(malformed.status, JSON.stringify(discovered)).toBe(400);
+    }
     const presentation = await call<any>("PUT", "/presentation", session.token, {
       protocolVersion: 3,
       expectedVersion: 0,
-      data: { camera: { x: 1, y: 2 }, tutorial: { done: false, step: 1 } },
+      data: {
+        camera: { x: 1, y: 2 }, tutorial: { done: false, step: 1 },
+        almanac: { discovered: { ZombieActorRegularTier1: 2, ZombieActorGardenTier1: 1 } },
+      },
     });
     expect(presentation.status).toBe(200);
     expect(presentation.body.version).toBe(1);

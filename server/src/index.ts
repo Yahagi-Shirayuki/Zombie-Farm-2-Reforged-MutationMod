@@ -773,7 +773,7 @@ app.put("/presentation", async (c) => {
       !body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
     return c.json({ error: "bad_presentation" }, 400);
   }
-  const presentationKeys = new Set(["player", "farm", "objectLayout", "rosterLayout", "zombiePot", "zombiePots", "tutorial", "ui", "settings", "camera", "selections"]);
+  const presentationKeys = new Set(["player", "farm", "objectLayout", "rosterLayout", "zombiePot", "zombiePots", "tutorial", "ui", "settings", "camera", "selections", "almanac"]);
   const pot = body.data.zombiePot as Record<string, unknown> | undefined;
   const validPot = pot === undefined || (!!pot && typeof pot === "object" && !Array.isArray(pot) &&
     typeof pot.parentAId === "string" && pot.parentAId.length <= 80 &&
@@ -798,6 +798,18 @@ app.put("/presentation", async (c) => {
       return row.name === undefined || (typeof row.name === "string" &&
         [...row.name].length <= 24 && !/[\u0000-\u001f\u007f]/.test(row.name));
     }));
+  // Zombie Almanac lifetime-discovery counts (cosmetic, client-authored). Bounded
+  // like the other presentation shapes so a hostile client can't bloat the blob.
+  const almanac = body.data.almanac as { discovered?: unknown } | undefined;
+  const validAlmanac = almanac === undefined || (!!almanac && typeof almanac === "object" &&
+    !Array.isArray(almanac) && (() => {
+      const discovered = almanac.discovered;
+      return discovered === undefined || (!!discovered && typeof discovered === "object" &&
+        !Array.isArray(discovered) && Object.keys(discovered).length <= 512 &&
+        Object.entries(discovered).every(([key, count]) =>
+          /^[A-Za-z0-9_-]{1,80}$/.test(key) &&
+          typeof count === "number" && Number.isSafeInteger(count) && count >= 1 && count <= 1_000_000));
+    })());
   const objectLayout = body.data.objectLayout as unknown;
   const validObjectLayout = objectLayout === undefined || (Array.isArray(objectLayout) &&
     objectLayout.length <= 512 && objectLayout.every((entry) => {
@@ -810,7 +822,7 @@ app.put("/presentation", async (c) => {
         (row.rotation === undefined || row.rotation === 0 || row.rotation === 1);
     }));
   if (!Object.keys(body.data).every((key) => presentationKeys.has(key)) ||
-      !validObjectLayout || !validRosterLayout || !validPot || !validPots) {
+      !validObjectLayout || !validRosterLayout || !validPot || !validPots || !validAlmanac) {
     return c.json({ error: "bad_presentation" }, 400);
   }
   const encoded = JSON.stringify(body.data);
