@@ -31,7 +31,12 @@ import type { RaidOutcome } from "./types";
 // 12: formation vacancies now refill correctly after knockback. A displaced Headless
 // zombie temporarily yields its priority so the next row can advance, then resumes its
 // defining push-to-front behavior after reaching its recovery slot.
-export const RAID_RULESET_VERSION = 12;
+// 13: the boss's wall special is now gated on the perch (Ninja carrotWall / Robot
+// junkWall). A descended boss used to keep summoning blockers behind itself at the
+// Garden support line; it now spends its whole budget on melee once it climbs down, so
+// the transcript diverges from the first post-descent action. This bump also raises
+// ARMY_CAP 16 → 20, which a v12 Worker would reject as `bad_roster`.
+export const RAID_RULESET_VERSION = 13;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

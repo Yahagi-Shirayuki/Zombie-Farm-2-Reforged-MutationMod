@@ -1721,6 +1721,11 @@ export class BattleSim {
     if (action.kind === "throw") return !!this.bossThrow && this.boss?.state === "structure";
     if (action.kind !== "special") return true;
     if (action.special.name === "wall") {
+      // Only a perched boss walls, for the same reason it only throws from up top: the
+      // wall materializes at the Garden support line, so a boss that has already climbed
+      // down would keep summoning blockers BEHIND itself, mid-lane. Once it descends its
+      // whole action budget is melee.
+      if (this.boss?.state !== "structure") return false;
       const wt = this.wallTemplate;
       return !!wt && !this.enemies.some((e) => e.alive && e.sourceKey === wt.sourceKey);
     }
@@ -1822,7 +1827,10 @@ export class BattleSim {
       }
       case "wall": {
         // Materialize at the Garden support line. It never walks or attacks.
-        const wt = this.wallTemplate;
+        // Re-check the perch here as well as in canPerform: with no wall standing and
+        // the last minion dead, promote() can start the boss's descent DURING the 3 s
+        // cast, and a wall that lands after that would sit behind the boss forever.
+        const wt = this.boss?.state === "structure" ? this.wallTemplate : null;
         if (wt && !this.enemies.some((e) => e.alive && e.sourceKey === wt.sourceKey)) {
           const wall = this.spawnEnemy(wt);
           wall.isWall = true;

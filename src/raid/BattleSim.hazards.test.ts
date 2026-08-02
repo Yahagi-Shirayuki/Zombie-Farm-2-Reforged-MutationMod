@@ -182,12 +182,14 @@ describe("boss wall (carrotWall / junkWall)", () => {
   it("spawns a tappable wall that chips 75 per tap", () => {
     const player = unit({ id: "p", sourceKey: "ZombieActorRegularTier1", team: "player" });
     const boss = unit({ id: "boss", sourceKey: "NinjaStageActorBoss", team: "enemy", isBoss: true, con: 3000 });
+    // A minion keeps the boss on its perch — only a perched boss walls.
+    const minion = unit({ id: "minion", sourceKey: "NinjaStageActorBoy", team: "enemy", con: 3000 });
     const wallTemplate = unit({
       id: "wall", sourceKey: "carrotWall", team: "enemy", str: 0, con: 150,
       hp: 1500, maxHp: 1500, attacks: [{ name: "", frequency: 1, mult: 0 }],
     });
     const sim = new BattleSim(
-      [player], [boss], null, true,
+      [player], [minion, boss], null, true,
       [{ name: "wall", weight: 100, castMs: 0, cooldownMs: 999999, damage: 0 }],
       10 * 60 * 1000, null, wallTemplate
     );
@@ -231,6 +233,28 @@ describe("boss wall (carrotWall / junkWall)", () => {
     stepUntil(sim, () => sim.projectiles.length > 0);
     expect(wall.x).toBe(spawnX);
     expect(sim.projectiles.length).toBeGreaterThan(0);
+  });
+
+  it("stops walling once the boss climbs down off its structure", () => {
+    const player = unit({ id: "p", sourceKey: "ZombieActorRegularTier1", team: "player" });
+    // No minions, so promote() sends the boss down the moment the fight opens.
+    const boss = unit({ id: "boss", sourceKey: "NinjaStageActorBoss", team: "enemy", isBoss: true, con: 3000 });
+    const wallTemplate = unit({
+      id: "wall", sourceKey: "carrotWall", team: "enemy", str: 0, con: 150,
+      hp: 1500, maxHp: 1500, attacks: [{ name: "", frequency: 1, mult: 0 }],
+    });
+    const sim = new BattleSim(
+      [player], [boss], null, true,
+      [{ name: "wall", weight: 100, castMs: 0, cooldownMs: 0, damage: 0 }],
+      10 * 60 * 1000, null, wallTemplate
+    );
+    const b = sim.units.find((u) => u.id === "boss")!;
+    stepUntil(sim, () => b.state !== "structure");
+    expect(b.state).not.toBe("structure");
+    // The wall is over half the Ninja boss's action budget, so a permissive gate would
+    // have it re-summoning carrots behind itself for the rest of the fight.
+    for (let t = 0; t < 8000; t += 16) sim.step(16);
+    expect(sim.units.some((u) => u.isWall)).toBe(false);
   });
 
   it("blocks zombies behind it, including Garden healers, but not zombies already past it", () => {

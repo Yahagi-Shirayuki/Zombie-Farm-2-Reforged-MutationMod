@@ -245,9 +245,11 @@ const ENEMY_FRAME_COUNTS: Record<string, { idle: number; attack: number }> = {
   VideoGameStageZombieActor: { idle: 4, attack: 3 },
 };
 // Source-game focus thought-bubbles (misc/thoughtBubble*.png), shown over the
-// charging zombie. Butterfly = distracted; brain = fully focused / ready.
+// charging zombie. Butterfly = distracted; brain = fully focused / ready; hmm = the
+// same bubble, empty but for a "..." (all three are the same 64x62 shape).
 const BUBBLE_BUTTERFLY = BASE + "assets/ui/thoughtBubbleButterfly.png";
 const BUBBLE_BRAIN = BASE + "assets/ui/thoughtBubbleBrains.png";
+const BUBBLE_HMM = BASE + "assets/ui/thoughtBubbleHmm.png";
 const DROP_BRAIN = BASE + "assets/ui/topbar_brain_icon.png";
 const BUBBLE_SCALE = 0.91; // the source art is 64x62 (1.3 enlarged, then scaled ~30% down)
 const BUBBLE_DX = 74; // shift the (mirrored) bubble right of the charging zombie (~one bubble width: 16 + 64*0.91)
@@ -433,15 +435,15 @@ export class RaidScene {
   private abilityCells: { key: string; cell: Container; badge?: Text; activated: boolean }[] = [];
 
   // Focus bubble hovering over the charging zombie: the source game's own thought-
-  // bubble art — a butterfly while distracted (tap to refocus) or a brain when the
-  // bar is full (tap to send it forward).
+  // bubble art — a butterfly while distracted (tap to refocus), a brain when the
+  // bar is full (tap to send it forward), or the empty "..." bubble while it simply
+  // charges. One sprite, three textures, swapped in layout().
   private bubble = new Container();
   private bubbleSprite = new Sprite();
   private bubbleTexButterfly: Texture | null = null;
   private bubbleTexBrain: Texture | null = null;
+  private bubbleTexHmm: Texture | null = null;
   private bubbleUnitId: string | null = null;
-  private bubbleThinking = new Graphics();
-  private bubbleDots = new Text({ text: "...", style: { fill: 0x302310, fontSize: 24, fontWeight: "bold" } });
   /** Mirrors `bubble.eventMode`. Seeded `true` so the disarm in buildBubble is the
    *  write that establishes the real (non-interactive) starting state. */
   private bubbleInteractive = true;
@@ -642,9 +644,10 @@ export class RaidScene {
     this.fillFaceBadge(this.pFace, zFace, 0x8bc34a, 0.7);
     this.fillFaceBadge(this.eFace, eFace, 0xef5350);
     await this.buildAbilityStrip();
-    [this.bubbleTexButterfly, this.bubbleTexBrain, this.brainTex] = await Promise.all([
+    [this.bubbleTexButterfly, this.bubbleTexBrain, this.bubbleTexHmm, this.brainTex] = await Promise.all([
       loadTex(BUBBLE_BUTTERFLY),
       loadTex(BUBBLE_BRAIN),
+      loadTex(BUBBLE_HMM),
       loadTex(DROP_BRAIN),
     ]);
     this.buildBubble();
@@ -657,21 +660,13 @@ export class RaidScene {
 
   /** The focus bubble (one, reused): the source game's thought-bubble sprite,
    *  tappable to pop the charging zombie's distraction / release it forward. Its
-   *  texture is swapped each frame (butterfly vs brain) in layout(). */
+   *  texture is swapped each frame (butterfly vs brain vs "...") in layout(). */
   private buildBubble() {
     const s = this.bubbleSprite;
     s.anchor.set(0.5, 1); // bottom-center: the bubble's tail hangs just over the zombie
     s.scale.set(-BUBBLE_SCALE, BUBBLE_SCALE); // mirror over the vertical axis (tail to the left)
     if (this.bubbleTexButterfly) s.texture = this.bubbleTexButterfly;
-    this.bubbleThinking
-      .ellipse(0, -34, 29, 20).fill({ color: 0xfffbdf })
-      .circle(-18, -12, 6).fill({ color: 0xfffbdf })
-      .circle(-27, -4, 3).fill({ color: 0xfffbdf });
-    this.bubbleDots.anchor.set(0.5);
-    this.bubbleDots.position.set(0, -39);
-    this.bubbleThinking.visible = false;
-    this.bubbleDots.visible = false;
-    this.bubble.addChild(s, this.bubbleThinking, this.bubbleDots);
+    this.bubble.addChild(s);
     this.bubble.visible = false;
     this.setBubbleInteractive(false);
     this.bubble.on("pointertap", () => {
@@ -1643,19 +1638,18 @@ export class RaidScene {
     if (bubbleId && bubTok) {
       this.bubbleUnitId = bubbleId;
       this.bubble.visible = true;
-      const tex = bub?.kind === "brain" ? this.bubbleTexBrain : this.bubbleTexButterfly;
+      // Same bubble art in all three states — only what's inside it changes.
+      const tex = !bub
+        ? this.bubbleTexHmm
+        : bub.kind === "brain" ? this.bubbleTexBrain : this.bubbleTexButterfly;
       if (tex) this.bubbleSprite.texture = tex;
       const szs = this.sizeScale();
       this.bubbleSprite.scale.set(-BUBBLE_SCALE * szs, BUBBLE_SCALE * szs); // track unit size
-      this.bubbleSprite.visible = !!bub;
-      this.bubbleThinking.visible = !!thinking;
-      this.bubbleDots.visible = !!thinking;
+      this.bubbleSprite.visible = true;
       // Only a distracted / awaiting-release bubble can be popped. The thinking
       // bubble is pure feedback: leaving it interactive would show a tap affordance
       // that does nothing and would swallow taps meant for the zombie under it.
       this.setBubbleInteractive(!!bub);
-      this.bubbleThinking.scale.set(szs);
-      this.bubbleDots.scale.set(szs);
       const bob = Math.sin(this.phaseT / 260) * 3 * szs;
       this.bubble.position.set(
         bubTok.root.x + BUBBLE_DX * szs,
@@ -1666,8 +1660,6 @@ export class RaidScene {
     } else {
       this.bubble.visible = false;
       this.bubbleSprite.visible = true;
-      this.bubbleThinking.visible = false;
-      this.bubbleDots.visible = false;
       this.setBubbleInteractive(false);
       this.bubble.scale.set(1);
       this.bubbleUnitId = null;

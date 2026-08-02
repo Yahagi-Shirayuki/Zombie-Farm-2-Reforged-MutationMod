@@ -137,6 +137,13 @@ REWARD_ONLY_DECOR = {
     "rockBunny", "greenGift", "redGift", "yellowGift", "teddyBear", "loveShack",
 }
 
+# Source `subCategory:"decor"` rows that Reforged treats as BUILDINGS, not scenery.
+# A functional object is one-per-farm (client and server both derive the purchase
+# limit from this category) and sits in the Market's Functional Items tab. The Pet
+# Pen is the only one: it is a single roaming-pet enclosure, and owning several has
+# no meaning — the pen's five slots are shared, not per-building.
+FUNCTIONAL_OVERRIDE_TILES = {"pettingZoo"}
+
 # These quest objectives target separately named color variants that share one
 # TileProperties key. Most same-tile Market rows are redundant recolors, but these
 # must remain distinct catalog cards or the corresponding buy objectives cannot be
@@ -326,6 +333,7 @@ def main():
             continue
         key = tile if tile not in seen else QUEST_VARIANT_KEYS[e["name"]]
         category = ("reward" if tile in EPIC_REWARD_TILES or tile in REWARD_ONLY_DECOR
+                    else "functional" if tile in FUNCTIONAL_OVERRIDE_TILES
                     else classify(e))
         tp = tileprops.get(tile, {})
 

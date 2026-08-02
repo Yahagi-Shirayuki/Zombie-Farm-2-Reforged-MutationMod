@@ -44,12 +44,12 @@ import { harvestXp, plowXp } from "./farmRewards";
 import {
   DEFAULT_FARM_BACKGROUND, getFarmBackground, isFarmBackground, setFarmBackground,
   FARM_BG_DENSITY, type FarmBackground, getDayNightMode, setDayNightMode,
-  isLocalNight, type DayNightMode,
+  isLocalNight, type DayNightMode, hasSeenHazardTip, markHazardTipSeen,
 } from "./prefs";
 import { BASE } from "./base";
 import { TutorialController } from "./tutorial/TutorialController";
 import { reconcileTutorialCompletion, TutStep, TUTORIAL_ZOMBIE_KEY } from "./tutorial/steps";
-import { initPlatform, isMobile } from "./platform";
+import { initPlatform, isMobile, isTouch } from "./platform";
 import { initPwa, promptReload, checkForUpdate } from "./pwa";
 import { initDiagnostics } from "./diagnostics";
 import {
@@ -1367,6 +1367,25 @@ async function main() {
       const current = new Map(field.serializeObjects().map((object) => [object.id, object]));
       for (const id of rejectedLocalIds) field.removeObject(id);
 
+      // The purchase + shed projections read only `objects`, never the field, so run
+      // them BEFORE the texture-loading loop below. Anything after that loop is skipped
+      // whenever a newer reconcile supersedes this one, and the shed must not be left
+      // reading empty just because an object swapped catalog keys (a shed upgrade).
+      objectPurchases.clear();
+      for (const object of objects) {
+        if (object.purchaseCost === undefined || object.purchaseCurrency === undefined) continue;
+        objectPurchases.set(object.instanceId, { cost: object.purchaseCost, currency: object.purchaseCurrency });
+      }
+
+      storedObjectIds.clear();
+      for (const object of objects) {
+        if (object.status !== "stored") continue;
+        const ids = storedObjectIds.get(object.catalogKey) ?? [];
+        ids.push(object.instanceId);
+        storedObjectIds.set(object.catalogKey, ids);
+      }
+      state.syncObjectStorage(Object.fromEntries([...storedObjectIds].map(([key, ids]) => [key, ids.length])));
+
       for (const object of objects) {
         const localId = aliases[object.instanceId];
         const source = current.get(object.instanceId) ?? (localId ? current.get(localId) : undefined);
@@ -1391,20 +1410,6 @@ async function main() {
 
       if (generation !== objectReconcileGeneration) return;
 
-      objectPurchases.clear();
-      for (const object of objects) {
-        if (object.purchaseCost === undefined || object.purchaseCurrency === undefined) continue;
-        objectPurchases.set(object.instanceId, { cost: object.purchaseCost, currency: object.purchaseCurrency });
-      }
-
-      storedObjectIds.clear();
-      for (const object of objects) {
-        if (object.status !== "stored") continue;
-        const ids = storedObjectIds.get(object.catalogKey) ?? [];
-        ids.push(object.instanceId);
-        storedObjectIds.set(object.catalogKey, ids);
-      }
-      state.syncObjectStorage(Object.fromEntries([...storedObjectIds].map(([key, ids]) => [key, ids.length])));
       const placed = field.serializeObjects();
       const armyBonus = placed.reduce((sum, object) => sum + (placeCatalog.get(object.key)?.armyMax ?? 0), 0);
       const itemCap = placed.reduce((cap, object) => Math.max(cap, placeCatalog.get(object.key)?.storageSlots ?? 0), 8);
@@ -2966,6 +2971,20 @@ async function main() {
     // Offline play has no server timestamp, but uses the same gentle relaunch delay.
     if (setup && !onlineFarm) raidLaunchLockedUntil = Date.now() + 15_000;
     if (!setup) return false; // gated (cooldown/army) — the army screen stays up
+    // First invasion that actually fields a hazard: hazards are the one part of a
+    // fight the player has to handle by hand, and nothing on screen says so. Ask the
+    // resolved setup rather than the raid's data flags — raids 2/10/11 declare a grab
+    // or an obstacle they have no implementation for, and the wall is per-STAGE, so
+    // only this tells us a hazard will really show up.
+    if (!hasSeenHazardTip() && (setup.grabber || setup.crab || setup.wallTemplate)) {
+      markHazardTipSeen();
+      const verb = isTouch() ? "Tap" : "Click";
+      await hud.timSays(
+        "Careful now — this invasion's got HAZARDS. They'll grab your zombies\n" +
+        `right off the field, or block the way forward.\n${verb} one to damage it — ` +
+        "keep at it and it'll go away!"
+      );
+    }
     jobs.setPaused(true);
     raidActive = true;
     world.visible = false;

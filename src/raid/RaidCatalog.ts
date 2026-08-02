@@ -6,8 +6,10 @@ import type { RaidDef, RaidStage } from "./types";
 
 /** Minimum army to launch an invasion (Help.json: "at least 8, best with 16"). */
 export const MIN_ARMY = 8;
-/** Best/most an invasion is fought with (source rule). Also the selection cap. */
-export const ARMY_CAP = 16;
+/** Hard ceiling on an invasion party, and the selection cap. The effective cap is
+ *  `min(ARMY_CAP, zombieMax)`, and zombieMax tops out at 16 + the Zombie Monolith's
+ *  +4 — so this must be 20 for the Monolith's four extra slots to be selectable. */
+export const ARMY_CAP = 20;
 
 /** The raid id of Old McDonnell's Farm — the tutorial invasion. */
 export const MCDONNELL_ID = 1;

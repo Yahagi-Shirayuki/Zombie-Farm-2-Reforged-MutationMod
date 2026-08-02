@@ -52,6 +52,7 @@ import {
 } from "./ui/panels/settings";
 import { openStorage as openStoragePanel } from "./ui/panels/storage";
 import { openFarmersGuide } from "./ui/panels/farmersGuide";
+import { showTimNotice } from "./ui/TimNotice";
 // View-model types + the grave classifier live in hudTypes so panel modules can
 // import them without depending on the whole Hud class. Re-exported below for the
 // existing `from "./hud"` importers (main.ts).
@@ -130,6 +131,8 @@ function functionalDescription(def: PlaceableDef): string | undefined {
     return `Unlocks planting ${def.graveColor}-class zombies — you must own this grave before you can grow them.`;
   if (def.storageSlots)
     return `A shed for objects you've packed away — holds up to ${def.storageSlots} items. Buy a bigger shed to store more.`;
+  if (def.petPen)
+    return "An enclosure your pets roam around in. Tap it to pick up to four of the pets you own — one pen is all you need.";
   if (def.key === "cameraNormal") return "A decorative camera to show off your farm.";
   return undefined;
 }
@@ -814,6 +817,21 @@ export class Hud {
     this.el.appendChild(col);
   }
 
+  /** Confirm a Market purchase that COMMITS on the tap. Crops and Items deliberately
+   *  do not use this: buying one only arms a planting/placement step the player still
+   *  has to finish (or cancel with a right-click), so the commitment is already
+   *  explicit and a prompt there is pure friction. Everything else — farm size,
+   *  ground, boosts, farmer parts, pets — spends the moment the card is tapped, so it
+   *  asks first. A free item needs no prompt. */
+  private confirmPurchase(name: string, cost: number, brains = false): Promise<boolean> {
+    if (cost <= 0) return Promise.resolve(true);
+    return this.confirmInGame(
+      `Buy ${name}?`,
+      `This costs ${cost.toLocaleString()} ${brains ? "brains" : "gold"}.`,
+      "Buy"
+    );
+  }
+
   /** Game-styled confirmation. Native browser confirm/prompt dialogs are never used. */
   confirmInGame(title: string, message: string, confirmLabel = "Confirm"): Promise<boolean> {
     return new Promise((resolve) => {
@@ -845,6 +863,13 @@ export class Hud {
       buttons.append(cancel, accept);
       panel.append(copy, buttons);
     });
+  }
+
+  /** One-off guidance in Tim Buckwheat's voice, outside the first-run tutorial.
+   *  Resolves once the player acknowledges it, so a caller can await it before
+   *  moving on. See ui/TimNotice.ts. */
+  timSays(message: string, buttonLabel = "OK"): Promise<void> {
+    return showTimNotice(this.el, message, buttonLabel);
   }
 
   showWriterLock(onTakeover: () => Promise<boolean>): void {
@@ -1025,6 +1050,9 @@ export class Hud {
   }
 
   // Hide the right menu + bottom tools into the single bottom-right fab.
+  // `chrome-expanded` on #hud lets the stylesheet move the remaining corner chrome
+  // out of the way of the two bars — on a portrait phone the bottom-left invasion
+  // shortcut sits underneath the tool bar, so it steps aside while they are out.
   collapse() {
     if (this.collapsed) return;
     this.collapsed = true;
@@ -1033,6 +1061,7 @@ export class Hud {
     this.fabImg.src = this.fabIconSrc();
     this.refreshBoostBadge(); // sync the fab's uses badge for the current mode
     this.fab.style.display = "block";
+    this.el.classList.remove("chrome-expanded");
     this.refreshTouchCancel();
   }
 
@@ -1042,6 +1071,7 @@ export class Hud {
     this.menuCol.style.display = "grid";
     this.toolsBar.style.display = "flex";
     this.fab.style.display = "none";
+    this.el.classList.add("chrome-expanded");
     this.refreshTouchCancel();
   }
 
@@ -1569,7 +1599,8 @@ export class Hud {
             portrait: `${BASE}assets/boosts/${b.icon}`, cost: b.cost, level: b.level, brains: b.brainsNeeded,
             description: [b.info, b.flavorText].filter(Boolean).join(" ") || undefined,
             ownedLimit,
-            onPick: () => {
+            onPick: async () => {
+              if (!await this.confirmPurchase(b.name, b.cost, b.brainsNeeded)) return;
               if (this.onBuyBoost && this.onBuyBoost(b)) { refreshCur(); renderGrid(); }
             },
           };
@@ -1587,9 +1618,12 @@ export class Hud {
             description: head.description,
             owned,
             equipped: this.state.farmerHeadId === head.id,
-            onPick: () => {
+            onPick: async () => {
               if (owned) this.onEquipFarmerHead?.(head);
-              else if (!this.onBuyFarmerHead || !this.onBuyFarmerHead(head)) return;
+              else {
+                if (!await this.confirmPurchase(head.name, head.cost ?? 0, head.brains)) return;
+                if (!this.onBuyFarmerHead || !this.onBuyFarmerHead(head)) return;
+              }
               refreshCur();
               renderGrid();
             },
@@ -1620,9 +1654,12 @@ export class Hud {
             description: pet.description,
             owned,
             equipped: this.state.activePet === pet.key,
-            onPick: () => {
+            onPick: async () => {
               if (owned) this.onEquipPet?.(pet);
-              else if (!this.onBuyPet || !this.onBuyPet(pet)) return;
+              else {
+                if (!await this.confirmPurchase(pet.name, pet.cost, pet.brains)) return;
+                if (!this.onBuyPet || !this.onBuyPet(pet)) return;
+              }
               refreshCur();
               renderGrid();
             },
@@ -2069,18 +2106,20 @@ export class Hud {
     this.audio.play("menuClick");
   }
 
-  // The Market Upgrade tab: a current-size banner plus, for each Farm Size tier, a
-  // gold card AND a brains card (six cards for three tiers). Tiers are bought in
-  // order (30 -> 40 -> 50 -> 60); buying either currency's card grows the farm, which
-  // makes both of that tier's cards read as owned.
+  // The Market Upgrade tab: for each Farm Size tier, a gold card AND a brains card
+  // (six cards for three tiers). Tiers are bought in order (30 -> 40 -> 50 -> 60);
+  // buying either currency's card grows the farm, which makes both of that tier's
+  // cards read as owned. The cards carry the sizes, so there is no current-size
+  // banner — only the maxed-out farm still needs a line of its own.
   private renderUpgradeGrid(grid: HTMLElement, refreshCur: () => void, rerender: () => void) {
     const current = this.getMapSize ? this.getMapSize() : 30;
     const maxed = this.farmUpgrades.every((u) => u.size <= current);
-    const status = document.createElement("div");
-    status.className = "mkt-upgrade-status";
-    status.innerHTML = `Current farm size <b>${current}×${current}</b>` +
-      (maxed ? " — the biggest there is!" : "");
-    grid.appendChild(status);
+    if (maxed) {
+      const status = document.createElement("div");
+      status.className = "mkt-upgrade-status";
+      status.textContent = "Your farm is as big as it gets!";
+      grid.appendChild(status);
+    }
     // Next buyable tier = smallest size still larger than the current farm.
     const next = this.farmUpgrades.filter((u) => u.size > current)
       .sort((a, b) => a.size - b.size)[0];
@@ -2139,6 +2178,7 @@ export class Hud {
     card.append(hd, body);
     if (buyable)
       card.onclick = async () => {
+        if (!await this.confirmPurchase(`${u.name} (${u.size}×${u.size})`, price, currency === "brains")) return;
         card.style.pointerEvents = "none";
         if (this.onBuyUpgrade && await this.onBuyUpgrade(u.size, currency)) {
           refreshCur();
@@ -2209,6 +2249,7 @@ export class Hud {
       card.onclick = () => { this.onApplyClimate?.(c); refreshCur(); rerender(); };
     } else if (buyable) {
       card.onclick = async () => {
+        if (!await this.confirmPurchase(c.name, price)) return;
         card.style.pointerEvents = "none";
         if (this.onBuyClimate && await this.onBuyClimate(c)) { refreshCur(); rerender(); }
         else card.style.pointerEvents = "";
@@ -2519,7 +2560,14 @@ export class Hud {
     requestTab.className = salesTab.className = "mkt-tab";
     requestTab.textContent = "Requests";
     salesTab.textContent = "Zombie Sales";
-    tabs.append(requestTab, salesTab);
+    // Compact screens cannot show the browse list AND the compose form at once —
+    // side by side they leave the list about three cards tall. There the form
+    // becomes a third tab; on a roomy screen this button is hidden by CSS and the
+    // form stays permanently docked beside the list.
+    const composeTab = document.createElement("button");
+    composeTab.className = "mkt-tab bm-tab-compose";
+    composeTab.textContent = "Create Post";
+    tabs.append(requestTab, salesTab, composeTab);
 
     const toolbar = document.createElement("div");
     toolbar.className = "bm-toolbar";
@@ -2600,6 +2648,7 @@ export class Hud {
     content.append(list, compose);
 
     let kind = initialKind;
+    let composing = false;
     let renderGeneration = 0;
     const cardFor = (key: string) => catalog.find((entry) => entry.cfg.key === key);
     const purchaseLockFor = (key: string) => {
@@ -2657,8 +2706,11 @@ export class Hud {
     };
 
     const setTabs = () => {
-      requestTab.classList.toggle("sel", kind === "BUY_ZOMBIE");
-      salesTab.classList.toggle("sel", kind === "SELL_ZOMBIE");
+      requestTab.classList.toggle("sel", !composing && kind === "BUY_ZOMBIE");
+      salesTab.classList.toggle("sel", !composing && kind === "SELL_ZOMBIE");
+      composeTab.classList.toggle("sel", composing);
+      // Only the compact layout acts on this; the wide one shows both halves.
+      panel.classList.toggle("bm-composing", composing);
     };
     const renderOrders = async () => {
       const generation = ++renderGeneration;
@@ -2784,8 +2836,9 @@ export class Hud {
       }
     };
 
-    requestTab.onclick = () => { kind = "BUY_ZOMBIE"; setTabs(); void renderOrders(); };
-    salesTab.onclick = () => { kind = "SELL_ZOMBIE"; setTabs(); void renderOrders(); };
+    requestTab.onclick = () => { composing = false; kind = "BUY_ZOMBIE"; setTabs(); void renderOrders(); };
+    salesTab.onclick = () => { composing = false; kind = "SELL_ZOMBIE"; setTabs(); void renderOrders(); };
+    composeTab.onclick = () => { composing = true; setTabs(); };
     for (const control of [typeFilter, mutationFilter, sort, mine]) control.onchange = () => void renderOrders();
     refresh.onclick = () => void renderOrders();
     composeKind.onchange = updateCompose;
@@ -2818,6 +2871,9 @@ export class Hud {
               ...(mutationRequired ? { mutationRequired } : {}),
               priceBrains,
             });
+        // Land the player back on the board the new post just joined, so on a
+        // compact layout the post they created is what they see next.
+        composing = false;
         kind = selling ? "SELL_ZOMBIE" : "BUY_ZOMBIE";
         setTabs(); updateCompose(); refreshBalance(); price.value = ""; await renderOrders();
       } catch (error) {
@@ -4098,6 +4154,14 @@ export class Hud {
     pim.className = "zr-por-img";
     if (portrait) pim.src = portrait;
     por.appendChild(pim);
+    // Show the SAME rig the inspect card shows: the static species portrait first,
+    // replaced by this individual's mutation-aware render once it is available. The
+    // Mausoleum grid used to keep the species art, so a stored mutant looked plain.
+    if (this.zombieMutationPortraitOf) {
+      void this.zombieMutationPortraitOf(z.key, z.mutation, z.color)
+        .then((mutated) => { if (pim.isConnected) pim.src = mutated; })
+        .catch(() => { /* retain the static species portrait */ });
+    }
     const name = document.createElement("div");
     name.className = "zr-name";
     name.textContent = z.name;

@@ -305,13 +305,23 @@ export class GameState {
   /** Adopt the server's authoritative item storage (Received bucket + shed). ONLINE the
    *  server owns both: raid loot is rolled and granted there, and the roll reads them to
    *  decide whether a unique may still drop — so an edited save must not decide them.
-   *  Counts are expanded back into the client's list shapes. */
+   *  Counts are expanded back into the client's list shapes.
+   *
+   *  The SHED is a special case. A packed decoration is a server OBJECT carrying
+   *  status "stored", so the shed's real contents arrive through syncObjectStorage;
+   *  `stored` here is the legacy item bucket, which is empty for every account that
+   *  packs things away the modern way. Adopting an empty bucket verbatim blanked the
+   *  shed on EVERY authoritative response and left it blank whenever the object
+   *  projection that restores it was superseded mid-flight (it bails on a newer
+   *  reconcile) — the shed looked wiped after actions that swap an object in place,
+   *  such as a storage-shed upgrade. Only a non-empty legacy bucket replaces it. */
   syncStorage(received: Record<string, number>, stored: Record<string, number>) {
     this.received = [];
     for (const [key, n] of Object.entries(received)) {
       for (let i = 0; i < n; i++) this.received.push(key);
     }
-    this.storedItems = Object.entries(stored).map(([key, count]) => ({ key, count }));
+    const legacy = Object.entries(stored).filter(([, count]) => count > 0);
+    if (legacy.length) this.storedItems = legacy.map(([key, count]) => ({ key, count }));
     this.emit();
   }
 

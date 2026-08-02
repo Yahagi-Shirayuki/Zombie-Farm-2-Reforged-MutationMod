@@ -22,6 +22,7 @@ export function isFarmBackground(value: unknown): value is FarmBackground {
 const SPRITE_KEY = "zf2r.spriteSet";
 const FARM_BG_KEY = "zf2r.farmBackground";
 const DAY_NIGHT_KEY = "zf2r.dayNight";
+const HAZARD_TIP_KEY = "zf2r.seenHazardTip";
 
 /** Which sprite pack to render with. Defaults to ZF2 (the only pack wired today). */
 export function getSpriteSet(): SpriteSet {
@@ -67,6 +68,28 @@ export function getDayNightMode(): DayNightMode {
 
 export function setDayNightMode(mode: DayNightMode): void {
   localStorage.setItem(DAY_NIGHT_KEY, mode);
+}
+
+/** Whether the player has been shown the "tap/click hazards to damage them" tip,
+ *  raised once before their first invasion that actually fields a hazard (the
+ *  Circus trapeze, the beach crab, the Ninja/Robot wall). Kept device-local rather
+ *  than in the save blob: hazards themselves are client-only, so this is a control
+ *  hint about THIS device's input, not account progression. A browser that can't
+ *  write storage simply sees the tip again — cheaper than failing the launch. */
+export function hasSeenHazardTip(): boolean {
+  try {
+    return localStorage.getItem(HAZARD_TIP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markHazardTipSeen(): void {
+  try {
+    localStorage.setItem(HAZARD_TIP_KEY, "1");
+  } catch {
+    /* preference is optional */
+  }
 }
 
 /** Local-clock night window. This avoids requesting precise location permission:
