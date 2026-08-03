@@ -79,6 +79,49 @@ describe("Black Market", () => {
     expect(created.body.order).toMatchObject({ kind: "SELL_ZOMBIE", zombieKey: "ZombieActorZomBetty" });
   });
 
+  it("browses by colour class and body family, and by both at once", async () => {
+    const seller = await signIn(uniqueSub("market-browse-seller"));
+    // One zombie per taxonomy cell the filters must separate: colour class (the
+    // toolbar's "category") down one axis, body family (its "class") down the other.
+    const units = [
+      { key: "ZombieActorRegularTier1", id: `browse-green-regular-${crypto.randomUUID()}` },
+      { key: "ZombieActorGirlTier1", id: `browse-green-female-${crypto.randomUUID()}` },
+      { key: "ZombieActorGardenTier1", id: `browse-green-garden-${crypto.randomUUID()}` },
+      { key: "ZombieActorRegularTier2", id: `browse-blue-regular-${crypto.randomUUID()}` },
+    ];
+    await grantRoster(seller, units.map((unit) => ({ id: unit.id, key: unit.key })));
+
+    let expectedAccountVersion = (await bootstrap(seller)).accountVersion;
+    for (const unit of units) {
+      const created = await call<any>("POST", "/black-market/orders", seller.token, {
+        operationId: operation(`browse-${unit.key}`), expectedAccountVersion,
+        kind: "SELL_ZOMBIE", unitId: unit.id, priceBrains: 2,
+      });
+      expect(created.status, JSON.stringify(created.body)).toBe(200);
+      expectedAccountVersion += 1;
+    }
+
+    // `mine` keeps the assertions clear of every other test's posts in the shared DB.
+    const browse = async (params: string) => {
+      const result = await call<any>("GET",
+        `/black-market/orders?kind=SELL_ZOMBIE&mine=true${params}`, seller.token);
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      return (result.body.orders as Array<{ zombieKey: string }>).map((order) => order.zombieKey).sort();
+    };
+
+    expect(await browse("")).toEqual([...units.map((unit) => unit.key)].sort());
+    expect(await browse("&zombieClass=Green")).toEqual(
+      ["ZombieActorRegularTier1", "ZombieActorGirlTier1", "ZombieActorGardenTier1"].sort());
+    expect(await browse("&zombieClass=Blue")).toEqual(["ZombieActorRegularTier2"]);
+    expect(await browse("&zombieGroup=Regular")).toEqual(
+      ["ZombieActorRegularTier1", "ZombieActorRegularTier2"].sort());
+    expect(await browse("&zombieGroup=Female")).toEqual(["ZombieActorGirlTier1"]);
+    expect(await browse("&zombieClass=Green&zombieGroup=Regular")).toEqual(["ZombieActorRegularTier1"]);
+    expect(await browse("&zombieClass=Blue&zombieGroup=Garden")).toEqual([]);
+    // An unrecognized bucket filters nothing rather than emptying the board.
+    expect(await browse("&zombieClass=Chartreuse")).toEqual([...units.map((unit) => unit.key)].sort());
+  });
+
   it("requires level 20 before requesting or purchasing a special zombie", async () => {
     const seller = await signIn(uniqueSub("market-special-level-seller"));
     const buyer = await signIn(uniqueSub("market-special-level-buyer"));

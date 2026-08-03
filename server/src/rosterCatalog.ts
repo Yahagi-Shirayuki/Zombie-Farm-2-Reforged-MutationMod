@@ -1,5 +1,10 @@
 import { EPIC_QUEST_ZOMBIE_REWARDS } from "../../src/epicBoss/rewards";
 import zombieRows from "../../public/assets/zombies.json";
+import {
+  BLACK_MARKET_CLASS_FILTERS,
+  BLACK_MARKET_GROUP_FILTERS,
+  type BlackMarketFilterOption,
+} from "../../src/blackMarketRules";
 import { OBJECTS } from "./objectCatalog";
 
 // Server-side zombie catalog. Mirrors the `cost` of each unit in
@@ -142,6 +147,41 @@ export function blackMarketPurchaseRequirement(key: string): BlackMarketPurchase
  * an authoritatively owned zombie from trading. */
 export function isTradableZombie(key: string): boolean {
   return TRADABLE_ZOMBIES.has(key);
+}
+
+// ---- Browse filters ------------------------------------------------------
+// Browsing filters by colour class and body family, but orders store only a zombie
+// key, so each filter value resolves to the catalog keys carrying it. The buckets
+// are derived from zombies.json once at module load; a request only ever picks a
+// bucket by name, so no request value reaches SQL.
+
+const keysByField = (
+  field: "className" | "group",
+  options: readonly BlackMarketFilterOption[]
+): ReadonlyMap<string, readonly string[]> => {
+  const rows = zombieRows as Array<{ key: string; className?: string; group?: string }>;
+  return new Map(options.map((option) => {
+    const wanted = new Set<string>([option.value, ...(option.also ?? [])]);
+    return [option.value, rows.filter((zombie) => wanted.has(zombie[field] ?? "")).map((z) => z.key)];
+  }));
+};
+const CLASS_FILTER_KEYS = keysByField("className", BLACK_MARKET_CLASS_FILTERS);
+const GROUP_FILTER_KEYS = keysByField("group", BLACK_MARKET_GROUP_FILTERS);
+
+/** Catalog keys selected by the browse filters. Null when neither filter narrows
+ * anything (including an unrecognized value, which is ignored the same way an
+ * unknown zombieKey is). An empty array means the two filters are disjoint — no
+ * zombie is both — which is a real, empty result rather than "no filter". */
+export function blackMarketFilterKeys(
+  className: string | undefined,
+  group: string | undefined
+): string[] | null {
+  const byClass = className ? CLASS_FILTER_KEYS.get(className) : undefined;
+  const byGroup = group ? GROUP_FILTER_KEYS.get(group) : undefined;
+  if (!byClass) return byGroup ? [...byGroup] : null;
+  if (!byGroup) return [...byClass];
+  const groupKeys = new Set(byGroup);
+  return byClass.filter((key) => groupKeys.has(key));
 }
 
 // ---- Garden-zombie fertilization probability ----------------------------

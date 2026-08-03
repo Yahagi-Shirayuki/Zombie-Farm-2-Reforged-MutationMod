@@ -15,6 +15,7 @@ import objectRows from "../../../public/assets/placeables.json";
 import { ALL_BITS, SLOTS, SLOT_MASK } from "../../../src/zombie/mutations";
 import { levelForXp, XP_THRESHOLDS } from "../levels";
 import {
+  blackMarketFilterKeys,
   blackMarketPurchaseRequirement,
   isTradableZombie,
   type BlackMarketPurchaseRequirement,
@@ -172,12 +173,25 @@ export async function summary(db: D1Database, accountId: string, now: number): P
 export async function list(
   db: D1Database,
   accountId: string,
-  query: { kind?: string; zombieKey?: string; mutated?: string; sort?: string; mine?: string; cursor?: string },
+  query: {
+    kind?: string; zombieClass?: string; zombieGroup?: string;
+    zombieKey?: string; mutated?: string; sort?: string; mine?: string; cursor?: string;
+  },
   now: number
 ): Promise<BlackMarketListResponse> {
   const kind: BlackMarketOrderKind = query.kind === "BUY_ZOMBIE" ? "BUY_ZOMBIE" : "SELL_ZOMBIE";
   const where = ["o.status='OPEN'", "o.kind=?"];
   const binds: unknown[] = [kind];
+  // The toolbar's two dropdowns. A bucket can span dozens of keys, so the list is
+  // inlined rather than bound — D1 caps bound parameters per query, and these are
+  // catalog constants, never request text (blackMarketFilterKeys resolves a bucket
+  // NAME, and the guard below re-checks the shape of what it returned).
+  const filterKeys = blackMarketFilterKeys(query.zombieClass, query.zombieGroup);
+  if (filterKeys) {
+    const safe = filterKeys.filter((key) => /^[A-Za-z0-9_]+$/.test(key));
+    where.push(safe.length ? `o.zombie_key IN (${safe.map((key) => `'${key}'`).join(",")})` : "0=1");
+  }
+  // Retained for clients still on the older per-type / mutated-yes-no toolbar.
   if (query.zombieKey && isTradableZombie(query.zombieKey)) {
     where.push("o.zombie_key=?"); binds.push(query.zombieKey);
   }

@@ -394,15 +394,17 @@ export const putPresentationV3 = (payload: PresentationRequest) =>
 
 export const blackMarketOrders = (query: {
   kind: BlackMarketOrderKind;
-  zombieKey?: string;
-  mutated?: boolean;
+  /** Colour class — the toolbar's "category" (Green/Blue/Red/Silver/Special). */
+  zombieClass?: string;
+  /** Body family — the toolbar's "class" (Regular/Female/Large/Garden/Headless/Small). */
+  zombieGroup?: string;
   sort?: "newest" | "price_asc" | "price_desc";
   mine?: boolean;
   cursor?: string;
 }) => {
   const params = new URLSearchParams({ kind: query.kind });
-  if (query.zombieKey) params.set("zombieKey", query.zombieKey);
-  if (query.mutated !== undefined) params.set("mutated", String(query.mutated));
+  if (query.zombieClass) params.set("zombieClass", query.zombieClass);
+  if (query.zombieGroup) params.set("zombieGroup", query.zombieGroup);
   if (query.sort) params.set("sort", query.sort);
   if (query.mine) params.set("mine", "true");
   if (query.cursor) params.set("cursor", query.cursor);

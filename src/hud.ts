@@ -29,6 +29,8 @@ import type {
   BlackMarketMutationResponse, BlackMarketOrderKind, BlackMarketOrderView,
 } from "./net/protocol";
 import {
+  BLACK_MARKET_CLASS_FILTERS,
+  BLACK_MARKET_GROUP_FILTERS,
   blackMarketComposeDefaults,
   blackMarketMutationRequirementLabel,
   blackMarketPurchaseLock,
@@ -323,8 +325,9 @@ export class Hud {
   }
 
   // Farm shortcuts. Menu keys only act from the unobstructed farm view; Escape
-  // closes the top overlay or cancels the active tool. Holding Space temporarily
-  // borrows Select/pan without discarding a crop, placement, or carried object.
+  // closes the top overlay, then opens Settings on an unobstructed desktop farm.
+  // Holding Space temporarily borrows Select/pan without discarding a crop,
+  // placement, or carried object.
   private wireActionHotkeys() {
     const typing = (target: EventTarget | null) => {
       const t = target as HTMLElement | null;
@@ -344,6 +347,12 @@ export class Hud {
         if (this.el.classList.contains("tutorial")) { e.preventDefault(); return; }
         if (document.fullscreenElement) return; // preserve native fullscreen exit
         if (this.closeTopOverlay()) { e.preventDefault(); return; }
+        if (!e.repeat && !isMobile() && !this.el.classList.contains("raiding") &&
+            !this.el.classList.contains("visiting")) {
+          e.preventDefault();
+          this.openSettings();
+          return;
+        }
         this.endTemporaryPan();
         if (this.mode !== "walk") { e.preventDefault(); this.setMode("walk"); }
         return;
@@ -1232,7 +1241,7 @@ export class Hud {
   zombieBaseCost: ((key: string) => number) | null = null;
   zombieCostsBrains: ((key: string) => boolean) | null = null;
   getBlackMarketOrders: ((query: {
-    kind: BlackMarketOrderKind; zombieKey?: string; mutated?: boolean;
+    kind: BlackMarketOrderKind; zombieClass?: string; zombieGroup?: string;
     sort?: "newest" | "price_asc" | "price_desc"; mine?: boolean;
   }) => Promise<BlackMarketListResponse>) | null = null;
   onCreateBlackMarketOrder: ((input:
@@ -2598,16 +2607,22 @@ export class Hud {
 
     const toolbar = document.createElement("div");
     toolbar.className = "bm-toolbar";
-    const typeFilter = document.createElement("select");
-    typeFilter.setAttribute("aria-label", "Zombie type filter");
-    typeFilter.append(new Option("All zombie types", ""));
     const catalog = [...new Map(this.blackMarketZombieCards.map((card) => [card.cfg.key, card])).values()]
       .sort((a, b) => a.name.localeCompare(b.name));
-    for (const card of catalog) typeFilter.append(new Option(card.name, card.cfg.key));
-    const mutationFilter = document.createElement("select");
-    mutationFilter.setAttribute("aria-label", "Mutation filter");
-    mutationFilter.append(new Option("Any mutations", ""), new Option("Mutated: Yes", "true"),
-      new Option("Mutated: No", "false"));
+    // Browsing cuts the catalog along its two axes rather than by single type: the
+    // colour class (shown as "category") and the body family (shown as "class").
+    const categoryFilter = document.createElement("select");
+    categoryFilter.setAttribute("aria-label", "Zombie category filter");
+    categoryFilter.append(new Option("All categories", ""));
+    for (const option of BLACK_MARKET_CLASS_FILTERS) {
+      categoryFilter.append(new Option(option.label, option.value));
+    }
+    const classFilter = document.createElement("select");
+    classFilter.setAttribute("aria-label", "Zombie class filter");
+    classFilter.append(new Option("All classes", ""));
+    for (const option of BLACK_MARKET_GROUP_FILTERS) {
+      classFilter.append(new Option(option.label, option.value));
+    }
     const sort = document.createElement("select");
     sort.setAttribute("aria-label", "Sort orders");
     sort.append(new Option("Newest", "newest"), new Option("Lowest price", "price_asc"),
@@ -2619,7 +2634,7 @@ export class Hud {
     const refresh = document.createElement("button");
     refresh.className = "prof-btn play";
     refresh.textContent = "Refresh";
-    toolbar.append(typeFilter, mutationFilter, sort, mineLabel, refresh);
+    toolbar.append(categoryFilter, classFilter, sort, mineLabel, refresh);
 
     // Fulfilled posts awaiting collection. The trade already settled server-side
     // (brains/zombie landed when the counterparty accepted); this strip is where
@@ -2925,8 +2940,8 @@ export class Hud {
       }
       try {
         const result = await this.getBlackMarketOrders({
-          kind, zombieKey: typeFilter.value || undefined,
-          mutated: mutationFilter.value ? mutationFilter.value === "true" : undefined,
+          kind, zombieClass: categoryFilter.value || undefined,
+          zombieGroup: classFilter.value || undefined,
           sort: sort.value as "newest" | "price_asc" | "price_desc", mine: mine.checked,
         });
         if (generation !== renderGeneration || !bg.isConnected) return;
@@ -3063,7 +3078,7 @@ export class Hud {
     salesTab.onclick = () => { composing = false; viewingHistory = false; kind = "SELL_ZOMBIE"; setTabs(); void renderOrders(); };
     historyTab.onclick = () => { composing = false; viewingHistory = true; setTabs(); void renderHistory(); };
     composeTab.onclick = () => { composing = true; setTabs(); };
-    for (const control of [typeFilter, mutationFilter, sort, mine]) control.onchange = () => void renderOrders();
+    for (const control of [categoryFilter, classFilter, sort, mine]) control.onchange = () => void renderOrders();
     refresh.onclick = () => { void renderOrders(); void renderFulfillments(); };
     composeKind.onchange = updateCompose;
     asset.onchange = refreshComposeStatus;

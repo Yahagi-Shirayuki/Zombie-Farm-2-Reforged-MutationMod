@@ -14,6 +14,44 @@ export interface BlackMarketZombieRequirement {
 
 export type BlackMarketComposeKind = "BUY_ZOMBIE" | "SELL_ZOMBIE";
 
+// ---- Browse filters ------------------------------------------------------
+// The catalog has two real axes, and the toolbar cuts along both: the colour class
+// (the tier ladder Green -> Blue -> Red -> Silver, then the specials) and the body
+// family. Beware the vocabulary crossover — the player calls the colour axis the
+// "category" and the family axis the "class", while the catalog data calls them
+// `className` and `group`. The wire values below are the DATA's words so no
+// translation table is needed server-side; only `label` is the player's.
+
+export interface BlackMarketFilterOption {
+  /** Value sent to the server; matches the catalog field exactly. */
+  value: string;
+  /** Toolbar text. */
+  label: string;
+  /** Extra catalog values folded into this option. */
+  also?: readonly string[];
+}
+
+/** Colour-class options — the toolbar's "category" dropdown. */
+export const BLACK_MARKET_CLASS_FILTERS: readonly BlackMarketFilterOption[] = [
+  { value: "Green", label: "Green" },
+  { value: "Blue", label: "Blue" },
+  { value: "Red", label: "Red" },
+  { value: "Silver", label: "Silver" },
+  // Yellow is the tier-less uniques (Crazy, Cupid). There is no Yellow rung on the
+  // ladder and a player reads them as specials, so they file under Special.
+  { value: "Special", label: "Special", also: ["Yellow"] },
+];
+
+/** Body-family options — the toolbar's "class" dropdown. */
+export const BLACK_MARKET_GROUP_FILTERS: readonly BlackMarketFilterOption[] = [
+  { value: "Regular", label: "Normal" },
+  { value: "Female", label: "Girl" },
+  { value: "Large", label: "Large" },
+  { value: "Garden", label: "Garden" },
+  { value: "Headless", label: "Headless" },
+  { value: "Small", label: "Mini" },
+];
+
 /** Initial values for the Create Post form. A roster-originated sale keeps the
  * concrete unit selected when the Black Market opens. */
 export function blackMarketComposeDefaults(
