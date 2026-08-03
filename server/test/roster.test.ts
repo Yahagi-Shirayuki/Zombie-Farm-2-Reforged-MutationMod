@@ -42,6 +42,11 @@ describe("rosterCatalog", () => {
     expect(legalMutation("ZombieActorRegularTier1", 4 | 8 | 128)).toBe(4 | 8 | 128);
     expect(legalMutation("ZombieActorMadeUp", 4)).toBe(4); // unknown key: leave it alone
   });
+  it("keeps Pumpking on headless species and strips it everywhere else", () => {
+    expect(legalMutation("ZombieActorHeadlessTier1", 8192 | 8)).toBe(8192 | 8);
+    expect(legalMutation("ZombieActorRegularTier1", 8192 | 8)).toBe(8);
+    expect(legalMutation("ZombieActorGardenTier4", 8192)).toBe(0);
+  });
   it("defines Black Market gates independently of planting levels", () => {
     expect(blackMarketPurchaseRequirement("ZombieActorRegularTier1")).toEqual({});
     expect(blackMarketPurchaseRequirement("ZombieActorSmallTier2")).toEqual({ minLevel: 1 });

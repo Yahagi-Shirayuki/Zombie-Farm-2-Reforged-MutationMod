@@ -9,11 +9,10 @@ import type { FarmerBodyDef, FarmerCatalog, FarmerHeadDef, PetCatalog, PetDef } 
 import { EPIC_BOSS_FIGHT_BRAIN_COST, type EpicBossPayment } from "./epicBoss/tokens";
 import { AudioManager } from "./audio";
 import { RosterEntry } from "./zombie/types";
-import {
-  ALL_BITS, HEADLESS_FORBIDDEN_MASK, MUTATIONS, mutationLabel, mutationBonus,
-} from "./zombie/mutations";
+import { ALL_BITS, bitAllowed, MUTATIONS, mutationLabel, mutationBonus } from "./zombie/mutations";
 import { QuestView } from "./quest/types";
 import type { RaidCardView, RaidPartyView, RaidResultView, RaidLaunchOpts, LootDrop } from "./raid/RaidManager";
+import { lootDropLabel } from "./raid/RaidManager";
 import type { ProfileIndex } from "./save/profiles";
 import { canGiftBrain, type Friend } from "./social/friends";
 import { isMobile } from "./platform";
@@ -29,7 +28,7 @@ import { otherPlayMode, playModeDestinationLabel, type PlayMode } from "./playMo
 import type { UpdateCheckResult } from "./updateCheck";
 import type {
   BlackMarketFulfillmentView, BlackMarketHistoryResponse, BlackMarketListResponse,
-  BlackMarketMutationResponse, BlackMarketOrderKind, BlackMarketOrderView,
+  BlackMarketMutationResponse, BlackMarketOrderKind, BlackMarketOrderView, GiftReward,
 } from "./net/protocol";
 import {
   BLACK_MARKET_CLASS_FILTERS,
@@ -38,6 +37,7 @@ import {
   blackMarketMutationRequirementLabel,
   blackMarketPurchaseLock,
   matchesBlackMarketMutation,
+  REQUESTABLE_MUTATION_MASK,
 } from "./blackMarketRules";
 // HUD styles live in a real stylesheet (src/ui/hud.css) so they get CSS tooling
 // and hot-reload. Vite injects it at module load — no manual <style> element.
@@ -143,6 +143,14 @@ function functionalDescription(def: PlaceableDef): string | undefined {
 }
 
 const UI = (n: string) => `${BASE}assets/ui/${n}`;
+
+/** Player-facing wording for what a gift paid out ("a brain 🧠", "300 gold 💰"). */
+function giftRewardLabel(reward: GiftReward): string {
+  if (reward.kind === "brain") {
+    return reward.amount === 1 ? "a brain 🧠" : `${reward.amount} brains 🧠`;
+  }
+  return `${reward.amount.toLocaleString()} gold 💰`;
+}
 
 
 
@@ -1382,8 +1390,11 @@ export class Hud {
   refreshInbox: (() => Promise<void>) | null = null;
   /** Cached unclaimed gifts addressed to me. */
   getInbox: (() => { id: string; fromName: string }[]) | null = null;
-  /** Claim a gift (credits a brain server-side). Returns whether it was credited. */
-  onClaimGift: ((id: string) => Promise<true | string>) | null = null;
+  /** Claim a gift (credited server-side). Resolves to what it paid out, to null if
+   *  it had already been opened (nothing credited, nothing to reveal), or to an
+   *  error message to show the player. Contents are rolled when the gift is SENT, so
+   *  they are unknown here until the claim comes back. */
+  onClaimGift: ((id: string) => Promise<GiftReward | null | string>) | null = null;
   /** Pull pending incoming friend requests into the cache. */
   refreshRequests: (() => Promise<void>) | null = null;
   /** Cached pending incoming friend requests (people asking to befriend me). */
@@ -2727,24 +2738,33 @@ export class Hud {
       (mask, input) => input.checked ? mask | Number(input.value) : mask,
       0
     );
-    // A headless zombie has no head to mutate, so a request for a head or hair/eye
-    // mutation on one could never be filled. Take those choices away instead of
-    // letting the player escrow brains on an impossible post.
-    const syncHeadlessMutationChoices = (selling: boolean) => {
-      const headless = !selling && cardFor(asset.value)?.zombie?.group === "Headless";
+    // A request nobody could ever fill is worth blocking before the player escrows
+    // brains on it: the selected species may not be able to wear the mutation (a
+    // headless zombie has no head; only a headless one can wear Pumpking), and a
+    // mutation added after the orders table was built can't be stored at all.
+    const syncMutationChoices = (selling: boolean) => {
+      const headless = cardFor(asset.value)?.zombie?.group === "Headless";
       for (const input of mutationChecks) {
-        const forbidden = headless && (Number(input.value) & HEADLESS_FORBIDDEN_MASK) !== 0;
-        if (forbidden) input.checked = false;
-        input.disabled = forbidden;
+        const bit = Number(input.value);
+        const wearable = selling || bitAllowed(bit, headless);
+        const storable = (bit & REQUESTABLE_MUTATION_MASK) !== 0;
+        const blocked = !wearable || !storable;
+        if (blocked) input.checked = false;
+        input.disabled = blocked;
         const label = input.parentElement as HTMLLabelElement | null;
-        label?.classList.toggle("bm-choice-off", forbidden);
-        if (label) label.title = forbidden ? "A headless zombie can't wear this mutation." : "";
+        label?.classList.toggle("bm-choice-off", blocked);
+        if (!label) continue;
+        label.title = wearable
+          ? (storable ? "" : "This mutation can't be requested on the Black Market yet.")
+          : headless
+            ? "A headless zombie can't wear this mutation."
+            : "Only headless zombies can wear this mutation.";
       }
     };
     const refreshComposeStatus = () => {
       const selling = composeKind.value === "SELL_ZOMBIE";
       const purchaseLock = selling ? null : purchaseLockFor(asset.value);
-      syncHeadlessMutationChoices(selling); // before the mask is read below
+      syncMutationChoices(selling); // before the mask is read below
       const missingMutation = !selling && mutationMode.value === "specific" &&
         selectedMutationMask() === 0;
       mutationChoices.hidden = selling || mutationMode.value !== "specific";
@@ -3273,7 +3293,8 @@ export class Hud {
     h.textContent = "Friends";
     const giftCostNote = document.createElement("div");
     giftCostNote.className = "fr-note";
-    giftCostNote.textContent = "Gifting a brain costs 100 gold, but provides 5 exp";
+    giftCostNote.textContent =
+      "Gifting costs 100 gold after 2 free gifts a day, but provides 5 exp";
     const note = document.createElement("div");
     note.className = "fr-note";
     const acctBar = document.createElement("div");
@@ -3368,22 +3389,28 @@ export class Hud {
         row.className = "prof-row fr-inbox-row";
         const nm = document.createElement("div");
         nm.className = "prof-name";
-        nm.append("🧠 Brain from ");
+        // The contents were fixed when the gift was sent, but they stay sealed until
+        // it's opened — the inbox never says what's inside.
+        nm.append("🎁 Gift from ");
         const bfrom = document.createElement("b");
         bfrom.textContent = g.fromName; // textContent: no markup from account strings
         nm.appendChild(bfrom);
         const claim = document.createElement("button");
         claim.className = "prof-btn play";
-        claim.textContent = "Claim";
+        claim.textContent = "Open";
         claim.onclick = async () => {
           claim.disabled = true;
           const result = await (this.onClaimGift?.(g.id) ?? Promise.resolve("Couldn't claim that gift."));
-          if (result === true) {
-            this.showToast(`Claimed a brain from ${g.fromName}! 🧠`);
-            await refresh();
-          } else {
+          if (typeof result === "string") {
             this.showToast(result);
             claim.disabled = false;
+          } else {
+            // null = already opened elsewhere: drop it from the inbox, but don't
+            // pretend it paid out something the player never received.
+            this.showToast(result
+              ? `${g.fromName} sent you ${giftRewardLabel(result)}!`
+              : "That gift had already been opened.");
+            await refresh();
           }
         };
         row.append(nm, claim);
@@ -3458,8 +3485,8 @@ export class Hud {
         if (!online() && f.giftsSent > 0) {
           const b = document.createElement("span");
           b.className = "prof-badge fr-gifts";
-          b.textContent = `🧠 ${f.giftsSent}`;
-          b.title = `${f.giftsSent} brain${f.giftsSent === 1 ? "" : "s"} gifted`;
+          b.textContent = `🎁 ${f.giftsSent}`;
+          b.title = `${f.giftsSent} gift${f.giftsSent === 1 ? "" : "s"} sent`;
           nm.appendChild(b);
         }
         const more = document.createElement("span");
@@ -3483,10 +3510,10 @@ export class Hud {
           ? !!f.giftOnCooldown
           : !canGiftBrain(f, Date.now());
         gift.disabled = giftCoolingDown;
-        gift.textContent = giftCoolingDown ? "Gifted 🧠" : "Gift 🧠";
+        gift.textContent = giftCoolingDown ? "Gifted 🎁" : "Gift 🎁";
         gift.title = giftCoolingDown
           ? "You already gifted this friend during the current cooldown."
-          : "Send this friend a brain";
+          : "Send this friend a gift";
         gift.onclick = async () => {
           if (online()) {
             gift.disabled = true;
@@ -3494,12 +3521,12 @@ export class Hud {
             if (err) { this.showToast(err); gift.disabled = false; }
             else {
               f.giftOnCooldown = true;
-              this.showToast(`Sent a brain to ${f.name}! +5 XP`);
+              this.showToast(`Sent a gift to ${f.name}! +5 XP`);
               renderList();
             }
           } else {
             if (this.onGiftBrain?.(f.id)) {
-              this.showToast(`Sent a brain to ${f.name}! 🧠`);
+              this.showToast(`Sent a gift to ${f.name}! 🎁`);
               renderList();
             }
           }
@@ -4531,8 +4558,8 @@ export class Hud {
         ? `<div class="rr-loot-items">${view.loot
             .map((l) =>
               l.icon
-                ? `<span class="rr-loot-i" title="${l.name}"><img src="${l.icon}"><span>${l.name}</span></span>`
-                : `<span class="rr-loot-i rr-loot-noimg">${l.name}</span>`
+                ? `<span class="rr-loot-i" title="${lootDropLabel(l)}"><img src="${l.icon}"><span>${lootDropLabel(l)}</span></span>`
+                : `<span class="rr-loot-i rr-loot-noimg">${lootDropLabel(l)}</span>`
             )
             .join("")}</div>`
         : `<div class="rr-loot-none">—</div>`);
@@ -4670,8 +4697,8 @@ export class Hud {
     const html = loot
       .map((l) =>
         l.icon
-          ? `<span class="rr-loot-i" title="${l.name}"><img src="${l.icon}"><span>${l.name}</span></span>`
-          : `<span class="rr-loot-i rr-loot-noimg">${l.name}</span>`
+          ? `<span class="rr-loot-i" title="${lootDropLabel(l)}"><img src="${l.icon}"><span>${lootDropLabel(l)}</span></span>`
+          : `<span class="rr-loot-i rr-loot-noimg">${lootDropLabel(l)}</span>`
       )
       .join("");
     if (items) items.innerHTML = html;

@@ -18,6 +18,9 @@ export const CROP_MUTATIONS: Readonly<Record<string, number>> = {
   lima_beans: 1024,
   venus_flytrap: 2048,
   dragon_fruit: 4096,
+  // Headless-only: resolveCropMutations passes the harvested zombie's body type to
+  // addMutation, so this bit lands on a headless zombie and is refused on any other.
+  pumpking: 8192,
 };
 
 export const CROP_MUTATION_CHANCE = 0.25;

@@ -83,6 +83,8 @@ manual `schema.sql` touched the table):
 | `0033_black_market_history` | Two `ALTER TABLE black_market_orders ADD COLUMN delivered_*` statements + backfill | Fails if either column exists. Historical filled requests keep `NULL` delivered details (never recorded); only sales backfill from escrow. |
 | `0034_quest_45_popcorn_backfill` | Data-only `UPDATE`: grants the Circus Popcorn quest 45 always owed but never paid | No schema change. Idempotent — skips any account that already has the key, so re-running is a no-op. Only touches accounts with `"45"` in their completed quests. Not race-proof against a live command batch; verify after applying (see below). |
 | `0036_raid_brain_pity` | `ALTER TABLE raid_state_v3 ADD COLUMN brain_dry_streak` | Fails if `brain_dry_streak` exists. Every account starts the streak at 0 — no backfill is possible, since dry invasions before this were never counted. |
+| `0037_raid_zombie_pity` | `ALTER TABLE raid_state_v3 ADD COLUMN zombie_dry_json` | Fails if `zombie_dry_json` exists. Every account starts empty (`'{}'`) — as above, dry wins before this were never counted, and `progress_json` records lifetime wins, not wins since the last rare zombie. |
+| `0038_gift_reward_roll` | Two `ALTER TABLE gifts ADD COLUMN reward_*` statements | Fails if either column exists. Gifts already sitting unclaimed in an inbox take the defaults (`'brain'` / `1`) and so still pay the single brain their sender was promised. |
 
 The remaining current migrations use repeatable deletes or `CREATE … IF NOT EXISTS`
 (including `0029_restore_ledger`, which recreates the `ledger` table dropped by the v3
@@ -120,6 +122,10 @@ wrangler d1 execute zombiefarm --remote --command \
   `delivered_invasions`, and `idx_black_market_fulfiller` exist after migration `0033`.
 - For the invasion brain pity floor, verify `raid_state_v3.brain_dry_streak` exists after
   migration `0036` — `/raid/start` selects it and fails the raid launch without it.
+- For the rare-zombie pity, verify `raid_state_v3.zombie_dry_json` exists after migration
+  `0037` — `/raid/finish` selects it and fails the settlement without it.
+- For rolled gift contents, verify `gifts.reward_kind` and `gifts.reward_amount` exist
+  after migration `0038` — `POST /gifts` writes both and the send fails without them.
 
 ## Going forward
 

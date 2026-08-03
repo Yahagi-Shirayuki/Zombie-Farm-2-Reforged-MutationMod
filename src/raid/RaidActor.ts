@@ -217,7 +217,7 @@ export class RaidActor {
       this.root.addChild(sp);
     }
     // Headless models have no feet — guard the walk animation.
-    const headFxKind = specialHeadFxKind(key);
+    const headFxKind = specialHeadFxKind(key, mutation);
     if (headFxKind) {
       this.specialHeadFx = new SpecialHeadFx(headFxKind);
       this.root.addChild(this.specialHeadFx.container);

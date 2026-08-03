@@ -3,7 +3,7 @@
 // are derived from the zombie catalog (zombies.json) by key at spawn/restore.
 import type { ZombieDef } from "../assets";
 import { classify } from "./taxonomy";
-import { applyHeadlessRestriction, mutationBonus } from "./mutations";
+import { applyBodyTypeRestriction, mutationBonus } from "./mutations";
 import { randomZombieName } from "./names";
 
 export const MAX_ZOMBIE_NAME_LENGTH = 24;
@@ -50,8 +50,9 @@ export interface OwnedZombie {
 // saved mask). When omitted, a market mutant grows in with its guaranteed bit
 // (def.mutation), so buying a Carrot Zombie yields a Carrot-eyed owned unit.
 // Combat stats bake in the mutation bonuses so downstream code reads str/dex/con
-// directly. Headless zombies have head/hair-eye mutations stripped here (report
-// §11), so a headless combine result never carries a mutation it can't show.
+// directly. Mutations the body type can't wear are stripped here (report §11) — a
+// headless zombie loses head/hair-eye ones, everyone else loses the headless-only
+// Pumpking — so a combine result never carries a mutation it can't show.
 export function makeOwned(
   id: string,
   def: ZombieDef,
@@ -64,8 +65,8 @@ export function makeOwned(
 ): OwnedZombie {
   const tax = classify(def.key);
   const group = def.group ?? tax.group;
-  // Enforce the headless restriction at the one place a mask lands on a unit.
-  const mask = applyHeadlessRestriction(mutation ?? def.mutation ?? 0, group === "Headless");
+  // Enforce the body-type restriction at the one place a mask lands on a unit.
+  const mask = applyBodyTypeRestriction(mutation ?? def.mutation ?? 0, group === "Headless");
   const bonus = mutationBonus(mask);
   return {
     id,

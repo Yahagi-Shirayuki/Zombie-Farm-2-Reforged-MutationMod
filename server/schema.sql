@@ -70,14 +70,20 @@ CREATE TABLE IF NOT EXISTS blocks (
 -- recipient via a unique grant (see grants). `claimed_at IS NULL` = still in the
 -- recipient's inbox. `day_bucket` = floor(created_at / 86400000): the once-a-day
 -- window is now enforced by a UNIQUE index rather than a read-then-insert race.
+-- `reward_kind`/`reward_amount` are the contents, rolled by the SENDER's request and
+-- fixed from then on (src/logic.ts GIFT_REWARD_TABLE); the recipient's first open each
+-- UTC day overrides them with a guaranteed brain. `type` is the legacy pre-roll column
+-- and is no longer read.
 CREATE TABLE IF NOT EXISTS gifts (
-  id          TEXT PRIMARY KEY,
-  from_id     TEXT NOT NULL REFERENCES accounts(id),
-  to_id       TEXT NOT NULL REFERENCES accounts(id),
-  type        TEXT NOT NULL DEFAULT 'brain',
-  created_at  INTEGER NOT NULL,
-  day_bucket  INTEGER NOT NULL DEFAULT 0,
-  claimed_at  INTEGER
+  id            TEXT PRIMARY KEY,
+  from_id       TEXT NOT NULL REFERENCES accounts(id),
+  to_id         TEXT NOT NULL REFERENCES accounts(id),
+  type          TEXT NOT NULL DEFAULT 'brain',
+  created_at    INTEGER NOT NULL,
+  day_bucket    INTEGER NOT NULL DEFAULT 0,
+  claimed_at    INTEGER,
+  reward_kind   TEXT NOT NULL DEFAULT 'brain',
+  reward_amount INTEGER NOT NULL DEFAULT 1
 );
 
 -- Existing-DB migration for the day_bucket column (run once; harmless on fresh DBs
@@ -528,7 +534,11 @@ CREATE TABLE IF NOT EXISTS raid_state_v3 (
   -- Brain-eligible invasions settled since this account's last brain drop. Server-only:
   -- /raid/start floors a zero roll to one brain at the threshold, and the count is never
   -- sent to the client (see src/raid/brainDrops.ts).
-  brain_dry_streak INTEGER NOT NULL DEFAULT 0
+  brain_dry_streak INTEGER NOT NULL DEFAULT 0,
+  -- Per-raid wins since that raid last dropped its rare zombie, {"<raidId>": <dryWins>}.
+  -- Server-only, same deal: /raid/finish grants the zombie outright at the threshold in
+  -- src/raid/zombieDrops.ts and the count is never sent to the client.
+  zombie_dry_json  TEXT NOT NULL DEFAULT '{}'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_raid_v3_live
   ON raid_sessions_v3(account_id) WHERE finished_at IS NULL;

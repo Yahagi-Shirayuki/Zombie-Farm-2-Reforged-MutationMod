@@ -237,7 +237,7 @@ fight that is strictly easier than the one the player saw. The player concedes t
 - A player who genuinely *would* have won can be forced to report a loss by a hostile local
   modification, but only against their own account — the merge is one-way and zero-reward.
 - If a transcript fails replay with `truncated_transcript`, `illegal_bubble`, `illegal_ability`,
-  or `input_after_finish` **and** the client conceded, the settlement no longer hard-rejects. It
+  `illegal_wall_tap`, or `input_after_finish` **and** the client conceded, the settlement no longer hard-rejects. It
   closes the session as a synthesised zero-reward loss and skips roster-partition validation
   (`server/src/v3/raid.ts`). `illegal_ability` and `illegal_bubble` were previously treated as
   forgery rejections. This is self-harming by construction — it grants nothing — but it is a real

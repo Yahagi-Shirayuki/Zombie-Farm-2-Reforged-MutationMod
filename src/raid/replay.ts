@@ -36,7 +36,14 @@ import type { RaidOutcome } from "./types";
 // Garden support line; it now spends its whole budget on melee once it climbs down, so
 // the transcript diverges from the first post-descent action. This bump also raises
 // ARMY_CAP 16 → 20, which a v12 Worker would reject as `bad_roster`.
-export const RAID_RULESET_VERSION = 13;
+// 14: player taps on a boss-summoned wall (Ninja carrotWall / Robot junkWall) are now
+// TRANSCRIBED as `wallTap` input. The wall is the one hazard the verifier simulates — the
+// other two are client-only — so the client chipping it for 75 a tap without telling the
+// server put the two simulations permanently out of step from the first tap. The player
+// then lost the fight on the server's un-tapped wall while winning it on screen, and the
+// finish was rejected (`illegal_ability` / `truncated_transcript`). Losses were absorbed
+// by the `clientWin` concession; wins were not, so a winning Ninja run could never settle.
+export const RAID_RULESET_VERSION = 14;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;
@@ -45,6 +52,7 @@ export const RAID_MAX_TRANSCRIPT_BYTES = 32 * 1024;
 export type RaidReplayInput =
   | { seq: number; tick: number; type: "bubble"; unitId: string }
   | { seq: number; tick: number; type: "ability"; abilityKey: string }
+  | { seq: number; tick: number; type: "wallTap"; unitId: string }
   | { seq: number; tick: number; type: "retreat" };
 
 export type ReplayResult =
@@ -94,6 +102,10 @@ export function advanceRaidSegment(
         if (typeof input.unitId !== "string" || !sim.popBubble(input.unitId)) return { ok: false, error: "illegal_bubble" };
       } else if (input.type === "ability") {
         if (typeof input.abilityKey !== "string" || !sim.activate(input.abilityKey)) return { ok: false, error: "illegal_ability" };
+      } else if (input.type === "wallTap") {
+        // Only a live wall takes a tap, so this can neither reach a normal enemy nor
+        // outrun the wall's own hit points: `tapWall` refuses everything else.
+        if (typeof input.unitId !== "string" || !sim.tapWall(input.unitId)) return { ok: false, error: "illegal_wall_tap" };
       } else if (input.type === "retreat") {
         retreated = true;
       } else return { ok: false, error: "bad_input_type" };

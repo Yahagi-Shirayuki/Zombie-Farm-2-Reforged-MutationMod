@@ -14,6 +14,7 @@
 import { rollLootTier } from "../../src/raid/LootTable";
 import { raidLoot, dropEcon } from "./raidLootCatalog";
 import { boostKeyForName } from "./boostCatalog";
+import { raidBoostBundle } from "../../src/raid/lootBundles";
 
 /** The literal loot entry that pays gold instead of an item. The client keys off this
  *  NAME (`drop === "Bonus Gold"`), NOT drops.json's `gold` flag — and it must, because
@@ -31,7 +32,7 @@ export function bonusGoldFor(recLevel: number): number {
 /** What a rolled drop turns into. */
 export type LootGrant =
   | { kind: "gold"; name: string; gold: number }
-  | { kind: "boost"; name: string; key: string }
+  | { kind: "boost"; name: string; key: string; qty: number }
   | { kind: "item"; name: string }
   | { kind: "none" };
 
@@ -110,7 +111,8 @@ export function rollLoot(
 
 /** Resolve a rolled drop name into the grant it produces. Order mirrors the client:
  *  "Bonus Gold" pays gold; anything whose NAME matches a boost stacks into the boost
- *  inventory; everything else is an item for the Received bucket.
+ *  inventory (in the raid bundle size — Insta-Grow drops ten at a time, see
+ *  raidBoostBundle); everything else is an item for the Received bucket.
  *
  *  A BRAIN-paying item drop is refused here because invasion brains use their own
  *  server-pinned table and are credited only after deterministic replay verifies a win. */
@@ -118,7 +120,7 @@ export function resolveLoot(name: string | null, recLevel: number): LootGrant {
   if (!name) return { kind: "none" };
   if (name === BONUS_GOLD) return { kind: "gold", name, gold: bonusGoldFor(recLevel) };
   const key = boostKeyForName(name);
-  if (key) return { kind: "boost", name, key };
+  if (key) return { kind: "boost", name, key, qty: raidBoostBundle(key) };
   const d = dropEcon(name);
   if (d?.brains) return { kind: "none" }; // see above — not reachable from any loot table
   return { kind: "item", name };

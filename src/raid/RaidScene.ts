@@ -17,7 +17,7 @@ import { EnemyActor, type EnemyAttackPose } from "./EnemyActor";
 import { ParticleField, ParticleConfig } from "./Particles";
 import { ABILITY_POOL } from "../zombie/traits";
 import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidLevelAsset, RaidOutcome } from "./types";
-import { RAID_TICK_MS, type RaidReplayInput } from "./replay";
+import { RAID_MAX_INPUTS, RAID_TICK_MS, type RaidReplayInput } from "./replay";
 import {
   extrapolatePosition,
   interpolatePosition,
@@ -35,6 +35,7 @@ import { computeRaidHudLayout } from "./raidHudLayout";
 type RaidInputDraft =
   | { type: "bubble"; unitId: string }
   | { type: "ability"; abilityKey: string }
+  | { type: "wallTap"; unitId: string }
   | { type: "retreat" };
 import { BASE } from "../base";
 
@@ -427,6 +428,17 @@ export class RaidScene {
 
   private recordInput(input: RaidInputDraft): void {
     this.replayInputs.push({ ...input, seq: ++this.inputSeq, tick: this.simTick } as RaidReplayInput);
+  }
+
+  /** Wall taps are the only input a player can produce without limit — one per tap,
+   *  against however many blockers a boss summons over a four-minute fight. Every one
+   *  of them has to reach the verifier (an untranscribed tap desynchronises the two
+   *  simulations), so once the transcript nears its cap the wall simply stops taking
+   *  taps. Refusing the tap keeps both sides in step; recording it past the cap would
+   *  fail the whole finish with `too_many_inputs`. The reserve leaves room for the
+   *  focus bubbles, ability taps, and the retreat that matter more. */
+  private canRecordWallTap(): boolean {
+    return this.inputSeq < RAID_MAX_INPUTS - 64;
   }
 
   // Top-left ability strip: tappable activated moves (Bash/Smash/Explode/Mini) with
@@ -962,11 +974,16 @@ export class RaidScene {
     // visually lower Circus trapeze remain tappable even behind a Large zombie.
     if (u.team === "player") root.eventMode = "none";
     // A summoned wall (carrotWall / junkWall) is tappable to chip it (ZFFightWall touch),
-    // in addition to the zombies attacking it.
+    // in addition to the zombies attacking it. The wall is a fully simulated enemy, so —
+    // unlike the client-only trapeze and crab — every tap MUST be transcribed or the
+    // verifier keeps fighting a wall the player already knocked down.
     if (u.isWall) {
       root.eventMode = "static";
       root.cursor = "pointer";
-      root.on("pointertap", () => this.sim.tapWall(u.id));
+      root.on("pointertap", () => {
+        if (this.sim.finished || !this.canRecordWallTap()) return;
+        if (this.sim.tapWall(u.id)) this.recordInput({ type: "wallTap", unitId: u.id });
+      });
     }
     return {
       root, actor, enemyActor, frameActor, epicActor, epicAnim: epicActor ? epicAnim : undefined,

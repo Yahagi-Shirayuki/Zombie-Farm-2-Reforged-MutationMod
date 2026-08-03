@@ -12,7 +12,8 @@ import type {
   BlackMarketTradeStats,
 } from "../../../src/net/protocol";
 import objectRows from "../../../public/assets/placeables.json";
-import { ALL_BITS, SLOTS, SLOT_MASK } from "../../../src/zombie/mutations";
+import { SLOTS, SLOT_MASK } from "../../../src/zombie/mutations";
+import { REQUESTABLE_MUTATION_MASK } from "../../../src/blackMarketRules";
 import { levelForXp, XP_THRESHOLDS } from "../levels";
 import {
   blackMarketFilterKeys,
@@ -72,10 +73,14 @@ const validId = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(value);
 const validPrice = (value: unknown): value is number =>
   Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= MAX_PRICE;
-const VALID_MUTATION_MASK = ALL_BITS.reduce((mask, bit) => mask | bit, 0);
+// REQUESTABLE_MUTATION_MASK is shared with the compose form (see blackMarketRules):
+// the stored column's CHECK caps it at the 13 bits that existed in migration 0030, so
+// a bit added later (Pumpking) is rejected here as a clean 400 rather than failing the
+// D1 INSERT. Widening the CHECK needs a table rebuild, which would cascade-delete
+// black_market_receipts — deliberately deferred.
 const validMutationRequirement = (value: unknown): value is number | undefined =>
   value === undefined || (Number.isSafeInteger(value) && Number(value) > 0 &&
-    (Number(value) & ~VALID_MUTATION_MASK) === 0);
+    (Number(value) & ~REQUESTABLE_MUTATION_MASK) === 0);
 export const matchesMutationRequirement = (
   mutation: number,
   mutated: number,

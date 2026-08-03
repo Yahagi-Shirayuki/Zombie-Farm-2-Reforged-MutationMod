@@ -75,6 +75,17 @@ BIT_PART = {
     16: "potatoHead", 32: "coffeeHead", 64: "celeryArm", 128: "broccoliHat",
     256: "garlicHead", 512: "cauliflowerHat", 1024: "limaBeanBody",
     2048: "flytrapCollar", 4096: "dragonArm",
+    # Pumpking (headless-only). Shares JackoZombie's pumpkin art.
+    8192: "pumpkinHatFeature",
+}
+# Rig overrides for a mutation bit whose authored layout doesn't suit how the
+# mutation is worn. Pumpking is worn by HEADLESS zombies, whose rigs store
+# neck=(0,0): the authored hat offsets are head-RELATIVE (they sit the pumpkin on
+# top of an existing head), so deriving them would drop it onto the chest. Author it
+# as a head-slot part instead, filling the same box the default head occupies
+# (bottom -26.5, centre x -4) so the pumpkin becomes the head they never had.
+BIT_RIG_OVERRIDE = {
+    8192: {"headRel": False, "ox": 10, "oy": 40, "ax": 0.73, "ay": 0.75, "z": 4},
 }
 # Tier-4 variants SHARE a stat bit with a lower-tier mutation (Eyebiscus=Carrot bit 4,
 # Heartichoke=Cauliflower bit 512) but have their OWN hair art. We emit a per-model
@@ -86,8 +97,12 @@ VARIANT_OVERRIDE = {
     "ZombieActorRegularTier4Heartichoke": (512, "heartichokeBody"),
 }
 # Every mutation part name (incl. the Tier-4 variants + the generic mutationArm),
-# stripped from runtime base models.
-MUT_PARTS = set(BIT_PART.values()) | {"eyebiscusHat", "heartichokeBody", "mutationArm"}
+# stripped from runtime base models. pumpkinHatFeature is exempt: it doubles as
+# JackoZombie's own hat, and stripping it would take that species' head away — a
+# Regular can never carry the Pumpking bit, so there is no double-render risk.
+MUT_PARTS = (set(BIT_PART.values()) - {"pumpkinHatFeature"}) | {
+    "eyebiscusHat", "heartichokeBody", "mutationArm",
+}
 
 # Additive parts that sit ON the head (tilt with it, positioned head-relative).
 HEAD_ADD = {
@@ -374,6 +389,8 @@ def main():
             "ox": L["offsetX"], "oy": L["offsetY"],
             "ax": L["pivotX"], "ay": 1 - L["pivotY"], "z": L.get("z", 0),
         }
+        if target.isdigit() and int(target) in BIT_RIG_OVERRIDE:
+            mutations[target].update(BIT_RIG_OVERRIDE[int(target)])
         if part in {"turnipArm", "celeryArm", "dragonArm"}:
             mutations[target]["replaces"] = "armF"
         elif part in {"limaBeanBody", "heartichokeBody"}:

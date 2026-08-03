@@ -72,6 +72,12 @@ Zastronaut, Deputy, Master Ninjombie, MerZombie, Ninjombie, Omega Zombie Bot, Po
 Sheriff, and Zombie Bot. Another player escrows the zombie as a `SELL_ZOMBIE` order, or fills
 a `BUY_ZOMBIE` request.
 
+**Four of those 28 also drop from invasions** and are therefore reachable solo: Old McZombie
+(Old McDonnell's, 1%), Diver (Summer Break), Forest (Tree World) and Teddy (Valentine's Day,
+0.8% each) — see `src/raid/zombieDrops.ts` and the rare-zombie section of
+`docs/mechanics/RAID_TIMING_AND_HAZARDS.md`. A hidden per-raid pity makes that route bounded:
+100 wins of a raid without its zombie guarantees it on the next. Nothing in the game says so.
+
 Delivery is gated on the **recipient**, checked pre-flight and re-checked as a SQL guard inside
 the fulfillment transaction (`server/src/rosterCatalog.ts`, `server/src/v3/blackMarket.ts`):
 

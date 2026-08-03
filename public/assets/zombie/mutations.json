@@ -133,6 +133,16 @@
   "z": 8,
   "replaces": "armF"
  },
+ "8192": {
+  "file": "pumpkinHatFeature",
+  "group": "head",
+  "headRel": false,
+  "ox": 10,
+  "oy": 40,
+  "ax": 0.73,
+  "ay": 0.75,
+  "z": 4
+ },
  "eyebiscusHat": {
   "file": "eyebiscusHat",
   "group": "head",

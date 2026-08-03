@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { rollLoot, resolveLoot, lootEligible, ownedLootCounter, bonusGoldFor, BONUS_GOLD } from "../src/loot";
 import { RAID_LOOT, dropEcon, raidLoot } from "../src/raidLootCatalog";
 import { rollLootTier } from "../../src/raid/LootTable";
+import { raidBoostBundle } from "../../src/raid/lootBundles";
 
 const none = () => 0;
 
@@ -139,8 +140,18 @@ describe("resolveLoot — what a drop becomes", () => {
     // keys off the literal name "Bonus Gold", so keying off the flag would wrongly turn
     // Golden Dice into gold.
     expect(dropEcon("Golden Dice")).toMatchObject({ gold: true });
-    expect(resolveLoot("Golden Dice", 5)).toEqual({ kind: "boost", name: "Golden Dice", key: "golden_dice" });
-    expect(resolveLoot("Invasion Voucher", 5)).toMatchObject({ kind: "boost", key: "invasion_voucher" });
+    expect(resolveLoot("Golden Dice", 5)).toEqual({ kind: "boost", name: "Golden Dice", key: "golden_dice", qty: 1 });
+    expect(resolveLoot("Invasion Voucher", 5)).toMatchObject({ kind: "boost", key: "invasion_voucher", qty: 1 });
+  });
+
+  it("hands Insta-Grow over as a bundle of ten", () => {
+    // The bundle table is shared with the offline client (src/raid/lootBundles.ts), so the
+    // two settlement paths can't pay different amounts for the same drop.
+    expect(raidBoostBundle("insta_grow")).toBe(10);
+    expect(resolveLoot("Insta-Grow", 5)).toEqual({ kind: "boost", name: "Insta-Grow", key: "insta_grow", qty: 10 });
+    // Its neighbours in the same loot tier are unaffected.
+    expect(resolveLoot("Insta-Plow", 5)).toMatchObject({ key: "insta_plow", qty: 1 });
+    expect(resolveLoot("Insta-Harvest", 5)).toMatchObject({ key: "insta_harvest", qty: 1 });
   });
 
   it("treats everything else as an item for the Received bucket", () => {

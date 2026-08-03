@@ -1,6 +1,9 @@
 // Thin data-access layer over D1. Handlers call these; no business rules live here
 // (those are in logic.ts / the routes) — just typed queries.
-import { friendCodeFromBytes, idFromBytes } from "./logic";
+import {
+  friendCodeFromBytes, idFromBytes, rollGiftReward, DAY_MS,
+  FIRST_DAILY_GIFT_REWARD, type GiftReward,
+} from "./logic";
 import type { GoogleIdentity } from "./auth";
 import type { Balance, Currency, EconomyEvent } from "./economy";
 import { applyBatch, clampSeed } from "./economy";
@@ -55,6 +58,9 @@ export interface Gift {
   type: string;
   created_at: number;
   claimed_at: number | null;
+  /** Contents rolled at SEND time (migration 0038). Legacy rows default to a brain. */
+  reward_kind: "brain" | "gold";
+  reward_amount: number;
 }
 
 function rand(n: number): Uint8Array {
@@ -433,7 +439,9 @@ export interface GiftSendResult {
 
 /** Atomically create a gift, charge any post-free-tier cost, and award sender XP.
  * The conditional INSERT enforces both the daily cap and sufficient gold, while
- * idx_gifts_once still prevents two sends to the same recipient. */
+ * idx_gifts_once still prevents two sends to the same recipient. The gift's contents
+ * are rolled here and stored on the row (see rollGiftReward); neither party learns
+ * them until the recipient opens it. */
 export async function sendGiftWithReward(
   db: D1Database,
   from: string,
@@ -441,15 +449,20 @@ export async function sendGiftWithReward(
   bucket: number,
   now: number,
   seed: Balance,
-  xpAward = GIFT_XP_REWARD
+  xpAward = GIFT_XP_REWARD,
+  rollReward: () => GiftReward = rollGiftReward
 ): Promise<GiftSendResult> {
   await getOrSeedBalance(db, from, seed);
   const id = idFromBytes(rand(16));
+  // Contents are decided HERE, once, and stored on the row — never re-rolled at open
+  // time. `reward` is chosen before the conditional INSERT so a gift that fails its
+  // daily-cap/gold check simply discards the roll.
+  const reward = rollReward();
   const guard = "EXISTS(SELECT 1 FROM gifts WHERE id=? AND from_id=?)";
   const results = await db.batch([
     db.prepare(
-      `INSERT INTO gifts (id, from_id, to_id, type, created_at, day_bucket)
-       SELECT ?, ?, ?, 'brain', ?, ?
+      `INSERT INTO gifts (id, from_id, to_id, type, created_at, day_bucket, reward_kind, reward_amount)
+       SELECT ?, ?, ?, 'brain', ?, ?, ?, ?
        WHERE (SELECT COUNT(*) FROM gifts WHERE from_id = ? AND day_bucket = ?) < ?
          AND (
            (SELECT COUNT(*) FROM gifts WHERE from_id = ? AND day_bucket = ?) < ?
@@ -457,7 +470,7 @@ export async function sendGiftWithReward(
          )
        ON CONFLICT (from_id, to_id, day_bucket) DO NOTHING`
     ).bind(
-      id, from, to, now, bucket,
+      id, from, to, now, bucket, reward.kind, reward.amount,
       from, bucket, DAILY_GIFT_LIMIT,
       from, bucket, FREE_DAILY_GIFTS,
       from, GIFT_GOLD_COST
@@ -567,19 +580,39 @@ export async function markGiftClaimed(
     .run();
 }
 
-/** Atomically consume an addressed gift, record its idempotency grant, and credit one
- * brain. Legacy versions could leave a grant behind while the gift stayed unclaimed;
- * this transaction heals both settled and pending orphan grants without double credit. */
-export async function claimGiftBrain(
+export interface GiftClaimResult {
+  claimed: boolean;
+  /** What was actually credited (null when nothing was claimed). */
+  reward: GiftReward | null;
+}
+
+/** Atomically consume an addressed gift, record its idempotency grant, and credit the
+ * gift's contents.
+ *
+ * The FIRST gift an account opens each UTC day always pays a brain, whatever the sender
+ * rolled onto it; every later gift that day pays the contents stored at send time. That
+ * choice is made INSIDE the SQL (a COUNT of gifts this account already claimed today)
+ * rather than by a read-then-write, so claims serialized on the account fence can never
+ * both take the daily floor.
+ *
+ * Legacy versions could leave a grant behind while the gift stayed unclaimed; this
+ * transaction heals both settled and pending orphan grants without double credit — an
+ * existing grant keeps its recorded kind/amount rather than being re-decided. */
+export async function claimGiftReward(
   db: D1Database,
   giftId: string,
   accountId: string,
   grantId: string,
   now: number,
   seed: Balance
-): Promise<boolean> {
+): Promise<GiftClaimResult> {
   await getOrSeedBalance(db, accountId, seed);
+  const dayStart = Math.floor(now / DAY_MS) * DAY_MS;
   const fence = "EXISTS(SELECT 1 FROM account_runtime_v3 WHERE account_id=? AND active_batch_id=?)";
+  // Nothing claimed yet today → this open takes the guaranteed daily brain. Served by
+  // idx_gifts_inbox (to_id, claimed_at); the gift being claimed is still NULL here
+  // because its claimed_at is only stamped by the last statement of this batch.
+  const firstToday = "(SELECT COUNT(*) FROM gifts WHERE to_id=? AND claimed_at>=?)=0";
   const result = await db.batch([
     db.prepare(`UPDATE account_runtime_v3 SET active_batch_id=?,active_batch_expires_at=?,
       account_version=account_version+1,updated_at=? WHERE account_id=?
@@ -588,26 +621,49 @@ export async function claimGiftBrain(
       .bind(grantId, now + 120_000, now, accountId, now, giftId, accountId),
     db.prepare(`INSERT OR IGNORE INTO grants
       (id,account_id,kind,amount,source_gift_id,created_at,settled_at)
-      SELECT ?,?,'brain',1,id,?,NULL FROM gifts
+      SELECT ?,?,
+        CASE WHEN ${firstToday} THEN ? ELSE reward_kind END,
+        CASE WHEN ${firstToday} THEN ? ELSE reward_amount END,
+        id,?,NULL FROM gifts
       WHERE id=? AND to_id=? AND claimed_at IS NULL
       AND EXISTS(SELECT 1 FROM account_runtime_v3 WHERE account_id=? AND active_batch_id=?)`)
-      .bind(grantId, accountId, now, giftId, accountId, accountId, grantId),
-    db.prepare(`UPDATE balances SET brains=brains+COALESCE((SELECT amount FROM grants
-      WHERE source_gift_id=? AND account_id=? AND kind='brain' AND settled_at IS NULL),0)
+      .bind(
+        grantId, accountId,
+        accountId, dayStart, FIRST_DAILY_GIFT_REWARD.kind,
+        accountId, dayStart, FIRST_DAILY_GIFT_REWARD.amount,
+        now, giftId, accountId, accountId, grantId
+      ),
+    db.prepare(`UPDATE balances SET
+      brains=brains+COALESCE((SELECT amount FROM grants
+        WHERE source_gift_id=? AND account_id=? AND kind='brain' AND settled_at IS NULL),0),
+      gold=gold+COALESCE((SELECT amount FROM grants
+        WHERE source_gift_id=? AND account_id=? AND kind='gold' AND settled_at IS NULL),0)
       WHERE account_id=? AND EXISTS(SELECT 1 FROM grants WHERE source_gift_id=?
-      AND account_id=? AND kind='brain' AND settled_at IS NULL) AND ${fence}`)
-      .bind(giftId, accountId, accountId, giftId, accountId, accountId, grantId),
+      AND account_id=? AND settled_at IS NULL) AND ${fence}`)
+      .bind(giftId, accountId, giftId, accountId, accountId, giftId, accountId, accountId, grantId),
     db.prepare(`UPDATE grants SET settled_at=? WHERE source_gift_id=? AND account_id=?
-      AND kind='brain' AND settled_at IS NULL AND ${fence}`)
+      AND settled_at IS NULL AND ${fence}`)
       .bind(now, giftId, accountId, accountId, grantId),
     db.prepare(`UPDATE gifts SET claimed_at=? WHERE id=? AND to_id=? AND claimed_at IS NULL
       AND EXISTS(SELECT 1 FROM grants WHERE source_gift_id=? AND account_id=?
-        AND kind='brain' AND settled_at IS NOT NULL) AND ${fence}`)
+        AND settled_at IS NOT NULL) AND ${fence}`)
       .bind(now, giftId, accountId, giftId, accountId, accountId, grantId),
     db.prepare(`UPDATE account_runtime_v3 SET active_batch_id=NULL,active_batch_expires_at=0,updated_at=?
       WHERE account_id=? AND active_batch_id=?`).bind(now, accountId, grantId),
   ]);
-  return (result[0]?.meta.changes ?? 0) === 1 && (result[4]?.meta.changes ?? 0) === 1;
+  if ((result[0]?.meta.changes ?? 0) !== 1 || (result[4]?.meta.changes ?? 0) !== 1) {
+    return { claimed: false, reward: null };
+  }
+  // Report what the GRANT recorded, not what we intended: an orphan-healed claim pays
+  // the pre-existing grant, and the player's toast must match the credited balance.
+  const grant = await db
+    .prepare("SELECT kind, amount FROM grants WHERE source_gift_id=? AND account_id=?")
+    .bind(giftId, accountId)
+    .first<{ kind: "brain" | "gold"; amount: number }>();
+  return {
+    claimed: true,
+    reward: grant ? { kind: grant.kind, amount: grant.amount } : null,
+  };
 }
 
 /** Record a PENDING grant (settled_at NULL) keyed by its source gift id, IF one
@@ -635,7 +691,7 @@ export async function insertGrantIfAbsent(
   return (res.meta.changes ?? 0) === 1;
 }
 
-/** Credit a pending grant's `amount` brains into the server-authoritative BALANCE,
+/** Credit a pending grant's `amount` of `kind` into the server-authoritative BALANCE,
  *  exactly once. settled_at is the single-apply gate (only one caller wins the
  *  flip); the credit is then an atomic increment on the balances row — no save-blob
  *  CAS, no churn, no deferred/rollback dance the old blob credit needed. `seed` is
@@ -644,6 +700,7 @@ export async function insertGrantIfAbsent(
 export async function settleGrant(
   db: D1Database,
   grantId: string,
+  kind: "brain" | "gold",
   amount: number,
   accountId: string,
   now: number,
@@ -655,8 +712,9 @@ export async function settleGrant(
     .run();
   if ((won.meta.changes ?? 0) !== 1) return false; // already settled by someone
   await getOrSeedBalance(db, accountId, seed); // ensure the balances row exists
+  const column = kind === "gold" ? "gold" : "brains";
   await db
-    .prepare("UPDATE balances SET brains = brains + ? WHERE account_id = ?")
+    .prepare(`UPDATE balances SET ${column} = ${column} + ? WHERE account_id = ?`)
     .bind(amount, accountId)
     .run();
   return true;
@@ -673,14 +731,15 @@ export async function reconcilePendingGrants(
 ): Promise<number> {
   const res = await db
     .prepare(
-      "SELECT id, amount FROM grants WHERE account_id = ? AND kind = 'brain' AND settled_at IS NULL"
+      `SELECT id, kind, amount FROM grants
+       WHERE account_id = ? AND kind IN ('brain','gold') AND settled_at IS NULL`
     )
     .bind(accountId)
-    .all<{ id: string; amount: number }>();
+    .all<{ id: string; kind: "brain" | "gold"; amount: number }>();
   const pending = res.results ?? [];
   let applied = 0;
   for (const g of pending) {
-    if (await settleGrant(db, g.id, g.amount, accountId, now, seed)) applied++;
+    if (await settleGrant(db, g.id, g.kind, g.amount, accountId, now, seed)) applied++;
   }
   return applied;
 }
@@ -3475,14 +3534,15 @@ export async function settleRaid(
     } else if (grant.kind === "boost") {
       // Stacks straight into the server-owned boost inventory, exactly as the client did
       // locally — except the client's version went through the removed `grant` action and
-      // was rejected, so this loot silently evaporated online.
+      // was rejected, so this loot silently evaporated online. A bundled drop (Insta-Grow
+      // x10) stacks its whole bundle, matching the v3 settle path.
       stmts.push(
         db
           .prepare(
-            `INSERT INTO inventory (account_id, item_key, count) VALUES (?, ?, 1)
-             ON CONFLICT(account_id, item_key) DO UPDATE SET count = count + 1`
+            `INSERT INTO inventory (account_id, item_key, count) VALUES (?, ?, ?)
+             ON CONFLICT(account_id, item_key) DO UPDATE SET count = MIN(?, count + ?)`
           )
-          .bind(accountId, grant.key)
+          .bind(accountId, grant.key, grant.qty, MAX_STACK, grant.qty)
       );
     } else if (grant.kind === "item") {
       stmts.push(addStorageStmt(db, accountId, "received", grant.name, 1));

@@ -22,9 +22,11 @@ import {
   type BlackMarketMutationResponse,
   type BlackMarketOrderKind,
   type BlackMarketSummary,
+  type GiftReward,
   type PresentationProjection,
   type PresentationRequest,
 } from "./protocol";
+export type { GiftReward } from "./protocol";
 import { purgeRetiredOnlineStorage } from "./storageCleanup";
 export type { RaidReplayInput } from "../raid/replay";
 
@@ -555,9 +557,16 @@ export const sendGift = (toAccountId: string) =>
 export const getInbox = () => req<InboxGift[]>("GET", "/gifts/inbox");
 
 /** Claim a gift. The response includes the authoritative balance after settlement so
- *  the client can display the brain immediately without a second bootstrap round trip. */
+ *  the client can display the reward immediately without a second bootstrap round trip.
+ *  `reward` is null on an already-claimed gift (there is nothing new to reveal). */
 export const claimGift = (giftId: string) =>
-  req<{ balance: Balance; accountVersion: number; alreadyClaimed: boolean; credited: boolean }>(
+  req<{
+    balance: Balance;
+    accountVersion: number;
+    alreadyClaimed: boolean;
+    credited: boolean;
+    reward: GiftReward | null;
+  }>(
     "POST",
     "/gifts/claim",
     { giftId }
@@ -875,9 +884,9 @@ export interface RaidFinishResult {
   /** The session had already expired (not settled within its TTL) — nothing credited. */
   expired?: boolean;
   /** The SERVER's loot roll for this win (the client no longer rolls its own online):
-   *  the drop's name + what it became. Null when nothing dropped, on a loss, or on a
-   *  replayed finish. */
-  loot?: { name: string; kind: "gold" | "boost" | "item" } | null;
+   *  the drop's name + what it became, plus `qty` for a bundled boost drop (Insta-Grow
+   *  pays ten). Null when nothing dropped, on a loss, or on a replayed finish. */
+  loot?: { name: string; kind: "gold" | "boost" | "item"; qty?: number } | null;
   /** Extremely rare roster reward, placed on the farm or protected in the Mausoleum. */
   newZombie?: { id: string; key: string; stored: boolean; received?: boolean } | null;
   outcome?: RaidOutcome;

@@ -59,7 +59,7 @@ concession field.
 ## Current security restrictions
 
 - If a transcript fails replay with `truncated_transcript`, `illegal_bubble`,
-  `illegal_ability`, or `input_after_finish` **and** the client conceded, the finish settles
+  `illegal_ability`, `illegal_wall_tap`, or `input_after_finish` **and** the client conceded, the finish settles
   as a synthesised zero-reward loss instead of rejecting, skipping roster-partition
   validation. It grants nothing, but it is a gap in "every settlement is replay-verified"
   and is recorded in the audit ledger.

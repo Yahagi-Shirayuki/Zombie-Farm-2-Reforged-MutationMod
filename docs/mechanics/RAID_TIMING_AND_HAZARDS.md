@@ -119,6 +119,14 @@ uses it and claiming empties Received. Both sides share one rule: `ownedLootCoun
 A tier-0 **"Bonus Gold"** pick pays gold instead of an item:
 `getBonusGoldLootForStageLevel:` = **stageLevel × 100**.
 
+**Boost drops can pay a bundle — a deliberate divergence.** The source hands over one of
+whatever boost the tier names. **Insta-Grow drops ten at a time** instead
+(`RAID_BOOST_BUNDLE` in `src/raid/lootBundles.ts`), because one Insta-Grow is a poor prize
+for a whole invasion; every other boost still drops singly, and the table applies to the RAID
+roll only — buying still grants `perPurchase`, claiming from Received still grants one. Both
+settlement paths read the one table (`server/src/loot.ts` `resolveLoot` online,
+`RaidManager.finishRaid` offline) and the results panel labels it "Insta-Grow x10".
+
 (The `getTotalLootWeight:` / `weight`-key path exists but feeds the *brains* table, not
 items — see below.)
 
@@ -152,6 +160,18 @@ field no boss, so neither can roll brains. The counter lives server-side in
 The floor is **deliberately invisible**: the counter is never sent to the client, and nothing
 in the UI names it, counts it out, or marks a floored drop differently from a rolled one. Keep
 it that way when touching the result panel or the fight's brain pickup.
+
+**Rare zombies are a separate roll, with the same treatment.** Four raids independently roll a
+special zombie on a win (`src/raid/zombieDrops.ts`): Old McDonnell's → Old McZombie at **1%**,
+Summer Break / Tree World / Valentine's Day → Diver / Forest / Teddy at **0.8%**. That roll gets
+its own pity, counted **per raid**: after `RAID_ZOMBIE_PITY_WINS = 100` wins of *that* raid
+without *its* zombie, the next win of it hands the zombie over
+(`rollRaidZombieDropWithPity`). Winning a different raid does nothing for it, a loss is not a
+completion, and receiving the zombie (rolled or guaranteed) resets that raid's count to 0 — so a
+collector starts a fresh 100 rather than being handed duplicates. Stored server-side as
+`raid_state_v3.zombie_dry_json` (`{"<raidId>": <dryWins>}`), offline as
+`GameState.zombieDryWins`. Same secrecy rule as the brain floor: never sent to the client, never
+surfaced, and a guaranteed zombie arrives through the ordinary reward row.
 
 Gold: `getStandardGoldLootForStageLevel:` + `goldDistributionLevelCoefficient` = 2.3
 (win gold scales with level); wiki figures still used where exact source gold is unmapped.
@@ -256,6 +276,16 @@ version 6 `raidVerifier.grabberOf` returns `null`, so the server replays the *un
 as an optimistic ceiling and the player concedes the difference via `clientWin`/`clientLosses`.
 Those concessions are merged one-way and can only worsen the submitting player's own result.
 See `../../SECURITY.md`.
+
+**THE WALL IS NOT CLIENT-ONLY.** It is a real enemy unit in the pinned config
+(`raidVerifier.summonWallTemplatesOf` → `createPinnedSim`), so BOTH simulations spawn it and both
+must agree on its hit points. Until ruleset 14 the player's 75-per-tap chip was applied on the
+client and never transcribed: one tap and the verifier was fighting a wall the player had already
+knocked down. The concession path only absorbs that on a conceded LOSS, so a **won** Ninja or Robot
+invasion was rejected outright (`illegal_ability` / `truncated_transcript`) and the player's farm
+was resynced back to before the fight. Ruleset 14 transcribes every tap as a `wallTap` input
+(`replay.ts` → `sim.tapWall`, rejected as `illegal_wall_tap` if no live wall takes it). Any future
+mechanic that lets the player touch a verifier-simulated unit must be transcribed the same way.
 
 **REMOVED — the crossing-obstacle hazard was a fabrication.**
 A ground-crossing obstacle/grab mechanic (a sprite or dot sliding down the lane, damaging or

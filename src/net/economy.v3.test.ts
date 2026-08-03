@@ -153,6 +153,7 @@ describe("v3 raid dependency ids", () => {
       accountVersion: 2,
       alreadyClaimed: false,
       credited: true,
+      reward: { kind: "brain", amount: 1 },
     });
 
     await expect(economy.claimGift("gift-1")).resolves.toMatchObject({ credited: true });
@@ -176,6 +177,7 @@ describe("v3 raid dependency ids", () => {
         accountVersion: 3,
         alreadyClaimed: false,
         credited: true,
+        reward: { kind: "brain", amount: 1 },
       });
 
     const claimed = economy.claimGift("gift-retry");

@@ -30,6 +30,7 @@ import {
   importEligible,
   normalizeFriendCode,
   normalizeUsername,
+  type GiftReward,
 } from "./logic";
 import { validateSave, MAX_SAVE_BYTES } from "./validate";
 import type { EconomyEvent } from "./economy";
@@ -445,6 +446,25 @@ app.post("/dev/fixture/orphan-gift-grant", requireAuth, async (c) => {
   }
   const result = await c.env.DB.batch(statements);
   return c.json({ inserted: (result[0]?.meta.changes ?? 0) === 1, settled: !!body.settled });
+});
+
+// Overwrite the contents a gift in MY inbox was sent with, so the integration suite can
+// exercise a known payout instead of whatever the send-time roll produced. Dev-only:
+// with DEV_AUTH="0" (the deployed value) this route does not exist.
+app.post("/dev/fixture/gift-reward", requireAuth, async (c) => {
+  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
+  const body = await c.req.json<{ giftId?: string; kind?: string; amount?: number }>()
+    .catch((): { giftId?: string; kind?: string; amount?: number } => ({}));
+  const accountId = c.get("accountId");
+  const kind = body.kind === "gold" ? "gold" : "brain";
+  const amount = Number.isFinite(body.amount) ? Math.max(0, Math.floor(body.amount as number)) : 1;
+  const gift = typeof body.giftId === "string"
+    ? await db.claimableGift(c.env.DB, body.giftId, accountId) : null;
+  if (!gift) return c.json({ error: "gift_not_found" }, 404);
+  await c.env.DB.prepare(
+    "UPDATE gifts SET reward_kind=?, reward_amount=? WHERE id=? AND to_id=? AND claimed_at IS NULL"
+  ).bind(kind, amount, gift.id, accountId).run();
+  return c.json({ ok: true, kind, amount });
 });
 
 app.use("*", async (c, next) => {
@@ -1438,9 +1458,11 @@ app.get("/gifts/inbox", async (c) => {
   return c.json(gifts);
 });
 
-// ---- POST /gifts/claim: atomically credit one brain (idempotent) ---------
+// ---- POST /gifts/claim: atomically credit the gift's contents (idempotent) ----
 // Grant creation, balance credit, and inbox removal commit in one D1 batch. The
 // UNIQUE source_gift_id constraint gives concurrent claims exactly one winner.
+// Contents were rolled when the gift was SENT; the only open-time decision is the
+// once-a-day guaranteed brain (see db.claimGiftReward).
 //
 app.post("/gifts/claim", async (c) => {
   const { giftId } = await c.req.json<{ giftId: string }>().catch(() => ({ giftId: "" }));
@@ -1448,7 +1470,11 @@ app.post("/gifts/claim", async (c) => {
   const now = Date.now();
 
   const gift = await db.claimableGift(c.env.DB, giftId, me);
-  const respond = async (alreadyClaimed: boolean, credited: boolean) => {
+  const respond = async (
+    alreadyClaimed: boolean,
+    credited: boolean,
+    reward: GiftReward | null = null
+  ) => {
     const [balance, runtime] = await Promise.all([
       db.getOrSeedBalance(c.env.DB, me, { ...STARTER_BALANCE }),
       c.env.DB.prepare("SELECT account_version FROM account_runtime_v3 WHERE account_id = ?")
@@ -1459,6 +1485,7 @@ app.post("/gifts/claim", async (c) => {
       rev: 0,
       alreadyClaimed,
       credited,
+      reward,
       balance,
       accountVersion: runtime?.account_version ?? 0,
     });
@@ -1466,8 +1493,8 @@ app.post("/gifts/claim", async (c) => {
   if (!gift) return respond(true, false); // already claimed / not mine / unknown
 
   const grantId = crypto.randomUUID();
-  const won = await db.claimGiftBrain(c.env.DB, gift.id, me, grantId, now, { ...STARTER_BALANCE });
-  if (!won) {
+  const claim = await db.claimGiftReward(c.env.DB, gift.id, me, grantId, now, { ...STARTER_BALANCE });
+  if (!claim.claimed) {
     // A raid/epic/command settlement may temporarily own the account fence. Do not
     // report the gift as claimed when it is still waiting in the inbox.
     if (await db.claimableGift(c.env.DB, gift.id, me)) {
@@ -1485,7 +1512,7 @@ app.post("/gifts/claim", async (c) => {
     return respond(true, false);
   }
 
-  return respond(false, true);
+  return respond(false, true, claim.reward);
 });
 
 // ---- raids: server-owned cooldown + one-use sessions --------------------

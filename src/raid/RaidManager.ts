@@ -34,7 +34,8 @@ import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, Ra
 import { rollLootTier } from "./LootTable";
 import { rollBrainDropWithPity, nextBrainDryStreak } from "./brainDrops";
 import { orderPartyRoster } from "./partySelection";
-import { rollRaidZombieDrop } from "./zombieDrops";
+import { rollRaidZombieDropWithPity, nextRaidZombieDryWins, hasRaidZombieDrop } from "./zombieDrops";
+import { raidBoostBundle } from "./lootBundles";
 
 /** Real grab-hazard art per raid id. Circus = the trapeze girl (extracted from the
  *  stage atlas). */
@@ -104,6 +105,14 @@ export interface RaidPartyView {
 export interface LootDrop {
   name: string;
   icon: string;
+  /** How many were won. Omitted (or 1) for the ordinary single drop; a bundled boost
+   *  (Insta-Grow) carries its bundle size so the panel can show "x10". */
+  qty?: number;
+}
+
+/** The results-panel label for a drop: bare name, or "name x10" for a bundle. */
+export function lootDropLabel(drop: LootDrop): string {
+  return (drop.qty ?? 1) > 1 ? `${drop.name} x${drop.qty}` : drop.name;
 }
 
 /** The end-of-raid tally, matching the real "ZOMBIES WIN" results panel. */
@@ -633,10 +642,12 @@ export class RaidManager {
         } else if (drop) {
           // A boost drop stacks straight into the player's boost inventory (bumping
           // that boost's count) rather than sitting in Storage/Received to be claimed.
+          // Bundled boosts pay their whole bundle — Insta-Grow drops ten at a time.
           const boost = this.assets.boosts.find((b) => b.name === drop);
-          if (boost) this.state.addBoost(boost.key);
+          const qty = boost ? raidBoostBundle(boost.key) : 1;
+          if (boost) this.state.addBoost(boost.key, qty);
           else this.state.receiveItem(drop);
-          loot.push({ name: drop, icon: this.lootIcon(drop) });
+          loot.push({ name: drop, icon: this.lootIcon(drop), qty });
         }
         // Brains drop in addition to loot. Offline credit is local; online credit is
         // applied by the server only after deterministic replay verifies the boss win.
@@ -646,7 +657,14 @@ export class RaidManager {
         // A loss never reaches here, and a boss-less stage can't roll brains, so neither
         // charges the counter towards a guarantee it wouldn't be able to honour.
         if (brainEligible) this.state.brainDryStreak = nextBrainDryStreak(this.state.brainDryStreak, brains);
-        const zombieDrop = rollRaidZombieDrop(raid.id, true, Math.random());
+        // The rare zombie carries its own silent per-raid pity: enough dry wins of THIS raid
+        // and the next one hands it over outright (see zombieDrops.ts). Streak settles on
+        // every win of a raid that has one; raids without a rare zombie never get a key.
+        const dryKey = String(raid.id);
+        const zombieDrop = rollRaidZombieDropWithPity(raid.id, true, Math.random(), this.state.zombieDryWins[dryKey] ?? 0);
+        if (hasRaidZombieDrop(raid.id)) {
+          this.state.zombieDryWins[dryKey] = nextRaidZombieDryWins(this.state.zombieDryWins[dryKey] ?? 0, !!zombieDrop);
+        }
         if (zombieDrop) {
           this.hooks.grantZombie?.(zombieDrop.key);
           loot.push({ name: zombieDrop.name, icon: zombiePortrait(zombieDrop.key) });

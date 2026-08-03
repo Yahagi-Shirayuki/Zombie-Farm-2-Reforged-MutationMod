@@ -4,6 +4,7 @@
 // they live here as plain functions rather than methods. Hud keeps thin
 // open*/openPanel wrappers that forward to these.
 import { openModal } from "../Modal";
+import { tintedImage } from "../tintedSprite";
 import { UI } from "../uiAsset";
 import type { LevelUpView, QuestCompleteView, ObjectActions } from "../hudTypes";
 
@@ -86,7 +87,15 @@ export function renderObjectActions(host: HTMLElement, o: ObjectActions): void {
 
   const por = document.createElement("div");
   por.className = "obj-por";
-  if (o.portrait) por.style.backgroundImage = `url(${o.portrait})`;
+  if (o.portrait) {
+    por.style.backgroundImage = `url(${o.portrait})`;
+    // Show the object in the colour it is on the farm. The base art goes up first
+    // so the sheet never waits on the canvas; the tinted copy replaces it once
+    // ready (usually the same frame, since the sprite is already in cache).
+    void tintedImage(o.portrait, o.tint)
+      .then((source) => { if (por.isConnected) por.style.backgroundImage = `url(${source})`; })
+      .catch(() => { /* keep the untinted art */ });
+  }
 
   const btns = document.createElement("div");
   btns.className = "zbtns";

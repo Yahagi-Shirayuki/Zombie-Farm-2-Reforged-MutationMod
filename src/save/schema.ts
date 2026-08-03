@@ -125,6 +125,9 @@ export interface RaidProgressSave {
   /** OFFLINE brain pity: brain-eligible invasions settled since the last brain drop
    *  (see src/raid/brainDrops.ts). Absent in saves written before it existed. */
   brainDryStreak?: number;
+  /** OFFLINE rare-zombie pity, keyed by raid id: wins of that raid since it last dropped
+   *  its rare zombie (see src/raid/zombieDrops.ts). Absent in older saves. */
+  zombieDryWins?: Record<string, number>;
 }
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ import {
   type BlackMarketFilterOption,
 } from "../../src/blackMarketRules";
 import { OBJECTS } from "./objectCatalog";
-import { applyHeadlessRestriction } from "../../src/zombie/mutations";
+import { applyBodyTypeRestriction } from "../../src/zombie/mutations";
 
 // Server-side zombie catalog. Mirrors the `cost` of each unit in
 // public/assets/zombies.json so the server can price a SELL exactly (sell = the
@@ -116,11 +116,12 @@ export function isHeadlessZombie(key: string): boolean {
 }
 
 /** The mutation mask a unit of `key` may legally carry: head and hair/eye bits are
- *  dropped for the headless family (a Party Zombie can't be carrot-eyed). The
- *  server-side twin of the client's makeOwned, which scrubs the same bits wherever
- *  a mask lands on a unit — both must agree or the child's stats diverge. */
+ *  dropped for the headless family (a Party Zombie can't be carrot-eyed), and the
+ *  headless-only Pumpking is dropped for everyone else. The server-side twin of the
+ *  client's makeOwned, which scrubs the same bits wherever a mask lands on a unit —
+ *  both must agree or the unit's stats diverge. */
 export function legalMutation(key: string, mask: number): number {
-  return applyHeadlessRestriction(mask, isHeadlessZombie(key));
+  return applyBodyTypeRestriction(mask, isHeadlessZombie(key));
 }
 
 const TRADABLE_ZOMBIES = new Set(

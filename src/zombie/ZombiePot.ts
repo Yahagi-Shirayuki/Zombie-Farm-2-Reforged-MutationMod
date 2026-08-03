@@ -85,7 +85,11 @@ export class ZombiePot {
   // wall-clock + Math.random.
   constructor(
     private now: () => number = () => Date.now(),
-    private rng: () => number = Math.random
+    private rng: () => number = Math.random,
+    /** Is this species headless? Injected because the pot carries no catalog, and the
+     *  child's body type decides which inherited mutations survive (see combineMasks).
+     *  The default answers "no", which only misses the headless-only Pumpking bit. */
+    private isHeadlessKey: (key: string) => boolean = () => false
   ) {}
 
   /** Is a combine currently running (started, not yet collected)? */
@@ -199,7 +203,7 @@ export class ZombiePot {
     if (!key) return null;
     return {
       key,
-      mutation: combineMasks(j.maskA, j.maskB),
+      mutation: combineMasks(j.maskA, j.maskB, this.isHeadlessKey(key)),
       color: mixColors(j.colorA, j.colorB),
     };
   }

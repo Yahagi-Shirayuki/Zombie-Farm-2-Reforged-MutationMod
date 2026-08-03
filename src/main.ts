@@ -5,7 +5,7 @@ import { snapPlowOrigin } from "./plowSelection";
 // blocks — no 'unsafe-eval'). Side-effect import; must run before `new Application()`.
 // pixi.js lists ./lib/unsafe-eval/init.* under "sideEffects", so it survives bundling.
 import "pixi.js/unsafe-eval";
-import { loadAssets, ensureObjectTexture, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit } from "./assets";
+import { loadAssets, ensureObjectTexture, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
 import { MAX_ZOMBIE_POTS, noRoomForAnother } from "./placementLimit";
 import { Field, CARROT, CropConfig, PLOT } from "./Field";
 import { Actor } from "./Actor";
@@ -2788,11 +2788,14 @@ async function main() {
     try {
       // Gift claims are server-fenced independently of the gameplay writer. Do not
       // let a paused queue or a writer lease held by another tab block acceptance.
-      if (economy) await economy.claimGift(id);
-      else await api.claimGift(id);
+      const claimed = economy ? await economy.claimGift(id) : await api.claimGift(id);
       try { await hud.refreshInbox?.(); }
       catch (refreshError) { console.warn("[gift] inbox refresh failed", errCode(refreshError)); }
-      return true;
+      // The server decides (and reports) the contents. A claim that credited nothing
+      // (already opened on another device) has no reward to reveal — say so rather
+      // than guessing at a payout the player never received.
+      if (!claimed.credited) return null;
+      return claimed.reward ?? { kind: "brain" as const, amount: 1 };
     } catch (e) {
       const code = errCode(e);
       console.warn("[gift] claim failed", code);
@@ -3198,7 +3201,9 @@ async function main() {
             // so advance it from the verified outcome as soon as it lands (closing the
             // result panel is the other, later, chance).
             tutorial?.onRaidResolved();
-            const drops = res.loot ? [{ name: res.loot.name, icon: raids.lootIconFor(res.loot.name) }] : [];
+            const drops = res.loot
+              ? [{ name: res.loot.name, icon: raids.lootIconFor(res.loot.name), qty: res.loot.qty ?? 1 }]
+              : [];
             if (res.newZombie) {
               if (!res.newZombie.received) {
                 zombies.grantReward(
@@ -3212,6 +3217,7 @@ async function main() {
               drops.push({
                 name: zombieDefs.get(res.newZombie.key)?.name ?? "Rare zombie",
                 icon: zombiePortrait(res.newZombie.key),
+                qty: 1,
               });
               hud.showToast(
                 `${zombieDefs.get(res.newZombie.key)?.name ?? "Rare zombie"} joined your ${res.newZombie.received ? "Received storage" : res.newZombie.stored ? "Mausoleum" : "farm"}!`
@@ -3746,6 +3752,7 @@ async function main() {
       hud.openObjectActions({
         name: def.name,
         portrait: `${BASE}assets/objects/${def.sprite}`,
+        tint: objectTint(def.color), // monoliths share one sprite, coloured per def
         canStore: canStore(def),
         canSell: def.category !== "functional",
         sellRefund: sellRefund(def),
@@ -4135,6 +4142,7 @@ async function main() {
           hud.openObjectActions({
             name: def.name,
             portrait: `${BASE}assets/objects/${def.sprite}`,
+            tint: objectTint(def.color), // monoliths share one sprite, coloured per def
             canStore: canStore(def),
             canSell: def.category !== "functional",
             sellRefund: sellRefund(def),

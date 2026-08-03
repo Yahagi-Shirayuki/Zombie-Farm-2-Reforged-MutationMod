@@ -87,6 +87,13 @@ export function blackMarketPurchaseLock(
   return null;
 }
 
+/** Mutations a wanted post may name. The stored column is capped at 8191 by
+ * `black_market_orders.mutation_required`'s CHECK (migration 0030) — the OR of the
+ * 13 bits that existed then — and SQLite cannot widen a CHECK in place, so the
+ * headless-only Pumpking (8192) is not requestable yet. The compose form greys it
+ * out and the Worker rejects it, rather than letting D1 fail the INSERT. */
+export const REQUESTABLE_MUTATION_MASK = ALL_BITS.reduce((mask, bit) => mask | bit, 0) & 8191;
+
 /** A specific request matches when the bit is present, even if the zombie carries
  * other mutations too. Without a specific bit, preserve the any/none behavior. */
 export function matchesBlackMarketMutation(
@@ -112,4 +119,4 @@ export function blackMarketMutationRequirementLabel(mask: number): string {
     .filter(Boolean)
     .join(" + ");
 }
-import { MUTATIONS, SLOTS, SLOT_MASK } from "./zombie/mutations";
+import { ALL_BITS, MUTATIONS, SLOTS, SLOT_MASK } from "./zombie/mutations";

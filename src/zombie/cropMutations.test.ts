@@ -38,6 +38,17 @@ describe("crop-adjacency mutations", () => {
     })).toBe(64);
   });
 
+  it("grows Pumpking on a headless zombie and on nothing else", () => {
+    expect(resolveCropMutations(0, ["pumpking"], { guaranteed: true, headless: true }))
+      .toBe(8192);
+    expect(resolveCropMutations(0, ["pumpking"], { guaranteed: true })).toBe(0);
+    // It fills the head slot a headless zombie has no other way to use, and leaves
+    // the arm/body/neck rolls alone.
+    expect(resolveCropMutations(0, ["pumpking", "celery", "onion"], {
+      guaranteed: true, headless: true, random: () => 1,
+    })).toBe(8192 | 64);
+  });
+
   it("makes every eligible crop mutation guaranteed with the monolith", () => {
     expect(resolveCropMutations(0, ["dragon_fruit"], {
       guaranteed: true,

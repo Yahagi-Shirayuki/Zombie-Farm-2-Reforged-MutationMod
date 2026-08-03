@@ -48,6 +48,12 @@ export const MUTATIONS: Record<number, MutationDef> = {
   1024: { bit: 1024, key: "limabean", name: "Lima Bean", slot: "body", stat: "con", amount: 3 },
   2048: { bit: 2048, key: "flytrap", name: "Flytrap", slot: "neck", stat: "con", amount: 4 },
   4096: { bit: 4096, key: "dragon", name: "Dragon-arm", slot: "arm", stat: "str", amount: 4 },
+  // HEADLESS-ONLY (see HEADLESS_ONLY_MASK). Pumpking never had a MutationIcons entry
+  // or a market mutant in ZF2 — it shipped as a crop-adjacency-only mutation and the
+  // one head exception the headless family could wear (MUTATION_CATALOG_CORRECTED.md
+  // §"Legacy / crop-adjacency-only", report §11), so its bonus is ours to choose:
+  // +3 attack, matching Garlichead — the best the head slot pays.
+  8192: { bit: 8192, key: "pumpking", name: "Pumpking", slot: "head", stat: "str", amount: 3 },
 };
 
 /** All known mutation bits (the ones we resolve). */
@@ -93,34 +99,46 @@ export function isFullyMutated(mask: number): boolean {
 }
 
 // A HEADLESS zombie has no head to mutate: it can only carry body, arm, and neck
-// mutations — never head or hair/eye (report §11). These are the slots it MAY hold
-// and the bitmask of everything it may NOT.
+// mutations — never head or hair/eye (report §11). These are the slots it MAY hold.
 export const HEADLESS_SLOTS: ReadonlySet<Slot> = new Set<Slot>(["body", "arm", "neck"]);
-export const HEADLESS_FORBIDDEN_MASK = SLOT_MASK.head | SLOT_MASK.hair_eye;
 
-/** Is a slot allowed on a (possibly headless) zombie? Headless bars head/hair_eye. */
-export function slotAllowed(slot: Slot, isHeadless: boolean): boolean {
-  return !isHeadless || HEADLESS_SLOTS.has(slot);
+// ...with one exception, which runs the other way: Pumpking is the head mutation
+// authored FOR the headless family — the pumpkin becomes the head they never had, so
+// a zombie that already owns a head can't wear it. It is the only bit in this mask.
+export const HEADLESS_ONLY_MASK = 8192;
+
+/** Head/hair-eye bits a headless zombie may NOT hold (Pumpking excluded — see above).
+ *  Pinned by server/migrations/0035_headless_mutation_repair.sql. */
+export const HEADLESS_FORBIDDEN_MASK =
+  (SLOT_MASK.head | SLOT_MASK.hair_eye) & ~HEADLESS_ONLY_MASK;
+
+/** Can this body type wear `bit` at all? Two-way: headless bars head/hair-eye, and
+ *  everyone else bars the headless-only mutations. Unknown bits are never allowed. */
+export function bitAllowed(bit: number, isHeadless: boolean): boolean {
+  const slot = slotOf(bit);
+  if (slot === null) return false;
+  if ((bit & HEADLESS_ONLY_MASK) !== 0) return isHeadless;
+  return isHeadless ? HEADLESS_SLOTS.has(slot) : true;
 }
 
 /**
- * Drop mutations a headless zombie can't hold (head + hair/eye). A no-op for a
- * normal zombie. Applied wherever a mask lands on a unit, so a headless combine
- * result simply never carries a head/hair-eye mutation.
+ * Drop the mutations this body type can't hold: head + hair/eye for a headless
+ * zombie, the headless-only ones for everybody else. Applied wherever a mask lands
+ * on a unit, so a combine result never carries a mutation it can't show.
  */
-export function applyHeadlessRestriction(mask: number, isHeadless: boolean): number {
-  return isHeadless ? mask & ~HEADLESS_FORBIDDEN_MASK : mask;
+export function applyBodyTypeRestriction(mask: number, isHeadless: boolean): number {
+  return isHeadless ? mask & ~HEADLESS_FORBIDDEN_MASK : mask & ~HEADLESS_ONLY_MASK;
 }
 
 /**
  * Can `bit` legally be added to `mask`? False if the bit is unknown, its slot is
- * already occupied (one-per-slot), or the zombie is headless and the slot is a
- * head/hair-eye slot. Adding a bit already present is a no-op and reported legal.
+ * already occupied (one-per-slot), or this body type can't wear it (see bitAllowed).
+ * Adding a bit already present is a no-op and reported legal.
  */
 export function canReceive(mask: number, bit: number, isHeadless = false): boolean {
   const slot = slotOf(bit);
   if (slot === null) return false;
-  if (!slotAllowed(slot, isHeadless)) return false; // headless: no head/hair_eye
+  if (!bitAllowed(bit, isHeadless)) return false;
   if ((mask & bit) !== 0) return true; // already have exactly this one
   return (mask & SLOT_MASK[slot]) === 0; // slot must be empty
 }
@@ -168,11 +186,16 @@ export function mutationBonus(mask: number): { str: number; con: number; dex: nu
  * variants higher), the higher bit is the higher-tier mutation — so the better mutation
  * always wins its slot. (Earlier builds guessed a 50/50 coin flip here; that was wrong.)
  */
-export function combineMasks(a: number, b: number): number {
+export function combineMasks(a: number, b: number, isHeadlessChild = false): number {
+  // Each parent first loses what the CHILD's body type can't wear, so a mutation the
+  // child could keep never loses its slot to one that is about to be stripped (a
+  // garlic head must survive a Pumpking parent when the child isn't headless).
+  const maskA = applyBodyTypeRestriction(a, isHeadlessChild);
+  const maskB = applyBodyTypeRestriction(b, isHeadlessChild);
   let child = 0;
   for (const slot of SLOTS) {
-    const am = a & SLOT_MASK[slot];
-    const bm = b & SLOT_MASK[slot];
+    const am = maskA & SLOT_MASK[slot];
+    const bm = maskB & SLOT_MASK[slot];
     if (am === 0 && bm === 0) continue; // neither -> empty slot
     if (am === 0) { child |= bm; continue; } // only B
     if (bm === 0) { child |= am; continue; } // only A

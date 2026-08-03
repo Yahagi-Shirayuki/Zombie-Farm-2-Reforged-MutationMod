@@ -176,6 +176,15 @@ export interface SocialBootstrap {
   inboxCount: number;
 }
 
+/** What opening a friend's gift paid out. The contents are rolled by the server when
+ *  the gift is SENT and stored on it, so nothing the recipient does can change them —
+ *  the one exception is the first gift opened each day, which is always a brain. The
+ *  inbox deliberately does not carry this: the box stays closed until it is claimed. */
+export interface GiftReward {
+  kind: "brain" | "gold";
+  amount: number;
+}
+
 export interface ResumableRaidProjection {
   sessionId: string;
   raidId: string;

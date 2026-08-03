@@ -332,7 +332,12 @@ export class ZombieField {
 
   potFor(potId: string): ZombiePot {
     let pot = this.pots.get(potId);
-    if (!pot) { pot = new ZombiePot(); this.pots.set(potId, pot); }
+    if (!pot) {
+      // The pot resolves the child's body type through the catalog so its inherited
+      // mask matches what the server computes for the same combine.
+      pot = new ZombiePot(undefined, undefined, (key) => this.resolve(key)?.group === "Headless");
+      this.pots.set(potId, pot);
+    }
     return pot;
   }
   /** Can a new combine be started right now? Needs a placed Zombie Pot, no combine

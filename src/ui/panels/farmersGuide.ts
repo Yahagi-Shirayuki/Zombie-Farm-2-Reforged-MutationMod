@@ -92,6 +92,10 @@ export const FARMERS_GUIDE_PAGES: GuidePage[] = [
         body: "Plant vegetables directly beside a zombie plot to give the harvested zombie a chance at developing the mutation associated with them. If you want to ensure that a specific mutation is obtained, then plant a mutated zombie directly instead.",
       },
       {
+        title: "Headless Zombies",
+        body: "A headless zombie has no head to mutate, so head and hair mutations never take on one — plant beside its arms, body and neck crops instead. Pumpking is the exception, and it runs the other way: the pumpkin becomes the head it never had, so only a headless zombie can grow one.",
+      },
+      {
         title: "Zombie Pot",
         body: "The Zombie Pot can also combine two zombies and inherit compatible traits. The zombie you place in Slot 1 decides what type comes out — Slot 2 only donates its mutations, and where two mutations compete for the same body part the stronger one wins. Special zombies fit in Slot 1 only, and are always passed on. At higher levels, combining two zombies of the same type breeds them up into a Silver zombie of that type, and every eligible pairing comes with a low chance of mutating into powerful special zombies instead.",
       },

@@ -5,7 +5,9 @@ import {
   blackMarketMutationRequirementLabel,
   blackMarketPurchaseLock,
   matchesBlackMarketMutation,
+  REQUESTABLE_MUTATION_MASK,
 } from "./blackMarketRules";
+import { ALL_BITS, HEADLESS_ONLY_MASK } from "./zombie/mutations";
 
 describe("Black Market compose defaults", () => {
   it("opens a roster-originated sale with that zombie selected", () => {
@@ -66,5 +68,14 @@ describe("Black Market purchase requirements", () => {
       .toBe("Broccohair or Cauli-hair + Turnip-Arm");
     expect(matchesBlackMarketMutation(4, true)).toBe(true);
     expect(matchesBlackMarketMutation(0, false)).toBe(true);
+  });
+
+  it("bounds requestable mutations by what the orders table can store", () => {
+    // The column's CHECK (migration 0030) caps the mask at the 13 bits that existed
+    // then, so headless-only Pumpking (8192) is excluded until that can be widened.
+    expect(REQUESTABLE_MUTATION_MASK).toBe(8191);
+    for (const bit of ALL_BITS) {
+      expect((bit & REQUESTABLE_MUTATION_MASK) !== 0).toBe(bit !== HEADLESS_ONLY_MASK);
+    }
   });
 });

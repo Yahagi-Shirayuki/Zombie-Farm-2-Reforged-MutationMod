@@ -106,6 +106,9 @@ export interface AlmanacEntryView {
 export interface ObjectActions {
   name: string;
   portrait: string;
+  /** Packed RGB the farm multiplies this object's sprite by (monoliths share one
+   *  greyscale PNG). Omitted/white leaves the portrait as authored. */
+  tint?: number;
   canStore: boolean; // false when the shed is full or item can't be stored
   canSell: boolean; // functional items are permanent and cannot be sold
   sellRefund: number;

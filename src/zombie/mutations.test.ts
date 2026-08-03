@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  applyHeadlessRestriction, canReceive, combineMasks, HEADLESS_FORBIDDEN_MASK, SLOT_MASK,
+  applyBodyTypeRestriction, canReceive, combineMasks, HEADLESS_FORBIDDEN_MASK,
+  HEADLESS_ONLY_MASK, mutationBonus, mutationLabel, SLOT_MASK,
 } from "./mutations";
 
 // Ground truth: combineZombieMutationFlag:withZombieFlag: / randMutation: — per slot,
@@ -40,18 +41,51 @@ describe("combineMasks — deterministic per-slot inheritance", () => {
 });
 
 describe("headless restriction — no head or hair/eye mutations", () => {
-  it("covers exactly the head and hair/eye bits", () => {
-    expect(HEADLESS_FORBIDDEN_MASK).toBe(SLOT_MASK.head | SLOT_MASK.hair_eye);
+  it("covers every head and hair/eye bit except headless-only Pumpking", () => {
+    expect(HEADLESS_FORBIDDEN_MASK)
+      .toBe((SLOT_MASK.head | SLOT_MASK.hair_eye) & ~HEADLESS_ONLY_MASK);
     // Pinned: server/migrations/0035_headless_mutation_repair.sql clears this literal.
     expect(HEADLESS_FORBIDDEN_MASK).toBe(951);
   });
 
   it("drops the eye mutations a headless zombie cannot wear", () => {
     // carrot/eyebiscus (4) and broccoli (128) are hair_eye; turnip (8) is an arm.
-    expect(applyHeadlessRestriction(4 | 8 | 128, true)).toBe(8);
-    expect(applyHeadlessRestriction(4 | 8 | 128, false)).toBe(4 | 8 | 128);
+    expect(applyBodyTypeRestriction(4 | 8 | 128, true)).toBe(8);
+    expect(applyBodyTypeRestriction(4 | 8 | 128, false)).toBe(4 | 8 | 128);
     expect(canReceive(0, 4, true)).toBe(false); // never accepted in the first place
     expect(canReceive(0, 8, true)).toBe(true);
+  });
+});
+
+describe("Pumpking — the headless-only head mutation", () => {
+  const PUMPKING = HEADLESS_ONLY_MASK;
+
+  it("pays the head slot's best attack bonus", () => {
+    expect(mutationBonus(PUMPKING)).toEqual({ str: 3, con: 0, dex: 0 });
+    expect(mutationLabel(PUMPKING)).toBe("Pumpking");
+  });
+
+  it("lands on a headless zombie and nowhere else", () => {
+    expect(canReceive(0, PUMPKING, true)).toBe(true);
+    expect(canReceive(0, PUMPKING, false)).toBe(false);
+    expect(applyBodyTypeRestriction(PUMPKING | 8, true)).toBe(PUMPKING | 8);
+    expect(applyBodyTypeRestriction(PUMPKING | 8, false)).toBe(8);
+  });
+
+  it("still obeys one-per-slot against the other head mutations", () => {
+    // A headless zombie can't hold them anyway, but a mask that somehow has one
+    // must not gain a second head mutation.
+    expect(canReceive(PUMPKING, 256, true)).toBe(false); // garlic (head) blocked
+    expect(canReceive(256, PUMPKING, false)).toBe(false);
+    expect(canReceive(PUMPKING, PUMPKING, true)).toBe(true); // already has it: no-op
+  });
+
+  it("does not cost a non-headless child its own head mutation in the Pot", () => {
+    // Garlic (256) vs Pumpking (8192) both sit in the head slot. The higher bit
+    // normally wins, but a non-headless child can't wear Pumpking — garlic survives.
+    expect(combineMasks(256, PUMPKING, false)).toBe(256);
+    expect(combineMasks(256, PUMPKING, true)).toBe(PUMPKING); // headless child keeps it
+    expect(combineMasks(PUMPKING, 8, false)).toBe(8);
   });
 });
 

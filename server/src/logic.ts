@@ -44,6 +44,61 @@ export function canSendGift(lastSentAt: number | null, now: number): boolean {
   return lastSentAt === null || now - lastSentAt >= DAY_MS;
 }
 
+/** What a claimed gift pays out. `amount` is brains for "brain", gold for "gold". */
+export interface GiftReward {
+  kind: "brain" | "gold";
+  amount: number;
+}
+
+/** The contents of a gift are rolled ONCE, when it is sent, and stored on the gift
+ *  row — never at open time. That removes any incentive to hoard, re-open, or time
+ *  claims: what is in the box was decided by the server the moment the sender
+ *  clicked, and the recipient cannot influence it. Weights are percent and sum to
+ *  100 (asserted by GIFT_REWARD_TOTAL_WEIGHT below). */
+export const GIFT_REWARD_TABLE: readonly { weight: number; reward: GiftReward }[] = [
+  { weight: 10, reward: { kind: "brain", amount: 1 } },
+  { weight: 25, reward: { kind: "gold", amount: 150 } },
+  { weight: 25, reward: { kind: "gold", amount: 300 } },
+  { weight: 25, reward: { kind: "gold", amount: 500 } },
+  { weight: 15, reward: { kind: "gold", amount: 1000 } },
+];
+
+/** Sum of GIFT_REWARD_TABLE weights — the exclusive upper bound for a roll. */
+export const GIFT_REWARD_TOTAL_WEIGHT = GIFT_REWARD_TABLE.reduce(
+  (total, entry) => total + entry.weight,
+  0
+);
+
+/** The FIRST gift a player opens each UTC day always pays a brain, whatever the
+ *  sender's roll stored on it. This is the daily floor that keeps the social loop
+ *  worth checking; every later gift that day pays its own rolled contents. */
+export const FIRST_DAILY_GIFT_REWARD: GiftReward = { kind: "brain", amount: 1 };
+
+/** Map a roll in [0, GIFT_REWARD_TOTAL_WEIGHT) onto the reward table. Pure and
+ *  deterministic in `roll` so the distribution is unit-testable; the caller
+ *  supplies crypto randomness (rollGiftReward below). */
+export function giftRewardForRoll(roll: number): GiftReward {
+  let cursor = Math.min(Math.max(Math.floor(roll), 0), GIFT_REWARD_TOTAL_WEIGHT - 1);
+  for (const entry of GIFT_REWARD_TABLE) {
+    if (cursor < entry.weight) return { ...entry.reward };
+    cursor -= entry.weight;
+  }
+  return { ...GIFT_REWARD_TABLE[GIFT_REWARD_TABLE.length - 1].reward };
+}
+
+/** Roll a gift's contents with crypto randomness. Rejection-samples the 32-bit
+ *  draw so the weights stay exact rather than skewed by a modulo remainder. */
+export function rollGiftReward(): GiftReward {
+  const limit = Math.floor(0x1_0000_0000 / GIFT_REWARD_TOTAL_WEIGHT) * GIFT_REWARD_TOTAL_WEIGHT;
+  const buffer = new Uint32Array(1);
+  let draw = limit;
+  do {
+    crypto.getRandomValues(buffer);
+    draw = buffer[0];
+  } while (draw >= limit);
+  return giftRewardForRoll(draw % GIFT_REWARD_TOTAL_WEIGHT);
+}
+
 /** Optimistic-concurrency check: a PUT /save is stale if its baseRev no longer
  *  matches the stored rev (another device wrote in between). */
 export function isStaleWrite(baseRev: number, currentRev: number): boolean {

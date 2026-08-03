@@ -1,4 +1,4 @@
-import { DICE_KEY, CONCENTRATION_KEY, VOUCHER_KEY } from "../boostCatalog";
+import { DICE_KEY, CONCENTRATION_KEY, VOUCHER_KEY, MAX_STACK } from "../boostCatalog";
 import { levelForXp, levelUpBrains } from "../levels";
 import { ownedLootCounter, resolveLoot, rollLoot } from "../loot";
 import { raidEcon, raidUnlocked, winGold } from "../raidCatalog";
@@ -9,7 +9,7 @@ import raidRows from "../../../public/assets/raids/raids.json";
 import { farmerCooldownMs } from "../../../src/farmer";
 import { buildPinnedV3Raid, verifyRaid, RAID_RULESET_VERSION, type PinnedRaidConfig, type RaidReplayInput } from "../raidVerifier";
 import { rollBrainDrop, rollBrainDropWithPity, nextBrainDryStreak } from "../../../src/raid/brainDrops";
-import { rollRaidZombieDrop } from "../../../src/raid/zombieDrops";
+import { rollRaidZombieDropWithPity, nextRaidZombieDryWins, hasRaidZombieDrop } from "../../../src/raid/zombieDrops";
 import objectRows from "../../../public/assets/placeables.json";
 import { shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
 import { encodeReceivedZombie } from "../../../src/zombie/receivedReward";
@@ -27,7 +27,12 @@ interface CoreState {
 }
 
 interface UnitRow { unit_id: string }
-interface RaidStateRow { last_started_at: number; progress_json: string; brain_dry_streak: number }
+interface RaidStateRow {
+  last_started_at: number;
+  progress_json: string;
+  brain_dry_streak: number;
+  zombie_dry_json: string;
+}
 interface QuestRow { version: number; current_json: string }
 interface SessionRow {
   id: string;
@@ -137,7 +142,8 @@ export async function startRaid(
   const [balance, coreRow, raidState, live, liveEpic, roster] = await Promise.all([
     db.prepare("SELECT gold, brains, xp FROM balances WHERE account_id = ?").bind(accountId).first<{ gold: number; brains: number; xp: number }>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<{ current_json: string }>(),
-    db.prepare("SELECT last_started_at, progress_json, brain_dry_streak FROM raid_state_v3 WHERE account_id = ?").bind(accountId).first<RaidStateRow>(),
+    db.prepare("SELECT last_started_at, progress_json, brain_dry_streak FROM raid_state_v3 WHERE account_id = ?")
+      .bind(accountId).first<Pick<RaidStateRow, "last_started_at" | "progress_json" | "brain_dry_streak">>(),
     db.prepare("SELECT id FROM raid_sessions_v3 WHERE account_id = ? AND finished_at IS NULL").bind(accountId).first<{ id: string }>(),
     db.prepare("SELECT id FROM epic_boss_sessions_v3 WHERE account_id = ? AND finished_at IS NULL").bind(accountId).first<{ id: string }>(),
     db.prepare(`SELECT unit_id FROM roster_v3 WHERE account_id = ? AND locked_by_raid IS NULL AND stored = 0
@@ -289,7 +295,8 @@ export async function finishRaid(
   // client concession is pure self-harm, so accept only those divergence-shaped replay
   // failures as a zero-reward loss. Structural transcript failures remain rejected.
   const concessionReplayErrors = new Set([
-    "truncated_transcript", "illegal_bubble", "illegal_ability", "input_after_finish",
+    "truncated_transcript", "illegal_bubble", "illegal_ability", "illegal_wall_tap",
+    "input_after_finish",
   ]);
   const concessionFallbackError = !verified.ok && conceded && concessionReplayErrors.has(verified.error)
     ? verified.error
@@ -354,7 +361,7 @@ export async function finishRaid(
   const [balance, coreRow, raidState, questRow, casualtyRows, objectRow, rosterCounts] = await Promise.all([
     db.prepare("SELECT gold, brains, xp, claimed_level FROM balances WHERE account_id = ?").bind(accountId).first<{ gold: number; brains: number; xp: number; claimed_level: number }>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<{ current_json: string }>(),
-    db.prepare("SELECT last_started_at, progress_json, brain_dry_streak FROM raid_state_v3 WHERE account_id = ?").bind(accountId).first<RaidStateRow>(),
+    db.prepare("SELECT last_started_at, progress_json, brain_dry_streak, zombie_dry_json FROM raid_state_v3 WHERE account_id = ?").bind(accountId).first<RaidStateRow>(),
     db.prepare("SELECT version, current_json FROM quest_documents_v3 WHERE account_id = ?").bind(accountId).first<QuestRow>(),
     losses.length
       ? db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, created_at FROM roster_v3
@@ -373,6 +380,10 @@ export async function finishRaid(
   const core = parse<CoreState>(coreRow.current_json, { inventory: {}, storage: { received: {}, stored: {} } });
   const objects = parse<Array<{ catalogKey: string; status: string }>>(objectRow.current_json, []);
   const progress = parse<Record<string, number>>(raidState.progress_json, {});
+  // Wins of each raid since it last handed over its rare zombie (silent pity — never sent
+  // to the client, see zombieDrops.ts). Only the four raids that HAVE a rare zombie ever
+  // appear as keys.
+  const zombieDry = parse<Record<string, number>>(raidState.zombie_dry_json, {});
   const firstClear = win && !(progress[String(raidId)] > 0);
   const baseGold = win ? winGold(econ, survivors.length / locked.length) : 0;
   const xp = firstClear ? econ.xp : 0;
@@ -389,7 +400,8 @@ export async function finishRaid(
   const brainDryStreak = win && hasBoss
     ? nextBrainDryStreak(raidState.brain_dry_streak ?? 0, brains)
     : Math.max(0, Math.trunc(raidState.brain_dry_streak ?? 0));
-  let loot: { name: string; kind: "gold" | "boost" | "item" } | null = null;
+  // `qty` is present only for a bundled boost drop; the client shows it as "x10".
+  let loot: { name: string; kind: "gold" | "boost" | "item"; qty?: number } | null = null;
   let newZombie: { id: string; key: string; stored: boolean; received?: boolean } | null = null;
   let newZombieName: string | null = null;
   let lootGold = 0;
@@ -402,9 +414,20 @@ export async function finishRaid(
     const name = rollLoot(raidId, boosts.dice ?? 0, ownedLootCounter(core.storage, objects), Math.random(), Math.random());
     const grant = resolveLoot(name, econ.recLevel);
     if (grant.kind === "gold") { lootGold = grant.gold; loot = { name: grant.name, kind: "gold" }; }
-    else if (grant.kind === "boost") { core.inventory[grant.key] = (core.inventory[grant.key] ?? 0) + 1; loot = { name: grant.name, kind: "boost" }; }
+    else if (grant.kind === "boost") {
+      // Bundled drops (Insta-Grow x10) stack in one go, clamped like every other inventory
+      // grant so the count stays inside the plausibility bound.
+      core.inventory[grant.key] = Math.min(MAX_STACK, (core.inventory[grant.key] ?? 0) + grant.qty);
+      loot = { name: grant.name, kind: "boost", qty: grant.qty };
+    }
     else if (grant.kind === "item") { core.storage.received[grant.name] = (core.storage.received[grant.name] ?? 0) + 1; loot = { name: grant.name, kind: "item" }; }
-    const zombieDrop = rollRaidZombieDrop(raidId, true, Math.random());
+    const zombieDrop = rollRaidZombieDropWithPity(raidId, true, Math.random(), zombieDry[String(raidId)] ?? 0);
+    // Settle this raid's dry-win streak on every win it could have dropped from. A win that
+    // pays (rolled or floored) resets it; a dry one adds to it. Raids with no rare zombie
+    // never get a key at all.
+    if (hasRaidZombieDrop(raidId)) {
+      zombieDry[String(raidId)] = nextRaidZombieDryWins(zombieDry[String(raidId)] ?? 0, !!zombieDrop);
+    }
     if (zombieDrop) {
       const activeCapacity = (core.zombieMax ?? 16) + objects.reduce(
         (total, object) => total +
@@ -478,9 +501,9 @@ export async function finishRaid(
     db.prepare(`UPDATE gameplay_documents_v3 SET current_json = ?, updated_at = ?
       WHERE account_id = ? AND ${guard}`)
       .bind(JSON.stringify(core), now, accountId, session.id, resultJson),
-    db.prepare(`UPDATE raid_state_v3 SET progress_json = ?, last_started_at = ?, brain_dry_streak = ?
-      WHERE account_id = ? AND ${guard}`)
-      .bind(JSON.stringify(progress), lastRaidAt, brainDryStreak, accountId, session.id, resultJson),
+    db.prepare(`UPDATE raid_state_v3 SET progress_json = ?, last_started_at = ?, brain_dry_streak = ?,
+      zombie_dry_json = ? WHERE account_id = ? AND ${guard}`)
+      .bind(JSON.stringify(progress), lastRaidAt, brainDryStreak, JSON.stringify(zombieDry), accountId, session.id, resultJson),
     db.prepare(`UPDATE quest_documents_v3 SET version = version + 1, current_json = ?, updated_at = ?
       WHERE account_id = ? AND ${guard}`)
       .bind(JSON.stringify({ completed: quests.completed, progress: quests.progress }), now, accountId, session.id, resultJson),

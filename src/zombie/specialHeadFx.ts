@@ -1,4 +1,5 @@
 import { Container, Graphics } from "pixi.js";
+import { SLOT_MASK } from "./mutations";
 
 export type SpecialHeadFxKind = "kindle" | "flame" | "confetti";
 
@@ -14,7 +15,11 @@ const HEAD_Y = -51;
 const AURA_ORB_RADIUS = 9.5 * 0.8;
 const CONFETTI_COLORS = [0xf94144, 0xf9c74f, 0x43aa8b, 0x577590, 0xe36bae, 0xf3722c];
 
-export function specialHeadFxKind(key: string): SpecialHeadFxKind | null {
+/** The looping effect that stands in for this species' missing head — unless a head
+ *  mutation has taken the slot. A Pumpking IS the zombie's head, so a Flamehead
+ *  wearing one shows the pumpkin instead of a flame where its head would be. */
+export function specialHeadFxKind(key: string, mutation = 0): SpecialHeadFxKind | null {
+  if ((mutation & SLOT_MASK.head) !== 0) return null;
   return SPECIAL_HEAD_FX[key] ?? null;
 }
 

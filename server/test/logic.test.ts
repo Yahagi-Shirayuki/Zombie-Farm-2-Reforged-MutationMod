@@ -12,6 +12,11 @@ import {
   normalizeFriendCode,
   normalizeUsername,
   projectFriendSave,
+  FIRST_DAILY_GIFT_REWARD,
+  GIFT_REWARD_TABLE,
+  GIFT_REWARD_TOTAL_WEIGHT,
+  giftRewardForRoll,
+  rollGiftReward,
 } from "../src/logic";
 import type { SaveGame } from "../src/env";
 
@@ -240,5 +245,62 @@ describe("deviceLabel — coarse UA → device string", () => {
     expect(deviceLabel(undefined)).toBeNull();
     expect(deviceLabel(null)).toBeNull();
     expect(deviceLabel("   ")).toBeNull();
+  });
+});
+
+describe("gift reward roll — contents decided at SEND time", () => {
+  it("weights the table exactly 10/25/25/25/15 across the whole roll space", () => {
+    const counts = new Map<string, number>();
+    for (let roll = 0; roll < GIFT_REWARD_TOTAL_WEIGHT; roll++) {
+      const reward = giftRewardForRoll(roll);
+      const key = `${reward.kind}:${reward.amount}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    expect(GIFT_REWARD_TOTAL_WEIGHT).toBe(100);
+    expect(Object.fromEntries(counts)).toEqual({
+      "brain:1": 10,
+      "gold:150": 25,
+      "gold:300": 25,
+      "gold:500": 25,
+      "gold:1000": 15,
+    });
+  });
+
+  it("maps the boundary rolls onto the intended bands", () => {
+    expect(giftRewardForRoll(0)).toEqual({ kind: "brain", amount: 1 });
+    expect(giftRewardForRoll(9)).toEqual({ kind: "brain", amount: 1 });
+    expect(giftRewardForRoll(10)).toEqual({ kind: "gold", amount: 150 });
+    expect(giftRewardForRoll(34)).toEqual({ kind: "gold", amount: 150 });
+    expect(giftRewardForRoll(35)).toEqual({ kind: "gold", amount: 300 });
+    expect(giftRewardForRoll(60)).toEqual({ kind: "gold", amount: 500 });
+    expect(giftRewardForRoll(84)).toEqual({ kind: "gold", amount: 500 });
+    expect(giftRewardForRoll(85)).toEqual({ kind: "gold", amount: 1000 });
+    expect(giftRewardForRoll(99)).toEqual({ kind: "gold", amount: 1000 });
+  });
+
+  it("clamps an out-of-range roll instead of returning undefined", () => {
+    expect(giftRewardForRoll(-1)).toEqual({ kind: "brain", amount: 1 });
+    expect(giftRewardForRoll(100)).toEqual({ kind: "gold", amount: 1000 });
+    expect(giftRewardForRoll(1e9)).toEqual({ kind: "gold", amount: 1000 });
+  });
+
+  it("returns a copy, so a caller can never mutate the shared table", () => {
+    const first = giftRewardForRoll(0);
+    first.amount = 999;
+    expect(giftRewardForRoll(0)).toEqual({ kind: "brain", amount: 1 });
+  });
+
+  it("only ever rolls rewards that are in the table", () => {
+    const allowed = new Set(
+      GIFT_REWARD_TABLE.map((entry) => `${entry.reward.kind}:${entry.reward.amount}`)
+    );
+    for (let i = 0; i < 500; i++) {
+      const reward = rollGiftReward();
+      expect(allowed.has(`${reward.kind}:${reward.amount}`)).toBe(true);
+    }
+  });
+
+  it("guarantees a brain for the first gift opened each day", () => {
+    expect(FIRST_DAILY_GIFT_REWARD).toEqual({ kind: "brain", amount: 1 });
   });
 });

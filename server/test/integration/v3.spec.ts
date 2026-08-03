@@ -220,6 +220,101 @@ describe("protocol v3 API", () => {
     }
   });
 
+  // One sender may only gift a given recipient once per UTC day (idx_gifts_once), so
+  // filling an inbox with several same-day gifts needs several senders.
+  const inboxFrom = async (
+    recipient: Awaited<ReturnType<typeof signIn>>,
+    contents: { kind: "brain" | "gold"; amount: number }[],
+    prefix: string
+  ): Promise<string[]> => {
+    const senders = await Promise.all(
+      contents.map((_, index) => signIn(uniqueSub(`${prefix}-sender-${index}`)))
+    );
+    for (const sender of senders) {
+      await befriend(sender, recipient);
+      const sent = await call<any>("POST", "/gifts", sender.token, { toAccountId: recipient.accountId });
+      expect(sent.status, JSON.stringify(sent.body)).toBe(200);
+    }
+    const inbox = await call<Array<{ id: string }>>("GET", "/gifts/inbox", recipient.token);
+    expect(inbox.body).toHaveLength(contents.length);
+    // Overwrite each send-time roll so the payout under test is deterministic.
+    for (const [index, gift] of inbox.body.entries()) {
+      const forced = await call<any>("POST", "/dev/fixture/gift-reward", recipient.token, {
+        giftId: gift.id, ...contents[index],
+      });
+      expect(forced, JSON.stringify(forced.body)).toMatchObject({ status: 200, body: contents[index] });
+    }
+    return inbox.body.map((gift) => gift.id);
+  };
+
+  it("guarantees a brain on the day's FIRST open, then pays each gift's own contents", async () => {
+    const recipient = await signIn(uniqueSub("gift-daily-brain"));
+    const before = await call<any>("POST", "/bootstrap", recipient.token, {});
+    const { gold, brains } = before.body.gameplay.balance;
+    // Every gift is rolled as gold; only the daily floor can produce a brain here.
+    const gifts = await inboxFrom(recipient, [
+      { kind: "gold", amount: 150 },
+      { kind: "gold", amount: 300 },
+      { kind: "gold", amount: 1000 },
+    ], "gift-daily-brain");
+
+    const first = await call<any>("POST", "/gifts/claim", recipient.token, { giftId: gifts[0] });
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    // The stored 150 gold is overridden — the first open of the day is always a brain.
+    expect(first.body).toMatchObject({ credited: true, reward: { kind: "brain", amount: 1 } });
+    expect(first.body.balance).toMatchObject({ gold, brains: brains + 1 });
+
+    const second = await call<any>("POST", "/gifts/claim", recipient.token, { giftId: gifts[1] });
+    expect(second.body).toMatchObject({ credited: true, reward: { kind: "gold", amount: 300 } });
+    expect(second.body.balance).toMatchObject({ gold: gold + 300, brains: brains + 1 });
+
+    const third = await call<any>("POST", "/gifts/claim", recipient.token, { giftId: gifts[2] });
+    expect(third.body).toMatchObject({ credited: true, reward: { kind: "gold", amount: 1000 } });
+    expect(third.body.balance).toMatchObject({ gold: gold + 1300, brains: brains + 1 });
+
+    const after = await call<any>("POST", "/bootstrap", recipient.token, {});
+    expect(after.body.gameplay.balance).toMatchObject({ gold: gold + 1300, brains: brains + 1 });
+  });
+
+  it("pays a later gift's stored contents, and a re-claim never re-rolls them", async () => {
+    const recipient = await signIn(uniqueSub("gift-stored-contents"));
+    const before = await call<any>("POST", "/bootstrap", recipient.token, {});
+    const { gold, brains } = before.body.gameplay.balance;
+    const gifts = await inboxFrom(recipient, [
+      { kind: "gold", amount: 150 },
+      { kind: "brain", amount: 1 },
+      { kind: "gold", amount: 500 },
+    ], "gift-stored");
+
+    // Burn the daily brain floor on the first gift so the rest pay what they hold.
+    expect((await call<any>("POST", "/gifts/claim", recipient.token, { giftId: gifts[0] })).body)
+      .toMatchObject({ credited: true, reward: { kind: "brain", amount: 1 } });
+
+    // A gift rolled as a brain still pays a brain once the floor is spent.
+    const brainGift = await call<any>("POST", "/gifts/claim", recipient.token, { giftId: gifts[1] });
+    expect(brainGift.body).toMatchObject({ credited: true, reward: { kind: "brain", amount: 1 } });
+    expect(brainGift.body.balance).toMatchObject({ gold, brains: brains + 2 });
+
+    const goldGift = await call<any>("POST", "/gifts/claim", recipient.token, { giftId: gifts[2] });
+    expect(goldGift.body).toMatchObject({ credited: true, reward: { kind: "gold", amount: 500 } });
+    expect(goldGift.body.balance).toMatchObject({ gold: gold + 500, brains: brains + 2 });
+
+    // Re-claiming a settled gift credits nothing and reveals nothing new.
+    const again = await call<any>("POST", "/gifts/claim", recipient.token, { giftId: gifts[2] });
+    expect(again.body).toMatchObject({ credited: false, alreadyClaimed: true, reward: null });
+    expect(again.body.balance).toMatchObject({ gold: gold + 500, brains: brains + 2 });
+  });
+
+  it("keeps a gift's contents sealed until it is opened", async () => {
+    const recipient = await signIn(uniqueSub("gift-sealed"));
+    await inboxFrom(recipient, [{ kind: "gold", amount: 1000 }], "gift-sealed");
+    const inbox = await call<any[]>("GET", "/gifts/inbox", recipient.token);
+    // The inbox must not tell the recipient what is in the box.
+    for (const gift of inbox.body) {
+      expect(Object.keys(gift).sort()).toEqual(["created_at", "fromName", "id", "type"]);
+    }
+  });
+
   it("fences activity to one explicit writer and transfers control atomically", async () => {
     const session = await signIn(undefined, false);
     const clientA = "writer-client-aaaaaaaa";

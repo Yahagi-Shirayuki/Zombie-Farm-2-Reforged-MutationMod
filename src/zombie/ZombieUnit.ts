@@ -250,7 +250,7 @@ export class ZombieUnit {
     this.addMutations(assets, m, replaceable, headForeground);
     this.applyArmPose();
     this.buildFarmEffects();
-    const headFxKind = specialHeadFxKind(this.data.key);
+    const headFxKind = specialHeadFxKind(this.data.key, this.data.mutation);
     if (headFxKind) {
       this.specialHeadFx = new SpecialHeadFx(headFxKind);
       this.root.addChild(this.specialHeadFx.container);

@@ -63,3 +63,46 @@ export function rollRaidZombieDrop(raidId: number, won: boolean, roll: number): 
 export function dropsOldMcZombie(raidId: number, won: boolean, roll: number): boolean {
   return rollRaidZombieDrop(raidId, won, roll)?.key === OLD_MC_ZOMBIE_KEY;
 }
+
+/** Wins of ONE raid, without that raid's rare zombie, before the next win is guaranteed to
+ *  hand it over. At 1% (Old McZombie) / 0.8% (the event zombies) a grinder can clear a raid
+ *  hundreds of times and still never see it; this puts a ceiling on that.
+ *
+ *  The streak is PER RAID — clearing Tree World does nothing for Old McDonnell's — and it
+ *  counts the raid's own dry wins, so a player who has already collected one starts over
+ *  rather than being handed a second immediately.
+ *
+ *  DELIBERATELY INVISIBLE, like the brain floor in brainDrops.ts: nothing in the UI counts
+ *  wins towards it, and a guaranteed zombie arrives through the same result-panel reward row
+ *  as a lucky one. Keep it that way. */
+export const RAID_ZOMBIE_PITY_WINS = 100;
+
+/** Roll a win's rare-zombie reward with the per-raid dry-win floor applied. `dryWins` is how
+ *  many times this raid has been won since it last handed its zombie over (see
+ *  nextRaidZombieDryWins). A natural roll always wins — the floor only fills in a miss. */
+export function rollRaidZombieDropWithPity(
+  raidId: number,
+  won: boolean,
+  roll: number,
+  dryWins: number
+): RaidZombieDrop | null {
+  const rolled = rollRaidZombieDrop(raidId, won, roll);
+  if (rolled) return rolled;
+  const drop = RAID_ZOMBIE_DROPS[raidId];
+  return won && drop != null && dryWins >= RAID_ZOMBIE_PITY_WINS ? drop : null;
+}
+
+/** Advance one raid's dry-win streak for a settled WIN of that raid. Receiving the zombie
+ *  resets it; a dry win adds to it, clamped so the stored number stays bounded.
+ *
+ *  Only call this for a raid that actually has a rare zombie (RAID_ZOMBIE_DROPS) and only on
+ *  a win: a loss is not a completion, and the other seven raids have nothing to guarantee. */
+export function nextRaidZombieDryWins(dryWins: number, dropped: boolean): number {
+  if (dropped) return 0;
+  return Math.min(Math.max(0, Math.trunc(dryWins)) + 1, RAID_ZOMBIE_PITY_WINS);
+}
+
+/** Whether a raid has a rare zombie at all — i.e. whether its dry-win streak means anything. */
+export function hasRaidZombieDrop(raidId: number): boolean {
+  return RAID_ZOMBIE_DROPS[raidId] != null;
+}

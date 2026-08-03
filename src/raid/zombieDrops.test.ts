@@ -6,7 +6,11 @@ import {
   FOREST_ZOMBIE_KEY,
   OLD_MC_ZOMBIE_DROP_RATE,
   OLD_MC_ZOMBIE_KEY,
+  hasRaidZombieDrop,
+  nextRaidZombieDryWins,
+  RAID_ZOMBIE_PITY_WINS,
   rollRaidZombieDrop,
+  rollRaidZombieDropWithPity,
   TEDDY_ZOMBIE_KEY,
 } from "./zombieDrops";
 
@@ -35,5 +39,65 @@ describe("rare raid zombie drops", () => {
     expect(rollRaidZombieDrop(2, true, 0)).toBeNull();
     expect(rollRaidZombieDrop(10, true, -0.1)).toBeNull();
     expect(rollRaidZombieDrop(11, true, Number.NaN)).toBeNull();
+  });
+});
+
+describe("rare zombie pity floor", () => {
+  const MISS = 1; // a roll above every drop rate
+
+  it("only the four raids with a rare zombie have a streak that means anything", () => {
+    expect([1, 7, 10, 11].every(hasRaidZombieDrop)).toBe(true);
+    expect([2, 3, 4, 5, 6, 8, 9].some(hasRaidZombieDrop)).toBe(false);
+  });
+
+  it("withholds the zombie until the raid's dry wins reach the threshold", () => {
+    for (let wins = 0; wins < RAID_ZOMBIE_PITY_WINS; wins++) {
+      expect(rollRaidZombieDropWithPity(1, true, MISS, wins)).toBeNull();
+    }
+    expect(rollRaidZombieDropWithPity(1, true, MISS, RAID_ZOMBIE_PITY_WINS)?.key).toBe(OLD_MC_ZOMBIE_KEY);
+  });
+
+  it("guarantees each raid's own zombie", () => {
+    expect(rollRaidZombieDropWithPity(7, true, MISS, RAID_ZOMBIE_PITY_WINS)?.key).toBe(DIVER_ZOMBIE_KEY);
+    expect(rollRaidZombieDropWithPity(10, true, MISS, RAID_ZOMBIE_PITY_WINS)?.key).toBe(FOREST_ZOMBIE_KEY);
+    expect(rollRaidZombieDropWithPity(11, true, MISS, RAID_ZOMBIE_PITY_WINS)?.key).toBe(TEDDY_ZOMBIE_KEY);
+  });
+
+  it("never conjures a zombie for a raid that has none, or for a loss", () => {
+    expect(rollRaidZombieDropWithPity(2, true, MISS, 10_000)).toBeNull();
+    expect(rollRaidZombieDropWithPity(1, false, MISS, RAID_ZOMBIE_PITY_WINS)).toBeNull();
+  });
+
+  it("does not override a natural drop", () => {
+    expect(rollRaidZombieDropWithPity(1, true, 0, 0)?.key).toBe(OLD_MC_ZOMBIE_KEY);
+  });
+
+  it("counts dry wins up and resets whenever the zombie lands", () => {
+    let dry = 0;
+    for (let i = 0; i < RAID_ZOMBIE_PITY_WINS; i++) dry = nextRaidZombieDryWins(dry, false);
+    expect(dry).toBe(RAID_ZOMBIE_PITY_WINS);
+    const guaranteed = rollRaidZombieDropWithPity(1, true, MISS, dry);
+    dry = nextRaidZombieDryWins(dry, !!guaranteed);
+    expect(dry).toBe(0);
+    // Collecting one starts the next streak over rather than handing out a second.
+    expect(rollRaidZombieDropWithPity(1, true, MISS, dry)).toBeNull();
+  });
+
+  it("clamps the stored count and shrugs off garbage", () => {
+    expect(nextRaidZombieDryWins(RAID_ZOMBIE_PITY_WINS, false)).toBe(RAID_ZOMBIE_PITY_WINS);
+    expect(nextRaidZombieDryWins(9_999, false)).toBe(RAID_ZOMBIE_PITY_WINS);
+    expect(nextRaidZombieDryWins(-7, false)).toBe(1);
+    expect(nextRaidZombieDryWins(42, true)).toBe(0);
+  });
+
+  it("takes at most threshold+1 wins of one raid to see its zombie, however unlucky", () => {
+    let dry = 0;
+    let received = 0;
+    for (let win = 1; win <= RAID_ZOMBIE_PITY_WINS + 1; win++) {
+      const drop = rollRaidZombieDropWithPity(1, true, MISS, dry);
+      if (drop) received = win;
+      dry = nextRaidZombieDryWins(dry, !!drop);
+    }
+    expect(received).toBe(RAID_ZOMBIE_PITY_WINS + 1);
   });
 });

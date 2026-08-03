@@ -1,0 +1,14 @@
+-- Silent rare-zombie pity: wins of each raid since that raid last handed over its rare
+-- zombie (Old McZombie, Diver, Forest, Teddy), as {"<raidId>": <dryWins>}. /raid/finish
+-- gives the zombie outright once a raid's count reaches the threshold in
+-- src/raid/zombieDrops.ts, then resets that raid's key to 0.
+--
+-- Per raid, not per account: grinding Tree World does nothing for Old McDonnell's. Only
+-- the four raids that have a rare zombie ever appear as keys.
+--
+-- Server-only state: it is never returned to the client, so nothing in the UI can reveal
+-- that a zombie was guaranteed rather than rolled.
+--
+-- Existing accounts start empty, i.e. every raid begins a fresh streak rather than being
+-- credited for dry wins the server never counted.
+ALTER TABLE raid_state_v3 ADD COLUMN zombie_dry_json TEXT NOT NULL DEFAULT '{}';

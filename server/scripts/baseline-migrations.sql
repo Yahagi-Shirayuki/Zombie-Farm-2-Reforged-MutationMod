@@ -44,4 +44,6 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0033_black_market_history.sql'),
   ('0034_quest_45_popcorn_backfill.sql'),
   ('0035_headless_mutation_repair.sql'),
-  ('0036_raid_brain_pity.sql');
+  ('0036_raid_brain_pity.sql'),
+  ('0037_raid_zombie_pity.sql'),
+  ('0038_gift_reward_roll.sql');
