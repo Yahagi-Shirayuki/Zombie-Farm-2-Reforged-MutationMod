@@ -1,10 +1,8 @@
 import type { EpicBossProjection, QuestProjection } from "../../../src/net/protocol";
 import { epicBossById, epicBossHp, epicBossUnlockLevel } from "../../../src/epicBoss/catalog";
 import type { EpicBossDef } from "../../../src/epicBoss/types";
-import { DICE_KEY, VOUCHER_KEY } from "../boostCatalog";
 import { ownedLootCounter } from "../loot";
 import { pickByFrequency } from "../../../src/raid/combatStats";
-import { QUEST_REWARD, questDefinition } from "../questCatalog";
 import { applyQuestEvents } from "./engine";
 import zombieRows from "../../../public/assets/zombies.json";
 import { buildPlayerUnits } from "../../../src/raid/CombatEngine";
@@ -355,7 +353,12 @@ export async function finish(
     { type: "kEpicStageEnemyDefeatedNotification", subject: String(defeatedLevel) },
     ...(loot ? [{ type: "kEpicBossEpicItemWonNotification", subject: loot.name }] : []),
   ];
-  const questChanges = applyQuestEvents(balance, quests, events, { includeEpic: true, epicQuestIds: new Set(def.questIds) });
+  const questChanges = applyQuestEvents(balance, quests, events, {
+    includeEpic: true,
+    epicQuestIds: new Set(def.questIds),
+    inventory: core.inventory,
+    storage: core.storage,
+  });
   const leveledUp = levelForXp(balance.xp) > levelForXp(xpBefore);
   const newlyCompleted = quests.completed.filter((id) => !beforeCompleted.has(id));
   const armyCapacity = core.zombieMax + objects.reduce((total, object) =>
@@ -366,11 +369,10 @@ export async function finish(
     (rosterCounts.results.find((row) => !row.stored)?.count ?? 0) - losses.length
   );
   const newZombies: { id: string; key: string; stored: boolean; received?: boolean }[] = [];
+  // Item rewards (Invasion Voucher / Golden Dice) are granted generically by
+  // applyQuestEvents above, which was handed core.inventory + core.storage. Only
+  // the zombie reward still needs placing, because it competes for army capacity.
   for (const id of newlyCompleted) {
-    const reward = questDefinition(id);
-    if (!reward) continue;
-    if (reward.rewardType === QUEST_REWARD.Item && reward.rewardItemKey === "Invasion Voucher") core.inventory[VOUCHER_KEY] = (core.inventory[VOUCHER_KEY] ?? 0) + 1;
-    if (reward.rewardType === QUEST_REWARD.Item && reward.rewardItemKey === "Golden Dice") core.inventory[DICE_KEY] = (core.inventory[DICE_KEY] ?? 0) + 1;
     const key = epicQuestZombieReward(id);
     if (key) {
       const stored = shouldStoreEpicReward(activeCount, armyCapacity);

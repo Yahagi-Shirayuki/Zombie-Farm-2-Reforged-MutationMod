@@ -297,6 +297,12 @@ export interface BlackMarketFulfillmentsResponse {
 export interface BlackMarketCollectResponse {
   ok: true;
   alreadyCollected: boolean;
+  /** The account's authoritative balance, echoed so collecting shows the brains the
+   *  trade already paid. Settlement credits them when the OTHER player fulfils the
+   *  order, so without this the creator's client keeps a stale balance until its next
+   *  bootstrap or command batch. Optional: an older deployed Worker omits it, and the
+   *  client falls back to an explicit refresh. */
+  balance?: BalanceProjection;
 }
 
 /** One completed trade from the caller's perspective (they were creator OR

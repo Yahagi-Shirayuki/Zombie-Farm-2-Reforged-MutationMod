@@ -280,6 +280,20 @@ describe("AudioManager focus muting", () => {
     expect(MockAudio.instances[MockAudio.instances.length - 1]?.src).toContain("assets/audio/brainRobot.mp3");
   });
 
+  it("reclaims a stalled fallback element instead of allocating a new one", () => {
+    const audio = new AudioManager();
+    const before = MockAudio.instances.length;
+
+    // A browser that never reports `ended` (iOS evicting a stalled element) must
+    // not strand the pool: the timed reclaim returns the element for reuse.
+    audio.play("buy");
+    expect(MockAudio.instances).toHaveLength(before + 1);
+    vi.advanceTimersByTime(10_000);
+
+    audio.play("buy");
+    expect(MockAudio.instances).toHaveLength(before + 1);
+  });
+
   it("uses girl audio for the catalog's Female group and keeps headless silent", () => {
     const audio = new AudioManager();
 
@@ -292,5 +306,160 @@ describe("AudioManager focus muting", () => {
 
     audio.brainForZombie("ZombieActorHeadlessTier1");
     expect(MockAudio.instances).toHaveLength(count);
+  });
+});
+
+// Raid combat fires an attack cue on nearly every 50 ms simulation tick. Each
+// HTMLAudioElement.play() costs several milliseconds of main-thread time on iOS,
+// so those cues must reach the speaker through Web Audio instead.
+describe("AudioManager one-shot effects", () => {
+  class MockSource {
+    static started: MockSource[] = [];
+    buffer: unknown = null;
+    onended: (() => void) | null = null;
+    connect = (destination: unknown) => destination;
+    disconnect = () => {};
+    start = () => { MockSource.started.push(this); };
+  }
+
+  class MockContext {
+    state = "running";
+    destination = {};
+    decodeCalls = 0;
+    createBufferSource = () => new MockSource();
+    createGain = () => ({
+      gain: { value: 0 },
+      connect: (destination: unknown) => destination,
+      disconnect: () => {},
+    });
+    decodeAudioData = () => { this.decodeCalls++; return Promise.resolve({} as AudioBuffer); };
+    resume = () => { this.state = "running"; return Promise.resolve(); };
+    suspend = () => { this.state = "suspended"; return Promise.resolve(); };
+  }
+
+  let context: MockContext;
+  let storage: Map<string, string>;
+
+  /** Let the fetch -> arrayBuffer -> decodeAudioData chain settle. */
+  const settleDecode = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+
+  beforeEach(() => {
+    MockAudio.instances = [];
+    MockAudio.rejectPlay = false;
+    MockSource.started = [];
+    storage = new Map();
+    context = new MockContext();
+    const windowTarget = new EventTarget() as EventTarget & { AudioContext: unknown };
+    windowTarget.AudioContext = function () { return context; } as unknown;
+    const documentTarget = new EventTarget();
+    Object.defineProperties(documentTarget, {
+      hidden: { get: () => false },
+      hasFocus: { value: () => true },
+    });
+    vi.stubGlobal("window", windowTarget);
+    vi.stubGlobal("document", documentTarget);
+    vi.stubGlobal("Audio", MockAudio);
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) }));
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    });
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("plays a decoded cue through Web Audio without allocating a media element", async () => {
+    const audio = new AudioManager();
+
+    // First cue: still decoding, so it falls back to a media element.
+    audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+    const afterFallback = MockAudio.instances.length;
+    expect(MockSource.started).toHaveLength(0);
+
+    await settleDecode();
+
+    // Every later cue is a throwaway buffer source — no new media element.
+    for (let i = 0; i < 20; i++) {
+      audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+    }
+    expect(MockSource.started).toHaveLength(20);
+    expect(MockAudio.instances).toHaveLength(afterFallback);
+  });
+
+  it("applies the sfx and master volumes to the buffered voice", async () => {
+    storage.set(SETTINGS_KEY, JSON.stringify({ masterVolume: 0.5, sfxVolume: 0.4 }));
+    const audio = new AudioManager();
+    const gains: { gain: { value: number } }[] = [];
+    context.createGain = () => {
+      const node = {
+        gain: { value: 0 },
+        connect: (destination: unknown) => destination,
+        disconnect: () => {},
+      };
+      gains.push(node);
+      return node;
+    };
+
+    audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+    await settleDecode();
+    audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+
+    expect(gains[gains.length - 1].gain.value).toBeCloseTo(0.55 * 0.4 * 0.5);
+  });
+
+  it("caps concurrent voices so a busy fight cannot pile them up", async () => {
+    const audio = new AudioManager();
+    audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+    await settleDecode();
+
+    // Nothing reports `ended`, so every voice stays live.
+    for (let i = 0; i < 60; i++) {
+      audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+    }
+
+    expect(MockSource.started).toHaveLength(24);
+  });
+
+  it("frees a voice slot once the clip ends", async () => {
+    const audio = new AudioManager();
+    audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+    await settleDecode();
+
+    for (let i = 0; i < 60; i++) {
+      audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+    }
+    for (const source of MockSource.started) source.onended?.();
+    audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+
+    expect(MockSource.started).toHaveLength(25);
+  });
+
+  it("decodes every attack cue when a raid starts", async () => {
+    const audio = new AudioManager();
+
+    audio.enterRaid("farmStageBGM.mp3");
+    await settleDecode();
+
+    // bite / flail / poke / swipe / punch / splat.
+    expect(context.decodeCalls).toBe(6);
+    audio.fightStrike({ team: "enemy", impact: "projectile" });
+    expect(MockSource.started).toHaveLength(1);
+  });
+
+  it("stays on the media element while the context is gesture-locked", async () => {
+    const audio = new AudioManager();
+    audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+    await settleDecode();
+    context.state = "suspended";
+
+    const before = MockAudio.instances.length;
+    audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+
+    expect(MockSource.started).toHaveLength(0);
+    expect(MockAudio.instances).toHaveLength(before + 1);
+    // The attempted resume leaves it running for the next cue.
+    audio.fightStrike({ team: "player", attackName: "ZombieBite" });
+    expect(MockSource.started).toHaveLength(1);
   });
 });

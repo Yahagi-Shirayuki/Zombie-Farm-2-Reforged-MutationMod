@@ -118,6 +118,23 @@ const clampVolume = (value: unknown, fallback = 1): number =>
     ? Math.max(0, Math.min(1, value))
     : fallback;
 
+// Every fight cue a raid can fire. Decoded up front on entering a raid so combat
+// never falls back to the media-element path mid-swing (see playOneShot).
+const FIGHT_CUE_FILES = [
+  "audio/bite.wav", "audio/flail.wav", "audio/poke.wav",
+  "audio/swipe.wav", "audio/punch.wav", "audio/splat.wav",
+];
+
+/** Web Audio voices allowed at once. Combat can fire ~20 cues/s; past this many
+ *  overlapping clips nothing is audible anyway, so extra cues are dropped rather
+ *  than allowed to pile up. */
+const MAX_VOICES = 24;
+
+/** Safety net for the media-element fallback: reclaim an element to the pool even
+ *  if `ended` never arrives (iOS silently stalls elements it decides to evict).
+ *  Without this the pool starves and every later cue allocates a fresh element. */
+const ONE_SHOT_RECLAIM_MS = 10_000;
+
 export class AudioManager {
   masterOn = true;
   musicOn = true;
@@ -136,6 +153,14 @@ export class AudioManager {
   // ~20 cues/s; a fresh `new Audio()` per cue makes iOS re-enter its media-loading
   // pipeline every time, a reliable source of main-thread jank and audio stutter.
   private oneShotPool = new Map<string, HTMLAudioElement[]>();
+  // Web Audio one-shot path. See playOneShot: media elements cost several ms of
+  // main-thread time per play() on iOS, which is fine for a menu click and ruinous
+  // for a raid firing an attack cue on nearly every 50 ms combat tick.
+  private ctx: AudioContext | null = null;
+  private ctxUnavailable = false;
+  private buffers = new Map<string, AudioBuffer>();
+  private decoding = new Set<string>();
+  private voices = 0;
   private armed = false; // whether a user-gesture resume listener is pending
   // While a raid is up, its looping stage BGM replaces the farm bgm. `raidBgm`
   // holds the active raid track (and `raidFile` its filename); the farm bgm is
@@ -230,6 +255,10 @@ export class AudioManager {
    */
   resumeFromGesture() {
     if (!this.canPlay()) return;
+    // Unlock Web Audio from the same gesture. iOS parks a context created outside
+    // one in "suspended" forever, which would leave every effect on the slow
+    // media-element path for the whole session.
+    void this.audioContext()?.resume().catch(() => { /* re-armed by the next gesture */ });
     if (this.musicOn && this.activeBgm().paused)
       void this.activeBgm().play().catch(() => this.arm());
     if (this.ambienceOn && this.ambBed.paused)
@@ -261,6 +290,11 @@ export class AudioManager {
     this.stopAmbience();
     for (const audio of this.oneShots) audio.pause();
     this.oneShots.clear();
+    // Hand the audio hardware back too, so a backgrounded PWA isn't holding a
+    // running context alongside the media session it relinquishes below.
+    if (this.ctx && this.ctx.state === "running") {
+      void this.ctx.suspend().catch(() => { /* already gone */ });
+    }
     // Where supported, immediately relinquish the OS media session so a
     // backgrounded PWA/tab no longer presents itself as active music.
     try {
@@ -271,6 +305,7 @@ export class AudioManager {
 
   private syncFocusAudio = () => {
     if (!this.canPlay()) return this.pauseForBackground();
+    if (this.ctx) void this.ctx.resume().catch(() => { /* needs a fresh gesture */ });
     if (this.musicOn) void this.activeBgm().play().catch(() => this.arm());
     if (this.ambienceOn) this.startAmbience();
   };
@@ -322,6 +357,10 @@ export class AudioManager {
       this.raidBgm = a;
       this.raidFile = file;
     }
+    // Decode every attack cue before the first swing lands. Combat fires these at
+    // up to ~20/s; a clip that is still decoding falls back to a media element,
+    // which is exactly the per-play main-thread cost raids cannot afford.
+    for (const cue of FIGHT_CUE_FILES) this.buffer(A(cue));
     // Warm the short victory cue while the battle is running so the decisive tick
     // never waits on its first network fetch/decode.
     if (!this.victoryBgm) {
@@ -409,15 +448,116 @@ export class AudioManager {
     this.playOneShot(file, 0.7);
   }
 
+  /**
+   * Fire one short sound effect.
+   *
+   * Prefers Web Audio: a decoded AudioBuffer played through a throwaway
+   * AudioBufferSourceNode costs microseconds. An HTMLAudioElement.play() instead
+   * enters the browser's media-element pipeline — on iOS an AVAudioSession round
+   * trip per cue, several MAIN-THREAD milliseconds each. Raids fire an attack cue
+   * on nearly every 50 ms combat tick, so that per-play cost is what made frame
+   * rate collapse the moment zombies started swinging.
+   *
+   * The element path stays as the fallback for the very first play of a clip
+   * (while it decodes), for browsers without Web Audio, and while the context is
+   * still suspended awaiting a user gesture. Long looping tracks (music/ambience)
+   * deliberately keep using media elements, where streaming is the point.
+   */
   private playOneShot(file: string, volume: number, channelVolume = this.sfxVolume) {
     const url = A(file);
+    const gain = volume * channelVolume * this.masterVolume;
+    if (this.playBuffered(url, gain)) return;
+    this.playElement(url, gain);
+  }
+
+  /** The AudioContext, created on first use. Returns null where Web Audio is
+   *  unavailable (or construction threw), which routes callers to the element
+   *  fallback for the rest of the session. */
+  private audioContext(): AudioContext | null {
+    if (this.ctx || this.ctxUnavailable) return this.ctx;
+    const Ctor = typeof window !== "undefined"
+      ? (window as unknown as {
+          AudioContext?: typeof AudioContext;
+          webkitAudioContext?: typeof AudioContext;
+        })
+      : undefined;
+    const Impl = Ctor?.AudioContext ?? Ctor?.webkitAudioContext;
+    if (!Impl) {
+      this.ctxUnavailable = true;
+      return null;
+    }
+    try {
+      this.ctx = new Impl();
+    } catch {
+      this.ctxUnavailable = true; // blocked or out of hardware contexts
+    }
+    return this.ctx;
+  }
+
+  /** Decoded clip for `url`, kicking off a one-time fetch+decode when missing.
+   *  Returns undefined until that lands, so the caller falls back this once. */
+  private buffer(url: string): AudioBuffer | undefined {
+    const ready = this.buffers.get(url);
+    if (ready) return ready;
+    const ctx = this.audioContext();
+    if (!ctx || this.decoding.has(url)) return undefined;
+    this.decoding.add(url);
+    void fetch(url)
+      .then((response) => response.arrayBuffer())
+      .then((data) => ctx.decodeAudioData(data))
+      .then((decoded) => { this.buffers.set(url, decoded); })
+      // A failed fetch/decode simply leaves this clip on the element path; it must
+      // never reject into the console on every subsequent cue, so drop it and let
+      // the next call retry.
+      .catch(() => { /* stays on the element fallback */ })
+      .finally(() => { this.decoding.delete(url); });
+    return undefined;
+  }
+
+  /** Play through Web Audio. Returns false when that isn't possible yet, meaning
+   *  the caller should use the media element for this one cue. */
+  private playBuffered(url: string, gain: number): boolean {
+    const ctx = this.audioContext();
+    if (!ctx) return false;
+    const buffer = this.buffer(url);
+    if (!buffer) return false;
+    // Autoplay policy parks a context created outside a gesture in "suspended".
+    // Ask once and fall back meanwhile; resumeFromGesture does the real unlock.
+    if (ctx.state !== "running") {
+      void ctx.resume().catch(() => { /* still gesture-locked */ });
+      return false;
+    }
+    if (this.voices >= MAX_VOICES) return true; // drop, don't queue: it's inaudible anyway
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const amp = ctx.createGain();
+    amp.gain.value = gain;
+    source.connect(amp).connect(ctx.destination);
+    this.voices++;
+    source.onended = () => {
+      this.voices--;
+      source.disconnect();
+      amp.disconnect();
+    };
+    source.start();
+    return true;
+  }
+
+  /** Media-element fallback. Pooled per file, because a fresh `new Audio()` per cue
+   *  makes iOS re-enter its media-loading pipeline every time. */
+  private playElement(url: string, gain: number) {
+    // Elements are only reclaimed when playback reports back; refuse to allocate
+    // past the cap so a browser that never fires `ended` can't accumulate media
+    // resources for the whole fight.
+    if (this.oneShots.size >= MAX_VOICES && !this.oneShotPool.get(url)?.length) return;
     const a = this.oneShotPool.get(url)?.pop() ?? new Audio(url);
-    a.volume = volume * channelVolume * this.masterVolume;
+    a.volume = gain;
     this.oneShots.add(a);
     let settled = false;
     const done = () => {
       if (settled) return; // `ended` and a late `error` must not pool twice
       settled = true;
+      clearTimeout(reclaim);
       this.oneShots.delete(a);
       const pool = this.oneShotPool.get(url) ?? [];
       if (pool.length < 6) {
@@ -425,6 +565,7 @@ export class AudioManager {
         this.oneShotPool.set(url, pool);
       }
     };
+    const reclaim = setTimeout(done, ONE_SHOT_RECLAIM_MS);
     // Property handlers (not addEventListener) so reuse replaces the previous
     // play's callbacks instead of stacking them.
     a.onended = done;

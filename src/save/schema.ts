@@ -310,6 +310,13 @@ export interface ZombiePotSave {
   specialB?: boolean;
   /** Player level captured when the combine began. Optional for old saves. */
   playerLevel?: number;
+  /** True when this job was started against a server that RESERVES both parents
+   *  (`lockedByRaid = "pot:<id>"`). It makes a missing reservation diagnostic: the
+   *  server has no such combine, so the job is a local fiction and its parents — which
+   *  the presentation hides while a job holds them — must be released rather than kept
+   *  hidden forever. Absent on offline jobs and on jobs persisted before reservations
+   *  existed, which the server still honours through its unreserved fallback. */
+  reserved?: boolean;
   /** Epoch ms the combine started. */
   startedAt: number;
   /** Epoch ms the result is ready (start + duration, Monolith already applied). */

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   COMBINE_SPECIAL_BY_GROUP,
   createCombineRandom,
@@ -35,12 +35,14 @@ describe("Zombie Pot species selection", () => {
   });
 
   it("always preserves a named special parent's species", () => {
+    const evolutionRoll = vi.fn(() => 0);
     expect(selectCombineSpecies(
-      parent("ZombieActorRegularCrazy", { tier: 5, isSpecial: true }),
+      parent("ZombieActorRegularCrazy", { tier: 5, group: "Regular", isSpecial: true }),
       parent("ordinary", { tier: 99 }),
       45,
-      () => 0
+      evolutionRoll
     )).toBe("ZombieActorRegularCrazy");
+    expect(evolutionRoll).not.toHaveBeenCalled();
     // Backward compatibility for a combine persisted before specials were
     // restricted to slot 1.
     expect(selectCombineSpecies(

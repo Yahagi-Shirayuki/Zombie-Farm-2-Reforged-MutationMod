@@ -76,6 +76,7 @@ export class EconomyClient {
   private ready = false;
   private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private recoveryAttempt = 0;
+  private recoveryInFlight = false;
   private ownershipTimer: ReturnType<typeof setTimeout> | null = null;
   private ownershipCheckInFlight = false;
 
@@ -87,7 +88,15 @@ export class EconomyClient {
   onCropFertilized: ((oc: number, or: number) => void) | null = null;
   onFarmState: ((farm: api.FarmState) => void) | null = null;
   onObjectState: ((objects: BootstrapResponse["gameplay"]["objects"]["objects"], aliases: Record<string, string>, baseZombieMax: number, rejectedLocalIds: string[]) => void) | null = null;
-  onRosterState: ((roster: BootstrapResponse["gameplay"]["roster"], aliases: Record<string, string>) => void) | null = null;
+  /** `settled` means this client has NOTHING outstanding — no queued command, none in
+   *  flight — so the roster it just received is the whole truth and may be used to
+   *  retire local state the server contradicts (see ZombieField.reconcileServerPots).
+   *  While work is outstanding the roster is merely a snapshot that predates it. */
+  onRosterState: ((
+    roster: BootstrapResponse["gameplay"]["roster"],
+    aliases: Record<string, string>,
+    settled: boolean,
+  ) => void) | null = null;
   onRaidSettled: ((res: api.RaidFinishResult) => void) | null = null;
   onRaidRevival: ((offer: NonNullable<BootstrapResponse["gameplay"]["raidRevival"]>, brains: number) => void) | null = null;
   onEpicBossState: ((event: BootstrapResponse["gameplay"]["epicBoss"]) => void) | null = null;
@@ -124,7 +133,7 @@ export class EconomyClient {
     api.setWriterConfirmedHandler(() => this.scheduleOwnershipCheck());
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") void this.checkOwnership();
+        if (document.visibilityState === "visible") void this.resumeFromBackground();
         else this.clearOwnershipCheck();
       });
       // A different device cannot push a takeover notification into this page.
@@ -186,9 +195,44 @@ export class EconomyClient {
     void this.refreshReadOnly();
   }
 
+  /** Re-take a lease the server reports as unheld. A free lease is NOT a conflict:
+   *  no other document owns it, so claiming it needs no takeover and must never raise
+   *  the "Farm active elsewhere" gate. The path that makes this load-bearing is mobile
+   *  resume — `pagehide` releases the lease when the OS suspends the app, but a
+   *  suspended document is often resumed rather than destroyed, so it wakes up holding
+   *  a credential the server has already forgotten. Without a silent re-claim that
+   *  document is paused forever: every tap answers "Gameplay paused — reconnect to
+   *  continue" and only a manual reload clears it.
+   *  Returns true once this document is writing again. */
+  private async reclaimFreeWriter(observedGeneration: number): Promise<boolean> {
+    if (!api.hasLocalWriterLock() || !api.getSession()) return false;
+    try {
+      await api.acquireWriter(observedGeneration, false);
+      let bootstrap = await api.bootstrap(true);
+      if (bootstrap.writer.status !== "mine") return false;
+      // Only now does the raid recovery in the caller's bootstrap become reachable:
+      // it no-ops while the lease is unowned.
+      bootstrap = await this.recoverResumableRaid(bootstrap);
+      this.queue.adoptBootstrap(bootstrap);
+      this.ready = true;
+      this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
+      this.syncOwnershipPolling(bootstrap.writer.status);
+      if (this.queue.size === 0) this.onAuthoritativeSettled?.(bootstrap.serverTime);
+      this.recoveryAttempt = 0;
+      this.onWriterAvailable?.();
+      await this.queue.retry();
+      return true;
+    } catch {
+      // A real second device answers 423 writer_active here; fall back to the gate.
+      return false;
+    }
+  }
+
   private async refreshReadOnly(): Promise<void> {
     try {
       const bootstrap = await api.bootstrap(true);
+      if (bootstrap.writer.status === "free" &&
+          await this.reclaimFreeWriter(bootstrap.writer.generation)) return;
       this.queue.adoptBootstrap(bootstrap);
       this.ready = true;
       this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
@@ -220,6 +264,21 @@ export class EconomyClient {
     } else this.clearOwnershipCheck();
   }
 
+  /** Foregrounding the app. Confirm the lease first, then — if gameplay is still
+   *  paused — retry immediately instead of waiting out a backoff that was scheduled
+   *  before the OS suspended us and may be a minute away. A document already behind
+   *  the takeover gate (its credential cleared) is left alone: that state is the
+   *  player's to resolve, and re-running recovery would reopen the dialog they
+   *  dismissed with "View only". */
+  private async resumeFromBackground(): Promise<void> {
+    await this.checkOwnership();
+    if (this.available || !api.hasWriterCredential()) return;
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = null;
+    this.recoveryAttempt = 0;
+    await this.recover();
+  }
+
   private async checkOwnership(): Promise<void> {
     if (this.ownershipCheckInFlight) return;
     this.clearOwnershipCheck();
@@ -227,6 +286,10 @@ export class EconomyClient {
     this.ownershipCheckInFlight = true;
     try {
       const writer = await api.writerStatus();
+      // Resolve "free" before treating the lease as lost. This check runs on every
+      // visibility change, so a mobile resume after `pagehide` released the lease lands
+      // here first — re-claim it instead of gating a farm no other device is holding.
+      if (writer.status === "free" && await this.reclaimFreeWriter(writer.generation)) return;
       if (writer.status !== "mine") this.handleWriterLost();
     } catch { /* ordinary recovery owns network failure handling */ }
     finally {
@@ -246,6 +309,9 @@ export class EconomyClient {
   }
 
   private async recover(): Promise<void> {
+    // A resume can race the backoff timer; one recovery attempt at a time.
+    if (this.recoveryInFlight) return;
+    this.recoveryInFlight = true;
     try {
       let bootstrap = await api.bootstrap(true);
       bootstrap = await this.recoverResumableRaid(bootstrap);
@@ -255,7 +321,17 @@ export class EconomyClient {
       this.syncOwnershipPolling(bootstrap.writer.status);
       if (this.queue.size === 0) this.onAuthoritativeSettled?.(bootstrap.serverTime);
       if (!this.queue.available) {
-        if (bootstrap.writer.status === "other") this.onWriterReplaced?.();
+        // Another live device owns the lease: the takeover gate owns this state, so
+        // stop retrying and let the player decide.
+        if (bootstrap.writer.status === "other") { this.onWriterReplaced?.(); return; }
+        if (bootstrap.writer.status === "free" &&
+            await this.reclaimFreeWriter(bootstrap.writer.generation)) return;
+        // Still paused (mutations disabled server-side, protocol skew, or a lost claim
+        // race). Keep the backoff alive: nothing else re-arms this timer, and dropping
+        // it here leaves the farm frozen behind "Gameplay paused — reconnect to
+        // continue" with no retry and no dialog until the player reloads by hand.
+        this.recoveryAttempt++;
+        this.scheduleRecovery();
         return;
       }
       this.recoveryAttempt = 0;
@@ -263,6 +339,8 @@ export class EconomyClient {
     } catch {
       this.recoveryAttempt++;
       this.scheduleRecovery();
+    } finally {
+      this.recoveryInFlight = false;
     }
   }
 
@@ -355,7 +433,13 @@ export class EconomyClient {
     this.enqueue({ type: "power.use", key }, { inventoryKey: key, inventoryCount: -1 });
   }
 
-  submitRoster(input: RosterInput, optimistic: { gold?: number } = {}): void {
+  /** Returns false ONLY when a combine collection could not be submitted because this
+   *  client no longer knows the job's parents (its in-memory record was cleared, or the
+   *  pot id moved). That case used to fall through silently: the caller had already
+   *  destroyed its pot job and granted an optimistic child, so no command, no rejection
+   *  and no rollback meant both parents were simply gone. The caller must undo its
+   *  optimistic collection when this returns false. */
+  submitRoster(input: RosterInput, optimistic: { gold?: number } = {}): boolean {
     if (input.type === "combineStart") {
       const potId = input.potId ?? "legacy";
       this.combineParents.set(potId, {
@@ -370,11 +454,12 @@ export class EconomyClient {
         parentBId: this.authoritativeUnitId(input.parentBId),
         ...(input.playerLevel === undefined ? {} : { playerLevel: input.playerLevel }),
       });
-      return;
+      return true;
     }
-    const potId = input.type === "combineCollect" ? input.potId ?? "legacy" : "legacy";
-    const parents = input.type === "combineCollect" ? this.combineParents.get(potId) : undefined;
-    if (input.type === "combineCollect" && parents) {
+    if (input.type === "combineCollect") {
+      const potId = input.potId ?? "legacy";
+      const parents = this.combineParents.get(potId);
+      if (!parents) return false;
       this.enqueue({
         type: "roster.combine",
         potId,
@@ -382,10 +467,11 @@ export class EconomyClient {
         parentBId: this.authoritativeUnitId(parents.parentBId),
         ...(parents.playerLevel === undefined ? {} : { playerLevel: parents.playerLevel }),
       }, { localUnitId: input.unitId });
-      return;
+      return true;
     }
     if (input.type === "sell") this.enqueue({ type: "roster.sell", unitId: this.authoritativeUnitId(input.unitId) }, optimistic);
     // Grants, casualties, and veterancy come from farm/raid results in v3.
+    return true;
   }
   submitRosterStatus(unitId: string, stored: boolean): void {
     this.enqueue({ type: "roster.status", unitId: this.authoritativeUnitId(unitId), stored });
@@ -826,7 +912,11 @@ export class EconomyClient {
       // Capture/display a pending revival before roster reconciliation removes the
       // casualties from the local presentation cache. The offer remains server-owned.
       if (gameplay.raidRevival) this.onRaidRevival?.(gameplay.raidRevival, gameplay.balance.brains);
-      this.onRosterState?.(gameplay.roster, { ...this.deferredRosterAliases, ...aliases });
+      this.onRosterState?.(
+        gameplay.roster,
+        { ...this.deferredRosterAliases, ...aliases },
+        this.queue.size === 0,
+      );
       this.deferredRosterAliases = {};
       this.onEpicBossState?.(epicBossRunToClient(gameplay.epicBoss, serverTime, clientTime));
       this.onTutorialState?.(gameplay.tutorialRewarded);

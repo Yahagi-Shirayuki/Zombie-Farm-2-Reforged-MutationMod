@@ -128,14 +128,17 @@ export class ZombiePot {
    * Start combining two parent snapshots. Refused (returns false) if a combine is
    * already running. `hasMonolith` quarters the timer. The parents' keys+masks are
    * captured here; the caller is responsible for removing the parent units from
-   * the roster once this returns true.
+   * the roster once this returns true. `reserved` records that an authoritative
+   * server was asked to hold both parents, which lets a later reconcile tell a
+   * genuine job apart from one whose start never landed (see ZombiePotSave).
    */
   start(
     a: ZombieSnapshot,
     b: ZombieSnapshot,
     hasMonolith: boolean,
     baseDurationMs: number = POT_DURATION_MS,
-    playerLevel = 1
+    playerLevel = 1,
+    reserved = false
   ): boolean {
     if (this.job || b.isSpecial) return false;
     const startedAt = this.now();
@@ -157,6 +160,7 @@ export class ZombiePot {
       specialA: a.isSpecial,
       specialB: b.isSpecial,
       playerLevel,
+      ...(reserved ? { reserved: true } : {}),
       startedAt,
       finishAt: startedAt + duration,
     };

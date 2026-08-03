@@ -3905,7 +3905,7 @@ export class Hud {
 
       const ruleNote = document.createElement("div");
       ruleNote.className = "cmb-rule-note";
-      ruleNote.textContent = "Slot 1 sets the zombie type; mutations can come from both. Special zombies only fit Slot 1 and are always inherited (special evolution rules still apply).";
+      ruleNote.textContent = "Slot 1 sets the zombie type; mutations can come from both. Special zombies only fit Slot 1 and always remain the same species.";
 
       const list = document.createElement("div");
       list.className = "cmb-list";

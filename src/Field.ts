@@ -9,6 +9,7 @@ import {
 import { clampPointToGrid, footprintOrigin, gridToScreen, HH, HW, screenToGrid, TILE_H, TILE_W, tileCenter } from "./iso";
 import { setFootprint, sortLayer } from "./depthSort";
 import { makeLight, OBJECT_GLOWS } from "./lighting";
+import { mintObjectId, objectIdFloor } from "./objectIds";
 import { leafTexture, ParticleConfig, ParticleField } from "./raid/Particles";
 import type { PlacedObjectSave, PlotSave } from "./save/schema";
 import { touchingPlotOffsets } from "./zombie/cropMutations";
@@ -1078,7 +1079,7 @@ export class Field {
     if (frontOverlay) layer.addChild(frontOverlay);
     if (rearMask) layer.addChild(rearMask);
     if (frontMask) layer.addChild(frontMask);
-    const oid = id ?? `o${this.nextObjId++}`;
+    const oid = id ?? this.mintId();
     const obj: FarmObject = { id: oid, def, oc, or, sprite, rearSprite, frontSprite, gateSprite,
       rearOverlay, frontOverlay, rearMask, frontMask, readyAt: ra, ready, flipped };
     this.objects.set(oid, obj);
@@ -1678,14 +1679,23 @@ export class Field {
     this.objects.clear();
     this.tileObject.clear();
     this.fenceBlock.clear();
-    let maxN = 0;
+    const restored: string[] = [];
     for (const s of saves) {
       const def = resolve(s.key);
       if (!def || !this.footprintFits(s.oc, s.or, def.tileW, def.tileH)) continue;
       this.placeObject(def, s.oc, s.or, s.id, s.readyAt, !!s.rotation);
-      const m = /^o(\d+)$/.exec(s.id);
-      if (m) maxN = Math.max(maxN, parseInt(m[1], 10));
+      restored.push(s.id);
     }
-    this.nextObjId = maxN + 1;
+    // Monotonic: a save whose objects all carry server instance ids scans to nothing,
+    // and dropping the counter back would re-issue ids this session already aliased to
+    // live server objects. See src/objectIds.ts for what that used to destroy.
+    this.nextObjId = objectIdFloor(this.nextObjId, restored);
+  }
+
+  /** A local id for a newly placed object that cannot collide with one already in play. */
+  private mintId(): string {
+    const { id, next } = mintObjectId(this.nextObjId, this.objects);
+    this.nextObjId = next;
+    return id;
   }
 }

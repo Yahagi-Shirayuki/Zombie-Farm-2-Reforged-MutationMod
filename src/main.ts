@@ -67,6 +67,7 @@ import {
 } from "./quest/mutantSubjects";
 import { resolveCropMutations } from "./zombie/cropMutations";
 import { MutationPortraits } from "./zombie/mutationPortrait";
+import { mutationLabel } from "./zombie/mutations";
 import {
   DR_GROUNDHOG,
   EPIC_BOSSES,
@@ -1366,6 +1367,8 @@ async function main() {
       authoritativeObjectIds = new Set(objects.map((object) => object.instanceId));
       const generation = ++objectReconcileGeneration;
       const current = new Map(field.serializeObjects().map((object) => [object.id, object]));
+      /** Local objects already adopted by a server object in this pass. */
+      const claimedSources = new Set<string>();
       for (const id of rejectedLocalIds) field.removeObject(id);
 
       // The purchase + shed projections read only `objects`, never the field, so run
@@ -1390,6 +1393,13 @@ async function main() {
       for (const object of objects) {
         const localId = aliases[object.instanceId];
         const source = current.get(object.instanceId) ?? (localId ? current.get(localId) : undefined);
+        // `current` is a snapshot, so it keeps resolving a local object after that
+        // object has been renamed to a server instance id. Two server objects aliased to
+        // the SAME local id would therefore both be placed on its tile — stacking, and
+        // displacing whatever legitimately stood there (this is how a Zombie Pot could
+        // vanish from the farm while the server still owned it). One claim per local
+        // object: a loser is skipped, and a reload rebuilds it from the server list.
+        if (source && claimedSources.has(source.id)) continue;
         if (object.status !== "placed") {
           if (current.has(object.instanceId)) field.removeObject(object.instanceId);
           if (localId && current.has(localId)) field.removeObject(localId);
@@ -1397,11 +1407,13 @@ async function main() {
         }
         const direct = current.get(object.instanceId);
         if (direct?.key === object.catalogKey) {
+          claimedSources.add(direct.id); // already itself: no other object may adopt it
           if (object.readyAt !== undefined) field.syncObjectReadyAt(object.instanceId, object.readyAt);
           continue;
         }
         const def = placeCatalog.get(object.catalogKey);
         if (!def || !source) continue;
+        claimedSources.add(source.id);
         await ensureObjectTexture(assets, def.sprite);
         if (def.growingSprite) await ensureObjectTexture(assets, def.growingSprite);
         if (generation !== objectReconcileGeneration) return;
@@ -1416,9 +1428,19 @@ async function main() {
       const itemCap = placed.reduce((cap, object) => Math.max(cap, placeCatalog.get(object.key)?.storageSlots ?? 0), 8);
       state.syncCapacities(baseZombieMax + armyBonus, itemCap);
     };
-    economy.onRosterState = (roster, aliases) => {
-      for (const pot of zombies.recoverServerPotReservations(roster)) {
+    economy.onRosterState = (roster, aliases, settled) => {
+      const pots = zombies.reconcileServerPots(roster, settled);
+      for (const pot of pots.live) {
         economy!.restoreCombineParents(pot.potId, pot.parentAId, pot.parentBId, pot.playerLevel);
+      }
+      if (pots.retired.length) {
+        // The job was a local fiction: the server holds no reservation for it, so its
+        // parents are ordinary roster units again and the reconcile below will show
+        // them. Persist immediately so a reload cannot resurrect the phantom Pot.
+        hud.showToast(pots.retired.length > 1
+          ? "Some Zombie Pot combines could not be confirmed — those zombies are back on your farm."
+          : "That Zombie Pot combine could not be confirmed — your zombies are back on your farm.");
+        saveManager.flushCritical();
       }
       const hidden = new Set(zombies.pendingPotParents().flatMap((pot) => [pot.parentAId, pot.parentBId]));
       zombies.reconcileServerRoster(roster.filter((unit) => !hidden.has(unit.id)), aliases);
@@ -2219,10 +2241,24 @@ async function main() {
       questBus.post(QuestEvent.CombinerHarvested, z.typeName, 1, unitSubjectAliasesOf(z));
       const c = tileCenter(z.col, z.row);
       floatText(c.x, c.y, z.mutation ? `${z.name}!` : z.name);
+      // Slot 1 sets the species, so combining two of the same type gives back one of
+      // that same type: two zombies go in, one identical-looking one comes out. Without
+      // naming the result that reads as "both of mine disappeared" — say what was made
+      // and what it inherited, since the mutations are the only visible difference.
+      const inherited = mutationLabel(z.mutation);
+      hud.showToast(inherited
+        ? `${z.name} the ${z.typeName} came out of the Zombie Pot with ${inherited}.`
+        : `${z.name} the ${z.typeName} came out of the Zombie Pot.`);
       try { await economy?.settleBeforeDependency(); }
       catch { hud.showToast("The combine result is waiting for the server to reconnect."); }
       zombies.confirmCombineCollection(targetPotId);
       saveManager.flushCritical();
+    } else if (zombies.combineReadyFor(targetPotId) && zombies.canAdd()) {
+      // The job is still ready and the farm has room, so this was not the ordinary
+      // "wait for a slot" refusal — the collection could not be handed to the server
+      // (or its species no longer resolves). collectCombine has already put the job
+      // back; say so rather than letting the button appear dead.
+      hud.showToast("That combine could not be confirmed just now — it is still in the Pot. Try again in a moment.");
     }
     return z ? z.name : null;
   };
@@ -2584,9 +2620,16 @@ async function main() {
   };
   hud.getBlackMarketFulfillments = async () => (await api.blackMarketFulfillments()).fulfillments;
   hud.onCollectBlackMarketOrder = async (orderId) => {
-    // Collection is pure acknowledgment — the trade settled when it happened —
-    // so no writer preparation or authoritative refresh is needed.
-    await api.collectBlackMarketOrder(orderId);
+    // Collection is pure acknowledgment — the trade settled when it happened — so no
+    // writer preparation is needed. The BALANCE still has to move on screen here: the
+    // brains were credited at settlement, by the counterparty's fulfil, an event this
+    // client never observed. Without adopting a fresh balance the payout stays
+    // invisible until the next bootstrap or command batch.
+    const result = await api.collectBlackMarketOrder(orderId);
+    // Remain compatible while the manually deployed Worker rolls forward: an older
+    // one omits the balance, so pay for a second round-trip only in that case.
+    if (result.balance) economy?.adoptExternalBalance(result.balance);
+    else await economy?.refreshAuthoritative();
   };
   hud.getBlackMarketHistory = () => api.blackMarketHistory();
   hud.refreshFriends = async () => {
@@ -2907,6 +2950,10 @@ async function main() {
       if (!raidActive) return scene.destroy();
       raidScene = scene;
       app.stage.addChild(scene.container);
+      // Debug handle — dev builds only, mirroring the online launch path below.
+      if (import.meta.env.DEV) {
+        (window as unknown as { ZF?: Record<string, unknown> }).ZF!.raidScene = scene;
+      }
     });
     return true;
   };
@@ -3565,12 +3612,17 @@ async function main() {
     const origin = field.plotOriginAt(col, row);
     if (origin) {
       const crop = field.cropInfoAt(col, row);
-      const warning = crop
-        ? `Remove this plot and discard the ${crop.name} growing on it? You will receive no refund.`
-        : "Remove this plot and return it to bare ground? You will receive no refund.";
-      const confirmed = await hud.confirmInGame("Remove this plot?", warning, "Remove Plot");
-      const current = field.plotOriginAt(col, row);
-      if (!confirmed || !current || current.oc !== origin.oc || current.or !== origin.or) return;
+      // Bare plowed soil holds nothing of value (the seed is only paid for when the
+      // farmer actually plants), so removing it is a plain tap — no confirmation.
+      if (crop) {
+        const confirmed = await hud.confirmInGame(
+          "Remove this plot?",
+          `Remove this plot and discard the ${crop.name} growing on it? You will receive no refund.`,
+          "Remove Plot"
+        );
+        const current = field.plotOriginAt(col, row);
+        if (!confirmed || !current || current.oc !== origin.oc || current.or !== origin.or) return;
+      }
       jobs.cancelAtTile(col, row); // drop any queued job on this plot first
       field.removePlot(col, row); // plot (and any crop) -> bare ground, no refund
       if (state.onFarm) state.onFarm({ type: "remove", oc: origin.oc, or: origin.or }, {});

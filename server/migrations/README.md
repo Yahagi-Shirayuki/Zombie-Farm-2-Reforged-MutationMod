@@ -81,6 +81,7 @@ manual `schema.sql` touched the table):
 | `0031_account_last_online` | `ALTER TABLE accounts ADD COLUMN last_online_at` + backfill from sessions | Fails if `last_online_at` exists. |
 | `0032_black_market_collection` | `ALTER TABLE black_market_orders ADD COLUMN acknowledged_at` | Fails if `acknowledged_at` exists. Pre-existing FULFILLED rows intentionally stay `NULL` so their creators finally see them as collectible. |
 | `0033_black_market_history` | Two `ALTER TABLE black_market_orders ADD COLUMN delivered_*` statements + backfill | Fails if either column exists. Historical filled requests keep `NULL` delivered details (never recorded); only sales backfill from escrow. |
+| `0034_quest_45_popcorn_backfill` | Data-only `UPDATE`: grants the Circus Popcorn quest 45 always owed but never paid | No schema change. Idempotent — skips any account that already has the key, so re-running is a no-op. Only touches accounts with `"45"` in their completed quests. Not race-proof against a live command batch; verify after applying (see below). |
 
 The remaining current migrations use repeatable deletes or `CREATE … IF NOT EXISTS`
 (including `0029_restore_ledger`, which recreates the `ledger` table dropped by the v3

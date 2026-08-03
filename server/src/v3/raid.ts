@@ -423,7 +423,10 @@ export async function finishRaid(
     ...(loot ? [{ type: "kLootItemWonNotification", subject: loot.name }] : []),
     ...(newZombieName ? [{ type: "kLootItemWonNotification", subject: newZombieName }] : []),
   ] : [];
-  const questChanges = applyQuestEvents(nextBalance, quests, questEvents);
+  const questChanges = applyQuestEvents(nextBalance, quests, questEvents, {
+    inventory: core.inventory,
+    storage: core.storage,
+  });
   const levelBefore = levelForXp(balance.xp);
   const levelAfter = levelForXp(nextBalance.xp);
   const lastRaidAt = levelAfter > levelBefore ? 0 : raidState.last_started_at;

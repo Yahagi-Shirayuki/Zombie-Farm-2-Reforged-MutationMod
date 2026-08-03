@@ -24,6 +24,27 @@ const memoryStorage = () => {
   };
 };
 
+const bootstrapFixture = (overrides: Record<string, unknown> = {}): any => ({
+  protocolVersion: 3, serverTime: 1, minimumProtocolVersion: 3, raidRulesetVersion: 0,
+  mutationsEnabled: true, accountVersion: 4, writerGeneration: 2,
+  writerDeviceId: "this-device",
+  writer: { status: "mine", generation: 2, lastActivityAt: 1 },
+  gameplay: {
+    balance: { gold: 200, brains: 15, xp: 0 },
+    farm: { version: 0, plots: {} }, objects: { version: 0, objects: [] },
+    quests: { version: 0, completed: [], progress: [] }, inventory: {},
+    storage: { received: {}, stored: {} }, roster: [], farmSize: 30,
+    climates: ["grass"], farmerHeads: [1], farmerHeadId: 1,
+    ownedPets: [], activePet: null, penPets: [], zombieMax: 16,
+    tutorialRewarded: false, raids: { progress: {}, lastRaidAt: 0 },
+    raidRevival: null, epicBoss: null,
+  },
+  presentation: { version: 0 },
+  social: { friends: [], incomingRequestCount: 0, inboxCount: 0 },
+  resumableRaid: null,
+  ...overrides,
+});
+
 describe("v3 raid dependency ids", () => {
   it("postpones the three-minute ownership poll after confirmed gameplay", async () => {
     vi.useFakeTimers();
@@ -670,6 +691,83 @@ describe("v3 raid dependency ids", () => {
     expect(api.bootstrap).toHaveBeenCalledWith(true);
     expect(economy.available).toBe(true);
     expect(writerOwned).toHaveBeenCalledOnce();
+  });
+
+  // A mobile resume finds the lease released by this document's own `pagehide`. It is
+  // free, not contested, so gameplay must come back silently instead of stranding the
+  // player behind "Gameplay paused — reconnect to continue".
+  it("re-claims a free writer lease on resume instead of raising the takeover gate", async () => {
+    const economy = new EconomyClient(new GameState(), "resume-free-lease");
+    (economy as any).ready = true;
+    (economy as any).queue.disable("offline");
+    vi.spyOn(economy as any, "adoptGameplay").mockImplementation(() => {});
+    const replaced = vi.fn();
+    const availableAgain = vi.fn();
+    economy.onWriterReplaced = replaced;
+    economy.onWriterAvailable = availableAgain;
+    vi.spyOn(api, "getSession").mockReturnValue({
+      token: "t", accountId: "resume-free-lease", username: "DoctorNerd", friendCode: "CODE",
+    });
+    vi.spyOn(api, "hasWriterCredential").mockReturnValue(true);
+    vi.spyOn(api, "hasLocalWriterLock").mockReturnValue(true);
+    vi.spyOn(api, "writerStatus").mockResolvedValue({
+      status: "free", generation: 5, lastActivityAt: 1,
+    });
+    const acquire = vi.spyOn(api, "acquireWriter").mockResolvedValue(undefined);
+    vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrapFixture({
+      writer: { status: "mine", generation: 6, lastActivityAt: 2 },
+    }));
+
+    await (economy as any).checkOwnership();
+
+    expect(acquire).toHaveBeenCalledWith(5, false);
+    expect(replaced).not.toHaveBeenCalled();
+    expect(availableAgain).toHaveBeenCalledOnce();
+    expect(economy.available).toBe(true);
+  });
+
+  it("still gates on a lease a second device actually holds", async () => {
+    const economy = new EconomyClient(new GameState(), "resume-contested-lease");
+    (economy as any).ready = true;
+    const replaced = vi.fn();
+    economy.onWriterReplaced = replaced;
+    vi.spyOn(economy as any, "refreshReadOnly").mockResolvedValue(undefined);
+    vi.spyOn(api, "getSession").mockReturnValue({
+      token: "t", accountId: "resume-contested-lease", username: "DoctorNerd", friendCode: "CODE",
+    });
+    vi.spyOn(api, "hasWriterCredential").mockReturnValue(true);
+    vi.spyOn(api, "hasLocalWriterLock").mockReturnValue(true);
+    vi.spyOn(api, "writerStatus").mockResolvedValue({
+      status: "other", generation: 5, lastActivityAt: 1,
+    });
+    const acquire = vi.spyOn(api, "acquireWriter").mockResolvedValue(undefined);
+
+    await (economy as any).checkOwnership();
+
+    expect(acquire).not.toHaveBeenCalled();
+    expect(replaced).toHaveBeenCalledOnce();
+    expect(economy.available).toBe(false);
+  });
+
+  // Without the reschedule the backoff dies here: no timer, no dialog, and every tap
+  // answers the pause toast until the player reloads by hand.
+  it("keeps retrying when a recovered bootstrap is still not writable", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", {});
+    const economy = new EconomyClient(new GameState(), "recover-still-paused");
+    vi.spyOn(economy as any, "adoptGameplay").mockImplementation(() => {});
+    const bootstrap = vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrapFixture({
+      mutationsEnabled: false,
+      writer: { status: "mine", generation: 2, lastActivityAt: 1 },
+    }));
+
+    await (economy as any).recover();
+    expect(economy.available).toBe(false);
+    expect(bootstrap).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(bootstrap.mock.calls.length).toBeGreaterThan(1);
   });
 
   it("does not bypass a paused queue that still has unresolved commands", async () => {

@@ -276,6 +276,51 @@ describe("protocol v3 command engine", () => {
     expect(state.quests.completed.filter((id) => id === "71")).toHaveLength(1);
   });
 
+  it("grants a quest item reward into the authoritative Received bucket", () => {
+    const state = freshGameplayState();
+    state.balance.xp = 1_000_000; // clear quest 45's level 12 gate
+    // Quest 45 "Big Top Bash": beat Zombies vs Circus three times -> Circus Popcorn.
+    for (let i = 0; i < 3; i++) {
+      applyQuestEvents(state.balance, state.quests, [
+        { type: "kInvasionSuccessfulNotification", subject: "Zombies vs Circus" },
+      ], { inventory: state.inventory, storage: state.storage });
+    }
+
+    expect(state.quests.completed).toContain("45");
+    expect(state.storage.received["Circus Popcorn"]).toBe(1);
+  });
+
+  it("grants a quest boost reward into the authoritative inventory", () => {
+    const state = freshGameplayState();
+    state.quests.completed = ["1002"]; // quest 1003's prerequisite
+    // Epic quest 1003 "Defeat Dr. Groundhog Level 20" pays a Golden Dice.
+    applyQuestEvents(state.balance, state.quests, [
+      { type: "kEpicStageEnemyDefeatedNotification", subject: "20" },
+    ], {
+      includeEpic: true,
+      epicQuestIds: new Set(["1003"]),
+      inventory: state.inventory,
+      storage: state.storage,
+    });
+
+    expect(state.quests.completed).toContain("1003");
+    expect(state.inventory.golden_dice).toBe(1);
+    // A boost is never ALSO parked in Received.
+    expect(state.storage.received["Golden Dice"]).toBeUndefined();
+  });
+
+  it("leaves item rewards dormant when no sink is supplied", () => {
+    const state = freshGameplayState();
+    state.balance.xp = 1_000_000;
+    for (let i = 0; i < 3; i++) {
+      applyQuestEvents(state.balance, state.quests, [
+        { type: "kInvasionSuccessfulNotification", subject: "Zombies vs Circus" },
+      ]);
+    }
+    expect(state.quests.completed).toContain("45");
+    expect(state.storage.received["Circus Popcorn"]).toBeUndefined();
+  });
+
   it("grants a harvested market mutant with its catalog mutation", () => {
     const state = freshGameplayState();
     state.farm.plots["0:0"] = {

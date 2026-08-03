@@ -43,12 +43,11 @@ export interface QuestHooks {
   /** Online mode: local notifications update an optimistic presentation layer;
    * server command events remain the sole durable source of progress and rewards. */
   authoritative?: boolean;
-  /** Claim a completed quest's reward EXTERNALLY (online: the server grants the
-   *  currency authoritatively + any level-up it triggers). Return true if handled —
-   *  the local currency add is then skipped so it isn't double-counted / rejected by
-   *  the spend-only economy endpoint. Item/zombie rewards are still granted locally
-   *  regardless (the server records but defers them). Absent / returns false → grant
-   *  currency locally as before (offline / local-only play). */
+  /** Claim a completed quest's reward EXTERNALLY (online: the server grants it
+   *  authoritatively — currency + any level-up it triggers, items into the
+   *  authoritative inventory/Received, epic zombie rewards via the epic-boss result).
+   *  Return true if handled and NO local grant of any kind happens. Absent / returns
+   *  false → grant everything locally (offline / local-only play). */
   grantReward?: (def: QuestDef) => boolean;
   /** Grant a reward item (rewardType 3) — e.g. into storage/received. */
   grantItem: (key: string) => void;
@@ -160,19 +159,24 @@ export class QuestSystem {
   }
 
   private dispatchReward(def: QuestDef) {
-    // Online, the server grants the currency (and any level-up) authoritatively; the
-    // local add is then skipped so it isn't double-counted or bounced by the spend-only
-    // economy endpoint. Item/zombie rewards are always granted locally (server defers).
+    // Online, the server grants EVERY reward authoritatively (currency and any level-up
+    // it triggers, items into the authoritative inventory/Received, and epic zombie
+    // rewards through the epic-boss result). The local grant is skipped in that case:
+    // currency would be double-counted or bounced by the spend-only economy endpoint,
+    // and a local item write is worse than useless — `adoptGameplay` replaces Received
+    // and the boost inventory wholesale with server truth, so it would silently vanish
+    // at the next sync. Offline (`grantReward` absent or false) grants everything here.
     const handled = this.hooks.grantReward?.(def) ?? false;
+    if (handled) return;
     switch (def.rewardType) {
       case RewardType.Gold:
-        if (!handled && def.rewardValue) this.state.addGold(def.rewardValue);
+        if (def.rewardValue) this.state.addGold(def.rewardValue);
         break;
       case RewardType.Xp:
-        if (!handled && def.rewardValue) this.state.addXp(def.rewardValue);
+        if (def.rewardValue) this.state.addXp(def.rewardValue);
         break;
       case RewardType.Brains:
-        if (!handled && def.rewardValue) this.state.addBrains(def.rewardValue);
+        if (def.rewardValue) this.state.addBrains(def.rewardValue);
         break;
       case RewardType.Item:
         if (def.rewardItemKey) this.hooks.grantItem(def.rewardItemKey);

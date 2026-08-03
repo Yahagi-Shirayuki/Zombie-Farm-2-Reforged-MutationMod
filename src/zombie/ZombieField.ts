@@ -51,7 +51,11 @@ export class ZombieField {
   // result (the v3 server derives its species from the authoritative parents). Fall
   // back to casualty/grant if these aren't wired.
   onCombineStart: ((potId: string, parentAId: string, parentBId: string) => void) | null = null;
-  onCombineCollect: ((potId: string, unitId: string, key: string, mutation: number) => void) | null = null;
+  /** Must return false if the collection could NOT be handed to the server, so this
+   *  field can put the job back instead of destroying it (and its two parents) for a
+   *  result that will never be granted. */
+  onCombineCollect:
+    ((potId: string, unitId: string, key: string, mutation: number) => boolean) | null = null;
   private rosterLive = false;
   private combining = false; // suppresses addUnit's generic onGrant during a collect
   private harvesting = false; // suppresses onGrant while spawning a server-harvested crop
@@ -364,6 +368,7 @@ export class ZombieField {
     // Both parents are consumed. ONLINE: the server records them as a combine job
     // (onCombineStart) so it can validate the result at collect; fall back to a plain
     // casualty removal if the combine hooks aren't wired.
+    const reserved = this.rosterLive && !!this.onCombineStart;
     if (this.rosterLive) {
       if (this.onCombineStart) this.onCombineStart(targetPotId, idA, idB);
       else this.onCasualty?.([idA, idB]);
@@ -373,7 +378,8 @@ export class ZombieField {
       { id: b.id, key: b.key, mutation: b.mutation, color: this.colorOf(b), ...this.speciesTraits(b) },
       this.field.hasCombineMonolith(), // Clay Monolith → 15-min combine
       baseDurationMs,
-      this.state.level
+      this.state.level,
+      reserved
     );
   }
 
@@ -448,9 +454,17 @@ export class ZombieField {
     const pending = pot.pending ? { ...pot.pending } : null;
     const result = pot.collect();
     if (!result) return null;
+    // From here the job is CLEARED. Both parents were consumed when the combine
+    // started, so every remaining failure path must put the job back — abandoning it
+    // destroys two zombies and yields nothing.
+    const abandon = (): null => {
+      if (pending) pot.restore(pending);
+      this.collectedPots.delete(targetPotId);
+      return null;
+    };
     if (pending) this.collectedPots.set(targetPotId, pending);
     const def = this.resolve(result.key);
-    if (!def) return null;
+    if (!def) return abandon();
     const mutation = def.mutation ? addMutation(result.mutation, def.mutation) : result.mutation;
     const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutation, result.color);
     // A combine result is granted via onCombineCollect (server validates it against the
@@ -461,8 +475,18 @@ export class ZombieField {
     this.syncCount();
     this.combining = false;
     if (this.rosterLive) {
-      if (this.onCombineCollect) this.onCombineCollect(targetPotId, data.id, data.key, data.mutation);
-      else this.onGrant?.({ id: data.id, key: data.key, mutation: data.mutation, invasions: data.invasions });
+      if (this.onCombineCollect) {
+        // A refused hand-off means the server will never grant this child. Take the
+        // optimistic unit back out and restore the job so the player can collect it
+        // again once the client has re-learned the job's parents.
+        if (!this.onCombineCollect(targetPotId, data.id, data.key, data.mutation)) {
+          this.takeOwned(data.id);
+          this.syncCount();
+          return abandon();
+        }
+      } else {
+        this.onGrant?.({ id: data.id, key: data.key, mutation: data.mutation, invasions: data.invasions });
+      }
     }
     return data;
   }
@@ -610,12 +634,30 @@ export class ZombieField {
     }
   }
 
-  /** Reconstruct jobs whose authoritative parent reservations survived after the
-   * local presentation lost its Pot save. Recovered jobs are immediately ready:
-   * the server reservation proves the combine started, but does not own its timer. */
-  recoverServerPotReservations(roster: {
-    id: string; key: string; mutation: number; lockedByRaid?: string;
-  }[]): { potId: string; parentAId: string; parentBId: string; playerLevel: number }[] {
+  /** Reconcile local Pot jobs against the authoritative roster, in both directions.
+   *
+   * RECOVER — a surviving parent reservation (`lockedByRaid = "pot:<id>"`) proves a
+   * combine started, so rebuild the job even if the local presentation lost it.
+   * Recovered jobs are immediately ready: the reservation does not own the timer.
+   *
+   * RETIRE — the inverse, and the one whose absence used to destroy zombies. A job
+   * this client believes in but the server has no reservation for can never be
+   * collected, yet its two parent ids stay hidden from the presentation for as long as
+   * it exists (see the callers of `pendingPotParents`). The result was two zombies
+   * that were neither in the Pot nor anywhere else. Retiring the job releases them.
+   *
+   * `settled` must be true — with a command queued or in flight the roster predates
+   * this client's own work, and a start that has not been sent yet would look exactly
+   * like a job the server never got. Only jobs flagged `reserved` are retired, because
+   * an older job legitimately has no reservation and the server still honours it
+   * through its unreserved fallback. */
+  reconcileServerPots(
+    roster: { id: string; key: string; mutation: number; lockedByRaid?: string }[],
+    settled = false
+  ): {
+    live: { potId: string; parentAId: string; parentBId: string; playerLevel: number }[];
+    retired: string[];
+  } {
     const reserved = new Map<string, typeof roster>();
     for (const unit of roster) {
       if (!unit.lockedByRaid?.startsWith("pot:")) continue;
@@ -626,7 +668,7 @@ export class ZombieField {
       reserved.set(potId, group);
     }
 
-    const recovered: { potId: string; parentAId: string; parentBId: string; playerLevel: number }[] = [];
+    const live: { potId: string; parentAId: string; parentBId: string; playerLevel: number }[] = [];
     for (const [potId, parents] of reserved) {
       if (parents.length !== 2) continue;
       const [a, b] = parents;
@@ -643,18 +685,32 @@ export class ZombieField {
           maskA: a.mutation,
           maskB: b.mutation,
           playerLevel: this.state.level,
+          reserved: true,
           startedAt: 0,
           finishAt: 0,
         }));
       }
-      recovered.push({
+      live.push({
         potId,
         parentAId: a.id,
         parentBId: b.id,
         playerLevel: sameParents ? current.playerLevel ?? this.state.level : this.state.level,
       });
     }
-    return recovered;
+
+    const retired: string[] = [];
+    if (!settled) return { live, retired };
+    for (const [potId, pot] of this.pots) {
+      const job = pot.pending;
+      if (!job?.reserved || reserved.has(potId)) continue;
+      // Optimistically collected jobs are held in `collectedPots` for rollback and are
+      // legitimately absent from the roster while their command is in flight; `settled`
+      // already excludes that, but skip them explicitly rather than rely on timing.
+      if (this.collectedPots.has(potId)) continue;
+      pot.cancel();
+      retired.push(potId);
+    }
+    return { live, retired };
   }
   /** Fill fields absent from pre-special-rule saves from the authoritative catalog.
    * The current level is safe as the legacy start-level fallback because levels do

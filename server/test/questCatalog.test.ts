@@ -20,3 +20,16 @@ describe("questCatalog — mirror of quests.json rewards", () => {
     expect(questReward("")).toBeUndefined();
   });
 });
+
+describe("questCatalog — item reward keys", () => {
+  it("carries a rewardItemKey for every item reward that names an item", () => {
+    for (const [id, quest] of Object.entries(questRows as Record<string, {
+      rewardType: number; rewardItem?: string; rewardItemKey?: string;
+    }>)) {
+      if (quest.rewardType !== QUEST_REWARD.Item || !quest.rewardItem) continue;
+      // An empty key silently drops the reward: every grant path guards on the KEY.
+      expect(quest.rewardItemKey, `quests.json ${id} (${quest.rewardItem})`).toBe(quest.rewardItem);
+      expect(QUEST_REWARDS[id]?.rewardItemKey, `mirror ${id}`).toBe(quest.rewardItem);
+    }
+  });
+});

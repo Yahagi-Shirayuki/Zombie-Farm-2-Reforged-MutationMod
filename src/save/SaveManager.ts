@@ -470,7 +470,12 @@ export class SaveManager {
     const pots = Object.fromEntries(Object.entries(p.zombiePots ?? {}).filter(([, pot]) =>
       !!pot?.parentAId && !!pot.parentBId
     ));
-    const pot = p.zombiePot?.parentAId && p.zombiePot.parentBId ? p.zombiePot : undefined;
+    const legacyPot = p.zombiePot?.parentAId && p.zombiePot.parentBId ? p.zombiePot : undefined;
+    // The legacy single-pot field is only carried forward when there are no keyed jobs
+    // (see the fields below). Deriving `hidden` from the jobs actually KEPT matters:
+    // hiding the parents of a job that is then discarded strands those two zombies —
+    // no Pot holds them and nothing puts them back in the roster.
+    const pot = Object.keys(pots).length ? undefined : legacyPot;
     const hiddenPotParents = new Set(
       [...Object.values(pots), ...(pot ? [pot] : [])].flatMap((job) =>
         job.parentAId && job.parentBId ? [job.parentAId, job.parentBId] : []
@@ -505,7 +510,7 @@ export class SaveManager {
       objects,
       ownedZombies: roster,
       zombiePots: Object.keys(pots).length ? pots : undefined,
-      zombiePot: Object.keys(pots).length ? undefined : pot,
+      zombiePot: pot,
       storage: {
         itemCap: 8,
         items: Object.entries(boot.gameplay.storage.stored).map(([key, count]) => ({ key, count })),

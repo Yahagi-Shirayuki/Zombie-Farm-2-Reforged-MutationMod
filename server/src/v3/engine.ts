@@ -12,8 +12,9 @@ import zombieRows from "../../../public/assets/zombies.json";
 import farmerRows from "../../../public/assets/farmer.json";
 import petRows from "../../../public/assets/pets/catalog.json";
 import objectRows from "../../../public/assets/placeables.json";
-import { boostEcon, MAX_STACK } from "../boostCatalog";
+import { boostEcon, boostKeyForName, MAX_STACK } from "../boostCatalog";
 import { cropEcon } from "../catalog";
+import { dropEcon } from "../raidLootCatalog";
 import { levelForXp, levelUpBrains } from "../levels";
 import { objectBuyXp, objectEcon, objectRefund } from "../objectCatalog";
 import { planClaim } from "../storage";
@@ -300,11 +301,44 @@ function rewardHarvest(
   return { ok: true, event: { type: "kCropHarvestedNotification", subject: plantNames.get(key) ?? key } };
 }
 
+/** Where a quest's Item reward lands. Boost names stack into the boost inventory; a
+ * decor/placeable name lands in Received by NAME, exactly like a raid loot drop, so
+ * the existing `storage.claim` command turns it into an owned object.
+ *
+ * An unrecognised name grants nothing rather than inventing an item — several
+ * catalog quests still name original-game content this reimplementation has no
+ * entry for (see docs/mechanics/QUEST_ITEM_REWARDS.md). Trophy drops with no `tile`
+ * (e.g. Rusty Fragment) are still recorded: they are collectibles, not claimables. */
+function grantQuestItem(
+  name: string,
+  sinks: { inventory?: Record<string, number>; received?: Record<string, number> }
+): void {
+  if (!name) return;
+  const boostKey = boostKeyForName(name);
+  if (boostKey) {
+    if (!sinks.inventory) return;
+    sinks.inventory[boostKey] = Math.min(MAX_STACK, (sinks.inventory[boostKey] ?? 0) + 1);
+    return;
+  }
+  const drop = dropEcon(name);
+  // A currency drop is paid as currency by its own reward type, never as an item.
+  if (!drop || drop.brains || drop.gold) return;
+  if (!sinks.received) return;
+  sinks.received[name] = (sinks.received[name] ?? 0) + 1;
+}
+
 export function applyQuestEvents(
   balance: BalanceProjection,
   quests: QuestProjection,
   events: QuestEvent[],
-  options: { includeEpic?: boolean; epicQuestIds?: ReadonlySet<string> } = {}
+  options: {
+    includeEpic?: boolean;
+    epicQuestIds?: ReadonlySet<string>;
+    /** Item-reward sinks. Omitted (as in unit tests that only assert progress),
+     *  Item rewards stay dormant instead of being granted into nothing. */
+    inventory?: Record<string, number>;
+    storage?: { received: Record<string, number>; stored: Record<string, number> };
+  } = {}
 ): { questId: string; counts: number[]; completed: boolean }[] {
   if (!events.length) return [];
   const completed = new Set(quests.completed);
@@ -334,11 +368,18 @@ export function applyQuestEvents(
     if (!def.requirements.every((req, index) => (counts[index] ?? 0) >= req.countTotal)) continue;
     completed.add(id);
     changed.add(id);
-    // Currency rewards are catalog-authoritative. Unresolved item/zombie rewards are
-    // deliberately dormant until their keys map to an authoritative catalog.
+    // Currency and item rewards are catalog-authoritative. Zombie rewards remain
+    // dormant here: every type-5 quest is an epic-boss quest, and those resolve
+    // through epicQuestZombieReward so the unit lands in the authoritative roster.
     if (def.rewardType === QUEST_REWARD.Xp) balance.xp += def.rewardValue;
     else if (def.rewardType === QUEST_REWARD.Gold) balance.gold += def.rewardValue;
     else if (def.rewardType === QUEST_REWARD.Brains) balance.brains += def.rewardValue;
+    else if (def.rewardType === QUEST_REWARD.Item) {
+      grantQuestItem(def.rewardItemKey, {
+        inventory: options.inventory,
+        received: options.storage?.received,
+      });
+    }
   }
 
   quests.completed = [...completed];
@@ -909,7 +950,10 @@ export function applyCommandBatch(
     results.push(result);
     if (result.status === "rejected") keys.forEach((key) => failedResources.add(key));
   }
-  const questChanges = applyQuestEvents(state.balance, state.quests, events);
+  const questChanges = applyQuestEvents(state.balance, state.quests, events, {
+    inventory: state.inventory,
+    storage: state.storage,
+  });
   const levelBefore = levelForXp(balanceBefore.xp);
   const levelAfter = levelForXp(state.balance.xp);
   // The original game makes invasions immediately available after a level-up.

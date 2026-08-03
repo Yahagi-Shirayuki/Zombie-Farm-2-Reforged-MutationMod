@@ -243,8 +243,13 @@ export async function fulfillments(
 }
 
 /** Acknowledge one fulfilled order so it stops surfacing as uncollected. Pure
- * bookkeeping — no balances, roster, or account version involved — so plain
- * idempotent UPDATE semantics are enough. */
+ * bookkeeping — it moves no balance, roster, or account version, so plain idempotent
+ * UPDATE semantics are enough.
+ *
+ * It DOES echo the current balance. The brains were credited at settlement, by the
+ * other player's fulfil — an event this account's client never saw — so collecting is
+ * the moment it must learn the new total. Reading it here costs one extra SELECT and
+ * saves the client a whole second round-trip. */
 export async function collect(
   db: D1Database,
   accountId: string,
@@ -255,12 +260,25 @@ export async function collect(
   const updated = await db.prepare(`UPDATE black_market_orders SET acknowledged_at=?
     WHERE id=? AND creator_account_id=? AND status='FULFILLED' AND acknowledged_at IS NULL`)
     .bind(now, orderId, accountId).run();
-  if ((updated.meta.changes ?? 0) === 1) return { ok: true, alreadyCollected: false };
+  if ((updated.meta.changes ?? 0) === 1) {
+    return { ok: true, alreadyCollected: false, ...await balanceEcho(db, accountId) };
+  }
   const row = await orderRow(db, orderId);
   if (!row) return { status: 404, error: "order_not_found" };
   if (row.creator_account_id !== accountId) return { status: 403, error: "not_order_owner" };
   if (row.status !== "FULFILLED") return { status: 409, error: "order_not_fulfilled" };
-  return { ok: true, alreadyCollected: true };
+  return { ok: true, alreadyCollected: true, ...await balanceEcho(db, accountId) };
+}
+
+/** `{ balance }` for the account, or `{}` if the row is somehow missing — an absent
+ *  balance is the same "older Worker" shape the client already tolerates. */
+async function balanceEcho(
+  db: D1Database,
+  accountId: string
+): Promise<{ balance?: { gold: number; brains: number; xp: number } }> {
+  const balance = await db.prepare("SELECT gold, brains, xp FROM balances WHERE account_id=?")
+    .bind(accountId).first<{ gold: number; brains: number; xp: number }>();
+  return balance ? { balance } : {};
 }
 
 const HISTORY_PAGE = 100;

@@ -41,4 +41,5 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0030_black_market_specific_mutations.sql'),
   ('0031_account_last_online.sql'),
   ('0032_black_market_collection.sql'),
-  ('0033_black_market_history.sql');
+  ('0033_black_market_history.sql'),
+  ('0034_quest_45_popcorn_backfill.sql');

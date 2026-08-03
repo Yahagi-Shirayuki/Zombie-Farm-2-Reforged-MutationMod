@@ -185,3 +185,42 @@ loss — the local save keeps the player whole until writes resume.
    which are the only two files `vitest.integration.config.ts` actually runs. A spec added
    elsewhere under `test/integration/` will never execute.
 3. Note the event + response here if the procedure was missing or wrong.
+
+---
+
+## 6. Player-report forensics (read-only)
+
+Settle a "my stuff disappeared" report from the audit trail before theorising about
+client bugs. `audit_events_v3` records every durable command (`durableKinds` in
+`src/v3/db.ts`) with its full command JSON and `createdIds`, plus one
+`command_rejected` row per batch and a `zombie_created` row.
+
+```sh
+wrangler d1 execute zombiefarm --remote --json --command \
+  "SELECT id FROM accounts WHERE username LIKE '<name>'"
+wrangler d1 execute zombiefarm --remote --json --command \
+  "SELECT kind, detail_json, created_at FROM audit_events_v3 \
+   WHERE account_id='<id>' ORDER BY created_at DESC LIMIT 20"
+```
+
+Cross-check any `createdIds` against `roster_v3`; `locked_by_raid LIKE 'pot:%'`
+identifies units currently reserved inside a Zombie Pot. `--json` output is prefixed by
+a config warning banner, so slice from the first `[` before parsing.
+
+Note that a Zombie Pot combine returns ONE unit of slot 1's species: combining two of a
+kind gives back one that looks identical to its parents, which is reported as a loss far
+more often than it is one.
+
+### Verifying migration `0034_quest_45_popcorn_backfill`
+
+It is a plain `UPDATE` outside the command pipeline's batch guard, so a player mid-batch
+can be clipped. After applying, this must return 0; re-apply if it does not.
+
+```sh
+wrangler d1 execute zombiefarm --remote --json --command \
+  "SELECT COUNT(*) AS still_owed FROM gameplay_documents_v3 g \
+   WHERE json_extract(g.current_json,'\$.storage.received.\"Circus Popcorn\"') IS NULL \
+     AND EXISTS (SELECT 1 FROM quest_documents_v3 q, \
+                 json_each(json_extract(q.current_json,'\$.completed')) e \
+                 WHERE q.account_id=g.account_id AND e.value='45')"
+```
