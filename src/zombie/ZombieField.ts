@@ -7,6 +7,7 @@ import { GameAssets, ZombieDef } from "../assets";
 import { Field } from "../Field";
 import { GameState } from "../GameState";
 import { OwnedZombieSave, ZombiePotSave } from "../save/schema";
+import { findEscape } from "../pathfind";
 import { addMutation } from "./mutations";
 import { makeOwned, normalizeZombieName, OwnedZombie, RosterEntry } from "./types";
 import { ZombieUnit } from "./ZombieUnit";
@@ -81,8 +82,26 @@ export class ZombieField {
     private state: GameState,
     // Resolve a zombie type key -> its catalog def (stats/taxonomy).
     private resolve: (key: string) => ZombieDef | undefined,
-    private playFertilizeSfx: () => void = () => {}
+    private playFertilizeSfx: () => void = () => {},
+    /** The farmer's current tile — where a unit with no remembered spot of its
+     *  own turns up. See arrivalTile(). */
+    private farmerTile: () => { col: number; row: number } = () => ({ col: 0, row: 0 })
   ) {}
+
+  /** Where to put a zombie that has no position to restore: on the farmer, so the
+   *  player sees it arrive, snapped to the nearest walkable tile if he happens to
+   *  be standing in a doorway or under an object. The old fallback was (0,0) —
+   *  the field's top corner, usually buried under whatever is built there. */
+  private arrivalTile(): { col: number; row: number } {
+    const at = this.farmerTile();
+    const col = Math.round(at.col);
+    const row = Math.round(at.row);
+    if (this.field.isPassable(col, row)) return { col, row };
+    const out = findEscape({ col, row }, (c, r) => this.field.isPassable(c, r), {
+      inBounds: (c, r) => this.field.inBounds(c, r),
+    });
+    return out.length ? out[out.length - 1] : { col, row };
+  }
 
   /** Deployed (on-farm) unit count — what the army cap limits. */
   get count(): number {
@@ -412,6 +431,29 @@ export class ZombieField {
 
   combineReadyFor(potId: string): boolean {
     return this.potFor(potId).ready;
+  }
+
+  /** The finished zombie waiting in a ready pot, resolved through the catalog the
+   *  same way collectCombine does (species mutation folded in) so the panel can
+   *  show exactly what is about to be collected. Null while the pot is running,
+   *  empty, or holding a species this catalog no longer knows. */
+  combinePreview(potId?: string): {
+    key: string; name: string; mutation: number; color?: [number, number, number];
+  } | null {
+    // Same pot the HUD's status reads: the tapped one, else the running job.
+    const result = (potId ? this.potFor(potId) : this.combinePot).preview();
+    if (!result) return null;
+    const def = this.resolve(result.key);
+    if (!def) return null;
+    // Built through makeOwned exactly as collectCombine does, so the preview can
+    // never advertise a mutation the collected unit won't have — a headless child
+    // has its head/hair-eye bits stripped there (no carrot-eyed Party Zombie).
+    const child = makeOwned(
+      "preview", def, 0, 0, 0,
+      def.mutation ? addMutation(result.mutation, def.mutation) : result.mutation,
+      result.color
+    );
+    return { key: child.key, name: def.name, mutation: child.mutation, color: child.color };
   }
 
   /** Quest/server reward. `serverStored` is the authoritative placement online —
@@ -760,8 +802,11 @@ export class ZombieField {
     for (const s of saves) {
       const def = this.resolve(s.key);
       if (!def) continue;
-      const col = s.pos?.col ?? 0;
-      const row = s.pos?.row ?? 0;
+      // A save that predates stored positions has none to restore: start the unit
+      // by the farmer rather than in the top corner.
+      const home = s.pos ?? this.arrivalTile();
+      const col = home.col;
+      const row = home.row;
       // Pass s.mutation (may be undefined) so an old save without the field falls
       // back to the species' default bit; an explicit 0 stays unmutated.
       const data = makeOwned(s.id, def, col, row, s.invasions ?? 0, s.mutation, s.color, s.name);
@@ -819,7 +864,11 @@ export class ZombieField {
         if (source) this.takeOwned(source.id);
         const def = this.resolve(save.key);
         if (!def) continue;
-        const data = makeOwned(save.id, def, source?.col ?? 0, source?.row ?? 0, save.invasions, save.mutation, source?.color, source?.name);
+        // No local counterpart means the server is handing us a unit this client
+        // never placed — a Black Market purchase, most often. It has no position
+        // of its own, so it joins the player at the farmer instead of the corner.
+        const home = source ?? this.arrivalTile();
+        const data = makeOwned(save.id, def, home.col, home.row, save.invasions, save.mutation, source?.color, source?.name);
         if (save.stored) this.stored.push(data);
         else this.addUnit(data);
         // A server unit with no local counterpart arriving AFTER go-live is a real

@@ -122,6 +122,9 @@ export interface RaidProgressSave {
   lastRaidAt?: number;
   /** Chosen attack order (deployed zombie ids, first attacks first). */
   attackOrder?: string[];
+  /** OFFLINE brain pity: brain-eligible invasions settled since the last brain drop
+   *  (see src/raid/brainDrops.ts). Absent in saves written before it existed. */
+  brainDryStreak?: number;
 }
 
 // ---------------------------------------------------------------------------

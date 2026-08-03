@@ -202,7 +202,8 @@ export class SaveManager {
       storage: { itemCap: this.state.storageItemCap, items: this.state.storedItems, received: this.state.received },
       boosts: this.state.boostInv,
       quests: this.quests.serialize(),
-      raids: { completed: this.state.raidsCompleted, lastRaidAt: this.state.lastRaidAt, attackOrder: this.state.raidAttackOrder },
+      raids: { completed: this.state.raidsCompleted, lastRaidAt: this.state.lastRaidAt, attackOrder: this.state.raidAttackOrder,
+        brainDryStreak: this.state.brainDryStreak },
       epicBoss: this.state.epicBossRun ?? undefined,
       social: { friends: this.state.friends },
       tutorial: this.state.tutorial,
@@ -589,6 +590,7 @@ export class SaveManager {
     this.state.raidsCompleted = data.raids?.completed ?? {};
     this.state.lastRaidAt = data.raids?.lastRaidAt ?? 0;
     this.state.raidAttackOrder = data.raids?.attackOrder ?? [];
+    this.state.brainDryStreak = Math.max(0, Math.trunc(data.raids?.brainDryStreak ?? 0));
     this.state.epicBossRun = data.epicBoss ? { ...data.epicBoss, attackOrder: [...data.epicBoss.attackOrder] } : null;
     this.state.friends = (data.social?.friends ?? []).map((friend) => ({ ...friend, giftsSent: friend.giftsSent ?? 0 }));
     this.state.tutorial = data.tutorial;

@@ -1,5 +1,6 @@
-/** Player level at which ordinary Zombie Pot combinations can promote to a
- * hidden tier-5 special. */
+/** Player level at which ordinary Zombie Pot combinations can promote: to the
+ * body type's silver (tier-4) for a matched pair, or — rarely — to its hidden
+ * tier-5 special. */
 export const COMBINE_SPECIAL_LEVEL = 25;
 
 /** Chance that an eligible non-special pair promotes to its type's special. */
@@ -14,6 +15,24 @@ export const COMBINE_SPECIAL_BY_GROUP: Readonly<Record<string, string>> = {
   Regular: "ZombieActorRegularTier5",     // Zombotron
   Headless: "ZombieActorHeadlessTier5",   // Skull Head
 };
+
+/** The silver (tier-4) representative for each zombie body type — what a pair of
+ * identical parents breeds up into at COMBINE_SPECIAL_LEVEL+. */
+export const COMBINE_SILVER_BY_GROUP: Readonly<Record<string, string>> = {
+  Garden: "ZombieActorGardenTier4",       // Zombee
+  Large: "ZombieActorLargeTier4",         // Zombarian
+  Small: "ZombieActorSmallTier4",         // Imp Zombie
+  Female: "ZombieActorGirlTier4",         // Zombielocks
+  Regular: "ZombieActorRegularTier4",     // Robo Zombie
+  Headless: "ZombieActorHeadlessTier4",   // Party Zombie
+};
+
+/** Already at the silver tier? Such a parent is its own "silver of the correct
+ *  type", so a matched pair keeps it rather than flattening the mutant silvers
+ *  (Eyebiscus / Heartichoke) down to the plain one for their group. */
+function isSilverKey(key: string): boolean {
+  return /Tier4/.test(key);
+}
 
 export interface CombineSpeciesParent {
   key: string;
@@ -48,8 +67,10 @@ export function createCombineRandom(parentAId: string, parentBId: string): () =>
 }
 
 /**
- * Choose the Zombie Pot's output species. The result is null only for the
- * prohibited special + special pairing.
+ * Choose the Zombie Pot's output species: slot 1's, except that a matched pair
+ * at COMBINE_SPECIAL_LEVEL+ breeds up to its body type's silver, and any
+ * eligible pair can rarely promote past both to the tier-5 special. The result
+ * is null only for the prohibited special + special pairing.
  *
  * Event/reward-only eligibility is intentionally enforced by the caller because
  * that catalog flag is not part of a persisted combine job.
@@ -77,6 +98,13 @@ export function selectCombineSpecies(
     // slot-1 Flamehead can promote to Skull Head even though its base species is
     // otherwise guaranteed.
     return specialA;
+  }
+
+  // Matched pair (two ZomBrutes, two Flameheads, ...) breeds up to the body
+  // type's silver. The tier-5 roll above already had its chance to override.
+  if (playerLevel >= COMBINE_SPECIAL_LEVEL && a.key === b.key && !isSilverKey(a.key)) {
+    const silver = a.group ? COMBINE_SILVER_BY_GROUP[a.group] : undefined;
+    if (silver) return silver;
   }
 
   return a.key;

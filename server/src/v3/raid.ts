@@ -8,7 +8,7 @@ import type { RaidOutcome } from "../../../src/raid/types";
 import raidRows from "../../../public/assets/raids/raids.json";
 import { farmerCooldownMs } from "../../../src/farmer";
 import { buildPinnedV3Raid, verifyRaid, RAID_RULESET_VERSION, type PinnedRaidConfig, type RaidReplayInput } from "../raidVerifier";
-import { rollBrainDrop } from "../../../src/raid/brainDrops";
+import { rollBrainDrop, rollBrainDropWithPity, nextBrainDryStreak } from "../../../src/raid/brainDrops";
 import { rollRaidZombieDrop } from "../../../src/raid/zombieDrops";
 import objectRows from "../../../public/assets/placeables.json";
 import { shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
@@ -27,7 +27,7 @@ interface CoreState {
 }
 
 interface UnitRow { unit_id: string }
-interface RaidStateRow { last_started_at: number; progress_json: string }
+interface RaidStateRow { last_started_at: number; progress_json: string; brain_dry_streak: number }
 interface QuestRow { version: number; current_json: string }
 interface SessionRow {
   id: string;
@@ -72,9 +72,14 @@ const objectArmyCapacity = new Map(
  *
  *  It used to be DERIVED from the session id instead of stored, which made the amount a
  *  pure function of a value handed to the client at /raid/start: a player could compute
- *  the pending roll before choosing to fight. The pin costs a field and closes that. */
-function rollPinnedBrainDrop(recommendedLevel: number, hasBoss: boolean): number {
-  return hasBoss ? rollBrainDrop(recommendedLevel) : 0;
+ *  the pending roll before choosing to fight. The pin costs a field and closes that.
+ *
+ *  `dryStreak` is the account's brain-eligible invasions since its last brain
+ *  (raid_state_v3.brain_dry_streak): at the threshold the roll's zero is floored to one
+ *  brain. Silent by design — the pinned amount is the only thing that reaches the client,
+ *  and a floored drop looks exactly like a rolled one. */
+function rollPinnedBrainDrop(recommendedLevel: number, hasBoss: boolean, dryStreak: number): number {
+  return hasBoss ? rollBrainDropWithPity(recommendedLevel, dryStreak) : 0;
 }
 
 /** Brain drop for a session opened BEFORE the amount was pinned (legacy derivation, kept
@@ -132,7 +137,7 @@ export async function startRaid(
   const [balance, coreRow, raidState, live, liveEpic, roster] = await Promise.all([
     db.prepare("SELECT gold, brains, xp FROM balances WHERE account_id = ?").bind(accountId).first<{ gold: number; brains: number; xp: number }>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<{ current_json: string }>(),
-    db.prepare("SELECT last_started_at, progress_json FROM raid_state_v3 WHERE account_id = ?").bind(accountId).first<RaidStateRow>(),
+    db.prepare("SELECT last_started_at, progress_json, brain_dry_streak FROM raid_state_v3 WHERE account_id = ?").bind(accountId).first<RaidStateRow>(),
     db.prepare("SELECT id FROM raid_sessions_v3 WHERE account_id = ? AND finished_at IS NULL").bind(accountId).first<{ id: string }>(),
     db.prepare("SELECT id FROM epic_boss_sessions_v3 WHERE account_id = ? AND finished_at IS NULL").bind(accountId).first<{ id: string }>(),
     db.prepare(`SELECT unit_id FROM roster_v3 WHERE account_id = ? AND locked_by_raid IS NULL AND stored = 0
@@ -155,7 +160,11 @@ export async function startRaid(
   if (dice) core.inventory[DICE_KEY] -= dice;
   if (concentration) core.inventory[CONCENTRATION_KEY]--;
   const sessionId = crypto.randomUUID();
-  const brainDrop = rollPinnedBrainDrop(econ.recLevel, pinned.config.enemyUnits.some((unit) => unit.isBoss));
+  const brainDrop = rollPinnedBrainDrop(
+    econ.recLevel,
+    pinned.config.enemyUnits.some((unit) => unit.isBoss),
+    raidState.brain_dry_streak ?? 0
+  );
   const expiresAt = now + RAID_TTL_MS;
   const earliestFinishAt = now + EARLIEST_FINISH_MS;
   const statements: D1PreparedStatement[] = [
@@ -345,7 +354,7 @@ export async function finishRaid(
   const [balance, coreRow, raidState, questRow, casualtyRows, objectRow, rosterCounts] = await Promise.all([
     db.prepare("SELECT gold, brains, xp, claimed_level FROM balances WHERE account_id = ?").bind(accountId).first<{ gold: number; brains: number; xp: number; claimed_level: number }>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<{ current_json: string }>(),
-    db.prepare("SELECT last_started_at, progress_json FROM raid_state_v3 WHERE account_id = ?").bind(accountId).first<RaidStateRow>(),
+    db.prepare("SELECT last_started_at, progress_json, brain_dry_streak FROM raid_state_v3 WHERE account_id = ?").bind(accountId).first<RaidStateRow>(),
     db.prepare("SELECT version, current_json FROM quest_documents_v3 WHERE account_id = ?").bind(accountId).first<QuestRow>(),
     losses.length
       ? db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, created_at FROM roster_v3
@@ -371,8 +380,15 @@ export async function finishRaid(
   const pinnedBrains = Number.isFinite(boosts.brainDrop)
     ? Math.max(0, Math.trunc(boosts.brainDrop as number))
     : null;
+  const hasBoss = config.enemyUnits.some((unit) => unit.isBoss);
   const brains = !win ? 0
-    : pinnedBrains ?? legacyBrainDrop(session.id, econ.recLevel, config.enemyUnits.some((unit) => unit.isBoss));
+    : pinnedBrains ?? legacyBrainDrop(session.id, econ.recLevel, hasBoss);
+  // Advance the silent brain pity counter. Only a WIN against a boss was a real chance at
+  // a brain, so only that settles the streak — a loss (paid nothing) and a boss-less stage
+  // (can't roll brains) leave it exactly where it was.
+  const brainDryStreak = win && hasBoss
+    ? nextBrainDryStreak(raidState.brain_dry_streak ?? 0, brains)
+    : Math.max(0, Math.trunc(raidState.brain_dry_streak ?? 0));
   let loot: { name: string; kind: "gold" | "boost" | "item" } | null = null;
   let newZombie: { id: string; key: string; stored: boolean; received?: boolean } | null = null;
   let newZombieName: string | null = null;
@@ -462,9 +478,9 @@ export async function finishRaid(
     db.prepare(`UPDATE gameplay_documents_v3 SET current_json = ?, updated_at = ?
       WHERE account_id = ? AND ${guard}`)
       .bind(JSON.stringify(core), now, accountId, session.id, resultJson),
-    db.prepare(`UPDATE raid_state_v3 SET progress_json = ?, last_started_at = ?
+    db.prepare(`UPDATE raid_state_v3 SET progress_json = ?, last_started_at = ?, brain_dry_streak = ?
       WHERE account_id = ? AND ${guard}`)
-      .bind(JSON.stringify(progress), lastRaidAt, accountId, session.id, resultJson),
+      .bind(JSON.stringify(progress), lastRaidAt, brainDryStreak, accountId, session.id, resultJson),
     db.prepare(`UPDATE quest_documents_v3 SET version = version + 1, current_json = ?, updated_at = ?
       WHERE account_id = ? AND ${guard}`)
       .bind(JSON.stringify({ completed: quests.completed, progress: quests.progress }), now, accountId, session.id, resultJson),

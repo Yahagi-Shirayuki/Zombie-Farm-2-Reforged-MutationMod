@@ -19,7 +19,7 @@ import { levelForXp, levelUpBrains } from "../levels";
 import { objectBuyXp, objectEcon, objectRefund } from "../objectCatalog";
 import { planClaim } from "../storage";
 import { QUEST_DEFINITIONS, QUEST_REWARD } from "../questCatalog";
-import { zombieSell } from "../rosterCatalog";
+import { legalMutation, zombieSell } from "../rosterCatalog";
 import { climateCost, nextSize, sizeTier } from "../shopCatalog";
 import { zombieCropEcon } from "../zombieCropCatalog";
 import { farmerGold, farmerZombieGrowMs } from "../../../src/farmer";
@@ -803,8 +803,11 @@ function applyOne(
       }
       const id = options.id();
       // Mutation inheritance never invents a new bit. It carries one mutation per
-      // anatomical slot and deterministically resolves a same-slot conflict.
-      const mutation = combineMasks(a.mutation, b.mutation);
+      // anatomical slot and deterministically resolves a same-slot conflict. A
+      // headless child then drops the head/hair-eye bits it cannot wear — the client
+      // strips them in makeOwned, so storing them here would diverge (e.g. a
+      // carrot-eyed slot-2 parent giving a Party Zombie eyes it can't show).
+      const mutation = legalMutation(resultKey, combineMasks(a.mutation, b.mutation));
       state.roster = state.roster.filter((u) => u.id !== a.id && u.id !== b.id);
       const stored = marker ? false : state.roster.filter((unit) => !unit.stored).length >= capacity.army;
       state.roster.push({ id, key: resultKey, mutation, invasions: 0, stored });

@@ -80,6 +80,30 @@ describe("offline completion", () => {
   });
 });
 
+describe("ready-to-collect preview", () => {
+  it("hides the result until the combine is done", () => {
+    const { pot, tick } = makePot();
+    expect(pot.preview()).toBeNull(); // idle pot
+    pot.start(snap("A", { mutation: 1 }), snap("B", { mutation: 8 }), false);
+    tick(POT_DURATION_MS - 1);
+    expect(pot.preview()).toBeNull(); // still combining
+  });
+
+  it("shows the finished zombie without collecting it", () => {
+    const { pot, finish } = makePot();
+    pot.start(snap("A", { mutation: 1 }), snap("B", { mutation: 8 }), false);
+    finish(POT_DURATION_MS + 1);
+    expect(pot.preview()).toEqual({ key: "A", mutation: 9, color: undefined });
+    // Non-destructive: the job is still there, and previewing twice is stable.
+    expect(pot.busy).toBe(true);
+    expect(pot.preview()).toEqual(pot.preview());
+    // ...and it is exactly what collection hands over.
+    expect(pot.collect()).toEqual({ key: "A", mutation: 9, color: undefined });
+    expect(pot.busy).toBe(false);
+    expect(pot.preview()).toBeNull(); // back to an empty pot
+  });
+});
+
 describe("species selection (determineBaseClass)", () => {
   const collectKey = (a: ReturnType<typeof snap>, b: ReturnType<typeof snap>, rng = 0) => {
     const { pot, finish } = makePot(rng);

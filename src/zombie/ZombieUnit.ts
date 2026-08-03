@@ -11,7 +11,7 @@ import { GameAssets, ZombieModel } from "../assets";
 import { Field } from "../Field";
 import { depth, screenToGrid, tileCenter } from "../iso";
 import { setFootprint } from "../depthSort";
-import { findPath } from "../pathfind";
+import { findEscape, findPath } from "../pathfind";
 import { OwnedZombie } from "./types";
 import { slotOf } from "./mutations";
 import {
@@ -358,7 +358,9 @@ export class ZombieUnit {
     this.setEyesClosed(false);
     const g = screenToGrid(this.wx, this.wy);
     const from = { col: Math.round(g.col), row: Math.round(g.row) };
-    const cells = findPath(from, { col, row }, (c, r) => this.field.isPassable(c, r));
+    const cells = findPath(
+      from, { col, row }, (c, r) => this.field.isPassable(c, r), this.pathOpts()
+    );
     this.path = cells.length
       ? cells.map((c) => tileCenter(c.col, c.row))
       : [tileCenter(col, row)];
@@ -377,16 +379,33 @@ export class ZombieUnit {
   private repath() {
     const g = screenToGrid(this.wx, this.wy);
     const from = { col: Math.round(g.col), row: Math.round(g.row) };
+    // Standing inside a placed object — bought onto an occupied tile, or one
+    // dropped on top of where it stood. Every wander candidate within reach is
+    // blocked too, so walk out through the object first; wandering resumes from
+    // the open ground on the far side.
+    if (!this.field.isPassable(from.col, from.row)) {
+      const escape = findEscape(from, (c, r) => this.field.isPassable(c, r), this.pathOpts());
+      if (escape.length) {
+        this.path = escape.map((c) => tileCenter(c.col, c.row));
+        return;
+      }
+    }
     for (let tries = 0; tries < 12; tries++) {
       const col = Math.round(from.col + (Math.random() * 2 - 1) * WANDER_RADIUS);
       const row = Math.round(from.row + (Math.random() * 2 - 1) * WANDER_RADIUS);
       if (!this.field.isPassable(col, row)) continue;
-      const cells = findPath(from, { col, row }, (c, r) => this.field.isPassable(c, r));
+      const cells = findPath(
+        from, { col, row }, (c, r) => this.field.isPassable(c, r), this.pathOpts()
+      );
       if (cells.length) {
         this.path = cells.map((c) => tileCenter(c.col, c.row));
         return;
       }
     }
+  }
+
+  private pathOpts() {
+    return { inBounds: (c: number, r: number) => this.field.inBounds(c, r) };
   }
 
   private nextIdlePause(): number {

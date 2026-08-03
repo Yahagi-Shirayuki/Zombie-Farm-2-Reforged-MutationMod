@@ -679,6 +679,14 @@
 #hud .cmb-prog > i { display: block; height: 100%; width: 0;
   background: linear-gradient(#8ad14a, #5c9a2c); transition: width .25s linear; }
 #hud .cmb-note { text-align: center; font-size: 13px; color: #d8c9a0; }
+/* ready view: the finished zombie, alone, waiting to be collected */
+#hud .cmb-result { display: flex; flex-direction: column; align-items: center; gap: 8px;
+  border-radius: 12px; border: 2px solid #8ad14a; background: #34240f; padding: 16px 12px;
+  box-shadow: 0 0 0 3px rgba(138,209,74,.18); }
+#hud .cmb-result .cmb-rpor { width: 104px; height: 104px; border-radius: 12px;
+  background: #24160a center/contain no-repeat; box-shadow: inset 0 0 0 2px rgba(255,255,255,.06); }
+#hud .cmb-result .cmb-rn { font-size: 17px; font-weight: 800; text-align: center; overflow-wrap: anywhere; }
+#hud .cmb-result .cmb-rm { font-size: 12px; color: #c9a24a; text-align: center; overflow-wrap: anywhere; }
 
 /* ---- Object action popup (Move / Store / Sell) ---- */
 #hud .obj-actions { text-align: center; min-width: 240px; }
@@ -1114,6 +1122,8 @@
 #hud .bm-mutation-choices label { display: flex; flex-direction: row; align-items: center;
   gap: 5px; padding: 2px 0; font-size: 11px; }
 #hud .bm-mutation-choices input { margin: 0; }
+/* a mutation the selected species can never wear (headless: head + hair/eye) */
+#hud .bm-mutation-choices label.bm-choice-off { opacity: .42; cursor: not-allowed; }
 #hud .bm-empty { grid-column: 1/-1; text-align: center; padding: 30px 8px; color: #6e4a1e; font-style: italic; }
 #hud .bm-fulfillments { border: 2px solid #3f8a68; border-radius: 10px; background: #e0edc9;
   padding: 6px 8px; margin-bottom: 8px; flex: 0 0 auto; }

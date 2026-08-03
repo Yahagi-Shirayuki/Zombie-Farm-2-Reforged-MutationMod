@@ -1,0 +1,85 @@
+import { describe, expect, it, vi } from "vitest";
+import { ZombieField } from "./ZombieField";
+import type { ZombieDef } from "../assets";
+
+const DEF = {
+  key: "ZombieActorRegularTier1",
+  name: "Regular Zombie",
+  str: 1, dex: 1, con: 1, focus: 0, cost: 10,
+} as unknown as ZombieDef;
+
+// A field where the listed tiles are covered by an object, everything else walkable.
+function fieldStub(blocked: string[], w = 30, h = 30) {
+  const keys = new Set(blocked);
+  return {
+    inBounds: (c: number, r: number) => c >= 0 && r >= 0 && c < w && r < h,
+    isPassable: (c: number, r: number) =>
+      c >= 0 && r >= 0 && c < w && r < h && !keys.has(`${c},${r}`),
+  };
+}
+
+// A ZombieField with only the collaborators the arrival path touches. Units land
+// in `stored` so no real ZombieUnit (and no renderer) is built.
+function subject(field: unknown, farmerTile: () => { col: number; row: number }) {
+  const zombies = Object.create(ZombieField.prototype) as ZombieField;
+  Object.assign(zombies, {
+    units: [], stored: [], selected: null, harvesting: false, rosterLive: true,
+    field,
+    farmerTile,
+    resolve: (key: string) => (key === DEF.key ? DEF : undefined),
+    state: { setZombieCount: vi.fn(), recordZombieDiscovered: vi.fn() },
+  });
+  return zombies;
+}
+
+const purchase = { id: "srv-1", key: DEF.key, mutation: 0, invasions: 0, stored: true };
+
+describe("where a server-granted zombie turns up", () => {
+  it("places a purchase the client never spawned on the farmer's tile", () => {
+    const zombies = subject(fieldStub([]), () => ({ col: 12, row: 9 }));
+
+    zombies.reconcileServerRoster([purchase]);
+
+    const [unit] = zombies.roster();
+    expect({ col: unit.col, row: unit.row }).toEqual({ col: 12, row: 9 });
+  });
+
+  it("snaps to open ground when the farmer is standing under an object", () => {
+    // A 4x4 object over cols 10-13 / rows 8-11, with the farmer inside it.
+    const blocked: string[] = [];
+    for (let r = 8; r < 12; r++) for (let c = 10; c < 14; c++) blocked.push(`${c},${r}`);
+    const zombies = subject(fieldStub(blocked), () => ({ col: 12, row: 9 }));
+
+    zombies.reconcileServerRoster([purchase]);
+
+    const [unit] = zombies.roster();
+    expect(blocked).not.toContain(`${unit.col},${unit.row}`);
+    // Nearest way out of that footprint, not the old (0,0) corner.
+    expect(Math.abs(unit.col - 12)).toBeLessThanOrEqual(3);
+    expect(Math.abs(unit.row - 9)).toBeLessThanOrEqual(3);
+  });
+
+  it("keeps the remembered position of a unit the reconcile already knows", () => {
+    const zombies = subject(fieldStub([]), () => ({ col: 12, row: 9 }));
+    Object.assign(zombies, {
+      stored: [{ ...DEF, id: "srv-1", key: DEF.key, mutation: 0, invasions: 0, col: 3, row: 4 }],
+    });
+
+    // Same id, but a changed field forces the record to be rebuilt.
+    zombies.reconcileServerRoster([{ ...purchase, invasions: 2 }]);
+
+    const [unit] = zombies.roster();
+    expect({ col: unit.col, row: unit.row }).toEqual({ col: 3, row: 4 });
+  });
+
+  it("restores a legacy save with no stored position onto the farmer", () => {
+    const zombies = subject(fieldStub([]), () => ({ col: 7, row: 6 }));
+
+    zombies.restore([
+      { id: "z1", key: DEF.key, name: "Old One", invasions: 0, mutation: 0, stored: true },
+    ] as never);
+
+    const [unit] = zombies.roster();
+    expect({ col: unit.col, row: unit.row }).toEqual({ col: 7, row: 6 });
+  });
+});

@@ -63,9 +63,15 @@ export class WalkController {
       const cells = findPath(
         { col: Math.round(sg.col), row: Math.round(sg.row) },
         { col: goalC, row: goalR },
-        (c, r) => this.field.isPassable(c, r)
+        (c, r) => this.field.isPassable(c, r),
+        { inBounds: (c, r) => this.field.inBounds(c, r) }
       );
-      if (cells.length) {
+      // findPath may stop short of the goal when it only managed to walk the
+      // farmer out of an object he was standing in. His arrival callback does the
+      // work at the destination, so a partial route is no use here — take the
+      // direct line instead, as before.
+      const last = cells.length ? cells[cells.length - 1] : null;
+      if (last && last.col === goalC && last.row === goalR) {
         // Waypoints = intermediate tile centers, then the exact destination point.
         const pts = cells.slice(0, -1).map((c) => tileCenter(c.col, c.row));
         pts.push({ x, y });

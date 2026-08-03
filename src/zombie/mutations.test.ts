@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { combineMasks, SLOT_MASK } from "./mutations";
+import {
+  applyHeadlessRestriction, canReceive, combineMasks, HEADLESS_FORBIDDEN_MASK, SLOT_MASK,
+} from "./mutations";
 
 // Ground truth: combineZombieMutationFlag:withZombieFlag: / randMutation: — per slot,
 // non-conflicting bits carry over; a same-slot conflict keeps the HIGHER bit value
@@ -34,6 +36,22 @@ describe("combineMasks — deterministic per-slot inheritance", () => {
     const a = 1 | 8 | 1024; // head + arm + body
     const b = 256 | 4 | 2048; // head + hair_eye + neck
     expect(combineMasks(a, b)).toBe(combineMasks(b, a));
+  });
+});
+
+describe("headless restriction — no head or hair/eye mutations", () => {
+  it("covers exactly the head and hair/eye bits", () => {
+    expect(HEADLESS_FORBIDDEN_MASK).toBe(SLOT_MASK.head | SLOT_MASK.hair_eye);
+    // Pinned: server/migrations/0035_headless_mutation_repair.sql clears this literal.
+    expect(HEADLESS_FORBIDDEN_MASK).toBe(951);
+  });
+
+  it("drops the eye mutations a headless zombie cannot wear", () => {
+    // carrot/eyebiscus (4) and broccoli (128) are hair_eye; turnip (8) is an arm.
+    expect(applyHeadlessRestriction(4 | 8 | 128, true)).toBe(8);
+    expect(applyHeadlessRestriction(4 | 8 | 128, false)).toBe(4 | 8 | 128);
+    expect(canReceive(0, 4, true)).toBe(false); // never accepted in the first place
+    expect(canReceive(0, 8, true)).toBe(true);
   });
 });
 

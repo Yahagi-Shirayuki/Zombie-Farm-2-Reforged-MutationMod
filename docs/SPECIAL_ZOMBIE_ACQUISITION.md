@@ -97,7 +97,17 @@ At player level 25 and above, two **non-special** zombies whose body types both 
 a combining-only special have a 10% chance to promote the output to **slot 1's** tier-5
 special: Garden produces Zombutterfly, Large produces Zomviking, Small produces
 Zombricaun, Female produces Zombelly Dancer, Regular produces Zombotron, and Headless
-produces Skull Head. A failed roll returns slot 1's ordinary species.
+produces Skull Head. A failed roll falls through to the ordinary rules below.
+
+At player level 25 and above, a pair of the **same species** (two ZomBrutes, two
+Flameheads) breeds up to that body type's **Silver** (tier-4) unit: Garden produces
+Zombee, Large produces Zombarian, Small produces Imp Zombie, Female produces
+Zombielocks, Regular produces Robo Zombie, and Headless produces Party Zombie. The
+tier-5 promotion above takes precedence when it hits, so a matched Flamehead pair
+usually yields a Party Zombie and rarely a Skull Head. A matched pair that is already
+silver (including the mutant silvers Eyebiscus and Heartichoke) keeps its own species
+rather than flattening to its group's plain silver, and below level 25 a matched pair
+returns slot 1's species like any other combine.
 
 A named special is a permanent output type: it may only be placed in **slot 1** (the
 Pot refuses to start otherwise, client and server), and it is always inherited. Two

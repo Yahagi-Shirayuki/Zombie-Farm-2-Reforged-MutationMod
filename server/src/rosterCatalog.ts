@@ -6,6 +6,7 @@ import {
   type BlackMarketFilterOption,
 } from "../../src/blackMarketRules";
 import { OBJECTS } from "./objectCatalog";
+import { applyHeadlessRestriction } from "../../src/zombie/mutations";
 
 // Server-side zombie catalog. Mirrors the `cost` of each unit in
 // public/assets/zombies.json so the server can price a SELL exactly (sell = the
@@ -101,6 +102,25 @@ const REWARD_ONLY_ZOMBIES = new Set(Object.values(EPIC_QUEST_ZOMBIE_REWARDS));
 
 export function isRewardOnlyZombie(key: string): boolean {
   return REWARD_ONLY_ZOMBIES.has(key);
+}
+
+const HEADLESS_ZOMBIES = new Set(
+  (zombieRows as Array<{ key: string; group?: string }>)
+    .filter((zombie) => zombie.group === "Headless")
+    .map((zombie) => zombie.key)
+);
+
+/** A headless species has no head to mutate. */
+export function isHeadlessZombie(key: string): boolean {
+  return HEADLESS_ZOMBIES.has(key);
+}
+
+/** The mutation mask a unit of `key` may legally carry: head and hair/eye bits are
+ *  dropped for the headless family (a Party Zombie can't be carrot-eyed). The
+ *  server-side twin of the client's makeOwned, which scrubs the same bits wherever
+ *  a mask lands on a unit — both must agree or the child's stats diverge. */
+export function legalMutation(key: string, mask: number): number {
+  return applyHeadlessRestriction(mask, isHeadlessZombie(key));
 }
 
 const TRADABLE_ZOMBIES = new Set(

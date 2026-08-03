@@ -32,7 +32,7 @@ import { ABILITY_TIER, ABILITY_POOL } from "../zombie/traits";
 import { displayTotals } from "../zombie/statDisplay";
 import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidOutcome, RaidStage } from "./types";
 import { rollLootTier } from "./LootTable";
-import { rollBrainDrop } from "./brainDrops";
+import { rollBrainDropWithPity, nextBrainDryStreak } from "./brainDrops";
 import { orderPartyRoster } from "./partySelection";
 import { rollRaidZombieDrop } from "./zombieDrops";
 
@@ -175,6 +175,9 @@ export interface RaidSetup {
   concentration: boolean;
   /** Pre-rolled award used by both the boss-death visual and final settlement. */
   brainDrop: number;
+  /** Whether this fight could pay brains at all (it fields a boss). Only such an
+   *  invasion moves the silent dry-streak counter — see finishRaid. */
+  brainEligible: boolean;
 }
 
 export class RaidManager {
@@ -369,11 +372,13 @@ export class RaidManager {
       raidId: raid.id,
       playerLevel: this.state.level,
     });
+    // OFFLINE the roll carries the silent pity floor (a long brain-less streak guarantees
+    // the smallest stack). ONLINE the server rolls it — floor included — and pins it.
     const hasBoss = enemyUnits.some((unit) => unit.isBoss);
     const brainDrop = hasBoss
       ? opts.serverAuthorized
         ? Math.max(0, Math.floor(opts.serverBrainDrop ?? 0))
-        : rollBrainDrop(raid.recommendedLevel)
+        : rollBrainDropWithPity(raid.recommendedLevel, this.state.brainDryStreak)
       : 0;
     return {
       raid,
@@ -402,6 +407,7 @@ export class RaidManager {
       dice,
       concentration,
       brainDrop,
+      brainEligible: hasBoss,
     };
   }
 
@@ -566,7 +572,8 @@ export class RaidManager {
     outcome: RaidOutcome,
     dice = 0,
     serverRewards = false,
-    brainDrop = 0
+    brainDrop = 0,
+    brainEligible = brainDrop > 0
   ): RaidResultView {
     // Veterancy is earned by SURVIVING a battle — credit only the units still
     // standing (drives rank-up). A unit knocked out mid-fight, even in a win, gets
@@ -635,6 +642,10 @@ export class RaidManager {
         // applied by the server only after deterministic replay verifies the boss win.
         brains = brainDrop;
         if (brains > 0) this.state.addBrains(brains);
+        // Settle the silent pity streak on the fights that could actually pay: a boss win.
+        // A loss never reaches here, and a boss-less stage can't roll brains, so neither
+        // charges the counter towards a guarantee it wouldn't be able to honour.
+        if (brainEligible) this.state.brainDryStreak = nextBrainDryStreak(this.state.brainDryStreak, brains);
         const zombieDrop = rollRaidZombieDrop(raid.id, true, Math.random());
         if (zombieDrop) {
           this.hooks.grantZombie?.(zombieDrop.key);
@@ -727,6 +738,6 @@ export class RaidManager {
     const setup = this.beginRaid(raidId, partyIds, opts);
     if (!setup) return null;
     const outcome = resolveRaid(setup.playerUnits, setup.enemyUnits);
-    return this.finishRaid(setup.raid, setup.party, outcome, setup.dice, false, setup.brainDrop);
+    return this.finishRaid(setup.raid, setup.party, outcome, setup.dice, false, setup.brainDrop, setup.brainEligible);
   }
 }

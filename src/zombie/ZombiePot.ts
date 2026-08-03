@@ -11,8 +11,10 @@
 //     (flag 15) is a SEPARATE item that halves mutant-zombie GROW times, not this.)
 //   * SPECIES IS A DELIBERATE DIVERGENCE, not recovered behavior. Slot 1 determines
 //     the result species, so the player picks the outcome. Named Specials are
-//     restricted to slot 1 and are always inherited; level-25+ non-special pairs
-//     retain their 10% chance to promote the slot-1 body type to its tier-5 Special.
+//     restricted to slot 1 and are always inherited; a level-25+ pair of the SAME
+//     species breeds up to that body type's Silver (tier-4), and level-25+ non-special
+//     pairs retain their 10% chance to promote the slot-1 body type to its tier-5
+//     Special instead.
 //     The recovered `determineBaseClass` instead resolved species from the catalog —
 //     non-veggie parent wins, then higher combat tier, then a coin flip on a tie.
 //     See docs/SPECIAL_ZOMBIE_ACQUISITION.md. Everything else in this list IS
@@ -173,14 +175,33 @@ export class ZombiePot {
    * Returns null if no job or it isn't ready yet.
    */
   collect(): PotResult | null {
+    const result = this.preview();
+    if (!result) {
+      // A ready job whose species no longer resolves still has to leave the pot,
+      // matching the pre-preview behaviour (the caller restores it if it can).
+      if (this.job && this.ready) this.job = null;
+      return null;
+    }
+    this.job = null;
+    return result;
+  }
+
+  /**
+   * The finished zombie WITHOUT collecting it, so the panel can show what came
+   * out while it waits to be picked up. Deterministic — same job, same result —
+   * so the preview always matches what collect() hands over. Null unless a job
+   * is ready (a running combine keeps its result hidden).
+   */
+  preview(): PotResult | null {
     if (!this.job || !this.ready) return null;
     const j = this.job;
-    const mutation = combineMasks(j.maskA, j.maskB);
     const key = this.pickSpecies(j);
-    const color = mixColors(j.colorA, j.colorB);
-    this.job = null;
     if (!key) return null;
-    return { key, mutation, color };
+    return {
+      key,
+      mutation: combineMasks(j.maskA, j.maskB),
+      color: mixColors(j.colorA, j.colorB),
+    };
   }
 
   /**

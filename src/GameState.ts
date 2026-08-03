@@ -63,6 +63,11 @@ export class GameState {
   raidsCompleted: Record<string, number> = {};
   // Epoch ms of the last completed invasion (drives the between-raids cooldown).
   lastRaidAt = 0;
+  // OFFLINE brain pity: brain-eligible invasions (boss wins) settled since the last brain
+  // drop. The offline roll floors a zero once this reaches BRAIN_PITY_INVASIONS. ONLINE the
+  // server owns the equivalent counter (raid_state_v3.brain_dry_streak) and never sends it
+  // down, so this stays 0 while signed in. Nothing in the UI reads it — by design.
+  brainDryStreak = 0;
   // The player's chosen attack order (deployed zombie ids, first attacks first).
   // Persisted so the Army screen reopens with the same ordering after a raid.
   raidAttackOrder: string[] = [];

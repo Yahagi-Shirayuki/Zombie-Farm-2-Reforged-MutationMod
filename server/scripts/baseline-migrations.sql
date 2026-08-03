@@ -42,4 +42,6 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0031_account_last_online.sql'),
   ('0032_black_market_collection.sql'),
   ('0033_black_market_history.sql'),
-  ('0034_quest_45_popcorn_backfill.sql');
+  ('0034_quest_45_popcorn_backfill.sql'),
+  ('0035_headless_mutation_repair.sql'),
+  ('0036_raid_brain_pity.sql');

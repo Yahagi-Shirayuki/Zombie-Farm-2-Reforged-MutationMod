@@ -23,6 +23,16 @@ const rareCombinePairIds = (): [string, string] => {
   throw new Error("could not find deterministic rare-combine test pair");
 };
 
+/** The inverse: a pair whose stable roll misses the 10% tier-5 promotion, so the
+ *  ordinary rules (slot 1 / matched-pair silver) decide the species. */
+const commonCombinePairIds = (): [string, string] => {
+  for (let index = 0; index < 10_000; index++) {
+    const ids: [string, string] = [`common-a-${index}`, `common-b-${index}`];
+    if (createCombineRandom(...ids)() >= 0.10) return ids;
+  }
+  throw new Error("could not find deterministic common-combine test pair");
+};
+
 describe("protocol v3 command engine", () => {
   it("starts fresh players with the tutorial's one-brain balance", () => {
     expect(freshGameplayState().balance).toEqual({ gold: 400, brains: 1, xp: 0 });
@@ -1223,6 +1233,54 @@ describe("protocol v3 command engine", () => {
       { type: "roster.combine", parentAId, parentBId, playerLevel: 25 }
     ), { now: 1, id: () => "child" });
     expect(result.state.roster[0].key).toBe("ZombieActorHeadlessTier5");
+  });
+
+  it("breeds a matched level-25 pair up to its body type's silver", () => {
+    const state = freshGameplayState();
+    state.balance.xp = 20_500;
+    const [parentAId, parentBId] = commonCombinePairIds();
+    state.roster = [
+      { id: parentAId, key: "ZombieActorLargeTier3", mutation: 0, invasions: 0, stored: false },
+      { id: parentBId, key: "ZombieActorLargeTier3", mutation: 0, invasions: 0, stored: false },
+    ];
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", parentAId, parentBId, playerLevel: 25 }
+    ), { now: 1, id: () => "child" });
+    expect(result.state.roster).toContainEqual(expect.objectContaining({
+      id: "child", key: "ZombieActorLargeTier4",
+    }));
+  });
+
+  it("strips head and hair/eye mutations from a headless combine child", () => {
+    const state = freshGameplayState();
+    const [parentAId, parentBId] = commonCombinePairIds();
+    state.roster = [
+      // Slot 1 is headless, so the child is; slot 2 donates carrot eyes (4) it can't
+      // wear plus a turnip arm (8) it can.
+      { id: parentAId, key: "ZombieActorHeadlessTier3", mutation: 0, invasions: 0, stored: false },
+      { id: parentBId, key: "ZombieActorRegularTier1", mutation: 4 | 8, invasions: 0, stored: false },
+    ];
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", parentAId, parentBId }
+    ), { now: 1, id: () => "child" });
+    expect(result.state.roster).toContainEqual(expect.objectContaining({
+      id: "child", key: "ZombieActorHeadlessTier3", mutation: 8,
+    }));
+  });
+
+  it("returns the parent species for a matched pair below level 25", () => {
+    const state = freshGameplayState();
+    const [parentAId, parentBId] = commonCombinePairIds();
+    state.roster = [
+      { id: parentAId, key: "ZombieActorLargeTier3", mutation: 0, invasions: 0, stored: false },
+      { id: parentBId, key: "ZombieActorLargeTier3", mutation: 0, invasions: 0, stored: false },
+    ];
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", parentAId, parentBId, playerLevel: 24 }
+    ), { now: 1, id: () => "child" });
+    expect(result.state.roster).toContainEqual(expect.objectContaining({
+      id: "child", key: "ZombieActorLargeTier3",
+    }));
   });
 
   it("does not unlock the rare roll when the combine started below level 25", () => {

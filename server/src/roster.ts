@@ -3,7 +3,9 @@
 //
 // A `combine` is expressed as a `casualty` (the two parents) plus a `grant` (the
 // result), so there's no separate combine type here.
-import { isKnownZombie, isRewardOnlyZombie, MAX_MUTATION, MAX_INVASIONS } from "./rosterCatalog";
+import {
+  isKnownZombie, isRewardOnlyZombie, legalMutation, MAX_MUTATION, MAX_INVASIONS,
+} from "./rosterCatalog";
 
 // NOTE: there is deliberately no public `grant`. A grant would let a modified client
 // add any catalog zombie and then SELL it for server gold (money laundering). Units
@@ -49,7 +51,9 @@ export function validateUnit(
     ok: true,
     unitId,
     key,
-    mutation: boundInt(mutation, MAX_MUTATION),
+    // Headless species drop head/hair-eye bits here too, so a migrated save can't
+    // carry an illegal mask the client would refuse to render.
+    mutation: legalMutation(key, boundInt(mutation, MAX_MUTATION)),
     invasions: boundInt(invasions, MAX_INVASIONS),
   };
 }

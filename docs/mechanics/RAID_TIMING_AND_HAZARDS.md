@@ -141,6 +141,18 @@ recovered base rates with the live game's 2× invasion-brain multiplier applied
 *chances* are untouched. Tiers roll rarest-first, so a boss awards at most one stack. Online
 rolls are pinned at start and credited only after replay verifies that the boss was defeated.
 
+**Pity floor — a second deliberate divergence (no ZF2 equivalent).** At the top of the table
+a boss win pays brains only ~15% of the time, so ordinary bad luck can run very long. After
+`BRAIN_PITY_INVASIONS = 8` brain-eligible invasions with no brain, the next one's zero roll is
+floored to **1 brain** (`rollBrainDropWithPity` in `src/raid/brainDrops.ts`). Only a WIN against
+a boss counts toward the streak — a loss pays nothing, and the low-level McDonnell's stages
+field no boss, so neither can roll brains. The counter lives server-side in
+`raid_state_v3.brain_dry_streak` (offline: `GameState.brainDryStreak`, saved under `raids`).
+
+The floor is **deliberately invisible**: the counter is never sent to the client, and nothing
+in the UI names it, counts it out, or marks a floored drop differently from a rolled one. Keep
+it that way when touching the result panel or the fight's brain pickup.
+
 Gold: `getStandardGoldLootForStageLevel:` + `goldDistributionLevelCoefficient` = 2.3
 (win gold scales with level); wiki figures still used where exact source gold is unmapped.
 

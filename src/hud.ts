@@ -9,7 +9,9 @@ import type { FarmerBodyDef, FarmerCatalog, FarmerHeadDef, PetCatalog, PetDef } 
 import { EPIC_BOSS_FIGHT_BRAIN_COST, type EpicBossPayment } from "./epicBoss/tokens";
 import { AudioManager } from "./audio";
 import { RosterEntry } from "./zombie/types";
-import { ALL_BITS, MUTATIONS, mutationLabel, mutationBonus } from "./zombie/mutations";
+import {
+  ALL_BITS, HEADLESS_FORBIDDEN_MASK, MUTATIONS, mutationLabel, mutationBonus,
+} from "./zombie/mutations";
 import { QuestView } from "./quest/types";
 import type { RaidCardView, RaidPartyView, RaidResultView, RaidLaunchOpts, LootDrop } from "./raid/RaidManager";
 import type { ProfileIndex } from "./save/profiles";
@@ -19,6 +21,7 @@ import { type DayNightMode, type FarmBackground } from "./prefs";
 import { fmtCooldown, MCDONNELL_ID, VOUCHER_KEY } from "./raid/RaidCatalog";
 import { marketPageSize } from "./marketPageSize";
 import { veterancy } from "./zombie/traits";
+import { COMBINE_SPECIAL_LEVEL } from "./zombie/combineSpecies";
 import { BASE } from "./base";
 import { compareCropMarketOrder, compareItemMarketOrder } from "./marketOrder";
 import { fillPartySelection, orderPartyRoster } from "./raid/partySelection";
@@ -1287,6 +1290,11 @@ export class Hud {
         pending: {
           keyA: string; keyB: string; maskA: number; maskB: number;
           colorA?: [number, number, number]; colorB?: [number, number, number];
+        } | null;
+        /** The finished zombie, set only once the combine is ready to collect. */
+        result: {
+          key: string; name: string; mutation: number;
+          color?: [number, number, number];
         } | null;
       })
     | null = null;
@@ -2719,9 +2727,24 @@ export class Hud {
       (mask, input) => input.checked ? mask | Number(input.value) : mask,
       0
     );
+    // A headless zombie has no head to mutate, so a request for a head or hair/eye
+    // mutation on one could never be filled. Take those choices away instead of
+    // letting the player escrow brains on an impossible post.
+    const syncHeadlessMutationChoices = (selling: boolean) => {
+      const headless = !selling && cardFor(asset.value)?.zombie?.group === "Headless";
+      for (const input of mutationChecks) {
+        const forbidden = headless && (Number(input.value) & HEADLESS_FORBIDDEN_MASK) !== 0;
+        if (forbidden) input.checked = false;
+        input.disabled = forbidden;
+        const label = input.parentElement as HTMLLabelElement | null;
+        label?.classList.toggle("bm-choice-off", forbidden);
+        if (label) label.title = forbidden ? "A headless zombie can't wear this mutation." : "";
+      }
+    };
     const refreshComposeStatus = () => {
       const selling = composeKind.value === "SELL_ZOMBIE";
       const purchaseLock = selling ? null : purchaseLockFor(asset.value);
+      syncHeadlessMutationChoices(selling); // before the mask is read below
       const missingMutation = !selling && mutationMode.value === "specific" &&
         selectedMutationMask() === 0;
       mutationChoices.hidden = selling || mutationMode.value !== "specific";
@@ -3848,10 +3871,14 @@ export class Hud {
     let timer: number | undefined;
     const stop = () => { if (timer !== undefined) { clearInterval(timer); timer = undefined; } };
 
-    // --- BUSY / READY view: progress bar + Collect ---
+    // --- BUSY view: the two parents + a progress bar while the combine runs,
+    //     then the finished zombie on its own once it is ready to collect. ---
     const renderBusy = () => {
       const st = this.getPotStatus?.();
       if (!st || !st.busy) { stop(); renderIdle(); return; }
+      // Which of the two layouts is on screen. The combine can finish under the
+      // ticking timer, so tick() rebuilds when this flips.
+      const done = !!st.result;
       wrap.innerHTML = "";
       const head = document.createElement("div");
       head.className = "cmb-head";
@@ -3860,55 +3887,85 @@ export class Hud {
       t.className = "cmb-time";
       head.appendChild(t);
 
-      // Show the two parents going in (from the pending job's keys + masks).
-      const slots = document.createElement("div");
-      slots.className = "cmb-slots";
-      const parent = (key: string, mask: number, color?: [number, number, number]) => {
-        const d = document.createElement("div");
-        d.className = "cmb-slot filled";
-        const p = document.createElement("div");
-        p.className = "cmb-por";
-        showPortrait(p, key, mask, color);
-        const mut = document.createElement("div");
-        mut.className = "cmb-sm";
-        mut.textContent = mutationLabel(mask) || "no mutations";
-        d.append(p, mut);
-        return d;
-      };
-      const plus = document.createElement("div");
-      plus.className = "cmb-plus";
-      plus.textContent = "+";
-      slots.append(parent(st.pending!.keyA, st.pending!.maskA, st.pending!.colorA), plus,
-        parent(st.pending!.keyB, st.pending!.maskB, st.pending!.colorB));
-
-      const bar = document.createElement("div");
-      bar.className = "cmb-prog";
-      const fill = document.createElement("i");
-      bar.appendChild(fill);
       const note = document.createElement("div");
       note.className = "cmb-note";
 
+      // Latched across the async collect so the 250ms tick can't re-enable the
+      // button under an in-flight hand-off and collect the same job twice.
+      let collecting = false;
       const go = document.createElement("button");
       go.className = "cmb-go";
       go.textContent = "Collect";
       go.onclick = async () => {
+        if (collecting) return;
+        collecting = true;
         go.disabled = true;
         const name = await this.onCollectCombine?.();
-        if (name) { stop(); renderIdle(); }
+        // Collected: the pot is empty again, so go back to the pick-two view.
+        if (name) { stop(); renderIdle(); return; }
+        collecting = false;
       };
-      wrap.append(head, slots, bar, note, go);
+
+      let fill: HTMLElement | null = null;
+      if (done) {
+        // Nothing goes in the pot any more — show only what came out of it.
+        const result = document.createElement("div");
+        result.className = "cmb-result";
+        const p = document.createElement("div");
+        p.className = "cmb-rpor";
+        showPortrait(p, st.result!.key, st.result!.mutation, st.result!.color);
+        const n = document.createElement("div");
+        n.className = "cmb-rn";
+        n.textContent = st.result!.name;
+        const mut = document.createElement("div");
+        mut.className = "cmb-rm";
+        mut.textContent = mutationLabel(st.result!.mutation) || "no mutations";
+        result.append(p, n, mut);
+        wrap.append(head, result, note, go);
+      } else {
+        // Show the two parents going in (from the pending job's keys + masks).
+        const slots = document.createElement("div");
+        slots.className = "cmb-slots";
+        const parent = (key: string, mask: number, color?: [number, number, number]) => {
+          const d = document.createElement("div");
+          d.className = "cmb-slot filled";
+          const p = document.createElement("div");
+          p.className = "cmb-por";
+          showPortrait(p, key, mask, color);
+          const mut = document.createElement("div");
+          mut.className = "cmb-sm";
+          mut.textContent = mutationLabel(mask) || "no mutations";
+          d.append(p, mut);
+          return d;
+        };
+        const plus = document.createElement("div");
+        plus.className = "cmb-plus";
+        plus.textContent = "+";
+        slots.append(parent(st.pending!.keyA, st.pending!.maskA, st.pending!.colorA), plus,
+          parent(st.pending!.keyB, st.pending!.maskB, st.pending!.colorB));
+
+        const bar = document.createElement("div");
+        bar.className = "cmb-prog";
+        fill = document.createElement("i");
+        bar.appendChild(fill);
+        wrap.append(head, slots, bar, note, go);
+      }
 
       const tick = () => {
         const s = this.getPotStatus?.();
         if (!s || !s.busy) { stop(); renderIdle(); return; }
-        const prog = s.totalMs > 0 ? (s.totalMs - s.remainingMs) / s.totalMs : 1;
-        fill.style.width = `${Math.min(100, prog * 100)}%`;
+        // The combine finished while this view was up: swap in the result layout.
+        if (!!s.result !== done) { renderBusy(); return; }
+        if (fill) {
+          const prog = s.totalMs > 0 ? (s.totalMs - s.remainingMs) / s.totalMs : 1;
+          fill.style.width = `${Math.min(100, prog * 100)}%`;
+        }
         t.textContent = s.ready ? "Ready!" : fmt(s.remainingMs);
         note.textContent = s.ready
           ? "The combine is done — collect your new zombie."
           : `Combining… ${fmt(s.remainingMs)} left` + (s.monolith ? " (Monolith: ×½)" : "");
         if (s.ready && !s.canCollect) note.textContent = "Farm full — free a zombie slot to collect.";
-        go.disabled = !s.ready || !s.canCollect;
+        go.disabled = collecting || !s.ready || !s.canCollect;
       };
       tick();
       stop();
@@ -3969,7 +4026,7 @@ export class Hud {
 
       const ruleNote = document.createElement("div");
       ruleNote.className = "cmb-rule-note";
-      ruleNote.textContent = "Slot 1 sets the zombie type; mutations can come from both. Special zombies only fit Slot 1 and always remain the same species.";
+      ruleNote.textContent = `Slot 1 sets the zombie type; mutations can come from both. Two zombies of the same type breed up into a Silver zombie at level ${COMBINE_SPECIAL_LEVEL}+. Special zombies only fit Slot 1 and always remain the same species.`;
 
       const list = document.createElement("div");
       list.className = "cmb-list";

@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   ZOMBIE_COST,
   blackMarketPurchaseRequirement,
+  isHeadlessZombie,
   isKnownZombie,
   isTradableZombie,
+  legalMutation,
   zombieSell,
 } from "../src/rosterCatalog";
 import { validateUnit, cleanIds } from "../src/roster";
@@ -29,6 +31,17 @@ describe("rosterCatalog", () => {
     expect(isTradableZombie("ZombieActorBandido")).toBe(true);
     expect(isTradableZombie("ZombieActorMadeUp")).toBe(false);
   });
+  it("strips head and hair/eye mutations from headless species only", () => {
+    expect(isHeadlessZombie("ZombieActorHeadlessTier4")).toBe(true);
+    expect(isHeadlessZombie("ZombieActorBombie")).toBe(true); // a named headless special
+    expect(isHeadlessZombie("ZombieActorRegularTier1")).toBe(false);
+    // Party Zombie: carrot eyes (4) + broccoli hair (128) go, turnip arm (8) stays.
+    expect(legalMutation("ZombieActorHeadlessTier4", 4 | 8 | 128)).toBe(8);
+    expect(legalMutation("ZombieActorHeadlessTier4", 8 | 1024 | 2048)).toBe(8 | 1024 | 2048);
+    // Everyone else keeps the whole mask.
+    expect(legalMutation("ZombieActorRegularTier1", 4 | 8 | 128)).toBe(4 | 8 | 128);
+    expect(legalMutation("ZombieActorMadeUp", 4)).toBe(4); // unknown key: leave it alone
+  });
   it("defines Black Market gates independently of planting levels", () => {
     expect(blackMarketPurchaseRequirement("ZombieActorRegularTier1")).toEqual({});
     expect(blackMarketPurchaseRequirement("ZombieActorSmallTier2")).toEqual({ minLevel: 1 });
@@ -51,6 +64,9 @@ describe("validateUnit — validate a seeded unit", () => {
     expect(validateUnit("z9", "ZombieActorRegularTier1", 0, -5)).toMatchObject({ ok: true, invasions: 0 });
     // Absurd values are clamped, not rejected.
     expect(validateUnit("z9", "ZombieActorRegularTier1", 0, 1e12).ok).toBe(true);
+    // A seeded headless unit cannot bring head/hair-eye mutations across.
+    expect(validateUnit("z9", "ZombieActorHeadlessTier3", 4 | 8, 0))
+      .toMatchObject({ ok: true, mutation: 8 });
   });
   it("rejects a fabricated key or a missing unit id", () => {
     expect(validateUnit("z9", "ZombieActorSuperCheat")).toMatchObject({ ok: false, error: "bad_key" });

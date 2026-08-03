@@ -6,6 +6,7 @@ import { snapPlowOrigin } from "./plowSelection";
 // pixi.js lists ./lib/unsafe-eval/init.* under "sideEffects", so it survives bundling.
 import "pixi.js/unsafe-eval";
 import { loadAssets, ensureObjectTexture, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit } from "./assets";
+import { MAX_ZOMBIE_POTS, noRoomForAnother } from "./placementLimit";
 import { Field, CARROT, CropConfig, PLOT } from "./Field";
 import { Actor } from "./Actor";
 import { PetActor } from "./PetActor";
@@ -476,7 +477,8 @@ async function main() {
   // Owned zombies (Phase 3): grown from harvested zombie crops, they wander the
   // farm (routing around objects) and can be selected to inspect their stats.
   const zombies = new ZombieField(
-    assets, field, state, (key) => zombieDefs.get(key), () => audio.play("instaGrow")
+    assets, field, state, (key) => zombieDefs.get(key), () => audio.play("instaGrow"),
+    () => walk.tile // where a unit with no saved position of its own arrives
   );
   audio.setZombieBarkSource(() => zombies.randomBrainBark());
 
@@ -2289,6 +2291,9 @@ async function main() {
             colorA: pot.pending.colorA, colorB: pot.pending.colorB,
           }
         : null,
+      // Only set once the combine is done: the panel then shows the finished
+      // zombie in place of the two parents until it is collected.
+      result: zombies.combinePreview(activePotId ?? undefined),
     };
   };
   hud.canCombineZombie = (key, slot) => {
@@ -2320,10 +2325,10 @@ async function main() {
       questBus.post(QuestEvent.CombinerHarvested, z.typeName, 1, unitSubjectAliasesOf(z));
       const c = tileCenter(z.col, z.row);
       floatText(c.x, c.y, z.mutation ? `${z.name}!` : z.name);
-      // Slot 1 sets the species, so combining two of the same type gives back one of
-      // that same type: two zombies go in, one identical-looking one comes out. Without
-      // naming the result that reads as "both of mine disappeared" — say what was made
-      // and what it inherited, since the mutations are the only visible difference.
+      // Slot 1 sets the species, so most combines give back slot 1's own type (a matched
+      // pair below level 25 included): two zombies go in, one identical-looking one comes
+      // out. Without naming the result that reads as "both of mine disappeared" — say what
+      // was made and what it inherited, since the mutations are the only visible difference.
       const inherited = mutationLabel(z.mutation);
       hud.showToast(inherited
         ? `${z.name} the ${z.typeName} came out of the Zombie Pot with ${inherited}.`
@@ -3177,7 +3182,7 @@ async function main() {
         // That call also starts the server-owned cooldown and returns the authoritative
         // balance + lastRaidAt + the rolled drop, which the client reconciles.
         const online = onlineFarm && !!raidSessionId && !!economy;
-        const view = raids.finishRaid(setup.raid, setup.party, outcome, setup.dice, online, setup.brainDrop);
+        const view = raids.finishRaid(setup.raid, setup.party, outcome, setup.dice, online, setup.brainDrop, setup.brainEligible);
         const casualtyParty = setup.party.filter((zombie) => outcome.losses.includes(zombie.id));
         let settlementPromise: Promise<api.RaidFinishResult> | null = null;
         if (online) {
@@ -3454,23 +3459,17 @@ async function main() {
   hud.onRotateTool = rotateCurrent;
 
   // Place the selected object at the pointer tile if the footprint is valid,
-  // unlocked, and affordable. Stays in placement mode to place several.
+  // unlocked, and affordable. Stays in placement mode to place several — except
+  // for an item whose last allowed copy this was (see the exit below).
   const tryPlaceObject = (col: number, row: number) => {
     const def = hud.placing;
     if (!def) return;
     if (!retrieving && receiving === null && hud.objectLimitReached?.(def)) return;
-    if (def.storageSlots && field.shedId()) return; // only one shed on the farm
-    if (def.zombieStorage && field.mausoleumId()) return; // only one Mausoleum
-    if (def.zombiePatch && field.patchId()) return; // only one Zombie Patch
-    if (def.graveColor && field.hasGrave(def.graveColor)) return; // only one of each grave
-    if (def.plowFree && field.hasPlowFree()) return; // only one Plowing Monolith
-    if (def.fastWork && field.hasFastWork()) return; // only one Speed Monolith
-    if (def.mutantMonolith && field.hasMutantMonolith()) return; // only one Mutant Monolith
-    if (def.combineFast && field.hasCombineMonolith()) return; // only one Clay Monolith
-    if (def.zombiePot && field.zombiePotCount() >= 3) {
-      hud.showToast("You can place at most 3 Zombie Pots.");
+    if (def.zombiePot && field.zombiePotCount() >= MAX_ZOMBIE_POTS) {
+      hud.showToast(`You can place at most ${MAX_ZOMBIE_POTS} Zombie Pots.`);
       return;
     }
+    if (noRoomForAnother(def, field)) return;
     const { oc, or } = field.resolveObjectOrigin(def, col, row);
     if (!field.canPlaceObject(oc, or, def)) return;
     // Retrieving a stored item: already owned, so it's free and places just one.
@@ -3546,6 +3545,10 @@ async function main() {
     floatText(c.x, c.y, `-${cost}${useBrains ? "b" : "g"}`);
     showPurchaseXp(xp, c);
     questBus.post(QuestEvent.ItemBought, def.name);
+    // That may have been the last copy the player is allowed: a Blue Grave, a
+    // monolith, the third Zombie Pot. Leave placement mode rather than trail a
+    // ghost of something no further tap could ever put down.
+    if (hud.objectLimitReached?.(def) || noRoomForAnother(def, field)) hud.setPlacing(null);
   };
 
   // Move tool: first tap lifts the object under the pointer; next valid tap drops

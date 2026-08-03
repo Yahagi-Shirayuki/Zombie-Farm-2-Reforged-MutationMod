@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  COMBINE_SILVER_BY_GROUP,
   COMBINE_SPECIAL_BY_GROUP,
   createCombineRandom,
   selectCombineSpecies,
@@ -95,6 +96,43 @@ describe("Zombie Pot species selection", () => {
       .toBe(COMBINE_SPECIAL_BY_GROUP.Garden);
     expect(selectCombineSpecies(large, garden, 25, () => 0.05))
       .toBe(COMBINE_SPECIAL_BY_GROUP.Large);
+  });
+
+  it("breeds a matched pair up to its body type's silver", () => {
+    for (const [group, silverKey] of Object.entries(COMBINE_SILVER_BY_GROUP)) {
+      const same = parent(`${group}-same`, { group });
+      expect(selectCombineSpecies(same, { ...same }, 25, () => 0.99)).toBe(silverKey);
+    }
+    // Two Flameheads -> Party Zombie, the Headless silver.
+    const flamehead = parent("ZombieActorHeadlessTier3", { group: "Headless", tier: 3 });
+    expect(selectCombineSpecies(flamehead, { ...flamehead }, 45, () => 0.99))
+      .toBe("ZombieActorHeadlessTier4");
+  });
+
+  it("does not breed a matched pair up before level 25", () => {
+    const brute = parent("ZombieActorLargeTier3", { group: "Large", tier: 3 });
+    expect(selectCombineSpecies(brute, { ...brute }, 24, () => 0.99))
+      .toBe("ZombieActorLargeTier3");
+  });
+
+  it("lets the tier-5 promotion override a matched pair's silver", () => {
+    // Two Flameheads at level 25+ normally give a Party Zombie; the rare roll
+    // upgrades that to Skull Head.
+    const flamehead = parent("ZombieActorHeadlessTier3", { group: "Headless", tier: 3 });
+    expect(selectCombineSpecies(flamehead, { ...flamehead }, 25, () => 0.099))
+      .toBe(COMBINE_SPECIAL_BY_GROUP.Headless);
+  });
+
+  it("keeps a matched pair that is already silver", () => {
+    // Mutant silvers must not flatten to the plain silver for their group.
+    const eyebiscus = parent("ZombieActorRegularTier4Eyebiscus", { group: "Regular", tier: 4 });
+    expect(selectCombineSpecies(eyebiscus, { ...eyebiscus }, 45, () => 0.99))
+      .toBe("ZombieActorRegularTier4Eyebiscus");
+  });
+
+  it("keeps a matched special pair prohibited", () => {
+    const bombie = parent("ZombieActorBombie", { group: "Headless", isSpecial: true });
+    expect(selectCombineSpecies(bombie, { ...bombie }, 45, () => 0.99)).toBeNull();
   });
 
   it("uses the ordinary rules when the 10% roll fails", () => {

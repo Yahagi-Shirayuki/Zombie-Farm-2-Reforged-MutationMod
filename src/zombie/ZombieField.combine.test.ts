@@ -20,6 +20,7 @@ const legacyJob = (): ZombiePotSave => ({
 const renderableAssets = (key: string): GameAssets => ({
   zombieModels: { [key]: { color: [0, 0, 0], neck: { x: 0, y: 0 }, parts: [] } },
   zombiePartTex: {},
+  mutationParts: {}, // a mutated child looks up its extra parts here
   invasionBubble: undefined,
 } as unknown as GameAssets);
 
@@ -67,7 +68,11 @@ describe("ZombieField combine save migration", () => {
       key: "ordinary", name: "Regular Zombie", group: "Regular",
       className: "Green", classColor: "#00ff00", str: 1, dex: 1, con: 1, focus: 1,
     } as ZombieDef;
-    const field = { zombiePotId: () => "pot" } as unknown as Field;
+    // isPassable/inBounds: the save carries no position, so the unit arrives on
+    // the farmer's tile.
+    const field = {
+      zombiePotId: () => "pot", inBounds: () => true, isPassable: () => true,
+    } as unknown as Field;
     const zombies = new ZombieField({} as GameAssets, field, state, (key) => key === def.key ? def : undefined);
     zombies.restore([{ id: "z1", key: def.key, stored: true, name: "Original" }]);
 
@@ -93,6 +98,51 @@ describe("ZombieField combine save migration", () => {
 
     expect(zombies.collectCombine(0, 0, "pot")).toBeNull();
     expect(zombies.potFor("pot").pending).not.toBeNull();
+  });
+
+  it("previews the ready pot's finished zombie, and stops once it is collected", () => {
+    const state = new GameState();
+    const def = {
+      key: "ordinary", name: "Regular Zombie", group: "Regular", tier: 1, mutation: 0,
+      className: "Green", classColor: "#00ff00", str: 1, dex: 1, con: 1, focus: 1,
+    } as ZombieDef;
+    const field = renderableField();
+    const zombies = new ZombieField(renderableAssets(def.key), field, state, (key) => key === def.key ? def : undefined);
+    zombies.restorePots({ pot: {
+      parentAId: "a", parentBId: "b", keyA: def.key, keyB: def.key,
+      maskA: 1, maskB: 8, startedAt: 0, finishAt: Date.now() + 60_000,
+    } });
+
+    expect(zombies.combinePreview("pot")).toBeNull(); // still combining
+    zombies.finishCombineNow("pot");
+    expect(zombies.combinePreview("pot")).toMatchObject({
+      key: def.key, name: "Regular Zombie", mutation: 9,
+    });
+
+    expect(zombies.collectCombine(0, 0, "pot")).not.toBeNull();
+    expect(zombies.combinePreview("pot")).toBeNull(); // back to the normal pot view
+  });
+
+  it("never previews an eye mutation on a headless result", () => {
+    const state = new GameState();
+    const headless = {
+      key: "headless", name: "Party Zombie", group: "Headless", tier: 4, mutation: 0,
+      className: "Silver", classColor: "#cfd4dd", str: 1, dex: 1, con: 1, focus: 1,
+    } as ZombieDef;
+    const field = renderableField();
+    const zombies = new ZombieField(
+      renderableAssets(headless.key), field, state,
+      (key) => key === headless.key ? headless : undefined
+    );
+    // Slot 2 donates carrot eyes (4) plus a turnip arm (8); only the arm can land.
+    zombies.restorePots({ pot: {
+      parentAId: "a", parentBId: "b", keyA: headless.key, keyB: headless.key,
+      maskA: 0, maskB: 4 | 8, startedAt: 0, finishAt: 0,
+    } });
+
+    expect(zombies.combinePreview("pot")).toMatchObject({ key: headless.key, mutation: 8 });
+    // ...and the collected unit agrees with what the preview showed.
+    expect(zombies.collectCombine(0, 0, "pot")?.mutation).toBe(8);
   });
 
   it("puts the job back when the collection cannot be handed to the server", () => {

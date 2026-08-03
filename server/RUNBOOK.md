@@ -207,9 +207,10 @@ Cross-check any `createdIds` against `roster_v3`; `locked_by_raid LIKE 'pot:%'`
 identifies units currently reserved inside a Zombie Pot. `--json` output is prefixed by
 a config warning banner, so slice from the first `[` before parsing.
 
-Note that a Zombie Pot combine returns ONE unit of slot 1's species: combining two of a
-kind gives back one that looks identical to its parents, which is reported as a loss far
-more often than it is one.
+Note that a Zombie Pot combine returns ONE unit, usually of slot 1's species: below level
+25, combining two of a kind gives back one that looks identical to its parents, which is
+reported as a loss far more often than it is one. At level 25+ a matched pair comes back
+as that body type's silver (tier-4) instead, or rarely its tier-5 special.
 
 ### Verifying migration `0034_quest_45_popcorn_backfill`
 
@@ -224,3 +225,21 @@ wrangler d1 execute zombiefarm --remote --json --command \
                  json_each(json_extract(q.current_json,'\$.completed')) e \
                  WHERE q.account_id=g.account_id AND e.value='45')"
 ```
+
+### Verifying migration `0035_headless_mutation_repair`
+
+Clears head + hair/eye mutation bits (mask 951) from headless units, which the v3 combine
+used to store even though the client strips them on load. It is a plain `UPDATE` on
+`roster_v3` / `roster`, so a player mid-batch can be clipped — re-running is a safe no-op.
+After applying, this must return 0 for both tables.
+
+```sh
+wrangler d1 execute zombiefarm --remote --json --command \
+  "SELECT (SELECT COUNT(*) FROM roster_v3 WHERE (mutation & 951)!=0 \
+             AND zombie_key LIKE 'ZombieActorHeadless%') AS v3_bad, \
+          (SELECT COUNT(*) FROM roster WHERE (mutation & 951)!=0 \
+             AND key LIKE 'ZombieActorHeadless%') AS v2_bad"
+```
+
+Note the query's `LIKE` misses `ZombieActorBombie`, which the migration also repairs;
+check it separately if a count looks off.

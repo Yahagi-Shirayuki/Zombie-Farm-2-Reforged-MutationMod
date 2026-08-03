@@ -6,6 +6,7 @@ import type { RaidDef, EnemyStat, AttackDef } from "./raid/types";
 import { setZombieNames } from "./zombie/names";
 import { BASE } from "./base";
 import { fetchJson, mapConcurrent } from "./assetLoading";
+import { MAX_ZOMBIE_POTS } from "./placementLimit";
 
 export interface Tile {
   terrain: string;
@@ -294,7 +295,7 @@ export function multiplyObjectTint(a: number, b: number): number {
  * objects still count as owned. Undefined means no special purchase limit. */
 export function placeablePurchaseLimit(def: Pick<PlaceableDef, "key" | "category">): number | undefined {
   if (def.category !== "functional") return undefined;
-  return def.key === "zombieCombiner" ? 3 : 1;
+  return def.key === "zombieCombiner" ? MAX_ZOMBIE_POTS : 1;
 }
 
 export interface GameAssets {

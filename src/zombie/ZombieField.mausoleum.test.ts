@@ -17,6 +17,8 @@ const withMausoleum = (tier?: PlaceableDef, stored = 0) => {
     zombiePotId: () => "pot",
     mausoleumId: () => (tier ? "tomb" : null),
     objectDefOf: () => tier,
+    inBounds: () => true,
+    isPassable: () => true, // positionless saves arrive on the farmer's tile
   } as unknown as Field;
   const zombies = new ZombieField(
     {} as GameAssets, field, new GameState(), (key) => (key === def.key ? def : undefined)

@@ -524,7 +524,11 @@ CREATE TABLE IF NOT EXISTS raid_sessions_v3 (
 CREATE TABLE IF NOT EXISTS raid_state_v3 (
   account_id       TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
   last_started_at  INTEGER NOT NULL DEFAULT 0,
-  progress_json    TEXT NOT NULL DEFAULT '{}'
+  progress_json    TEXT NOT NULL DEFAULT '{}',
+  -- Brain-eligible invasions settled since this account's last brain drop. Server-only:
+  -- /raid/start floors a zero roll to one brain at the threshold, and the count is never
+  -- sent to the client (see src/raid/brainDrops.ts).
+  brain_dry_streak INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_raid_v3_live
   ON raid_sessions_v3(account_id) WHERE finished_at IS NULL;
