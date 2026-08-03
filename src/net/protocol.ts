@@ -280,7 +280,9 @@ export interface BlackMarketFulfillmentView {
   kind: BlackMarketOrderKind;
   zombieKey: string;
   mutated: boolean;
-  /** Escrowed unit details, present on fulfilled SELL_ZOMBIE posts. */
+  /** The traded unit's details — the sale's escrowed zombie, or the one delivered
+   * for a filled request. Absent only on trades that predate delivered-unit
+   * recording (migration 0033). */
   mutation?: number;
   invasions?: number;
   priceBrains: number;

@@ -456,8 +456,14 @@ export class SaveManager {
     const objects = boot.gameplay.objects.objects.flatMap((obj) => {
       if (obj.status !== "placed") return [];
       const layout = objectLayout.get(obj.instanceId);
-      return [{ id: obj.instanceId, key: obj.catalogKey, oc: layout?.oc ?? 0, or: layout?.or ?? 0,
-        rotation: layout?.rotation, readyAt: obj.readyAt == null
+      // A placed object with no saved position must NOT be fabricated onto (0,0). Every
+      // such object used to land on that one tile, where the first won and
+      // Field.restoreObjects silently discarded the rest — and the next presentation,
+      // written from the field, made the loss permanent. Leave it out here; the object
+      // reconcile treats it as an orphan and re-homes it onto a real free tile.
+      if (!layout) return [];
+      return [{ id: obj.instanceId, key: obj.catalogKey, oc: layout.oc, or: layout.or,
+        rotation: layout.rotation, readyAt: obj.readyAt == null
           ? undefined
           : serverTimestampToClient(obj.readyAt, boot.serverTime, clientTime) }];
     });

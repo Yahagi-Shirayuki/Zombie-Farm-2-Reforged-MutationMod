@@ -187,7 +187,7 @@ describe("SaveManager mode isolation", () => {
     );
     const save = (manager as any).fromBootstrap({
       serverTime: 10_000,
-      presentation: { data: {} },
+      presentation: { data: { objectLayout: [{ id: "tree-1", oc: 4, or: 5 }] } },
       gameplay: {
         balance: { gold: 0, brains: 0, xp: 0 }, zombieMax: 16, zombiePotBought: false,
         farmerHeads: [1], farmerHeadId: 1, ownedPets: [], activePet: null, penPets: [],
@@ -206,6 +206,40 @@ describe("SaveManager mode isolation", () => {
     expect(save.farm.plots[0].crop.plantedAt).toBe(19_000);
     expect(save.objects[0].readyAt).toBe(22_000);
     expect(save.raids.lastRaidAt).toBe(18_000);
+  });
+
+  // A placed object with no layout entry used to be fabricated onto (0,0). Several at
+  // once all landed on that one tile, Field.restoreObjects kept the first and silently
+  // dropped the rest, and the next presentation — written from the field — erased them
+  // for good. They must be left for the reconcile's re-home path instead.
+  it("omits placed objects that have no saved position instead of stacking them on 0,0", () => {
+    vi.spyOn(Date, "now").mockReturnValue(20_000);
+    const manager = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "online",
+    );
+    const save = (manager as any).fromBootstrap({
+      serverTime: 10_000,
+      presentation: { data: { objectLayout: [{ id: "placed-1", oc: 7, or: 9 }] } },
+      gameplay: {
+        balance: { gold: 0, brains: 0, xp: 0 }, zombieMax: 16, zombiePotBought: false,
+        farmerHeads: [1], farmerHeadId: 1, ownedPets: [], activePet: null, penPets: [],
+        farmSize: 30, climates: ["grass"], inventory: {},
+        storage: { stored: {}, received: {} }, farm: { plots: {} },
+        objects: { objects: [
+          { status: "placed", instanceId: "placed-1", catalogKey: "flowerBed" },
+          { status: "placed", instanceId: "no-layout-1", catalogKey: "flowerBed" },
+          { status: "placed", instanceId: "no-layout-2", catalogKey: "flowerBed" },
+        ] },
+        roster: [], quests: { progress: [], completed: [] },
+        raids: { progress: {}, lastRaidAt: 0 }, epicBoss: null, tutorialRewarded: false,
+      },
+      social: { friends: [] },
+    });
+
+    expect(save.objects).toEqual([
+      { id: "placed-1", key: "flowerBed", oc: 7, or: 9, rotation: undefined, readyAt: undefined },
+    ]);
   });
 
   it("keeps online farmer intentions in an account-scoped device journal", () => {

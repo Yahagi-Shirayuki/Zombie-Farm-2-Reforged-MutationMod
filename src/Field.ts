@@ -1049,6 +1049,17 @@ export class Field {
     );
   }
 
+  /** The first free origin for this def, scanned row-major from the farm's near corner,
+   *  or null when nothing on the farm can hold it. Object positions live only in the
+   *  presentation layout, so this is how the reconcile re-homes a server-owned object
+   *  whose saved position was lost — without it that object can never be drawn again. */
+  findFreeOrigin(def: PlaceableDef): { oc: number; or: number } | null {
+    for (let or = 0; or + def.tileH - 1 < this.h; or++)
+      for (let oc = 0; oc + def.tileW - 1 < this.w; oc++)
+        if (this.canPlaceObject(oc, or, def)) return { oc, or };
+    return null;
+  }
+
   // Place a new object (id auto-generated) or restore one (id given). For fruit
   // trees, `readyAt` sets when fruit ripens (defaults to now + growMs for a fresh
   // placement); a past readyAt means it's already ripe (offline growth). Returns

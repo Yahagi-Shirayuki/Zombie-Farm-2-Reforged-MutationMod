@@ -87,7 +87,15 @@ export class EconomyClient {
   onQuestChanges: ((changes: api.QuestChange[]) => void) | null = null;
   onCropFertilized: ((oc: number, or: number) => void) | null = null;
   onFarmState: ((farm: api.FarmState) => void) | null = null;
-  onObjectState: ((objects: BootstrapResponse["gameplay"]["objects"]["objects"], aliases: Record<string, string>, baseZombieMax: number, rejectedLocalIds: string[]) => void) | null = null;
+  /** Resolving `false` means a newer reconcile superseded this pass before it consumed
+   *  `aliases`, and this client must keep them for the next one. Any other result (or a
+   *  synchronous handler) means they were applied and may be dropped. */
+  onObjectState: ((
+    objects: BootstrapResponse["gameplay"]["objects"]["objects"],
+    aliases: Record<string, string>,
+    baseZombieMax: number,
+    rejectedLocalIds: string[],
+  ) => void | Promise<boolean | void>) | null = null;
   /** `settled` means this client has NOTHING outstanding — no queued command, none in
    *  flight — so the roster it just received is the whole truth and may be used to
    *  retire local state the server contradicts (see ZombieField.reconcileServerPots).
@@ -898,16 +906,31 @@ export class EconomyClient {
       this.state.syncStorage(gameplay.storage.received, gameplay.storage.stored);
       for (const crop of crops) if (crop.fertilized) this.onCropFertilized?.(crop.oc, crop.pr);
       this.onFarmState?.({ plowed, spent, crops });
-      this.onObjectState?.(
+      const objectAliasesForPass = { ...this.deferredObjectAliases, ...objectAliases };
+      const objectPass = this.onObjectState?.(
         gameplay.objects.objects.map((object) => object.readyAt === undefined ? object : ({
           ...object,
           readyAt: serverTimestampToClient(object.readyAt, serverTime, clientTime),
         })),
-        { ...this.deferredObjectAliases, ...objectAliases },
+        objectAliasesForPass,
         gameplay.zombieMax,
         [...new Set([...this.deferredRejectedObjectIds, ...rejectedObjectIds])]
       );
-      this.deferredObjectAliases = {};
+      // The reconcile is async. Clearing the alias map here — as this used to — discarded
+      // it the moment that reconcile awaited a texture, so a pass superseded mid-flight
+      // lost the only mapping from a server-minted instance id to the local object holding
+      // its position. Positions live nowhere else, so the object could never be drawn
+      // again: the player had paid for something permanently invisible. Retain each alias
+      // until a pass reports it consumed them, and drop only the keys actually delivered
+      // so an alias learned since this pass started survives.
+      void Promise.resolve(objectPass)
+        .then((consumed) => {
+          if (consumed === false) return;
+          for (const id of Object.keys(objectAliasesForPass)) delete this.deferredObjectAliases[id];
+        })
+        .catch(() => {});
+      // Rejections are applied before the reconcile's first await, so they are always
+      // consumed. Re-delivering one could delete a later object that reused the freed id.
       this.deferredRejectedObjectIds.clear();
       // Capture/display a pending revival before roster reconciliation removes the
       // casualties from the local presentation cache. The offer remains server-owned.

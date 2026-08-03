@@ -1121,6 +1121,10 @@
 #hud .bm-fulfill-title { font-size: 12px; font-weight: 800; color: #2c6248; margin-bottom: 6px; }
 #hud .bm-fulfill-rail { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
 #hud .bm-fulfill-rail .bm-card { flex: 0 0 220px; border-color: #3f8a68; }
+/* The traded unit's mutations, called out above the "who/when" prose so the card
+   says WHICH zombie changed hands, not just its species. */
+#hud .bm-fulfill-traits { font-size: 11px; font-weight: 800; color: #2c6248; }
+#hud .bm-fulfill-traits[hidden] { display: none; }
 /* The explicit display rules on toolbar/content outrank the UA [hidden] rule,
    so the History tab's visibility switching needs these. */
 #hud .bm-toolbar[hidden], #hud .bm-content[hidden] { display: none; }

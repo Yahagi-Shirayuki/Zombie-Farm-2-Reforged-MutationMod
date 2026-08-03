@@ -615,7 +615,7 @@ describe("v3 raid dependency ids", () => {
     economy.onPetState = () => calls.push("pet");
     economy.onQuestState = () => calls.push("quest");
     economy.onFarmState = () => calls.push("farm");
-    economy.onObjectState = () => calls.push("objects");
+    economy.onObjectState = () => { calls.push("objects"); };
     economy.onRosterState = () => calls.push("roster");
     economy.onEpicBossState = () => calls.push("epic");
     const gameplay = {
@@ -811,6 +811,71 @@ describe("v3 raid dependency ids", () => {
     (economy as any).adoptCommandResponse(response);
     expect(rejected).toBe("insufficient");
     expect(rejectedObjects).toEqual(["o7"]);
+  });
+
+  // An object bought under a local id the server already owns comes back under a
+  // server-minted instance id, and the alias is the ONLY link back to the local object
+  // holding its position. Positions live nowhere else, so dropping the alias while the
+  // reconcile was still using it left the player paying for an object that could never
+  // be drawn again.
+  describe("object alias retention", () => {
+    const responseWith = (results: CommandBatchResponse["results"]): CommandBatchResponse => ({
+      protocolVersion: 3, batchId: "alias", accountVersion: 1, writerGeneration: 1, serverTime: 1,
+      results,
+      gameplay: {
+        balance: { gold: 0, brains: 0, xp: 0 }, farm: { version: 0, plots: {} },
+        objects: { version: 0, objects: [] }, quests: { version: 0, completed: [], progress: [] },
+        inventory: {}, storage: { received: {}, stored: {} }, roster: [], farmSize: 30,
+        climates: ["grass"], farmerHeads: [], farmerHeadId: 1, ownedPets: [], activePet: null,
+        penPets: [], zombieMax: 16, tutorialRewarded: false, raids: { progress: {}, lastRaidAt: 0 },
+      },
+      farmVersionBefore: 0, farmVersionAfter: 0, netDelta: { gold: 0, brains: 0, xp: 0 },
+      questChanges: [], createdZombieIds: [],
+    } as any);
+
+    /** Queue an object.buy whose server response renames `o24` to a UUID. */
+    const withRenamedBuy = (economy: EconomyClient) => {
+      (economy as any).commandsBySequence.set(4, {
+        type: "object.buy", catalogKey: "flowerBed", clientInstanceId: "o24",
+      });
+      (economy as any).optimistic.set(4, { gold: -50, brains: 0, xp: 0, localObjectId: "o24" });
+      return responseWith([{ sequence: 4, status: "applied", createdIds: ["uuid-1"] }]);
+    };
+
+    it("redelivers the alias when a reconcile pass is superseded before consuming it", async () => {
+      const economy = new EconomyClient(new GameState(), "alias-retain");
+      const seen: Record<string, string>[] = [];
+      // The real handler awaits a texture, then bails because a newer pass bumped its
+      // generation. It reports that by resolving false.
+      economy.onObjectState = async (_objects, aliases) => {
+        seen.push(aliases);
+        return false;
+      };
+      (economy as any).adoptCommandResponse(withRenamedBuy(economy));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      (economy as any).adoptCommandResponse(responseWith([]));
+      expect(seen).toHaveLength(2);
+      expect(seen[0]).toEqual({ "uuid-1": "o24" });
+      expect(seen[1]).toEqual({ "uuid-1": "o24" }); // survived the superseded pass
+    });
+
+    it("drops the alias once a pass reports it consumed it", async () => {
+      const economy = new EconomyClient(new GameState(), "alias-consume");
+      const seen: Record<string, string>[] = [];
+      economy.onObjectState = async (_objects, aliases) => {
+        seen.push(aliases);
+        return true;
+      };
+      (economy as any).adoptCommandResponse(withRenamedBuy(economy));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      (economy as any).adoptCommandResponse(responseWith([]));
+      expect(seen[0]).toEqual({ "uuid-1": "o24" });
+      expect(seen[1]).toEqual({});
+    });
   });
 
   it("translates roster status, sell, and restored combine parent ids", () => {

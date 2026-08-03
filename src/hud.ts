@@ -125,7 +125,7 @@ function functionalDescription(def: PlaceableDef): string | undefined {
   if (def.zombiePot)
     return "Combine two of your zombies into a brand-new one. Only one is needed; the first costs gold, later Pots cost brains.";
   if (def.zombieStorage)
-    return "Stores your spare zombies off the field with no limit, freeing up graves to plant more.";
+    return `Stores up to ${def.zombieSlots ?? 0} spare zombies off the field, freeing up graves to plant more. Upgrade it for five more slots.`;
   if (def.zombiePatch) return "A cosy spot where your idle zombies gather to relax and nap.";
   if (def.graveColor)
     return `Unlocks planting ${def.graveColor}-class zombies — you must own this grave before you can grow them.`;
@@ -1213,8 +1213,14 @@ export class Hud {
   onZombieDeploy: ((id: string) => void | Promise<void>) | null = null;
   /** Whether a Mausoleum exists to store zombies in (gates the Store action). */
   canStoreZombies: (() => boolean) | null = null;
-  /** Mausoleum storage-slot capacity (shown as fixed slots; default 15). */
-  mausoleumCap = 15;
+  /** Mausoleum storage-slot capacity (shown as fixed slots). The placed building's
+   *  tier decides it, so it is read on every render, not cached. 0 = none placed. */
+  getMausoleumCap: (() => number) | null = null;
+  /** The next Mausoleum tier the placed building can be upgraded to, or null when
+   *  none is placed / it is already the top tier. */
+  getMausoleumUpgrade: (() => { name: string; cost: number; brains: boolean; slots: number } | null) | null = null;
+  /** Pay for and apply that upgrade (charges, swaps the building in place). */
+  onMausoleumUpgrade: (() => void | Promise<void>) | null = null;
   /** Whether the farm has a free army slot (gates the Deploy action). */
   canDeployZombie: (() => boolean) | null = null;
   /** Select a deployed zombie and center the camera on it. */
@@ -1572,11 +1578,22 @@ export class Hud {
         if (sub === "Functional") {
           const cur = this.getShedSlots ? this.getShedSlots() : 0;
           const sheds = cards.filter((c) => c.def.storageSlots);
-          const others = cards.filter((c) => !c.def.storageSlots);
+          const others = cards.filter((c) => !c.def.storageSlots && !c.def.zombieStorage);
           const next = sheds
             .filter((c) => (c.def.storageSlots ?? 0) > cur)
             .sort((a, b) => (a.def.storageSlots ?? 0) - (b.def.storageSlots ?? 0))[0];
-          cards = next ? [next, ...others] : others;
+          // The Mausoleum upgrades the same way: with one placed, offer only the next
+          // tier above its capacity; with none placed, only the base building (never
+          // an upgrade tier, which has nothing to upgrade).
+          const capacity = this.getMausoleumCap ? this.getMausoleumCap() : 0;
+          const base = Math.min(...this.objectCards
+            .filter((c) => c.def.zombieStorage)
+            .map((c) => c.def.zombieSlots ?? 0));
+          const nextTomb = cards
+            .filter((c) => c.def.zombieStorage && (c.def.zombieSlots ?? 0) > capacity &&
+              (capacity > 0 || c.def.zombieSlots === base))
+            .sort((a, b) => (a.def.zombieSlots ?? 0) - (b.def.zombieSlots ?? 0))[0];
+          cards = [...(next ? [next] : []), ...(nextTomb ? [nextTomb] : []), ...others];
         }
         return cards.map((c) => {
           // The Zombie Pot flips to a flat 3 brains once the player has owned one
@@ -2762,8 +2779,12 @@ export class Hud {
         card.className = "bm-card bm-fulfilled";
         const portrait = document.createElement("img");
         portrait.src = this.zombiePortraitOf?.(entry.zombieKey) ?? cardFor(entry.zombieKey)?.portrait ?? "";
-        if (sold && this.zombieMutationPortraitOf) {
-          void this.zombieMutationPortraitOf(entry.zombieKey, entry.mutation ?? 0)
+        // Both directions describe one concrete unit — the sale's escrowed zombie, or
+        // the one the fulfiller handed over for a request — so both get that unit's
+        // mutated portrait. Trades too old to have recorded it keep the neutral
+        // species portrait and say nothing about mutations.
+        if (entry.mutation !== undefined && this.zombieMutationPortraitOf) {
+          void this.zombieMutationPortraitOf(entry.zombieKey, entry.mutation)
             .then((source) => { if (card.isConnected) portrait.src = source; })
             .catch(() => { /* retain the static species portrait */ });
         }
@@ -2771,6 +2792,15 @@ export class Hud {
         const name = document.createElement("div");
         name.className = "bm-name";
         name.textContent = sold ? `${zombieName} — Sold!` : `${zombieName} — Request filled!`;
+        const traits = document.createElement("div");
+        traits.className = "bm-fulfill-traits";
+        if (entry.mutation !== undefined) {
+          const bits = [mutationLabel(entry.mutation) || "No mutations"];
+          if (entry.invasions) bits.push(veterancy(entry.invasions));
+          traits.textContent = bits.join(" · ");
+        } else {
+          traits.hidden = true;
+        }
         const meta = document.createElement("div");
         meta.className = "bm-meta";
         const when = new Date(entry.fulfilledAt).toLocaleDateString();
@@ -2783,7 +2813,7 @@ export class Hud {
         const brain = document.createElement("img");
         brain.src = UI("topbar_brain_icon.png");
         cost.appendChild(brain);
-        body.append(name, meta, cost);
+        body.append(name, traits, meta, cost);
         const action = document.createElement("button");
         action.textContent = "Collect";
         action.onclick = async () => {
@@ -3664,13 +3694,15 @@ export class Hud {
     head.className = "zr-head";
     const grid = document.createElement("div");
     grid.className = "zr-grid";
-    wrap.append(head, grid);
+    const foot = document.createElement("div");
+    foot.className = "zbtns";
+    wrap.append(head, grid, foot);
     panel.append(wrap);
 
     const render = () => {
       const roster = this.getRoster ? this.getRoster() : [];
       const stored = roster.filter((r) => r.stored);
-      const cap = this.mausoleumCap;
+      const cap = this.getMausoleumCap?.() ?? 0;
       head.innerHTML = "";
       const title = document.createElement("h2");
       title.textContent = "Mausoleum";
@@ -3696,6 +3728,23 @@ export class Hud {
           slot.onclick = () => this.pickZombieToStore(render);
           grid.appendChild(slot);
         }
+      }
+
+      // Upgrade the building in place: each tier adds five slots for brains.
+      foot.innerHTML = "";
+      const next = this.getMausoleumUpgrade?.() ?? null;
+      if (next) {
+        const button = document.createElement("button");
+        button.className = "zbtn deploy";
+        button.textContent = `Upgrade to ${next.slots} slots — ${next.cost}${next.brains ? "b" : "g"}`;
+        button.onclick = async () => {
+          button.disabled = true;
+          if (await this.confirmPurchase(next.name, next.cost, next.brains)) {
+            await this.onMausoleumUpgrade?.();
+          }
+          render();
+        };
+        foot.appendChild(button);
       }
     };
     render();

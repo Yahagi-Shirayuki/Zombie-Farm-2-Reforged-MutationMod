@@ -374,30 +374,49 @@ describe("Black Market", () => {
   it("surfaces a filled request to the requester with the fulfiller's delivery", async () => {
     const requester = await signIn(uniqueSub("market-collect-requester"));
     const filler = await signIn(uniqueSub("market-collect-filler"));
-    await grantBalance(requester, { brains: 3 });
-    const unitId = `market-collect-offer-${crypto.randomUUID()}`;
-    await grantRoster(filler, [{ id: unitId, key: "ZombieActorRegularTier1" }]);
+    await grantBalance(requester, { brains: 9 });
+    const plainUnitId = `market-collect-offer-${crypto.randomUUID()}`;
+    const mutatedUnitId = `market-collect-mutant-${crypto.randomUUID()}`;
+    await grantRoster(filler, [
+      { id: plainUnitId, key: "ZombieActorRegularTier1" },
+      { id: mutatedUnitId, key: "ZombieActorRegularTier1", mutation: 8 | 128, invasions: 3 },
+    ]);
 
-    const requesterBefore = await bootstrap(requester);
-    const created = await call<any>("POST", "/black-market/orders", requester.token, {
-      operationId: operation("collect-request"), expectedAccountVersion: requesterBefore.accountVersion,
-      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated: false, priceBrains: 3,
-    });
-    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    // The delivered unit — not the request's wording — is what the requester must be
+    // told about, so the collect notice carries that unit's mutations either way.
+    const fillRequest = async (label: string, mutated: boolean, unitId: string, priceBrains: number) => {
+      const requesterBefore = await bootstrap(requester);
+      const created = await call<any>("POST", "/black-market/orders", requester.token, {
+        operationId: operation(`collect-request-${label}`),
+        expectedAccountVersion: requesterBefore.accountVersion,
+        kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated, priceBrains,
+      });
+      expect(created.status, JSON.stringify(created.body)).toBe(200);
+      const fillerBefore = await bootstrap(filler);
+      const fulfilled = await call<any>("POST", `/black-market/orders/${created.body.order.id}/fulfill`, filler.token, {
+        operationId: operation(`collect-fill-${label}`),
+        expectedAccountVersion: fillerBefore.accountVersion, unitId,
+      });
+      expect(fulfilled.status, JSON.stringify(fulfilled.body)).toBe(200);
+      return created.body.order.id as string;
+    };
 
-    const fillerBefore = await bootstrap(filler);
-    const fulfilled = await call<any>("POST", `/black-market/orders/${created.body.order.id}/fulfill`, filler.token, {
-      operationId: operation("collect-fill"), expectedAccountVersion: fillerBefore.accountVersion, unitId,
-    });
-    expect(fulfilled.status, JSON.stringify(fulfilled.body)).toBe(200);
-
+    const plainOrderId = await fillRequest("plain", false, plainUnitId, 3);
     const pending = await call<any>("GET", "/black-market/fulfillments", requester.token);
     expect(pending.body.fulfillments).toHaveLength(1);
     expect(pending.body.fulfillments[0]).toMatchObject({
       kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", priceBrains: 3,
+      mutation: 0, invasions: 0,
     });
-    const collected = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, requester.token, {});
+    const collected = await call<any>("POST", `/black-market/orders/${plainOrderId}/collect`, requester.token, {});
     expect(collected).toMatchObject({ status: 200, body: { ok: true, alreadyCollected: false } });
+
+    const mutantOrderId = await fillRequest("mutant", true, mutatedUnitId, 5);
+    const mutantPending = await call<any>("GET", "/black-market/fulfillments", requester.token);
+    expect(mutantPending.body.fulfillments).toHaveLength(1);
+    expect(mutantPending.body.fulfillments[0]).toMatchObject({
+      id: mutantOrderId, kind: "BUY_ZOMBIE", mutation: 8 | 128, invasions: 3,
+    });
   });
 
   it("records completed trades in both accounts' history with lifetime stats", async () => {

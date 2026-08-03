@@ -1081,6 +1081,76 @@ describe("protocol v3 command engine", () => {
     });
   });
 
+  // ---- Mausoleum upgrade ladder (mausoleum3 -> 4 -> 5 -> 6 -> 7, +5 slots each) ----
+  const withMausoleum = (catalogKey: string): MutableGameplayState => {
+    const state = freshGameplayState();
+    state.balance.brains = 100;
+    state.balance.xp = 50_000; // above every level gate
+    state.objects.objects.push({ instanceId: "tomb", catalogKey, status: "placed" });
+    return state;
+  };
+
+  it("charges each Mausoleum rung in brains and swaps the building in place", () => {
+    const state = withMausoleum("mausoleum3");
+    const result = applyCommandBatch(state, commands(
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum4" },
+    ), { now: 1 });
+    expect(result.results[0].status).toBe("applied");
+    expect(result.state.objects.objects).toContainEqual(
+      expect.objectContaining({ instanceId: "tomb", catalogKey: "mausoleum4" })
+    );
+    expect(result.state.balance.brains).toBe(96);
+
+    // ...and the rungs above cost 6, 8, then 10 brains.
+    const rest = applyCommandBatch(result.state, commands(
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum5" },
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum6" },
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum7" },
+    ), { now: 2 });
+    expect(rest.results.map((r) => r.status)).toEqual(["applied", "applied", "applied"]);
+    expect(rest.state.balance.brains).toBe(72);
+  });
+
+  it("refuses to skip a rung, to climb from a non-Mausoleum, or to buy a tier outright", () => {
+    const skipped = applyCommandBatch(withMausoleum("mausoleum3"), commands(
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum7" },
+    ), { now: 1 });
+    expect(skipped.results[0]).toMatchObject({ status: "rejected", error: "bad_tier" });
+    expect(skipped.state.balance.brains).toBe(100);
+
+    const topped = applyCommandBatch(withMausoleum("mausoleum7"), commands(
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum7" },
+    ), { now: 1 });
+    expect(topped.results[0]).toMatchObject({ status: "rejected", error: "bad_tier" });
+
+    const notATomb = applyCommandBatch(withMausoleum("gravestoneBlue"), commands(
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum4" },
+    ), { now: 1 });
+    expect(notATomb.results[0]).toMatchObject({ status: "rejected", error: "bad_tier" });
+
+    // A tier is an upgrade only: buying one outright would cost a fraction of the ladder.
+    const bought = applyCommandBatch(freshGameplayState(), commands(
+      { type: "object.buy", catalogKey: "mausoleum7", clientInstanceId: "cheap-tomb" },
+    ), { now: 1 });
+    expect(bought.results[0]).toMatchObject({ status: "rejected", error: "bad_item" });
+  });
+
+  it("gives each Mausoleum tier five more zombie storage slots", () => {
+    const fill = (state: MutableGameplayState) => {
+      state.zombieMax = 1;
+      state.roster.push({ id: "active", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: false });
+      for (let i = 0; i < 15; i++) {
+        state.roster.push({ id: `s${i}`, key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: true });
+      }
+      return applyCommandBatch(state, commands(
+        { type: "roster.status", unitId: "active", stored: true },
+      ), { now: 1 });
+    };
+    expect(fill(withMausoleum("mausoleum3")).results[0])
+      .toMatchObject({ status: "rejected", error: "storage_full" }); // 15 slots, all taken
+    expect(fill(withMausoleum("mausoleum4")).results[0]).toMatchObject({ status: "applied" }); // 20
+  });
+
   it("refuses to move a Received zombie into the item shed", () => {
     const marker = encodeReceivedZombie({
       id: "received-zombie", key: "ZombieActorGirlTier1", mutation: 0, invasions: 0,

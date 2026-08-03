@@ -46,6 +46,7 @@ interface ObjectRule {
   category: string;
   armyMax: number;
   storageSlots: number;
+  zombieSlots: number; // Mausoleum zombie-storage capacity (0 for everything else)
   growMs: number;
   harvestValue: number;
   zombiePot?: boolean;
@@ -129,6 +130,19 @@ const objectRules = new Map(
     zombiePot: r.key === "zombieCombiner",
   }])
 );
+/** The Mausoleum upgrade ladder, cheapest tier first. Each tier is its own catalog
+ *  key worth five more zombie slots, and its price is the INCREMENTAL cost of that
+ *  step — so the ladder must be climbed one rung at a time (see object.upgrade) or
+ *  the later tiers would be reachable for a fraction of their intended cost. */
+const mausoleumTiers = [...objectRules.entries()]
+  .filter(([, rule]) => (rule.zombieSlots ?? 0) > 0)
+  .map(([key, rule]) => ({ key, slots: rule.zombieSlots }))
+  .sort((a, b) => a.slots - b.slots);
+/** Slots of the only Mausoleum tier that can be BOUGHT (the rest are upgrades). */
+const baseMausoleumSlots = mausoleumTiers[0]?.slots ?? 0;
+/** The tier that follows a building with `slots` capacity (undefined at the top). */
+const nextMausoleumTier = (slots: number) => mausoleumTiers.find((tier) => tier.slots > slots);
+
 const farmerHeads = new Map(farmerRows.heads.map((head) => [head.id, head]));
 const freeFarmerHeads = farmerRows.heads.filter((head) => !head.cost).map((head) => head.id);
 const pets = new Map(petRows.pets.map((pet) => [pet.key, pet]));
@@ -187,7 +201,9 @@ function placedCapacity(state: MutableGameplayState): { army: number; storage: n
     if (obj.status !== "placed") continue;
     const rule = objectRules.get(obj.catalogKey);
     army += rule?.armyMax ?? 0;
-    if (obj.catalogKey === "mausoleum3") storage = Math.max(storage, 15);
+    // Zombie storage comes from the placed Mausoleum's TIER (each upgrade tier is a
+    // separate catalog key worth five more slots); only one can be placed.
+    storage = Math.max(storage, rule?.zombieSlots ?? 0);
   }
   return { army, storage };
 }
@@ -590,6 +606,10 @@ function applyOne(
       if (!econ || econ.cost <= 0) return reject(sequence, "bad_item");
       if (state.objects.objects.length >= MAX_FUNCTIONAL_OBJECTS) return reject(sequence, "object_limit");
       if (level < econ.level) return reject(sequence, "locked");
+      // Only the base Mausoleum is sold; its upgrade tiers are reachable solely
+      // through object.upgrade, one rung at a time.
+      const buySlots = objectRules.get(command.catalogKey)?.zombieSlots ?? 0;
+      if (buySlots > 0 && buySlots !== baseMausoleumSlots) return reject(sequence, "bad_item");
       const isZombiePot = command.catalogKey === "zombieCombiner";
       const purchaseLimit = isZombiePot ? 3 : objectRules.get(command.catalogKey)?.category === "functional" ? 1 : undefined;
       if (purchaseLimit !== undefined && state.objects.objects.filter((object) =>
@@ -652,6 +672,15 @@ function applyOne(
         candidate.catalogKey === command.catalogKey) &&
         objectRules.get(command.catalogKey)?.category === "functional") {
         return reject(sequence, "object_limit");
+      }
+      // Mausoleum tiers are priced per STEP, so only the rung directly above the
+      // building being upgraded is payable — and only a Mausoleum can climb it.
+      const targetSlots = objectRules.get(command.catalogKey)?.zombieSlots ?? 0;
+      if (targetSlots > 0) {
+        const fromSlots = obj ? objectRules.get(obj.catalogKey)?.zombieSlots ?? 0 : 0;
+        if (fromSlots <= 0 || nextMausoleumTier(fromSlots)?.key !== command.catalogKey) {
+          return reject(sequence, "bad_tier");
+        }
       }
       const currency = econ.brains ? "brains" : "gold";
       if (state.balance[currency] < econ.cost) return reject(sequence, "insufficient");

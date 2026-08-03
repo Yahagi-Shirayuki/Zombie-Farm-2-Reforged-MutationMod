@@ -166,6 +166,11 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "loveShack": { cost: 0, brains: false, xp: 0, level: -1 },
   "mailboxNormal": { cost: 950, brains: false, xp: 9, level: 8 },
   "mausoleum3": { cost: 8, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  // Mausoleum upgrade tiers (bought only as an object.upgrade of the placed one).
+  "mausoleum4": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum5": { cost: 6, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum6": { cost: 8, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum7": { cost: 10, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mechanicalBull": { cost: 0, brains: false, xp: 0, level: -1 },
   "monkeyBars": { cost: 4000, brains: false, xp: 0, level: 40 },
   "monolithCombine": { cost: 12, brains: true, xp: 6000, level: 25, purchaseLimit: 1 },

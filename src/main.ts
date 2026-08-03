@@ -1363,12 +1363,12 @@ async function main() {
       field.reconcilePlots([...presentation, ...authoritative], (key) => catalog.get(key));
     };
     let objectReconcileGeneration = 0;
+    /** Server objects the farm has no room to re-home — warned about once each, so a
+     *  full farm does not repeat the same toast on every reconcile. */
+    const rehomeWarned = new Set<string>();
     economy.onObjectState = async (objects, aliases, baseZombieMax, rejectedLocalIds) => {
       authoritativeObjectIds = new Set(objects.map((object) => object.instanceId));
       const generation = ++objectReconcileGeneration;
-      const current = new Map(field.serializeObjects().map((object) => [object.id, object]));
-      /** Local objects already adopted by a server object in this pass. */
-      const claimedSources = new Set<string>();
       for (const id of rejectedLocalIds) field.removeObject(id);
 
       // The purchase + shed projections read only `objects`, never the field, so run
@@ -1389,6 +1389,32 @@ async function main() {
         storedObjectIds.set(object.catalogKey, ids);
       }
       state.syncObjectStorage(Object.fromEntries([...storedObjectIds].map(([key, ids]) => [key, ids.length])));
+
+      // Load every texture this pass can need BEFORE touching the field. This loop used
+      // to await mid-iteration, which let a newer pass supersede it half-applied and made
+      // the alias map unusable at exactly the point it was still needed. With the awaits
+      // hoisted, everything below is synchronous and cannot interleave.
+      const sprites = new Set<string>();
+      for (const object of objects) {
+        if (object.status !== "placed") continue;
+        const def = placeCatalog.get(object.catalogKey);
+        if (!def) continue;
+        sprites.add(def.sprite);
+        if (def.growingSprite) sprites.add(def.growingSprite);
+      }
+      await Promise.allSettled([...sprites].map((sprite) => ensureObjectTexture(assets, sprite)));
+      if (generation !== objectReconcileGeneration) return false; // superseded: keep the aliases
+      // A sprite whose download failed would otherwise be placed as an EMPTY texture: an
+      // invisible object still holding its tiles against every future placement. Skip it
+      // and let the next reconcile retry the download.
+      const textureReady = (def: PlaceableDef) =>
+        !!assets.objects[def.sprite] && (!def.growingSprite || !!assets.objects[def.growingSprite]);
+
+      const current = new Map(field.serializeObjects().map((object) => [object.id, object]));
+      /** Local objects already adopted by a server object in this pass. */
+      const claimedSources = new Set<string>();
+      /** Placed server objects that no local object is holding a position for. */
+      const orphans: { instanceId: string; def: PlaceableDef; readyAt?: number }[] = [];
 
       for (const object of objects) {
         const localId = aliases[object.instanceId];
@@ -1412,21 +1438,50 @@ async function main() {
           continue;
         }
         const def = placeCatalog.get(object.catalogKey);
-        if (!def || !source) continue;
+        if (!def || !textureReady(def)) continue;
+        if (!source) {
+          orphans.push({ instanceId: object.instanceId, def, readyAt: object.readyAt });
+          continue;
+        }
         claimedSources.add(source.id);
-        await ensureObjectTexture(assets, def.sprite);
-        if (def.growingSprite) await ensureObjectTexture(assets, def.growingSprite);
-        if (generation !== objectReconcileGeneration) return;
         field.removeObject(source.id);
-        field.placeObject(def, source.oc, source.or, object.instanceId, object.readyAt, !!source.rotation);
+        if (!field.placeObject(def, source.oc, source.or, object.instanceId, object.readyAt, !!source.rotation)) {
+          // Its remembered tile is taken (a stale layout entry can collide with a live
+          // object). Re-home it below rather than let it fall off the farm.
+          orphans.push({ instanceId: object.instanceId, def, readyAt: object.readyAt });
+        }
       }
 
-      if (generation !== objectReconcileGeneration) return;
+      // Anything the server still owns as placed but that nothing on the farm holds a
+      // position for is otherwise unreachable forever: the presentation layout is written
+      // from the field, so an object missing from the field is missing from the next save
+      // too. Give it a real tile so it becomes visible, movable, and persisted again.
+      //
+      // This runs even when the farm is otherwise empty. Gameplay objects and the
+      // presentation blob arrive in the SAME bootstrap response, so "no positions at all"
+      // cannot mean a half-loaded save — it means those positions are genuinely gone, and
+      // a real tile beats an invisible object the player has already paid for.
+      for (const orphan of orphans) {
+        const spot = field.findFreeOrigin(orphan.def);
+        if (!spot) {
+          if (!rehomeWarned.has(orphan.instanceId)) {
+            rehomeWarned.add(orphan.instanceId);
+            hud.showToast(`No room to put your ${orphan.def.name} back — clear a space and it will reappear.`);
+          }
+          continue;
+        }
+        field.placeObject(orphan.def, spot.oc, spot.or, orphan.instanceId, orphan.readyAt);
+        rehomeWarned.delete(orphan.instanceId);
+      }
+      // Persist the recovered positions immediately: a reload before the next autosave
+      // would drop them straight back into the state this just repaired.
+      if (orphans.length) saveManager.flushCritical();
 
       const placed = field.serializeObjects();
       const armyBonus = placed.reduce((sum, object) => sum + (placeCatalog.get(object.key)?.armyMax ?? 0), 0);
       const itemCap = placed.reduce((cap, object) => Math.max(cap, placeCatalog.get(object.key)?.storageSlots ?? 0), 8);
       state.syncCapacities(baseZombieMax + armyBonus, itemCap);
+      return true; // aliases consumed — EconomyClient may drop them
     };
     economy.onRosterState = (roster, aliases, settled) => {
       const pots = zombies.reconcileServerPots(roster, settled);
@@ -2061,11 +2116,10 @@ async function main() {
     audio.play("menuClick");
   };
 
-  // Upgrade the already-placed shed to a bigger one IN PLACE (no re-placement):
-  // charge, swap its type/sprite, and raise the storage capacity.
-  const upgradeShed = (def: PlaceableDef) => {
+  // Upgrade an already-placed building (storage shed / Mausoleum) to a bigger tier
+  // IN PLACE (no re-placement): charge, swap its type/sprite, and raise its capacity.
+  const upgradeBuilding = (def: PlaceableDef, id: string | null) => {
     if (onlineGameplayBlocked()) return;
-    const id = field.shedId();
     if (!id) return;
     if (state.level < def.level) return;
     const xp = buyXp(def.cost, def.xp, !!def.brainsNeeded, def.category);
@@ -2100,16 +2154,19 @@ async function main() {
     questBus.post(QuestEvent.ItemBought, def.name);
   };
 
-  // Buying an object from the market: load its sprite(s) (lazy). A shed with one
-  // already placed UPGRADES it in place; otherwise enter placement. Fruit trees
-  // have a second (growing) frame to preload.
+  // Buying an object from the market: load its sprite(s) (lazy). A shed or Mausoleum
+  // with one already placed UPGRADES it in place; otherwise enter placement. Fruit
+  // trees have a second (growing) frame to preload.
   hud.onBuy = async (def) => {
     if (onlineGameplayBlocked()) return;
     if (hud.objectLimitReached?.(def)) return;
     await ensureObjectTexture(assets, def.sprite);
     if (def.growingSprite) await ensureObjectTexture(assets, def.growingSprite);
-    if (def.storageSlots && field.shedId()) upgradeShed(def); // upgrade, don't place
-    else if (def.zombieStorage && field.mausoleumId()) return; // already have a Mausoleum
+    if (def.storageSlots && field.shedId()) upgradeBuilding(def, field.shedId()); // upgrade, don't place
+    // A placed Mausoleum upgrades in place too; a lower/equal tier is a no-op.
+    else if (def.zombieStorage && field.mausoleumId()) {
+      if ((def.zombieSlots ?? 0) > zombies.mausoleumCap) upgradeBuilding(def, field.mausoleumId());
+    }
     else if (def.zombiePatch && field.patchId()) return; // only one Zombie Patch
     else if (def.graveColor && field.hasGrave(def.graveColor)) return; // already own this grave
     else hud.setPlacing(def);
@@ -2146,7 +2203,29 @@ async function main() {
       hint: obtainHint(def, almanacSources),
     }));
   hud.zombiePortraitOf = (key) => zombiePortrait(key);
-  hud.mausoleumCap = zombies.mausoleumCap;
+  hud.getMausoleumCap = () => zombies.mausoleumCap;
+  // The Mausoleum upgrade ladder: each tier is an ordinary catalog placeable that
+  // replaces the placed one (see upgradeBuilding), so the next tier is simply the
+  // cheapest authored Mausoleum with more slots than the one standing on the farm.
+  const nextMausoleumTier = (): PlaceableDef | null => {
+    if (!field.mausoleumId()) return null;
+    const cap = zombies.mausoleumCap;
+    return [...placeCatalog.values()]
+      .filter((def) => def.zombieStorage && (def.zombieSlots ?? 0) > cap)
+      .sort((a, b) => (a.zombieSlots ?? 0) - (b.zombieSlots ?? 0))[0] ?? null;
+  };
+  hud.getMausoleumUpgrade = () => {
+    const def = nextMausoleumTier();
+    return def
+      ? { name: def.name, cost: def.cost, brains: !!def.brainsNeeded, slots: def.zombieSlots ?? 0 }
+      : null;
+  };
+  hud.onMausoleumUpgrade = async () => {
+    const def = nextMausoleumTier();
+    if (!def) return;
+    await ensureObjectTexture(assets, def.sprite);
+    upgradeBuilding(def, field.mausoleumId());
+  };
   hud.canStoreZombies = () => !!field.mausoleumId() && !zombies.mausoleumFull;
   hud.canDeployZombie = () => zombies.canAdd();
   hud.onZombieRename = (id, requested) => {

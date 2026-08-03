@@ -212,6 +212,8 @@ interface FulfillmentRow {
   closed_at: number;
   escrow_mutation: number | null;
   escrow_invasions: number | null;
+  delivered_mutation: number | null;
+  delivered_invasions: number | null;
   fulfilled_by_name: string | null;
 }
 
@@ -222,23 +224,32 @@ export async function fulfillments(
   accountId: string
 ): Promise<BlackMarketFulfillmentsResponse> {
   const result = await db.prepare(`SELECT o.id,o.kind,o.zombie_key,o.mutated_required,o.price_brains,
-      o.created_at,o.closed_at,o.escrow_mutation,o.escrow_invasions,a.username AS fulfilled_by_name
+      o.created_at,o.closed_at,o.escrow_mutation,o.escrow_invasions,
+      o.delivered_mutation,o.delivered_invasions,a.username AS fulfilled_by_name
     FROM black_market_orders o LEFT JOIN accounts a ON a.id=o.fulfilled_by_account_id
     WHERE o.creator_account_id=? AND o.status='FULFILLED' AND o.acknowledged_at IS NULL
     ORDER BY o.closed_at DESC LIMIT ?`).bind(accountId, FULFILLMENT_PAGE).all<FulfillmentRow>();
-  const views: BlackMarketFulfillmentView[] = (result.results ?? []).map((row) => ({
-    id: row.id,
-    kind: row.kind,
-    zombieKey: row.zombie_key,
-    mutated: !!row.mutated_required,
-    ...(row.kind === "SELL_ZOMBIE" && row.escrow_mutation !== null
-      ? { mutation: row.escrow_mutation, invasions: row.escrow_invasions ?? 0 }
-      : {}),
-    priceBrains: row.price_brains,
-    createdAt: row.created_at,
-    fulfilledAt: row.closed_at,
-    fulfilledBy: row.fulfilled_by_name ?? "Player",
-  }));
+  const views: BlackMarketFulfillmentView[] = (result.results ?? []).map((row) => {
+    // The traded unit, whichever direction it moved: a sale's escrowed zombie or the
+    // unit the fulfiller handed over for a request. Both are stamped on the order at
+    // settlement (migration 0033); the escrow fallback covers sales fulfilled before
+    // that column existed, and a request that old simply has no unit to describe.
+    const mutation = row.delivered_mutation ??
+      (row.kind === "SELL_ZOMBIE" ? row.escrow_mutation : null);
+    const invasions = row.delivered_invasions ??
+      (row.kind === "SELL_ZOMBIE" ? row.escrow_invasions : null);
+    return {
+      id: row.id,
+      kind: row.kind,
+      zombieKey: row.zombie_key,
+      mutated: !!row.mutated_required,
+      ...(mutation !== null ? { mutation, invasions: invasions ?? 0 } : {}),
+      priceBrains: row.price_brains,
+      createdAt: row.created_at,
+      fulfilledAt: row.closed_at,
+      fulfilledBy: row.fulfilled_by_name ?? "Player",
+    };
+  });
   return { fulfillments: views };
 }
 

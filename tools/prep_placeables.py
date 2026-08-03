@@ -144,6 +144,21 @@ REWARD_ONLY_DECOR = {
 # no meaning — the pen's five slots are shared, not per-building.
 FUNCTIONAL_OVERRIDE_TILES = {"pettingZoo"}
 
+# ---- Mausoleum upgrade ladder (design override, NOT source data) ------------
+# The source ships one buyable Mausoleum (mausoleum3) plus two key-fragment tiers
+# that Reforged does not use. Reforged instead makes the placed Mausoleum
+# upgradeable in place, exactly like the storage sheds: each tier costs brains and
+# adds five zombie storage slots. Every tier reuses the base row (same art, same
+# 4x4 footprint) and differs only in key/name/cost/zombieSlots.
+MAUSOLEUM_BASE_SLOTS = 15
+MAUSOLEUM_TIERS = [
+    # key, market name, brain cost, zombie storage slots
+    ("mausoleum4", "Mausoleum II", 4, MAUSOLEUM_BASE_SLOTS + 5),
+    ("mausoleum5", "Mausoleum III", 6, MAUSOLEUM_BASE_SLOTS + 10),
+    ("mausoleum6", "Mausoleum IV", 8, MAUSOLEUM_BASE_SLOTS + 15),
+    ("mausoleum7", "Mausoleum V", 10, MAUSOLEUM_BASE_SLOTS + 20),
+]
+
 # These quest objectives target separately named color variants that share one
 # TileProperties key. Most same-tile Market rows are redundant recolors, but these
 # must remain distinct catalog cards or the corresponding buy objectives cannot be
@@ -458,6 +473,9 @@ def main():
             # simple functional effects the game can apply on placement
             "armyMax": e.get("increaseArmyMaxBy", 0),
             "storageSlots": slots,  # >0 for storage sheds (item capacity)
+            # >0 for the Mausoleum (zombie storage slots). The base tier's value is
+            # a design number, not a source one; see MAUSOLEUM_TIERS below.
+            "zombieSlots": MAUSOLEUM_BASE_SLOTS if tile == "mausoleum3" else 0,
             # Pet Pen: tapping it opens the authoritative cosmetic collection.
             **({"petPen": True} if tile == "pettingZoo" else {}),
             # fruit trees: repeatable harvest (regrows fruit for gold)
@@ -536,6 +554,7 @@ def main():
             "pivotY": tp.get("pivoty", 0.0),
             "armyMax": 0,
             "storageSlots": 0,
+            "zombieSlots": 0,
             "growMs": 0,
             "harvestValue": 0,
             "growingSprite": "",
@@ -560,6 +579,15 @@ def main():
             # the source row, so re-apply the game's own floor(cost / 100) rule to
             # the price actually charged (500 gold -> 5 xp, not the source's 500).
             c["xp"] = c["cost"] // 100
+
+    # Mausoleum upgrade tiers: clones of the base row (same sprite/footprint) that
+    # the Market offers one at a time above the placed building's capacity.
+    base_mausoleum = next((c for c in catalog if c["key"] == "mausoleum3"), None)
+    if base_mausoleum:
+        for key, name, cost, slots in MAUSOLEUM_TIERS:
+            tier = dict(base_mausoleum)
+            tier.update({"key": key, "name": name, "cost": cost, "zombieSlots": slots})
+            catalog.append(tier)
 
     catalog.sort(key=lambda c: (c["category"], c["level"], c["cost"]))
     with open(os.path.join(OUT, "placeables.json"), "w", encoding="utf-8") as f:

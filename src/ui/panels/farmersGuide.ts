@@ -113,7 +113,7 @@ export const FARMERS_GUIDE_PAGES: GuidePage[] = [
       },
       {
         title: "Earned Zombies",
-        body: "A zombie you win from a quest, an invasion, or a boss joins the farm right away when there is an open army slot. If your farm is full it waits in Storage → Received instead, and is never lost. Claiming it from there moves it into the Mausoleum, so you will need a Mausoleum with a free space before it can join your roster.",
+        body: "A zombie you win from a quest, an invasion, or a boss joins the farm right away when there is an open army slot. If your farm is full it waits in Storage → Received instead, and is never lost. Claiming it from there moves it into the Mausoleum, so you will need a Mausoleum with a free space before it can join your roster. The Mausoleum starts with 15 slots and can be upgraded four times — tap the building, or buy the next one from Market → Items → Functional — for five more slots each time.",
       },
     ],
   },

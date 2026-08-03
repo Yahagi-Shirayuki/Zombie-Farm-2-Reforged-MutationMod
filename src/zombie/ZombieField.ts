@@ -12,7 +12,10 @@ import { makeOwned, normalizeZombieName, OwnedZombie, RosterEntry } from "./type
 import { ZombieUnit } from "./ZombieUnit";
 import { ZombiePot } from "./ZombiePot";
 
-/** Mausoleum storage-slot capacity (default; upgradeable later). */
+/** Mausoleum storage-slot capacity of the BASE building. Every tier above it is
+ *  authored in placeables.json (`zombieSlots`), so the live cap comes from the
+ *  placed building's def; this is only the fallback for a def that predates the
+ *  field. See the Mausoleum upgrade ladder in tools/prep_placeables.py. */
 export const MAUSOLEUM_CAP = 15;
 
 export function joiningPatchTile(
@@ -89,13 +92,16 @@ export class ZombieField {
   get storedCount(): number {
     return this.stored.length;
   }
-  /** Mausoleum storage-slot capacity. */
+  /** Mausoleum storage-slot capacity: the placed building's tier decides it, so
+   *  upgrading the Mausoleum raises this immediately. Zero with none placed. */
   get mausoleumCap(): number {
-    return MAUSOLEUM_CAP;
+    const id = this.field.mausoleumId();
+    if (!id) return 0;
+    return this.field.objectDefOf(id)?.zombieSlots ?? MAUSOLEUM_CAP;
   }
   /** Are all Mausoleum slots full? */
   get mausoleumFull(): boolean {
-    return this.stored.length >= MAUSOLEUM_CAP;
+    return this.stored.length >= this.mausoleumCap;
   }
   /** Total owned units (deployed + stored). */
   get total(): number {
@@ -233,7 +239,7 @@ export class ZombieField {
   // Store a deployed unit in the Mausoleum: take it off the farm (keeps it owned,
   // frees an army slot). No-op if not found / already stored.
   store(id: string): boolean {
-    if (this.stored.length >= MAUSOLEUM_CAP) return false; // Mausoleum full
+    if (this.mausoleumFull) return false; // no Mausoleum, or every slot taken
     const i = this.units.findIndex((u) => u.id === id);
     if (i < 0) return false;
     const u = this.units[i];
