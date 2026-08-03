@@ -230,16 +230,11 @@ wrangler d1 execute zombiefarm --remote --json --command \
 
 Clears head + hair/eye mutation bits (mask 951) from headless units, which the v3 combine
 used to store even though the client strips them on load. It is a plain `UPDATE` on
-`roster_v3` / `roster`, so a player mid-batch can be clipped — re-running is a safe no-op.
-After applying, this must return 0 for both tables.
+`roster_v3`, so a player mid-batch can be clipped — re-running is a safe no-op.
+After applying, this must return 0.
 
 ```sh
 wrangler d1 execute zombiefarm --remote --json --command \
-  "SELECT (SELECT COUNT(*) FROM roster_v3 WHERE (mutation & 951)!=0 \
-             AND zombie_key LIKE 'ZombieActorHeadless%') AS v3_bad, \
-          (SELECT COUNT(*) FROM roster WHERE (mutation & 951)!=0 \
-             AND key LIKE 'ZombieActorHeadless%') AS v2_bad"
+  "SELECT COUNT(*) AS v3_bad FROM roster_v3 WHERE (mutation & 951)!=0 \
+     AND (zombie_key LIKE 'ZombieActorHeadless%' OR zombie_key='ZombieActorBombie')"
 ```
-
-Note the query's `LIKE` misses `ZombieActorBombie`, which the migration also repairs;
-check it separately if a count looks off.

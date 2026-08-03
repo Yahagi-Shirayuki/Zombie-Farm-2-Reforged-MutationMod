@@ -26,17 +26,7 @@ WHERE (mutation & 951) != 0
     'ZombieActorBombie'
   );
 
--- Same repair for the retired protocol-v2 roster, which the legacy raid verifier and the
--- one-time save migration still read.
-UPDATE roster
-SET mutation = mutation & ~951
-WHERE (mutation & 951) != 0
-  AND key IN (
-    'ZombieActorHeadlessTier1',
-    'ZombieActorHeadlessTier2',
-    'ZombieActorHeadlessTier3',
-    'ZombieActorHeadlessTier4',
-    'ZombieActorHeadlessTier5',
-    'ZombieActorHeadless2Tier5',
-    'ZombieActorBombie'
-  );
+-- Do not update the retired protocol-v2 `roster` table here. Migration 0020 drops it
+-- on upgraded databases, while fresh databases retain an empty compatibility table
+-- from schema.sql and baseline this migration without executing it. Referencing that
+-- optional table makes the entire migration fail on the live upgrade path.
