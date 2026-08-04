@@ -79,9 +79,11 @@ describe("every Market mutant's promise matches what its card will read", () => 
 });
 
 describe("Tier-4 mutants that reuse a lower tier's bit", () => {
-  it("describes Heartichoke (lvl 44) by its bonus, not as Cauliflower's mutation", () => {
+  it("describes Heartichoke by its bonus, not as Cauliflower's mutation", () => {
     const heartichoke = row("ZombieActorRegularTier4Heartichoke");
-    expect(heartichoke.level).toBe(44);
+    // Unlock level is deliberately not asserted here (see the Eyebiscus case
+    // below); it moves with the mutant ladder and is owned by
+    // quest/cropUnlockAlignment.test.ts. What matters here is the shared bit.
     expect(heartichoke.mutation).toBe(512); // shared with Cauliflower Zombie
 
     const text = mutationMarketDescription(heartichoke, heartichoke.mutation!)!;

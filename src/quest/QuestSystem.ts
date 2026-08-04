@@ -375,10 +375,27 @@ export class QuestSystem {
         this.authoritativeCompletionRequested.delete(change.questId);
         if (!wasCompleted && !wasOptimisticallyCelebrated) this.hooks.completed(def);
       } else if (!this.completed.has(change.questId)) {
-        this.active.set(
-          change.questId,
-          def.requirements.map((r, i) => Math.max(0, Math.min(r.countTotal, change.counts[i] ?? 0)))
+        const authoritative = def.requirements.map(
+          (r, i) => Math.max(0, Math.min(r.countTotal, change.counts[i] ?? 0))
         );
+        this.active.set(change.questId, authoritative);
+        // The rail draws the optimistic preview in preference to these counts, and
+        // the preview only ever grows from LOCAL events. If the server counted
+        // something this client did not post — another device, or a command whose
+        // optimistic post was skipped — the preview would sit below the truth and,
+        // because nothing cleared it, keep shadowing it for the rest of the session:
+        // the player does the thing twice and the objective still reads 1.
+        // Keep the preview only where it is genuinely AHEAD (an unconfirmed local
+        // event), and drop it once the server has caught up.
+        const preview = this.authoritativePreview.get(change.questId);
+        if (preview) {
+          const merged = preview.map((count, i) => Math.max(count, authoritative[i] ?? 0));
+          if (merged.every((count, i) => count === authoritative[i])) {
+            this.authoritativePreview.delete(change.questId);
+          } else {
+            this.authoritativePreview.set(change.questId, merged);
+          }
+        }
       }
     }
     this.tryActivate();

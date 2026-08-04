@@ -78,6 +78,126 @@ CROP_REBALANCE = {
 # server/src/levels.ts both stop at 45, so a crop above it would be unplantable.
 LEVEL_CAP = 45
 
+# ---- Mutant zombies -------------------------------------------------------
+# A "mutant" zombie is the pre-mutated unit the market sells: it carries its
+# mutation already grown AND a tier-graded body (Green 2/2/2, Blue 5/2/5,
+# Red 8/2/10, Silver 12/2/18). The other route to the same mutation is planting
+# any zombie beside the matching crop (src/zombie/cropMutations.ts).
+#
+# ZF2 unlocked each mutant AT or AFTER its crop, which made buying one pointless —
+# by then you could grow the mutation yourself for the price of a seed. Reforged
+# inverts that: the mutant lands BEFORE its crop, so buying it is the only way to
+# get that mutation early, and the crop later becomes the cheap bulk route.
+#
+# The lead widens with progression, from 2 levels early to 5:
+#
+#     lead(cropLevel) = min(5, round(2 + 3 * (cropLevel - 5) / 24))
+#
+# Two places the formula is not applied literally:
+#   * Carrot/Onion/Tomato/Turnip — their crops sit at levels 1-5, so there is no
+#     room to be early. They stay at 3, clear of the tutorial.
+#   * Flytrap — Red tier, but its crop (venus_flytrap) unlocks at 19. The formula
+#     would put it at 15, ahead of every Blue mutant and level with the ordinary
+#     Red zombies, so the premium body would outclass everything on sale for the
+#     next 13 levels. It stays late instead, which is also what ZF2 did with it.
+#
+# The result keeps the tier bands ordered and behind their ordinary counterparts:
+#     Green 3-12, Blue 16-28, Red 30-32, Silver 39-40
+#     (ordinary: Green 1-6, Blue 8-13, Red 15-20, Silver 25-30)
+MUTANT_REBALANCE = {
+    "ZombieActorRegularTier1Carrots": 3,       # Carrot Zombie      (carrot L1)
+    "ZombieActorRegularTier1Tomatoes": 3,      # Tomato Zombie      (tomato L3)
+    "ZombieActorRegularTier1Onions": 3,        # Onion Zombie       (onion L1)
+    "ZombieActorRegularTier1Turnips": 3,       # Turnip Zombie      (turnip L5,  -2)
+    "ZombieActorRegularTier1Potatoes": 7,      # Potato Zombie      (potato L10, -3)
+    "ZombieActorRegularTier1Coffee": 12,       # Coffee Zombie      (coffee L15, -3)
+    "ZombieActorRegularTier2Celery": 16,       # Celery Zombie      (celery L20, -4)
+    "ZombieActorRegularTier2Broccoli": 19,     # Broccoli Zombie    (broccoli L23, -4)
+    "ZombieActorRegularTier2Garlic": 20,       # Garlic Zombie      (garlic L25, -5)
+    "ZombieActorRegularTier2Cauliflower": 24,  # Cauliflower Zombie (cauliflower L29, -5)
+    "ZombieActorRegularTier2LimaBeans": 28,    # Lima Bean Zombie   (lima_beans L33, -5)
+    "ZombieActorRegularTier3VenusFlytrap": 30, # Flytrap Zombie     (venus_flytrap L19, tier exception)
+    "ZombieActorRegularTier3DragonFruit": 32,  # Dragon Fruit Zombie(dragon_fruit L37, -5)
+    "ZombieActorRegularTier4Eyebiscus": 39,    # Eyebiscus Zombie   (eyebiscus L44, -5)
+    "ZombieActorRegularTier4Heartichoke": 40,  # Heartichoke Zombie (heartichoke L45, -5)
+}
+
+# Pumpking is deliberately absent: it is the one mutation with no market mutant at
+# all (crop-adjacency only, and only the headless family can grow it). Its crop
+# moved to level 39 and stays there — a late, powerful mutation is a reason to use
+# the Black Market rather than a gap to fill.
+
+
+# ---- Mutant colour class --------------------------------------------------
+# Re-levelling the mutants above moved them out of the level bands their colour
+# used to sit in: a Blue Lima Bean at level 28 sat among Silver zombies. These
+# entries move the colour to the band the zombie now occupies.
+#
+# Ordinary (non-mutant) zombies hold the bands: Green 1-6, Blue 8-13, Red 15-20,
+# Silver 25-30. The promotions below put each mutant in the band containing its
+# unlock level, and the existing UnitStats bodies already fit: the Reds carry
+# 5/2/5 against ordinary Red 5/4/4.5, and the Silvers carry 5/2/5 to 8/2/10
+# against ordinary Silver 5.5/2/5.5. Stats are therefore NOT overridden.
+#
+# Deliberately unpromoted:
+#   * Coffee Zombie (level 12) — it lands in the Blue band, but its body is a
+#     genuine Green 2/2/2 and level 12 is the band's last rung. Blue would
+#     overpromise. It stays Green.
+#   * Carrot/Tomato/Onion/Turnip/Potato (3-7) and Eyebiscus/Heartichoke (39-40)
+#     are already in the right band.
+#
+# NOTE — the key keeps its original tier token: ZombieActorRegularTier2Celery is
+# now Red. The key is the save/roster/almanac/sprite identity, so renaming it to
+# match would be an identity change for something that is only a display class.
+# tools/prep_market.py classify() derives the colour from that token, so THIS
+# table has to win, and taxonomy.ts treats the baked value as authoritative.
+# Do not "fix" the key/colour disagreement by reverting the colour.
+#
+# Changing the colour is not purely cosmetic. It also decides which ability tiers
+# the zombie can unlock (taxonomy.classTierRank) and its Black Market trade gate
+# (className -> coloured gravestone -> that object's level: Red 15, Silver 25).
+# Both were checked against the new unlock levels: the earliest Red mutant is 16
+# and the earliest Silver is 28, so no mutant is purchasable before it is
+# tradeable. The tier NUMBER moves with the colour so the two never disagree —
+# it drives roaming fertilize chance and Zombie Pot species selection.
+MUTANT_CLASS_REBALANCE = {
+    "ZombieActorRegularTier2Celery":       (3, "Red", "#ff5a4a"),     # L16
+    "ZombieActorRegularTier2Broccoli":     (3, "Red", "#ff5a4a"),     # L19
+    "ZombieActorRegularTier2Garlic":       (3, "Red", "#ff5a4a"),     # L20
+    "ZombieActorRegularTier2Cauliflower":  (3, "Red", "#ff5a4a"),     # L24
+    "ZombieActorRegularTier2LimaBeans":    (4, "Silver", "#cfd4dd"),  # L28
+    "ZombieActorRegularTier3VenusFlytrap": (4, "Silver", "#cfd4dd"),  # L30
+    "ZombieActorRegularTier3DragonFruit":  (4, "Silver", "#cfd4dd"),  # L32
+}
+
+
+def rebalance_mutant_class(key, entry):
+    """Overwrite one zombies.json entry's tier + colour class, in place.
+
+    Returns True if the zombie is re-classed, False otherwise. Must run AFTER
+    both classify() and the UnitStats tier read, since it overrides both.
+    """
+    row = MUTANT_CLASS_REBALANCE.get(key)
+    if row is None:
+        return False
+    entry["tier"], entry["className"], entry["classColor"] = row
+    return True
+
+
+def rebalance_mutant(key, entry):
+    """Overwrite one zombies.json entry's unlock level from MUTANT_REBALANCE.
+
+    Returns True if the zombie is rebalanced, False if it is not in the table
+    (every non-mutant zombie). Raises if the table names an unreachable level.
+    """
+    level = MUTANT_REBALANCE.get(key)
+    if level is None:
+        return False
+    if level > LEVEL_CAP:
+        raise ValueError(f"{key}: unlock level {level} is above the level cap {LEVEL_CAP}")
+    entry["level"] = level
+    return True
+
 
 def rebalance_crop(key, entry):
     """Overwrite one plants.json entry's economy from CROP_REBALANCE, in place.

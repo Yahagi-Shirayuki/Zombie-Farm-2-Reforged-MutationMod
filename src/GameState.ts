@@ -110,7 +110,8 @@ export class GameState {
    *  and reconciles to server truth. Null offline, where the crop loop stays local. */
   onFarm:
     | ((
-        action: { type: "plant" | "harvest" | "plow" | "remove"; oc: number; or: number; cropKey?: string; fertilized?: boolean; unitId?: string },
+        action: { type: "plant" | "harvest" | "plow" | "remove" | "move"; oc: number; or: number;
+                  toOc?: number; toOr?: number; cropKey?: string; fertilized?: boolean; unitId?: string },
         optimistic: { gold?: number; brains?: number; xp?: number }
       ) => void)
     | null = null;

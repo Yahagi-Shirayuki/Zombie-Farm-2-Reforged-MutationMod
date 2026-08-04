@@ -90,6 +90,18 @@ describe("v3 raid dependency ids", () => {
     });
   });
 
+  it("sends a plot relocation as a farm.move carrying both origins", () => {
+    // Plot POSITIONS are client layout, but which plot exists WHERE is server-owned:
+    // without this command the next reconcile drags the plot back to its old origin.
+    const economy = new EconomyClient(new GameState(), "plot-move");
+
+    economy.submitFarm({ type: "move", oc: 0, or: 0, toOc: 8, toOr: 4 }, {});
+
+    expect((economy as any).queue.pending[0].command).toEqual({
+      type: "farm.move", oc: 0, or: 0, toOc: 8, toOr: 4,
+    });
+  });
+
   it("flushes a zombie harvest immediately so its server-owned mutation is visible", () => {
     const economy = new EconomyClient(new GameState(), "zombie-harvest-flush");
     const flush = vi.spyOn((economy as any).queue, "flush").mockResolvedValue(undefined);

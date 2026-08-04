@@ -13,9 +13,10 @@ against Market.json and writes back the authoritative fields:
 The curated SET and order (which crops have art) are preserved as-is; only the
 per-entry economy numbers are refreshed from source. Re-runnable / idempotent.
 
-Two Reforged retunes override the source and are applied AFTER the join, so a
-re-run cannot revert them: brain prices (all catalogs) and the regular crops'
-level/cost/sell/xp rebalance. Both live in tools/reforge_economy.py.
+Three Reforged retunes override the source and are applied AFTER the join, so a
+re-run cannot revert them: brain prices (all catalogs), the regular crops'
+level/cost/sell/xp rebalance, and the market mutants' unlock levels + colour
+class. All of them live in tools/reforge_economy.py.
 
 Run from the repo root (the folder containing ZF2R_extracted/ and zombiefarm/):
     python zombiefarm/tools/prep_market.py
@@ -25,7 +26,10 @@ import os
 import re
 import sys
 
-from reforge_economy import CROP_REBALANCE, brain_price, rebalance_crop
+from reforge_economy import (
+    CROP_REBALANCE, MUTANT_CLASS_REBALANCE, MUTANT_REBALANCE,
+    brain_price, rebalance_crop, rebalance_mutant, rebalance_mutant_class,
+)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GAMEPLAY = os.path.join(ROOT, "ZF2R_extracted", "data", "json", "gameplay", "Market.json")
@@ -143,6 +147,8 @@ def main():
 
     # ---- zombies: join by unitKey (== catalog key) ----
     zombies = load(ZOMBIES)
+    remutanted = 0
+    reclassed = 0
     named = load(SPECIAL_ZOMBIES)["Entries"]
     # Named specials use dedicated rigs rather than the shared ZombieSheet model.
     # `reward_only` is deliberately narrower than the source's market visibility:
@@ -219,6 +225,10 @@ def main():
         z["cost"] = s.get("cost", z.get("cost", 0))
         z["growMs"] = (s.get("growTime") or 86400) * 1000
         z["level"] = s.get("level", 1)
+        # Market mutants unlock AHEAD of the crop that grows their mutation (see
+        # tools/reforge_economy.py). Applied after the source read for the same
+        # reason as the crops: the join above would otherwise revert it.
+        remutanted += rebalance_mutant(z["key"], z)
         # Some mutant rows reuse crop-scale XP values (hundreds). Harvesting a
         # zombie unit awards 1-2 XP throughout the playable zombie catalog.
         raw_xp = int(s.get("xp", 2) or 1)
@@ -260,6 +270,10 @@ def main():
         # value is an erroneous 0, so keep the corrected gameplay classification.
         if z["key"] == "ZombieActorRegularCrazy":
             z["tier"] = 5
+        # Re-levelled market mutants wear the colour of the band they now sit in.
+        # Runs after BOTH classify() and the UnitStats tier read because it
+        # overrides both, keeping colour and tier number in agreement.
+        reclassed += rebalance_mutant_class(z["key"], z)
         # NOTE: abilities are NOT baked here. In ZF2 a zombie's abilities are
         # assigned by compiled logic (initActorSpecificAbilities group aura +
         # getRandomAbilityToUnlock veterancy unlocks), not by the asset data, so
@@ -288,6 +302,13 @@ def main():
             z["brainsNeeded"] = True
             z["rewardOnly"] = False
 
+    unknown_mutants = (set(MUTANT_REBALANCE) | set(MUTANT_CLASS_REBALANCE)) - {z["key"] for z in zombies}
+    if unknown_mutants:
+        # A typo or a renamed key would otherwise silently leave that mutant on its
+        # ZF2 unlock level, back behind the crop it is supposed to lead.
+        print("ERROR mutant rebalance keys not in zombies.json:", *sorted(unknown_mutants), sep="\n  ")
+        sys.exit(1)
+
     # Permanent crops first, then holiday/seasonal crops; unlock level orders each
     # group. Python's stable sort retains authored order for complete ties.
     plants.sort(key=lambda p: (bool(p.get("seasonal", False)), p.get("level", 1)))
@@ -305,7 +326,8 @@ def main():
     print(f"plants:  {len(plants)} enriched, {rebalanced} rebalanced "
           f"(levels {min(p['level'] for p in plants)}"
           f"-{max(p['level'] for p in plants)})")
-    print(f"zombies: {len(zombies)} enriched (levels {min(z['level'] for z in zombies)}"
+    print(f"zombies: {len(zombies)} enriched, {remutanted} mutants re-levelled, "
+          f"{reclassed} re-classed (levels {min(z['level'] for z in zombies)}"
           f"-{max(z['level'] for z in zombies)})")
     if missing:
         print("WARNING unmatched (left unchanged):", *missing, sep="\n  ")

@@ -586,21 +586,25 @@ describe("AudioManager gapless music looping", () => {
     expect(MockSource.started).toHaveLength(1);
   });
 
-  it("bounds a non-looping sting to its authored length", async () => {
+  // A decoded buffer costs ~0.37 MB per second of stereo audio, so the decoded path
+  // is only worth buying where the seam it hides is actually heard often. Everything
+  // else streams from the element, exactly as music did before gapless looping.
+  it("streams a non-looping sting instead of decoding it", async () => {
     const audio = new AudioManager();
     audio.enterRaid("farmStageBGM.mp3");
+    await settleDecode();
+    MockSource.started = [];
+
     audio.playRaidVictory();
     await settleDecode();
 
-    const sting = MockSource.started[MockSource.started.length - 1];
-    expect(sting.loop).toBe(false);
-    // start(when, offset, duration): begins past the delay and stops before the
-    // trailing padding rather than playing it out.
-    expect(sting.startArgs[1]).toBeCloseTo(HEAD / RATE, 5);
-    expect(sting.startArgs[2]).toBeCloseTo(453600 / RATE, 5); // winBGM's authored length
+    // Played once, no seam to hide: 4 MB of decoded buffer would buy nothing.
+    expect(MockSource.started).toHaveLength(0);
+    const sting = MockAudio.instances.find((a) => a.src.includes("winBGM"))!;
+    expect(sting.paused).toBe(false);
   });
 
-  it("loops the whole buffer when a track has no authored length on file", async () => {
+  it("streams a track with no authored length rather than pricing it blind", async () => {
     const audio = new AudioManager();
     await settleDecode();
     MockSource.started = [];
@@ -608,9 +612,43 @@ describe("AudioManager gapless music looping", () => {
     audio.enterRaid("someUnknownStage.mp3");
     await settleDecode();
 
-    const track = MockSource.started[MockSource.started.length - 1];
-    expect(track.loopStart).toBe(0);
-    expect(track.loopEnd).toBeCloseTo(paddedBuffer().duration, 5);
+    expect(MockSource.started).toHaveLength(0);
+    const unknown = MockAudio.instances.find((a) => a.src.includes("someUnknownStage"))!;
+    expect(unknown.paused).toBe(false);
+  });
+
+  it("streams the long stage themes and decodes only the beds", async () => {
+    const audio = new AudioManager();
+    await settleDecode();
+    // The farm bed loops all session at 31 s, so it earns its 11 MB.
+    expect(MockSource.started).toHaveLength(1);
+
+    MockSource.started = [];
+    audio.enterRaid("farmStageBGM.mp3"); // 64 s: 23 MB for a seam heard once a fight
+    await settleDecode();
+
+    expect(MockSource.started).toHaveLength(0);
+    const stage = MockAudio.instances.find((a) => a.src.includes("farmStageBGM"))!;
+    expect(stage.paused).toBe(false);
+  });
+
+  it("gives the farm bed's buffer back for the length of a raid, then restores it", async () => {
+    const audio = new AudioManager();
+    await settleDecode();
+    const bed = MockAudio.instances.find((a) => a.src.includes("dayFarmBGM"))!;
+
+    audio.enterRaid("farmStageBGM.mp3");
+    await settleDecode();
+    // Holding 11 MB through a fight that has its own theme is pure waste.
+    expect(bed.src).toBe("");
+
+    MockSource.started = [];
+    audio.exitRaid();
+    await settleDecode();
+
+    // ...and the track is reusable: it re-attaches and decodes again on the way out.
+    expect(bed.src).toContain("dayFarmBGM");
+    expect(MockSource.started).toHaveLength(1);
   });
 
   it("returns to the buffer, not the element, after a background/foreground cycle", async () => {
@@ -645,5 +683,243 @@ describe("AudioManager gapless music looping", () => {
     audio.exitRaid();
 
     expect(raid.src).toBe("");
+  });
+});
+
+// The platform can take the audio session away at any moment — on iOS a call, a
+// notification, Siri, the lock screen, another app, or memory pressure — and Safari
+// reports that as the non-standard state "interrupted", where resume() can return a
+// promise that NEVER settles. Music rides that session, so without a recovery path
+// it simply stops and nothing ever retries it, while effects keep playing on their
+// media-element fallback: the "audio cuts in and out" a player hears.
+describe("AudioManager audio-session recovery", () => {
+  class MockSource {
+    static started: MockSource[] = [];
+    buffer: unknown = null;
+    loop = false;
+    loopStart = 0;
+    loopEnd = 0;
+    onended: (() => void) | null = null;
+    connect = (destination: unknown) => destination;
+    disconnect = () => {};
+    stop = () => {};
+    start = () => { MockSource.started.push(this); };
+  }
+
+  class MockContext {
+    static live: MockContext[] = [];
+    state = "running";
+    currentTime = 0;
+    destination = {};
+    closeCalls = 0;
+    onstatechange: (() => void) | null = null;
+    /** Safari during an interruption: resume() never settles, either way. */
+    resumeHangs = false;
+    constructor() { MockContext.live.push(this); }
+    createBufferSource = () => new MockSource();
+    createGain = () => ({
+      gain: { value: 0, linearRampToValueAtTime: () => {} },
+      connect: (destination: unknown) => destination,
+      disconnect: () => {},
+    });
+    decodeAudioData = () => Promise.resolve({
+      duration: 40, length: 40 * 44100, sampleRate: 44100,
+      getChannelData: () => new Float32Array(64).fill(0.5),
+    } as unknown as AudioBuffer);
+    resume = () => {
+      if (this.resumeHangs) return new Promise<void>(() => {});
+      this.setState("running");
+      return Promise.resolve();
+    };
+    suspend = () => { this.setState("suspended"); return Promise.resolve(); };
+    close = () => { this.closeCalls++; this.setState("closed"); return Promise.resolve(); };
+    setState(next: string) {
+      this.state = next;
+      this.onstatechange?.();
+    }
+  }
+
+  const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+  const current = () => MockContext.live[MockContext.live.length - 1];
+
+  let hidden: boolean;
+
+  beforeEach(() => {
+    MockAudio.instances = [];
+    MockAudio.rejectPlay = false;
+    MockSource.started = [];
+    MockContext.live = [];
+    hidden = false;
+    const windowTarget = new EventTarget() as EventTarget & { AudioContext: unknown };
+    windowTarget.AudioContext = MockContext;
+    const documentTarget = new EventTarget();
+    Object.defineProperties(documentTarget, {
+      hidden: { get: () => hidden },
+      hasFocus: { value: () => true },
+    });
+    vi.stubGlobal("window", windowTarget);
+    vi.stubGlobal("document", documentTarget);
+    vi.stubGlobal("Audio", MockAudio);
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) }));
+    vi.stubGlobal("localStorage", {
+      getItem: () => JSON.stringify({ music: true, ambience: false }),
+      setItem: () => {},
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("reports an interrupted track as not playing, so callers know to restart it", async () => {
+    const audio = new AudioManager();
+    await settle();
+    expect(MockSource.started).toHaveLength(1);
+
+    // The source object still exists, but a frozen context makes no sound. Treating
+    // that as "playing" is what let music die with nothing left to retry.
+    current().state = "interrupted";
+    MockSource.started = [];
+    audio.resumeFromGesture();
+    await settle();
+
+    expect(MockSource.started.length).toBeGreaterThan(0);
+  });
+
+  it("rebuilds the context and restarts music when resume() hangs", async () => {
+    const audio = new AudioManager();
+    await settle();
+    const interrupted = current();
+
+    interrupted.state = "interrupted";
+    interrupted.resumeHangs = true;
+    MockSource.started = [];
+
+    vi.useFakeTimers();
+    audio.resumeFromGesture();
+    // A hanging resume() must not stall recovery: it is raced, not awaited.
+    await vi.advanceTimersByTimeAsync(2_000);
+    vi.useRealTimers();
+    await settle();
+
+    expect(interrupted.closeCalls).toBe(1);
+    expect(MockContext.live).toHaveLength(2);
+    expect(current().state).toBe("running");
+    expect(MockSource.started.length).toBeGreaterThan(0); // playing on the new context
+  });
+
+  it("rebuilds a context the platform closed outright", async () => {
+    const audio = new AudioManager();
+    await settle();
+    current().state = "closed";
+    MockSource.started = [];
+
+    audio.resumeFromGesture();
+    await settle();
+
+    expect(MockContext.live).toHaveLength(2);
+    expect(MockSource.started.length).toBeGreaterThan(0);
+  });
+
+  it("restarts frozen sources when the session comes back on its own", async () => {
+    new AudioManager();
+    await settle();
+    const ctx = current();
+    ctx.state = "interrupted";
+    MockSource.started = [];
+
+    // No focus/visibility event accompanies this — statechange is the only signal.
+    ctx.setState("running");
+    await settle();
+
+    expect(MockSource.started.length).toBeGreaterThan(0);
+  });
+
+  it("recovers a context that claims to be running but whose clock has stopped", async () => {
+    vi.useFakeTimers();
+    new AudioManager();
+    await vi.advanceTimersByTimeAsync(0);
+    const stalled = current();
+    stalled.currentTime = 5;
+
+    // Two watchdog ticks with no progress: state still says "running", so resume()
+    // has nothing to do and only a new context can recover it.
+    await vi.advanceTimersByTimeAsync(2_100);
+    await vi.advanceTimersByTimeAsync(2_100);
+
+    expect(stalled.closeCalls).toBe(1);
+    expect(MockContext.live).toHaveLength(2);
+  });
+
+  it("leaves a healthy context alone", async () => {
+    vi.useFakeTimers();
+    new AudioManager();
+    await vi.advanceTimersByTimeAsync(0);
+    const ctx = current();
+
+    for (let tick = 1; tick <= 4; tick++) {
+      ctx.currentTime = tick * 2;
+      await vi.advanceTimersByTimeAsync(2_100);
+    }
+
+    expect(ctx.closeCalls).toBe(0);
+    expect(MockContext.live).toHaveLength(1);
+  });
+
+  it("does not fight a deliberate background suspend", async () => {
+    vi.useFakeTimers();
+    new AudioManager();
+    await vi.advanceTimersByTimeAsync(0);
+    const ctx = current();
+
+    hidden = true;
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    // Backgrounded audio is supposed to be silent; recovering it would be a bug.
+    expect(ctx.closeCalls).toBe(0);
+    expect(MockContext.live).toHaveLength(1);
+  });
+
+  it("repairs a streaming track too, which has no buffer source to inspect", async () => {
+    vi.useFakeTimers(); // the watchdog interval must be created under fake timers
+    const audio = new AudioManager();
+    await settle();
+    audio.enterRaid("farmStageBGM.mp3"); // too long to decode: this one streams
+    await settle();
+    const stage = MockAudio.instances.find((a) => a.src.includes("farmStageBGM"))!;
+    expect(stage.paused).toBe(false);
+    const playsBefore = stage.playCalls;
+
+    stage.pause(); // an interruption stops media elements as dead as buffer sources
+    await vi.advanceTimersByTimeAsync(2_100);
+
+    expect(stage.playCalls).toBeGreaterThan(playsBefore);
+    expect(stage.paused).toBe(false);
+  });
+
+  it("frees the voice budget a dead context's sources could never release", async () => {
+    const audio = new AudioManager();
+    await settle();
+    audio.enterRaid("farmStageBGM.mp3");
+    await settle();
+
+    // Fill the voice cap, then lose the context: those sources can never report
+    // `ended`, so without a reset the budget stays spent and effects go silent.
+    for (let i = 0; i < 40; i++) audio.fightStrike({ team: "player", attackName: "Bite" });
+    current().state = "closed";
+    audio.resumeFromGesture();
+    await settle();
+
+    // The first cue after the rebuild re-decodes against the new context; the next
+    // one has to reach Web Audio again rather than a spent budget.
+    MockSource.started = [];
+    audio.fightStrike({ team: "player", attackName: "Bite" });
+    await settle();
+    audio.fightStrike({ team: "player", attackName: "Bite" });
+
+    expect(MockSource.started.length).toBeGreaterThan(0);
   });
 });

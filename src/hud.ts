@@ -4,6 +4,7 @@
 // bottom-center. Resize-safe (fixed positioning).
 import { GameState } from "./GameState";
 import { CropConfig } from "./Field";
+import { harvestXp } from "./farmRewards";
 import { PlaceableDef, BoostDef, FarmSizeUpgrade, ClimateUpgrade, upgradeIcon, placeablePurchaseLimit } from "./assets";
 import type { FarmerBodyDef, FarmerCatalog, FarmerHeadDef, PetCatalog, PetDef } from "./assets";
 import { EPIC_BOSS_FIGHT_BRAIN_COST, type EpicBossPayment } from "./epicBoss/tokens";
@@ -84,6 +85,7 @@ interface MktEntry {
   level: number;
   brains?: boolean; // priced in brains rather than gold
   sell?: number; // harvest value (plants and fruit trees)
+  xp?: number; // experience granted per harvest (crops)
   timeLabel?: string; // catalog grow/regrowth time
   graveNeeded?: "Blue" | "Red" | "Silver"; // locked until this colored grave is owned
   ownedLimit?: boolean; // "1 per farm" limit reached (gift vouchers) — can't buy
@@ -1232,6 +1234,9 @@ export class Hud {
   getShedSlots: (() => number) | null = null;
   /** Whether a colored grave is placed (gates planting that zombie class). */
   hasGrave: ((color: "Blue" | "Red" | "Silver") => boolean) | null = null;
+  /** Whether the Plowing Monolith is placed — it moves the plow XP onto harvests,
+   *  so the per-harvest XP quoted on crop cards has to account for it. */
+  hasPlowFree: (() => boolean) | null = null;
   /** Whether a gift voucher has hit its "1 per farm" limit — you already own that
    *  zombie, or hold an (unused) voucher for it (set by main; spans both Cupid
    *  vouchers, which grant the same zombie). Keyed by the boost key. */
@@ -1378,7 +1383,9 @@ export class Hud {
   /** Current independent farm mode and direct switch to the other farm. */
   playMode: PlayMode = "local";
   onSwitchFarm: ((mode: PlayMode) => void) | null = null;
-  onExportLocal: (() => void) | null = null;
+  /** Download this farm's progress as a file. Set in BOTH modes: the file is a plain
+   *  SaveGame either way, and Local Farm's Import is the only thing that reads one. */
+  onExportSave: (() => void) | null = null;
   onImportLocal: ((raw: string) => boolean) | null = null;
   onResetLocal: (() => void) | null = null;
   /** Settings' "Check for Updates": poll the service worker on demand. Null where
@@ -1614,7 +1621,7 @@ export class Hud {
       if (tab === "Crops" && sub === "Plants")
         return this.plantCards.map((c) => ({
           name: c.name, portrait: c.portrait, cost: c.cost, level: c.level, sell: c.sell,
-          timeLabel: c.timeLabel,
+          xp: this.cropXp(c.cfg), timeLabel: c.timeLabel,
           onPick: () => { this.setPlanting(c.cfg); bg.remove(); },
         }));
       if (tab === "Crops" && sub === "Zombies")
@@ -2134,6 +2141,14 @@ export class Hud {
       s.innerHTML = `<img src="${UI("topbar_money_icon.png")}">+${en.sell}`;
       body.appendChild(s);
     }
+    // Harvest XP, so a plant's payoff can be judged on level progress and not just
+    // gold. Zombie crops deliberately don't set it (see the Crops/Zombies entries).
+    if (en.xp) {
+      const x = document.createElement("div");
+      x.className = "mkt-xp";
+      x.innerHTML = `<img src="${UI("topbar_exp_icon.png")}">+${en.xp}`;
+      body.appendChild(x);
+    }
     if (en.timeLabel) {
       const t = document.createElement("div");
       t.className = "mkt-time";
@@ -2469,6 +2484,12 @@ export class Hud {
     showPlants();
   }
 
+  /** XP one harvest of this crop pays out — the same number JobSystem awards, so a
+   *  placed Plowing Monolith (which moves the plow XP onto the harvest) is included. */
+  private cropXp(cfg: CropConfig): number {
+    return harvestXp(cfg.xp ?? 0, !!this.hasPlowFree?.());
+  }
+
   private buildCard(c: MenuCard, onPick: (c: MenuCard) => void, forceLock = false): HTMLElement {
     const levelLocked = this.state.level < c.level;
     // Colored-grave gate for zombie crops (Blue/Red/Silver need the grave placed).
@@ -2494,6 +2515,15 @@ export class Hud {
       const s = document.createElement("span");
       s.innerHTML = `<img src="${UI("topbar_money_icon.png")}">+${c.sell}`;
       right.appendChild(s);
+    }
+    // Plants only: zombie crops earn XP too, but growing one is about the unit you
+    // dig up, so quoting a yield on those cards points at the wrong thing.
+    const cardXp = c.cfg.isZombie ? 0 : this.cropXp(c.cfg);
+    if (cardXp) {
+      const x = document.createElement("span");
+      x.className = "pm-xp";
+      x.innerHTML = `<img src="${UI("topbar_exp_icon.png")}">+${cardXp}`;
+      right.appendChild(x);
     }
     const t = document.createElement("span");
     t.innerHTML = `<img src="${UI("icon_time.png")}">${c.timeLabel}`;

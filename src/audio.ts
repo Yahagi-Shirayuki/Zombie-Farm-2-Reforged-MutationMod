@@ -100,6 +100,66 @@ const AUTHORED_SECONDS: Record<string, number> = {
 const HANDOVER_MS = 150;
 
 /**
+ * How long to wait for `AudioContext.resume()` before giving up on it.
+ *
+ * iOS takes the audio session away constantly and for mundane reasons — a call, a
+ * notification, Siri, the lock screen, another app, memory pressure — and Safari
+ * reports that as the non-standard state `"interrupted"`. A `resume()` issued while
+ * interrupted can return a promise that NEVER settles, so it must always be raced
+ * rather than awaited: an unguarded `await` there is a permanently silent game.
+ */
+const RESUME_TIMEOUT_MS = 1_200;
+
+/** Minimum gap between context rebuilds, so a device that keeps taking the session
+ *  away can't put us in a tear-down loop. */
+const REBUILD_COOLDOWN_MS = 5_000;
+
+/** How often to check that audio we believe is playing is actually advancing. */
+const WATCHDOG_MS = 2_000;
+
+/**
+ * Longest looping track we will hold decoded in memory for the sake of a gapless
+ * seam.
+ *
+ * A decoded buffer costs ~0.37 MB per second (Float32 per channel, stereo, at the
+ * 48 kHz iOS runs contexts at) — so `farmStageBGM` alone is 23 MB and `robotStageBGM`
+ * 22 MB, against 11 MB for the farm bed and 3 MB for the ambience bed. The long ones
+ * are also the ones whose seam is heard least: a stage theme loops once or twice in a
+ * whole invasion, while the beds loop all session. 40 s keeps every track that loops
+ * often and drops exactly the two that dominate the footprint.
+ *
+ * This matters beyond tidiness: on a phone already carrying tens of megabytes of
+ * artwork, that resident audio is itself a reason the OS reclaims the audio session,
+ * which is the interruption the recovery path above exists to survive.
+ */
+const MAX_DECODED_LOOP_SECONDS = 40;
+
+/** Resolve true if `promise` fulfils within `ms`, false if it rejects OR hangs. */
+function settledWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), ms);
+    promise.then(() => finish(true), () => finish(false));
+  });
+}
+
+/** What a LoopTrack needs from the shared audio session. `context()` can return a
+ *  DIFFERENT context than it did last call — the manager replaces one the platform
+ *  has taken away — so a track must never cache it. */
+interface AudioSession {
+  context(): AudioContext | null;
+  /** Get the session running again, rebuilding it if necessary. Resolves false when
+   *  only a fresh user gesture can help. */
+  ensureRunning(): Promise<boolean>;
+}
+
+/**
  * Where the authored audio actually sits inside a decoded buffer.
  *
  * Browsers strip differing amounts of MP3 encoder delay on their own (some all of
@@ -154,12 +214,18 @@ class LoopTrack {
   private offset = 0;      // resume position while stopped
   private fade: ReturnType<typeof setInterval> | null = null;
   private vol = 1;
+  private decodeAttempts = 0;
+  private released = false; // dispose() dropped the element source; play() restores it
 
   constructor(
     private readonly url: string,
     private readonly authored: number | undefined,
     private readonly looping: boolean,
-    private readonly context: () => AudioContext | null,
+    /** Whether this track earns the decoded (gapless) path at all — see
+     *  MAX_DECODED_LOOP_SECONDS. When false it simply streams, as music did before
+     *  gapless looping existed, and costs no resident memory. */
+    private readonly gapless: boolean,
+    private readonly session: AudioSession,
   ) {
     // Created up front (not on first play) so channel volumes can be applied
     // before anything starts, and lazy so the bytes are only fetched once the
@@ -176,14 +242,23 @@ class LoopTrack {
     if (this.amp && this.fade === null) this.amp.gain.value = value;
   }
 
-  /** Whether nothing is actually coming out right now — including after a start
-   *  the browser's autoplay policy rejected, which is what re-arms the gesture
-   *  listener. `wantPlay` is intent and deliberately separate: a blocked start
-   *  still wants to play. */
-  get paused() { return !this.source && this.el.paused; }
+  /** Whether nothing is AUDIBLE right now — including after a start the browser's
+   *  autoplay policy rejected, which is what re-arms the gesture listener.
+   *
+   *  A started source counts as playing only while its context is running: an
+   *  interrupted or suspended context freezes every buffer source without telling
+   *  anyone, so "a source object exists" is not evidence of sound. Reporting that as
+   *  playing is what let a silent track sit there with nothing ever retrying it.
+   *  `wantPlay` is intent and deliberately separate: a blocked start still wants to
+   *  play. */
+  get paused() {
+    if (this.source) return this.session.context()?.state !== "running";
+    return this.el.paused;
+  }
 
-  /** Begin fetching and decoding without playing, so a later start is instant. */
-  warm() { this.decode(); }
+  /** Whether this track is meant to be playing (as opposed to deliberately stopped),
+   *  so a session recovery knows what to bring back. */
+  get wanted() { return this.wantPlay; }
 
   /** Restart from the top on the next play (the non-looping victory sting). */
   rewind() {
@@ -193,21 +268,23 @@ class LoopTrack {
 
   play(): Promise<void> {
     this.wantPlay = true;
+    this.restoreElement();
     this.decode();
-    const ctx = this.context();
+    const ctx = this.session.context();
     if (ctx && this.buffer) {
-      if (ctx.state === "running") {
-        if (!this.source) this.startSource(this.offset);
-        return Promise.resolve();
+      if (this.ensureSource()) return Promise.resolve();
+      if (ctx.state !== "running") {
+        // Backgrounding suspends the context, an interruption freezes it, and the
+        // platform can close it outright. Recovering is the session's job — a bare
+        // resume() here can hang forever on iOS — and the element is not a stand-in:
+        // it is the gappy path, and nothing would ever hand playback back to the
+        // buffer. Rejecting re-arms the gesture listener, which is the one thing
+        // that CAN fix a session only the user is allowed to restart.
+        return this.session.ensureRunning().then((ok) => {
+          if (ok && this.wantPlay && this.ensureSource()) return;
+          throw new Error("audio session unavailable");
+        });
       }
-      // Backgrounding suspends the context, and resuming it is async. Wait for it
-      // rather than falling back to the element: the element is the gappy path, and
-      // nothing would ever hand playback back to the buffer, so one
-      // background/foreground cycle would otherwise cost gapless looping for the
-      // rest of the session. A rejection here re-arms the gesture listener.
-      return ctx.resume().then(() => {
-        if (this.wantPlay && !this.source) this.startSource(this.offset);
-      });
     }
     this.el.volume = this.vol;
     return this.el.play();
@@ -216,25 +293,86 @@ class LoopTrack {
   pause() {
     this.offset = this.position();
     this.wantPlay = false;
+    this.endFade();
     this.stopSource();
     this.el.pause();
   }
 
-  /** Release the decoded buffer and the media resource. Music buffers are tens of
-   *  megabytes decoded, so a finished raid track must not outlive the raid. */
+  /** The session was interrupted and has come back.
+   *
+   *  A source the platform froze is not reliably restarted by it — on iOS a buffer
+   *  source that was live across an interruption often stays silent even once the
+   *  context reads "running" again — so replace it from the position it stopped at
+   *  rather than trusting it. Harmless when called spuriously: the replacement
+   *  resumes from the same offset, because a stopped context's clock doesn't
+   *  advance. */
+  resync() {
+    if (!this.source) return;
+    this.offset = this.position();
+    this.stopSource();
+    this.ensureSource();
+  }
+
+  /** The context this track is playing on is being replaced. Bank the position and
+   *  drop the nodes that belong to it, keeping both the decoded buffer (portable,
+   *  and megabytes to rebuild) and `wantPlay` so the new session can resume.
+   *
+   *  Must be called while the DYING context is still the session's current one —
+   *  `position()` reads its clock. */
+  detach() {
+    this.offset = this.position();
+    this.endFade();
+    this.stopSource();
+  }
+
+  /** Give back the decoded buffer and the media resource, banking the position.
+   *
+   *  A decoded minute of stereo music is over 20 MB, so a track that has stepped
+   *  aside — a finished raid's theme, or the farm bed for the length of an invasion —
+   *  must not stay resident. The track remains usable: the next `play()` re-attaches
+   *  the element and re-decodes, which is a cached fetch plus a worker decode while
+   *  the element already streams. */
   dispose() {
+    this.offset = this.position();
     this.wantPlay = false;
     this.stopSource();
     this.endFade();
     this.el.pause();
     this.el.src = "";
+    this.released = true;
     this.buffer = null;
+    this.decodeStarted = false;
+    this.decodeAttempts = 0;
   }
 
   // --- internals -----------------------------------------------------------
+  /** Re-attach the media source dropped by `dispose()`. `el.src` reads back as the
+   *  resolved page URL once cleared, so the flag is what tracks this, not the DOM. */
+  private restoreElement() {
+    if (!this.released) return;
+    this.released = false;
+    this.el.src = this.url;
+  }
+
+  /** Make sure a live buffer source is producing sound, taking over from a
+   *  streaming element if one is mid-flight. Returns false when the buffer path
+   *  isn't usable right now and the caller should fall back. */
+  private ensureSource(): boolean {
+    const ctx = this.session.context();
+    if (!ctx || !this.buffer || ctx.state !== "running") return false;
+    if (this.source) return true; // running context + live source == audible
+    if (!this.el.paused) {
+      // The buffer landed while the element was streaming — or a recovery restored
+      // the session under it. Either way the gapless path takes over from here.
+      this.handover();
+      return this.source !== null;
+    }
+    return this.startSource(this.offset);
+  }
+
   /** Seconds into the loop region right now, whichever path is playing. */
   private position(): number {
-    const ctx = this.context();
+    const ctx = this.session.context();
     const length = this.region.end - this.region.start;
     if (this.source && ctx && length > 0) {
       const elapsed = this.startedFrom + (ctx.currentTime - this.startedAt);
@@ -249,21 +387,26 @@ class LoopTrack {
   }
 
   private decode() {
-    if (this.decodeStarted || this.buffer) return;
-    const ctx = this.context();
-    if (!ctx) return; // no Web Audio: the element stays in charge
+    if (this.decodeStarted || this.buffer || !this.gapless) return;
+    const ctx = this.session.context();
+    if (!ctx || this.decodeAttempts >= 3) return; // no Web Audio: the element stays in charge
     this.decodeStarted = true;
+    this.decodeAttempts++;
     void fetch(this.url)
       .then((response) => response.arrayBuffer())
       .then((data) => ctx.decodeAudioData(data))
       .then((decoded) => {
         this.buffer = decoded;
         this.region = loopRegion(decoded, this.authored);
-        if (this.wantPlay && ctx.state === "running") this.handover();
+        if (this.wantPlay && ctx === this.session.context()) this.ensureSource();
       })
       // A failed fetch/decode simply leaves this track on the element, which is
-      // exactly the old behaviour — never a hard failure.
-      .catch(() => { /* stays on the streaming element */ });
+      // exactly the old behaviour — never a hard failure. Clearing the flag lets a
+      // later play() retry (a decode against a context the platform then killed
+      // rejects, and permanently stranding the track on the element for that is the
+      // same missing-recovery bug this file exists to fix). Bounded by the attempt
+      // cap above, so a genuinely missing file can't refetch on every event.
+      .catch(() => { this.decodeStarted = false; });
   }
 
   /** The buffer arrived while the element was streaming: start the gapless source
@@ -293,49 +436,60 @@ class LoopTrack {
     this.fade = null;
   }
 
-  private startSource(offset: number, fadeIn = 0) {
-    const ctx = this.context();
-    if (!ctx || !this.buffer) return;
+  /** Returns whether a source is now playing. */
+  private startSource(offset: number, fadeIn = 0): boolean {
+    const ctx = this.session.context();
+    if (!ctx || !this.buffer) return false;
     this.stopSource();
     const length = this.region.end - this.region.start;
     const from = length > 0 ? Math.min(offset, length) : 0;
-    const source = ctx.createBufferSource();
-    source.buffer = this.buffer;
-    if (this.looping) {
-      source.loop = true;
-      source.loopStart = this.region.start;
-      source.loopEnd = this.region.end;
+    try {
+      const source = ctx.createBufferSource();
+      source.buffer = this.buffer;
+      if (this.looping) {
+        source.loop = true;
+        source.loopStart = this.region.start;
+        source.loopEnd = this.region.end;
+      }
+      const amp = ctx.createGain();
+      amp.gain.value = fadeIn > 0 ? 0 : this.vol;
+      if (fadeIn > 0 && typeof amp.gain.linearRampToValueAtTime === "function") {
+        amp.gain.linearRampToValueAtTime(this.vol, ctx.currentTime + fadeIn);
+      }
+      source.connect(amp).connect(ctx.destination);
+      source.onended = () => {
+        if (source !== this.source) return; // superseded by a restart
+        this.source = null;
+        this.wantPlay = false; // a non-looping sting finished on its own
+      };
+      // Non-looping stings are bounded explicitly so the trailing padding never plays.
+      source.start(0, this.region.start + from, this.looping ? undefined : length - from);
+      this.source = source;
+      this.amp = amp;
+      this.startedAt = ctx.currentTime;
+      this.startedFrom = from;
+      return true;
+    } catch {
+      // A buffer decoded by a context that has since been replaced can be refused.
+      // Drop it so the next play() re-decodes against the live context, and let the
+      // element cover this attempt.
+      this.buffer = null;
+      this.decodeStarted = false;
+      return false;
     }
-    const amp = ctx.createGain();
-    amp.gain.value = fadeIn > 0 ? 0 : this.vol;
-    if (fadeIn > 0 && typeof amp.gain.linearRampToValueAtTime === "function") {
-      amp.gain.linearRampToValueAtTime(this.vol, ctx.currentTime + fadeIn);
-    }
-    source.connect(amp).connect(ctx.destination);
-    source.onended = () => {
-      if (source !== this.source) return; // superseded by a restart
-      this.source = null;
-      this.wantPlay = false; // a non-looping sting finished on its own
-    };
-    // Non-looping stings are bounded explicitly so the trailing padding never plays.
-    source.start(0, this.region.start + from, this.looping ? undefined : length - from);
-    this.source = source;
-    this.amp = amp;
-    this.startedAt = ctx.currentTime;
-    this.startedFrom = from;
   }
 
   private stopSource() {
     if (!this.source) return;
     const source = this.source;
+    const amp = this.amp;
     this.source = null;
-    source.onended = null;
-    try {
-      source.stop();
-    } catch { /* never started */ }
-    source.disconnect();
-    this.amp?.disconnect();
     this.amp = null;
+    source.onended = null;
+    // Nodes belonging to a closed context throw on every one of these.
+    try { source.stop(); } catch { /* never started, or context gone */ }
+    try { source.disconnect(); } catch { /* context gone */ }
+    try { amp?.disconnect(); } catch { /* context gone */ }
   }
 }
 
@@ -427,11 +581,17 @@ export class AudioManager {
   private decoding = new Set<string>();
   private voices = 0;
   private armed = false; // whether a user-gesture resume listener is pending
+  // Session recovery. `ensuring` de-dupes concurrent attempts (combat asks on every
+  // dropped cue), `lastRebuild` rate-limits tear-downs, and the watchdog catches the
+  // failures that produce no event at all. See ensureRunning / checkAudio.
+  private ensuring: Promise<boolean> | null = null;
+  private lastRebuild = 0;
+  private watchdog: ReturnType<typeof setInterval> | null = null;
+  private lastClock = -1;
   // While a raid is up, its looping stage BGM replaces the farm bgm. `raidBgm`
   // holds the active raid track (and `raidFile` its filename); the farm bgm is
   // paused for the raid's duration.
   private raidBgm: LoopTrack | null = null;
-  private victoryBgm: LoopTrack | null = null;
   private raidFile = "";
   private zombieBarkSource: (() => { group: string; key: string } | null) | null = null;
 
@@ -469,6 +629,21 @@ export class AudioManager {
 
     if (this.musicOn && this.canPlay()) void this.bgm.play().catch(() => this.arm());
     if (this.ambienceOn && this.canPlay()) this.startAmbience();
+    this.startWatchdog();
+  }
+
+  /** Release timers and the audio session. Only the page teardown needs this; the
+   *  manager otherwise lives as long as the game does. */
+  destroy() {
+    this.stopWatchdog();
+    this.stopAmbience();
+    for (const track of this.loops()) track.dispose();
+    const ctx = this.ctx;
+    this.ctx = null;
+    if (ctx) {
+      ctx.onstatechange = null;
+      try { void ctx.close().catch(() => { /* already gone */ }); } catch { /* no close */ }
+    }
   }
 
   // --- persistence ---------------------------------------------------------
@@ -516,21 +691,191 @@ export class AudioManager {
    */
   resumeFromGesture() {
     if (!this.canPlay()) return;
+    // Start inside the gesture itself — an autoplay policy only honours what the
+    // gesture synchronously reaches — then let the async recovery pick up whatever
+    // needed the session back first.
+    this.restartLoops();
     // Unlock Web Audio from the same gesture. iOS parks a context created outside
     // one in "suspended" forever, which would leave every effect on the slow
     // media-element path for the whole session.
-    void this.audioContext()?.resume().catch(() => { /* re-armed by the next gesture */ });
+    void this.recover();
+    this.startWatchdog();
+  }
+
+  // --- audio session ---------------------------------------------------------
+  /** Every looping track that currently exists, for session-wide operations. */
+  private loops(): LoopTrack[] {
+    const tracks = [this.bgm, this.ambBed];
+    if (this.raidBgm) tracks.push(this.raidBgm);
+    return tracks;
+  }
+
+  /** Start whichever loops should be audible but aren't. Safe to call at any time:
+   *  a track already producing sound is left alone (`paused` means inaudible, not
+   *  "has no source"), so this is the single idempotent repair for every path that
+   *  can leave music stopped. */
+  private restartLoops() {
+    if (!this.canPlay()) return;
     if (this.musicOn && this.activeBgm().paused)
       void this.activeBgm().play().catch(() => this.arm());
     if (this.ambienceOn && this.ambBed.paused)
       void this.ambBed.play().catch(() => this.arm());
   }
 
+  /** Get the session running and put back whatever it was carrying. */
+  private recover(): Promise<void> {
+    return this.ensureRunning().then((ok) => {
+      if (ok) this.restartLoops();
+      else this.arm(); // only a user gesture can help now
+    });
+  }
+
+  /**
+   * Get the audio session into a running state.
+   *
+   * The platform takes it away for reasons the game never sees — on iOS a call, a
+   * notification, Siri, the lock screen, another app, or memory pressure — and
+   * Safari reports that as the non-standard state `"interrupted"`, in which
+   * `resume()` may return a promise that never settles. So resume is RACED, never
+   * awaited, and when it loses (or the context has been closed outright) the only
+   * cure is a brand new context. Concurrent callers share one attempt.
+   */
+  private ensureRunning(): Promise<boolean> {
+    if (this.ensuring) return this.ensuring;
+    const attempt = this.attemptRunning().then(
+      (ok) => { this.ensuring = null; return ok; },
+      () => { this.ensuring = null; return false; },
+    );
+    this.ensuring = attempt;
+    return attempt;
+  }
+
+  private async attemptRunning(): Promise<boolean> {
+    let ctx = this.audioContext();
+    if (!ctx) return false;
+    if (ctx.state === "running") return true;
+    if (ctx.state !== "closed" && await this.resumeWithin(ctx)) return true;
+
+    ctx = this.rebuildContext();
+    if (!ctx) return false;
+    if (ctx.state === "running") return true;
+    return this.resumeWithin(ctx);
+  }
+
+  /** True only if `resume()` both settled in time AND left the context running. */
+  private async resumeWithin(ctx: AudioContext): Promise<boolean> {
+    try {
+      if (!await settledWithin(ctx.resume(), RESUME_TIMEOUT_MS)) return false;
+    } catch {
+      return false; // resume() can throw outright on a dead context
+    }
+    return ctx.state === "running";
+  }
+
+  /**
+   * Replace a context the platform has taken away.
+   *
+   * Rate-limited, because a device that keeps interrupting us must not be able to
+   * drive a tear-down loop, and because iOS caps how many contexts a page may hold.
+   */
+  private rebuildContext(): AudioContext | null {
+    const now = Date.now();
+    if (now - this.lastRebuild < REBUILD_COOLDOWN_MS) return this.ctx;
+    this.lastRebuild = now;
+
+    // Bank positions and drop nodes while the DYING context is still current —
+    // detach() reads its clock.
+    for (const track of this.loops()) track.detach();
+
+    const dying = this.ctx;
+    this.ctx = null;
+    // Those voices were counted against sources that can now never report `ended`.
+    this.voices = 0;
+    // One-shot buffers are small and cheap to re-decode, and some engines refuse a
+    // buffer that outlived its context. The music buffers are megabytes each, are
+    // portable by spec, and stay with their tracks.
+    this.buffers.clear();
+    this.decoding.clear();
+    if (dying) {
+      dying.onstatechange = null;
+      try { void dying.close().catch(() => { /* already gone */ }); } catch { /* no close */ }
+    }
+
+    // A construction failure here must not latch Web Audio off for the session the
+    // way a first-use failure does: the platform is momentarily out of contexts, not
+    // missing the API. Clear the flag on both sides so the next attempt past the
+    // cooldown gets to try again.
+    this.ctxUnavailable = false;
+    const fresh = this.audioContext();
+    this.ctxUnavailable = false;
+    return fresh;
+  }
+
+  /**
+   * Watch for audio that we believe is playing but isn't.
+   *
+   * Two failures produce no event at all: a source left on a context the system
+   * froze (whose `state` can still read "running" while its clock stops), and a loop
+   * that never restarted because the focus/visibility event that would have
+   * restarted it never came. Both present to the player as music dropping out
+   * mid-session with no way back.
+   */
+  private startWatchdog() {
+    if (this.watchdog !== null) return;
+    this.lastClock = -1;
+    this.watchdog = setInterval(this.checkAudio, WATCHDOG_MS);
+    // Node only (tests): a background health check must never hold the process open.
+    (this.watchdog as unknown as { unref?: () => void }).unref?.();
+  }
+
+  private stopWatchdog() {
+    if (this.watchdog === null) return;
+    clearInterval(this.watchdog);
+    this.watchdog = null;
+    this.lastClock = -1;
+  }
+
+  private checkAudio = () => {
+    if (!this.canPlay() || !(this.musicOn || this.ambienceOn)) return this.stopWatchdog();
+    const ctx = this.ctx;
+    if (ctx) {
+      if (ctx.state !== "running") {
+        this.lastClock = -1;
+        void this.recover();
+        return;
+      }
+      // A "running" context whose clock has stopped is an interruption the platform
+      // never reported. resume() has nothing to do here, so go straight to a rebuild.
+      if (this.lastClock >= 0 && ctx.currentTime <= this.lastClock) {
+        this.lastClock = -1;
+        this.rebuildContext();
+        void this.recover();
+        return;
+      }
+      this.lastClock = ctx.currentTime;
+    }
+    // Reached with no context at all when every live track streams (the long stage
+    // themes), which an interruption stops just as dead — those need the same repair.
+    this.restartLoops();
+  };
+
   // --- music ---------------------------------------------------------------
-  /** Build a seamless-looping track, giving it the authored length that lets it
-   *  skip the encoder padding baked into our MP3s. */
+  /** Build a track, giving it the authored length that lets it skip the encoder
+   *  padding baked into our MP3s, and deciding whether it earns the decoded path.
+   *
+   *  Gapless looping is a memory purchase, and what it buys depends entirely on how
+   *  often the seam is heard. The farm bed and the ambience bed loop all session and
+   *  are cheap, so they keep it; a 64-second stage theme loops perhaps twice in a
+   *  whole invasion and costs 23 MB, so it streams. A non-looping sting has no seam
+   *  to hide and never decodes. An unknown length is treated as too long: we can't
+   *  price what we can't measure. */
   private track(file: string, looping: boolean): LoopTrack {
-    return new LoopTrack(A(file), AUTHORED_SECONDS[file], looping, () => this.audioContext());
+    const authored = AUTHORED_SECONDS[file];
+    const gapless = looping && authored !== undefined && authored <= MAX_DECODED_LOOP_SECONDS;
+    return new LoopTrack(A(file), authored, looping, gapless, {
+      context: () => this.audioContext(),
+      ensureRunning: () => this.ensureRunning(),
+    });
   }
 
   // The looping track that should be playing right now: the raid stage BGM while
@@ -553,6 +898,7 @@ export class AudioManager {
   }
 
   private pauseForBackground = () => {
+    this.stopWatchdog(); // deliberate silence is not a fault to repair
     this.activeBgm().pause();
     this.stopAmbience();
     for (const audio of this.oneShots) audio.pause();
@@ -572,7 +918,11 @@ export class AudioManager {
 
   private syncFocusAudio = () => {
     if (!this.canPlay()) return this.pauseForBackground();
-    if (this.ctx) void this.ctx.resume().catch(() => { /* needs a fresh gesture */ });
+    this.startWatchdog();
+    // Returning to the foreground is also where an interruption that happened while
+    // we were away gets discovered, so this goes through the full recovery rather
+    // than a bare resume() that can hang.
+    if (this.ctx) void this.recover();
     if (this.musicOn) void this.activeBgm().play().catch(() => this.arm());
     if (this.ambienceOn) this.startAmbience();
   };
@@ -599,8 +949,10 @@ export class AudioManager {
 
   setMusic(on: boolean) {
     this.musicOn = on;
-    if (on && this.canPlay()) void this.activeBgm().play().catch(() => this.arm());
-    else this.activeBgm().pause();
+    if (on && this.canPlay()) {
+      this.startWatchdog();
+      void this.activeBgm().play().catch(() => this.arm());
+    } else this.activeBgm().pause();
     this.persist();
   }
 
@@ -617,7 +969,10 @@ export class AudioManager {
     if (!file) return;
     if (this.raidFile !== file) {
       this.exitRaid(true); // tear down any prior raid track without resuming farm
-      this.bgm.pause();     // farm bed steps aside for the whole raid
+      // The farm bed steps aside for the whole raid, so it gives its decoded buffer
+      // back rather than holding 11 MB through a fight that has its own theme. It
+      // re-decodes on the way out, behind the element that starts streaming at once.
+      this.bgm.dispose();
       const a = this.track(file, true);
       a.volume = 0.4 * this.musicVolume * this.masterVolume;
       this.raidBgm = a;
@@ -625,15 +980,9 @@ export class AudioManager {
     }
     // Decode every attack cue before the first swing lands. Combat fires these at
     // up to ~20/s; a clip that is still decoding falls back to a media element,
-    // which is exactly the per-play main-thread cost raids cannot afford.
+    // which is exactly the per-play main-thread cost raids cannot afford. These are
+    // fractions of a second each — the whole set costs less than a second of music.
     for (const cue of FIGHT_CUE_FILES) this.buffer(A(cue));
-    // Warm the short victory cue while the battle is running so the decisive tick
-    // never waits on its first network fetch/decode.
-    if (!this.victoryBgm && this.musicOn) {
-      this.victoryBgm = this.track("winBGM.mp3", false);
-      this.victoryBgm.volume = 0.4 * this.musicVolume * this.masterVolume;
-      this.victoryBgm.warm();
-    }
     if (this.musicOn && this.canPlay()) void this.raidBgm!.play().catch(() => this.arm());
   }
 
@@ -643,8 +992,10 @@ export class AudioManager {
     const file = "winBGM.mp3";
     if (this.raidFile !== file) {
       this.exitRaid(true);
-      this.bgm.pause();
-      const audio = this.victoryBgm ?? this.track(file, false);
+      this.bgm.dispose();
+      // Streams from the element: a 10-second sting plays once and has no seam to
+      // hide, so decoding it would buy nothing for 4 MB.
+      const audio = this.track(file, false);
       audio.rewind();
       audio.volume = 0.4 * this.musicVolume * this.masterVolume;
       this.raidBgm = audio;
@@ -657,19 +1008,11 @@ export class AudioManager {
   // is used internally when immediately swapping to another raid track.
   exitRaid(keepFarmPaused = false) {
     if (this.raidBgm) {
-      if (this.raidBgm === this.victoryBgm) this.victoryBgm = null;
-      // Decoded music is tens of megabytes; a finished raid's track must not
-      // outlive the raid alongside the farm bed.
+      // A finished raid's track must not outlive the raid — whether that's a decoded
+      // buffer or just the element's own network buffer.
       this.raidBgm.dispose();
       this.raidBgm = null;
       this.raidFile = "";
-    }
-    // A raid that ended without a win leaves the warmed victory sting decoded.
-    // Only on a real exit: the `keepFarmPaused` swaps are entering another raid or
-    // playing that very sting, both of which still want it.
-    if (!keepFarmPaused) {
-      this.victoryBgm?.dispose();
-      this.victoryBgm = null;
     }
     if (!keepFarmPaused && this.musicOn && this.canPlay()) void this.bgm.play().catch(() => this.arm());
   }
@@ -761,7 +1104,22 @@ export class AudioManager {
       return null;
     }
     try {
-      this.ctx = new Impl();
+      const ctx = new Impl();
+      // The platform hands the session back without telling anyone, so a context
+      // that returns to "running" on its own has to restart the sources that were
+      // frozen when it left — nothing else would.
+      ctx.onstatechange = () => {
+        if (ctx !== this.ctx) return; // superseded by a rebuild
+        if (ctx.state !== "running") {
+          if (this.canPlay()) this.startWatchdog();
+          return;
+        }
+        // Arriving at "running" means the session had left it. Any source still
+        // attached was frozen by the platform and can't be trusted to have resumed.
+        for (const track of this.loops()) track.resync();
+        this.restartLoops();
+      };
+      this.ctx = ctx;
     } catch {
       this.ctxUnavailable = true; // blocked or out of hardware contexts
     }
@@ -795,26 +1153,35 @@ export class AudioManager {
     if (!ctx) return false;
     const buffer = this.buffer(url);
     if (!buffer) return false;
-    // Autoplay policy parks a context created outside a gesture in "suspended".
-    // Ask once and fall back meanwhile; resumeFromGesture does the real unlock.
+    // Autoplay policy parks a context created outside a gesture in "suspended", and
+    // the platform can interrupt or close a running one at any moment. Kick the
+    // shared recovery (concurrent callers share one attempt, so combat asking on
+    // every dropped cue costs nothing) and fall back to the element meanwhile.
     if (ctx.state !== "running") {
-      void ctx.resume().catch(() => { /* still gesture-locked */ });
+      void this.recover();
       return false;
     }
     if (this.voices >= MAX_VOICES) return true; // drop, don't queue: it's inaudible anyway
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    const amp = ctx.createGain();
-    amp.gain.value = gain;
-    source.connect(amp).connect(ctx.destination);
-    this.voices++;
-    source.onended = () => {
-      this.voices--;
-      source.disconnect();
-      amp.disconnect();
-    };
-    source.start();
-    return true;
+    try {
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      const amp = ctx.createGain();
+      amp.gain.value = gain;
+      source.connect(amp).connect(ctx.destination);
+      this.voices++;
+      source.onended = () => {
+        this.voices--;
+        source.disconnect();
+        amp.disconnect();
+      };
+      source.start();
+      return true;
+    } catch {
+      // A buffer that outlived the context it was decoded by can be refused. Drop it
+      // so the next cue re-decodes against the live context, and use the element now.
+      this.buffers.delete(url);
+      return false;
+    }
   }
 
   /** Media-element fallback. Pooled per file, because a fresh `new Audio()` per cue
@@ -863,6 +1230,7 @@ export class AudioManager {
   }
 
   private startAmbience() {
+    this.startWatchdog();
     void this.ambBed.play().catch(() => this.arm());
     this.scheduleAmbienceOneShot();
   }

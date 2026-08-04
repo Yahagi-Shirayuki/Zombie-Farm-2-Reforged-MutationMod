@@ -640,6 +640,38 @@ export class SaveManager {
     try { return localStorage.getItem(this.cacheKey()); } catch { return null; }
   }
 
+  /** Build a portable full save from an Online Farm, for the same "download a copy"
+   * flow Local Farm has. Online keeps no full blob on the device (only presentation),
+   * so the file is serialised from live in-memory state — which IS the server's,
+   * hydrated at bootstrap and kept reconciled by the command queue. The result is an
+   * ordinary SaveGame, so the only thing that can ingest it is Local Farm's Import
+   * (importLocal refuses every other mode); nothing here can travel back online.
+   * Account-scoped fields are dropped rather than translated:
+   *   - social: online friendships live on the server, and the local list is the
+   *     offline stub — carrying account friends over would fabricate local ones.
+   *   - farmJobs: unfinished farmer intents whose commands may already have committed
+   *     server-side. Replaying them on the copy would repeat their effect for free.
+   *   - zombiePots[].reserved: records a SERVER-held parent reservation. Only the
+   *     online reconciler reads it, and it marks a job for retirement when no
+   *     authoritative reservation backs it — which is every job, once local. */
+  exportOnline(): string | null {
+    if (this.mode !== "online") return null;
+    try {
+      const { social: _social, farmJobs: _farmJobs, ...blob } = this.serialize();
+      if (blob.zombiePots) {
+        const pots: NonNullable<SaveGame["zombiePots"]> = {};
+        for (const [id, job] of Object.entries(blob.zombiePots)) {
+          const { reserved: _reserved, ...rest } = job;
+          pots[id] = rest;
+        }
+        blob.zombiePots = pots;
+      }
+      return JSON.stringify(blob);
+    } catch {
+      return null;
+    }
+  }
+
   importLocal(raw: string): boolean {
     if (this.mode !== "local") return false;
     try {

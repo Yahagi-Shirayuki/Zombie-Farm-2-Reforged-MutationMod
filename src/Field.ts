@@ -489,6 +489,87 @@ export class Field {
 
   // Remove the plot under (col,row) entirely (destroy any crop, free its tiles,
   // revert to bare ground). Used by the Remove tool.
+  /** Origin a plot would take for a pointer at (col,row) — centred on the pointer,
+   *  the same anchoring a freshly plowed plot uses. */
+  plotOriginFor(col: number, row: number): { oc: number; or: number } {
+    return this.originFor(col, row);
+  }
+
+  /** Is this plot one the Move tool may pick up?
+   *
+   *  Only a BARE tilled plot moves. Anything growing stays put: a crop's value and
+   *  its mutation adjacency are decided where it sits, so letting a planted plot
+   *  wander would make the farm's layout mid-grow a thing to game rather than plan.
+   *  Spent dirt and holes are not tilled ground and stay put too. */
+  canMovePlot(oc: number, or: number): boolean {
+    const plot = this.plots.get(this.key(oc, or));
+    return !!plot && plot.state === "plowed" && !plot.crop;
+  }
+
+  /** Can the plot at (fromOc,fromOr) be relocated to (toOc,toOr)?
+   *
+   *  The destination is allowed to overlap the plot's OWN tiles — nudging a plot one
+   *  tile along is the common case, and it would otherwise collide with itself. */
+  canMovePlotTo(fromOc: number, fromOr: number, toOc: number, toOr: number): boolean {
+    if (!this.canMovePlot(fromOc, fromOr)) return false;
+    if (!this.fits(toOc, toOr)) return false;
+    const own = new Set<string>();
+    this.forEachTile(fromOc, fromOr, (k) => own.add(k));
+    for (let r = toOr; r < toOr + PLOT; r++)
+      for (let c = toOc; c < toOc + PLOT; c++)
+        if (!own.has(`${c},${r}`) && this.tileOccupied(c, r)) return false;
+    return true;
+  }
+
+  /** Relocate a whole plot, carrying whatever grows on it.
+   *
+   *  Layout only: the Planting keeps its `plantedAt`, so growth is untouched — a crop
+   *  moved mid-grow ripens exactly when it always would have. */
+  movePlot(fromOc: number, fromOr: number, toOc: number, toOr: number): boolean {
+    const fromKey = this.key(fromOc, fromOr);
+    const plot = this.plots.get(fromKey);
+    // Check movability BEFORE the same-origin shortcut, so a planted plot cannot
+    // report a successful "move" just by being dropped where it already is.
+    if (!plot || !this.canMovePlot(fromOc, fromOr)) return false;
+    if (fromOc === toOc && fromOr === toOr) return true;
+    if (!this.canMovePlotTo(fromOc, fromOr, toOc, toOr)) return false;
+
+    // Release the old tiles BEFORE claiming the new ones: the two footprints can
+    // overlap, and the destination must not inherit a stale claim.
+    this.forEachTile(fromOc, fromOr, (t) => this.tilePlot.delete(t));
+    this.plots.delete(fromKey);
+    plot.oc = toOc;
+    plot.or = toOr;
+    const toKey = this.key(toOc, toOr);
+    this.plots.set(toKey, plot);
+    this.forEachTile(toOc, toOr, (t) => this.tilePlot.set(t, toKey));
+
+    this.fit(plot.soil, plot.soil.texture, toOc, toOr, PLOT);
+    if (plot.crop) {
+      // Re-layout re-parents by stage, so pass the stage the crop is actually on.
+      plot.crop.baseY = this.layoutCrop(
+        plot.crop, plot.crop.stageFile ?? plot.crop.cfg.stages[0], toOc, toOr);
+    }
+    return true;
+  }
+
+  /** Ghost for the Move tool while a plot is in hand: the destination footprint,
+   *  green when it can land there. Returns the resolved origin. */
+  setPlotMoveCursor(col: number, row: number, fromOc: number, fromOr: number):
+    { oc: number; or: number; valid: boolean } {
+    this.objGhost.visible = false; // the plot ghost and the object ghost are exclusive
+    const { oc, or } = this.originFor(col, row);
+    const valid = this.canMovePlotTo(fromOc, fromOr, oc, or);
+    const c = this.plotCenterOf(oc, or);
+    this.cursor.position.set(c.x, c.y);
+    this.cursorGreen.visible = valid;
+    this.cursorRed.visible = !valid;
+    this.cursorLabel.visible = true;
+    this.cursorLabel.text = "Move";
+    this.cursor.visible = true;
+    return { oc, or, valid };
+  }
+
   removePlot(col: number, row: number): boolean {
     const at = this.plotOriginAt(col, row);
     if (!at) return false;

@@ -1082,8 +1082,8 @@
   display: flex; align-items: center; justify-content: center; padding: 0 4px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 1px #000; }
 #hud .mkt-body { flex: 1 1 auto; display: grid; grid-template-columns: minmax(0,1fr) auto;
-  grid-template-rows: minmax(0,1fr) auto auto; grid-template-areas:
-  "portrait sell" "portrait time" "cost cost";
+  grid-template-rows: minmax(0,1fr) auto auto auto; grid-template-areas:
+  "portrait sell" "portrait xp" "portrait time" "cost cost";
   align-items: center; padding: 4px 5px 7px; gap: 2px 4px; min-height: 0; }
 #hud .mkt-body > .mkt-portrait { grid-area: portrait; justify-self: center;
   max-height: 50px; max-width: 100%; object-fit: contain;
@@ -1100,6 +1100,11 @@
 #hud .mkt-sell { font-size: 11px; font-weight: 700; color: #3f7a1e; display: flex;
   grid-area: sell; align-items: center; gap: 2px; }
 #hud .mkt-sell img { height: 12px; max-height: 12px; }
+/* Harvest XP: the same chip shape as the sell/time stats, tinted like the topbar
+   experience bar so the icon reads as "level progress" and not another currency. */
+#hud .mkt-xp { font-size: 11px; font-weight: 700; color: #2f5f9a; display: flex;
+  grid-area: xp; align-items: center; gap: 2px; }
+#hud .mkt-xp img { height: 12px; max-height: 12px; }
 #hud .mkt-time { font-size: 11px; font-weight: 700; color: #452c0c; display: flex;
   grid-area: time; align-items: center; gap: 2px; }
 #hud .mkt-time img { height: 13px; max-height: 13px; }
@@ -1395,6 +1400,7 @@
   align-items: flex-end; gap: 5px; color: #452c0c; font-weight: 700; font-size: 13px; }
 #hud .pm-right span { display: flex; align-items: center; gap: 3px; }
 #hud .pm-right img { height: 15px; }
+#hud .pm-right .pm-xp { color: #2f5f9a; }
 #hud .pm-cost { grid-area: cost; margin-top: 5px; display: flex; align-items: center;
   justify-content: center; gap: 3px; background: linear-gradient(#7a5220, #5e3d15);
   border-radius: 6px; color: #ffe9a8; font-weight: 700; font-size: 14px; padding: 3px 0;

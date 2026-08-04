@@ -506,6 +506,31 @@ function applyOne(
       delete state.farm.plots[key];
       return { sequence, status: "applied" };
     }
+    case "farm.move": {
+      // Layout only: the plot record — crop, plantedAt, value, fertilised flag —
+      // moves across untouched, so nothing about growth or payout is re-decided.
+      if (!validCoord(command.oc, state.farmSize) || !validCoord(command.or, state.farmSize) ||
+          !validCoord(command.toOc, state.farmSize) || !validCoord(command.toOr, state.farmSize)) {
+        return reject(sequence, "bad_coord");
+      }
+      const from = plotKey(command.oc, command.or);
+      const plot = state.farm.plots[from];
+      if (!plot) return reject(sequence, "nothing_to_move");
+      // Only BARE tilled ground moves. A planted plot's payout and its mutation
+      // adjacency are decided where it sits, and spent soil is not tilled ground.
+      if (plot.state !== "plowed") return reject(sequence, "plot_occupied");
+      const to = plotKey(command.toOc, command.toOr);
+      if (from === to) return { sequence, status: "applied" };
+      // The destination may overlap the plot's OWN footprint (a one-tile nudge), so
+      // judge the overlap with this plot already lifted off the board.
+      const { [from]: _lifted, ...others } = state.farm.plots;
+      if (others[to] || overlapsExistingPlot(others, command.toOc, command.toOr)) {
+        return reject(sequence, "plot_overlap");
+      }
+      delete state.farm.plots[from];
+      state.farm.plots[to] = plot;
+      return { sequence, status: "applied" };
+    }
     case "power.buy": {
       const boost = boostEcon(command.key);
       if (!boost) return reject(sequence, "bad_item");
@@ -991,6 +1016,9 @@ export function applyCommandBatch(
   const failedResources = new Set<string>();
   const resources = (item: SequencedCommand): string[] => {
     const command = item.command;
+    if (command.type === "farm.move") {
+      return [`plot:${command.oc}:${command.or}`, `plot:${command.toOc}:${command.toOr}`];
+    }
     if (command.type.startsWith("farm.") && "oc" in command && "or" in command) return [`plot:${command.oc}:${command.or}`];
     if (command.type === "object.refund" || command.type === "object.status" || command.type === "object.upgrade") return [`object:${command.instanceId}`];
     if (command.type === "object.harvest_trees") return command.instanceIds.map((id) => `object:${id}`);

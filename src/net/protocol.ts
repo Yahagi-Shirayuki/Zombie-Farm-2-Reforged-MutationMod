@@ -29,6 +29,9 @@ export type GameplayCommand =
   | { type: "farm.plant"; oc: number; or: number; cropKey: string; fertilized?: boolean }
   | { type: "farm.harvest"; oc: number; or: number }
   | { type: "farm.remove"; oc: number; or: number }
+  /** Relocate a plot and whatever is growing on it. Layout only — the crop,
+   *  its timers and its value are carried across untouched. */
+  | { type: "farm.move"; oc: number; or: number; toOc: number; toOr: number }
   | { type: "power.buy"; key: string }
   | { type: "power.use"; key: string; oc?: number; or?: number; target?: "zombie_pot" }
   | { type: "object.buy"; catalogKey: string; clientInstanceId?: string }

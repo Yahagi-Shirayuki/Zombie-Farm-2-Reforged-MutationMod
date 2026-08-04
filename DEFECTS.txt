@@ -465,5 +465,29 @@ DECOR ART (found after the restoration shipped, both pre-existing).
   art unchanged. This is AUTHORED art, not recovered — the original had the same bug.
 
 
+QUEST RAIL UNDER-REPORTED IN ONLINE MODE (field report: "I put in two giant lollipops
+and it shows in task that I still need to buy one more", quest 27 Candyland).
+
+  FIXED in src/quest/QuestSystem.applyAuthoritativeChanges. views() draws the
+  OPTIMISTIC preview in preference to the confirmed server counts, and nothing ever
+  cleared that preview (only restore() did). The preview grows solely from events this
+  client posts locally, so any progress the server counted without a matching local
+  post — another device, or a command whose optimistic post was skipped — sat below
+  the truth and kept SHADOWING it for the rest of the session. Confirmed counts now
+  merge in with max(), and the preview is dropped once the server has caught up, so
+  the rail still shows an unconfirmed local event but can never display less than the
+  server has already granted. Two regression tests in QuestSystem.test.ts.
+
+  The server side was verified correct first: applyCommandBatch counts two lollipop
+  buys as 2 whether they arrive in one batch or two.
+
+  NOT RULED OUT as the cause of this particular report: 11 of the 25 buy-objectives
+  name an item the market sells BEFORE the quest exists, so a purchase made early
+  earns no credit. Quest 27 wants Giant Lollipops (sold at 21) and Balloons (21) at
+  quest level 23, and Cotton Candy Trees (sold at 7) at 23 — a 16-level gap.
+  Distinguishing test for a reporter: RELOAD. The preview bug clears on reload (the
+  count jumps to the right value); an early purchase does not.
+
+
 Additional Features/Fixes
 - 

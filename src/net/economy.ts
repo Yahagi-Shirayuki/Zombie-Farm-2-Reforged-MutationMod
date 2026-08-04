@@ -28,9 +28,12 @@ export type RosterInput =
   | { type: "combineCollect"; potId?: string; unitId: string; key: string; mutation?: number };
 
 export interface FarmActionInput {
-  type: "plant" | "harvest" | "plow" | "remove";
+  type: "plant" | "harvest" | "plow" | "remove" | "move";
   oc: number;
   or: number;
+  /** Destination origin, "move" only. */
+  toOc?: number;
+  toOr?: number;
   cropKey?: string;
   fertilized?: boolean;
   unitId?: string;
@@ -410,7 +413,10 @@ export class EconomyClient {
         ? { type: "farm.harvest", oc: input.oc, or: input.or }
         : input.type === "remove"
           ? { type: "farm.remove", oc: input.oc, or: input.or }
-          : { type: "farm.plow", oc: input.oc, or: input.or };
+          : input.type === "move"
+            ? { type: "farm.move", oc: input.oc, or: input.or,
+                toOc: input.toOc ?? input.oc, toOr: input.toOr ?? input.or }
+            : { type: "farm.plow", oc: input.oc, or: input.or };
     const sequence = this.enqueue(command, { ...optimistic, localUnitId: input.unitId });
     // A harvested zombie is rendered immediately, but its crop-adjacency mutation
     // is server-owned. Do not leave that visible result sitting in the ordinary

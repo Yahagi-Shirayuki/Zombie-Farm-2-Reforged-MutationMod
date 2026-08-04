@@ -2051,6 +2051,8 @@ async function main() {
   };
   // Colored graves gate planting their zombie class (Blue/Red/Silver).
   hud.hasGrave = (color) => field.hasGrave(color);
+  // Lets crop cards quote the harvest XP the Plowing Monolith actually pays out.
+  hud.hasPlowFree = () => field.hasPlowFree();
 
   // ---- Farm Size upgrade (Market → Upgrade tab) ----
   // Buying an expansion grows the field (origin stays at 0,0 so nothing on the farm
@@ -2583,21 +2585,40 @@ async function main() {
     setPreferredPlayMode(destination);
     location.reload();
   };
-  hud.onExportLocal = playMode === "local" ? () => {
+  // Export writes the same kind of file from either farm — a plain SaveGame — and
+  // only Local Farm's Import reads one, so an export never travels back online.
+  const downloadSave = (raw: string, name: string) => {
+    const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `zombie-farm-${name}-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+  // Online has no full blob on this device (only presentation), so the file is
+  // serialised from the live server-hydrated game. Settle the outbox first, or a
+  // just-spent balance / just-harvested zombie would be missing from the copy.
+  const exportOnlineFarm = async () => {
+    try { await economy?.flush(); } catch { /* the durable outbox retries on its own */ }
+    saveManager.flushCritical();
+    const raw = saveManager.exportOnline();
+    if (!raw) {
+      hud.showToast("Online Farm could not be exported.");
+      return;
+    }
+    downloadSave(raw, "online");
+    hud.showToast("Online Farm exported. Load it with Local Farm's Import.");
+  };
+  hud.onExportSave = playMode === "local" ? () => {
     saveManager.flushCritical();
     const raw = saveManager.exportLocal();
     if (!raw) {
       hud.showToast("Local Farm could not be exported.");
       return;
     }
-    const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `zombie-farm-local-${new Date().toISOString().slice(0, 10)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadSave(raw, "local");
     hud.showToast("Local Farm backup exported.");
-  } : null;
+  } : () => { void exportOnlineFarm(); };
   hud.onImportLocal = playMode === "local" ? (raw) => {
     if (!saveManager.importLocal(raw)) return false;
     saveManager.suspend();
@@ -3454,9 +3475,14 @@ async function main() {
   // The object currently being relocated by the Move tool (null = none). `flipped`
   // tracks its orientation so rotating mid-carry survives the drop.
   let carrying: { id: string; def: PlaceableDef; flipped: boolean } | null = null;
+  // The farm plot currently in hand (Move tool). Objects and plots are both carried
+  // one at a time and never together, so picking one up always drops the other.
+  let carryingPlot: { oc: number; or: number } | null = null;
   const cancelCarry = () => {
     carrying = null;
+    carryingPlot = null;
     field.hideObjectCursor();
+    field.hideCursor();
   };
 
   // Orientation for the placement ghost (Rotate tool flips it on the vertical axis),
@@ -3579,14 +3605,41 @@ async function main() {
     if (carrying) {
       const { oc, or } = field.resolveObjectOrigin(carrying.def, col, row);
       if (field.moveObject(carrying.id, oc, or, carrying.flipped)) cancelCarry();
-    } else {
-      const id = field.objectAtPoint(wx, wy);
-      const def = id ? field.objectDefOf(id) : null;
-      if (id && def) {
-        carrying = { id, def, flipped: field.objectFlipOf(id) };
-        field.setObjectCursor(def, col, row, id, carrying.flipped);
-      }
+      return;
     }
+    if (carryingPlot) {
+      const from = carryingPlot;
+      const { oc, or } = field.plotOriginFor(col, row);
+      if (!field.movePlot(from.oc, from.or, oc, or)) return; // blocked: keep holding it
+      // The farmer may be walking to the tile this plot just left.
+      jobs.cancelAtTile(from.oc, from.or);
+      // Layout is client-owned, but WHICH plot exists where is not: without this the
+      // next reconcile would put the plot back where the server still thinks it is.
+      if (state.onFarm) state.onFarm({ type: "move", oc: from.oc, or: from.or, toOc: oc, toOr: or }, {});
+      audio.play("place");
+      saveManager.save();
+      cancelCarry();
+      return;
+    }
+    // Nothing in hand: pick up whatever is under the tap. An object wins over the
+    // plot beneath it, matching every other tool's hit order.
+    const id = field.objectAtPoint(wx, wy);
+    const def = id ? field.objectDefOf(id) : null;
+    if (id && def) {
+      carrying = { id, def, flipped: field.objectFlipOf(id) };
+      field.setObjectCursor(def, col, row, id, carrying.flipped);
+      return;
+    }
+    const plot = field.plotOriginAt(col, row);
+    if (!plot) return;
+    if (!field.canMovePlot(plot.oc, plot.or)) {
+      // Say why rather than silently ignoring the tap — an unresponsive plot reads
+      // as a broken tool.
+      hud.showToast("Only bare tilled plots can be moved.");
+      return;
+    }
+    carryingPlot = plot;
+    field.setPlotMoveCursor(col, row, plot.oc, plot.or);
   };
 
   // Gold paid when selling a placed object. Brain prices convert at 1,000g each.
@@ -3990,6 +4043,7 @@ async function main() {
     }
     if (hud.mode === "move") {
       if (carrying) field.setObjectCursor(carrying.def, col, row, carrying.id, carrying.flipped);
+      else if (carryingPlot) field.setPlotMoveCursor(col, row, carryingPlot.oc, carryingPlot.or);
       return;
     }
     if (hud.mode === "remove") {

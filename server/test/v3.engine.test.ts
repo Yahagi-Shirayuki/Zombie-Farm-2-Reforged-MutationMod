@@ -916,6 +916,78 @@ describe("protocol v3 command engine", () => {
     expect(replaced.results[0]).toMatchObject({ status: "applied" });
   });
 
+  it("moves a bare tilled plot", () => {
+    const state = freshGameplayState();
+    state.balance.gold = 10_000;
+    const plowed = applyCommandBatch(state, commands(
+      { type: "farm.plow", oc: 0, or: 0 },
+    ), { now: 1_000 });
+
+    const moved = applyCommandBatch(plowed.state, commands(
+      { type: "farm.move", oc: 0, or: 0, toOc: 8, toOr: 8 },
+    ), { now: 2_000 });
+
+    expect(moved.results[0]).toMatchObject({ status: "applied" });
+    expect(moved.state.farm.plots["0:0"]).toBeUndefined();
+    expect(moved.state.farm.plots["8:8"]).toEqual({ state: "plowed" });
+    expect(moved.farmChanged).toBe(true);
+  });
+
+  it("refuses to move a plot with a crop on it", () => {
+    // Only bare tilled ground moves: a crop's payout and its mutation adjacency are
+    // decided where it sits, so a planted plot stays put.
+    const state = freshGameplayState();
+    state.balance.gold = 10_000;
+    const planted = applyCommandBatch(state, commands(
+      { type: "farm.plow", oc: 0, or: 0 },
+      { type: "farm.plant", oc: 0, or: 0, cropKey: "carrot" },
+    ), { now: 1_000 });
+    expect(planted.state.farm.plots["0:0"]?.state).toBe("planted");
+
+    const moved = applyCommandBatch(planted.state, commands(
+      { type: "farm.move", oc: 0, or: 0, toOc: 8, toOr: 8 },
+    ), { now: 2_000 });
+
+    expect(moved.results[0]).toMatchObject({ status: "rejected", error: "plot_occupied" });
+    expect(moved.state.farm.plots["0:0"]?.state).toBe("planted");
+    expect(moved.state.farm.plots["8:8"]).toBeUndefined();
+  });
+
+  it("lets a plot shuffle one tile, overlapping its own old footprint", () => {
+    const state = freshGameplayState();
+    state.balance.gold = 10_000;
+    const plowed = applyCommandBatch(state, commands({ type: "farm.plow", oc: 4, or: 4 }), { now: 1 });
+    const nudged = applyCommandBatch(plowed.state, commands(
+      { type: "farm.move", oc: 4, or: 4, toOc: 5, toOr: 4 },
+    ), { now: 2 });
+    expect(nudged.results[0]).toMatchObject({ status: "applied" });
+    expect(nudged.state.farm.plots["5:4"]).toEqual({ state: "plowed" });
+  });
+
+  it("refuses a move onto another plot, off the farm, or from nowhere", () => {
+    const state = freshGameplayState();
+    state.balance.gold = 10_000;
+    const two = applyCommandBatch(state, commands(
+      { type: "farm.plow", oc: 0, or: 0 },
+      { type: "farm.plow", oc: 4, or: 0 },
+    ), { now: 1 });
+
+    const onto = applyCommandBatch(two.state, commands(
+      { type: "farm.move", oc: 0, or: 0, toOc: 2, toOr: 0 },
+    ), { now: 2 });
+    expect(onto.results[0]).toMatchObject({ status: "rejected", error: "plot_overlap" });
+
+    const offMap = applyCommandBatch(two.state, commands(
+      { type: "farm.move", oc: 0, or: 0, toOc: -1, toOr: 0 },
+    ), { now: 3 });
+    expect(offMap.results[0]).toMatchObject({ status: "rejected", error: "bad_coord" });
+
+    const empty = applyCommandBatch(two.state, commands(
+      { type: "farm.move", oc: 12, or: 12, toOc: 16, toOr: 16 },
+    ), { now: 4 });
+    expect(empty.results[0]).toMatchObject({ status: "rejected", error: "nothing_to_move" });
+  });
+
   it("rejects duplicate functional buys even when the owned copy is stored", () => {
     const state = freshGameplayState();
     state.balance.brains = 100;

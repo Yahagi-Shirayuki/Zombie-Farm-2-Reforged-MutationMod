@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "../net/api";
 import { SaveManager } from "./SaveManager";
 import { activeSaveKey } from "./profiles";
+import { SAVE_VERSION } from "./schema";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -272,6 +273,69 @@ describe("SaveManager mode isolation", () => {
       savedAt: 123,
       jobs: [{ kind: "plant", oc: 4, or: 6, cx: 10, cy: 20, cropKey: "carrot" }],
     });
+  });
+
+  it("exports an Online Farm as a file Local Farm's import accepts", () => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    const online = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "online",
+    );
+    vi.spyOn(online, "serialize").mockReturnValue({
+      version: SAVE_VERSION,
+      savedAt: 5,
+      player: { name: "Tester", gold: 900, brains: 4, xp: 1200 },
+      farm: { fieldId: "default", w: 34, h: 34, plots: [] },
+      ownedZombies: [{ id: "z-1", key: "regular" }],
+      // Account-scoped: the online friends list is the server's, the journal's
+      // commands may already have committed, and `reserved` is a server-held lock.
+      social: { friends: [{ id: "f-1", name: "Friend" }] },
+      farmJobs: { savedAt: 5, jobs: [{ kind: "harvest", oc: 1, or: 2, cx: 3, cy: 4 }] },
+      zombiePots: { "pot-1": { keyA: "regular", keyB: "regular", maskA: 0, maskB: 0,
+        reserved: true, startedAt: 1, finishAt: 9 } },
+    } as never);
+
+    const raw = online.exportOnline();
+    expect(raw).toBeTruthy();
+    const blob = JSON.parse(raw!);
+    expect(blob.player.gold).toBe(900);
+    expect(blob.ownedZombies).toEqual([{ id: "z-1", key: "regular" }]);
+    expect(blob.social).toBeUndefined();
+    expect(blob.farmJobs).toBeUndefined();
+    expect(blob.zombiePots["pot-1"].reserved).toBeUndefined();
+    expect(blob.zombiePots["pot-1"].finishAt).toBe(9);
+
+    const local = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "local",
+    );
+    expect(local.importLocal(raw!)).toBe(true);
+    expect(JSON.parse(localStorage.getItem(activeSaveKey()) ?? "null")).toMatchObject({
+      player: { gold: 900 },
+      farm: { w: 34 },
+    });
+  });
+
+  // Export is one-way: a file leaves the account, and nothing loads one back into it.
+  it("keeps each farm's export/import on its own side", () => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    const online = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "online",
+    );
+    const local = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "local",
+    );
+    const file = JSON.stringify({
+      version: SAVE_VERSION, savedAt: 1,
+      player: { name: "Tester", gold: 1 }, farm: { fieldId: "default", w: 30, h: 30, plots: [] },
+    });
+
+    expect(online.importLocal(file)).toBe(false);
+    expect(online.exportLocal()).toBeNull();
+    expect(local.exportOnline()).toBeNull();
+    expect(localStorage.getItem(activeSaveKey())).toBeNull();
   });
 
   it("never falls back to a Local Farm write from Online Farm", () => {

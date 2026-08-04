@@ -54,6 +54,41 @@ describe("QuestSystem client-paced progress", () => {
     expect(system.views()[0].objectives[0].count).toBe(1);
   });
 
+  it("catches the rail up when the server counted more than this client posted", () => {
+    // Reported from the field: "I put in two giant lollipops and it shows I still
+    // need to buy one more." The rail draws the optimistic preview in preference to
+    // the confirmed counts, and nothing cleared that preview — so a server count the
+    // client had not posted locally stayed hidden for the rest of the session.
+    const bus = new QuestBus();
+    const system = new QuestSystem(new Map([["1", quest()]]), new GameState(), bus, {
+      authoritative: true,
+      grantReward: vi.fn(), grantItem: vi.fn(), grantZombie: vi.fn(),
+      completed: vi.fn(), render: vi.fn(),
+    });
+    system.restore();
+
+    bus.post(QuestEvent.SoilPlowed); // optimistic preview := 1
+    expect(system.views()[0].objectives[0].count).toBe(1);
+
+    system.applyAuthoritativeChanges([{ questId: "1", counts: [2], completed: false }]);
+    expect(system.views()[0].objectives[0].count).toBe(2);
+  });
+
+  it("still shows an unconfirmed local event that runs ahead of the server", () => {
+    const bus = new QuestBus();
+    const system = new QuestSystem(new Map([["1", quest()]]), new GameState(), bus, {
+      authoritative: true,
+      grantReward: vi.fn(), grantItem: vi.fn(), grantZombie: vi.fn(),
+      completed: vi.fn(), render: vi.fn(),
+    });
+    system.restore();
+
+    bus.post(QuestEvent.SoilPlowed);
+    bus.post(QuestEvent.SoilPlowed); // preview := 2, server has only seen the first
+    system.applyAuthoritativeChanges([{ questId: "1", counts: [1], completed: false }]);
+    expect(system.views()[0].objectives[0].count).toBe(2); // no flicker backwards
+  });
+
   it("requests prompt server confirmation when local events predict completion", () => {
     const bus = new QuestBus();
     const requestAuthoritativeCompletionCheck = vi.fn();

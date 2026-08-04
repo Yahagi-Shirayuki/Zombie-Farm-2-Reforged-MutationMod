@@ -267,6 +267,8 @@ export function openSettings(hud: Hud): void {
   const farmModeNote = noteEl(hud.playMode === "local"
     ? "Saved on this device only. Online Farm has separate progress."
     : "Saved to your account. Local Farm has separate progress.");
+  // Save file controls. Both farms export the same thing — a plain save file — but
+  // only Local Farm can read one back, so Import/Reset stay local-only.
   const localStorageControls: HTMLElement[] = [];
   if (hud.playMode === "local") {
     const actions = document.createElement("div");
@@ -278,7 +280,7 @@ export function openSettings(hud: Hud): void {
     const exportButton = document.createElement("button");
     exportButton.className = "set-action";
     exportButton.textContent = "Export";
-    exportButton.onclick = () => hud.onExportLocal?.();
+    exportButton.onclick = () => hud.onExportSave?.();
     const importButton = document.createElement("button");
     importButton.className = "set-action";
     importButton.textContent = "Import";
@@ -302,7 +304,27 @@ export function openSettings(hud: Hud): void {
     actions.append(label, controls);
     localStorageControls.push(
       actions,
-      noteEl("Clearing browser data can remove Local Farm. Export a backup to keep it safe."),
+      noteEl("Clearing browser data can remove Local Farm. Export a backup to keep it safe. Import also accepts an Online Farm export."),
+    );
+  } else {
+    // Online Farm export: a one-way copy out to a file. There is no Import here —
+    // an Online Farm's progress is the server's, so a file can never be loaded into
+    // it — and no Reset, because the account save isn't this browser's to delete.
+    const actions = document.createElement("div");
+    actions.className = "set-row";
+    const label = document.createElement("span");
+    label.textContent = "Online Save";
+    const controls = document.createElement("div");
+    controls.className = "set-username-controls";
+    const exportButton = document.createElement("button");
+    exportButton.className = "set-action";
+    exportButton.textContent = "Export";
+    exportButton.onclick = () => hud.onExportSave?.();
+    controls.append(exportButton);
+    actions.append(label, controls);
+    localStorageControls.push(
+      actions,
+      noteEl("Downloads a copy of this farm. Load it with Local Farm's Import — it can't be imported back into an Online Farm."),
     );
   }
   // Diagnostics: available in BOTH farm modes, because crashes happen in both. Copying
