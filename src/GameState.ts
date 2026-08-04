@@ -7,6 +7,7 @@ import { TutorialSave } from "./save/schema";
 import type { FarmerCatalog } from "./assets";
 import { farmerCooldownMs, farmerGold, farmerMultiplier, farmerZombieGrowMs } from "./farmer";
 import type { EpicBossRun } from "./epicBoss/types";
+import { parseReceivedZombie } from "./zombie/receivedReward";
 
 export const XP_THRESHOLDS = [
   0, 25, 75, 150, 250, 375, 550, 800, 1300, 1800, 2300, 2800, 3300, 3900, 4500,
@@ -140,7 +141,7 @@ export class GameState {
   onInventory:
     | ((
         action: { type: "buy" | "use" | "grant"; key: string; qty?: number; unitId?: string; localZombieHarvests?: { id: string; oc: number; or: number }[]; oc?: number; or?: number; target?: "zombie_pot" },
-        optimistic: { count: number; gold?: number; brains?: number }
+        optimistic: { count: number; gold?: number; brains?: number; xp?: number }
       ) => void)
     | null = null;
 
@@ -317,9 +318,28 @@ export class GameState {
     this.emit();
   }
 
+  /** The Almanac counts what the player OWNS, not where they keep it, so a reward
+   *  zombie parked in Received is discovered exactly like one standing on the farm.
+   *  Every grant path now counts at the moment the unit is earned; this floor is
+   *  the repair for markers earned BEFORE that was true, which would otherwise stay
+   *  silhouetted until claimed (and, once claiming stopped double-counting, forever).
+   *  A floor rather than an increment, so it is idempotent across reloads and never
+   *  fights the earn-time count. */
+  countUnclaimedZombieRewards() {
+    const pending: Record<string, number> = {};
+    for (const entry of this.received) {
+      const zombie = parseReceivedZombie(entry);
+      if (zombie) pending[zombie.key] = (pending[zombie.key] ?? 0) + 1;
+    }
+    for (const [key, count] of Object.entries(pending)) {
+      this.zombieDiscovered[key] = Math.max(this.zombieDiscovered[key] ?? 0, count);
+    }
+  }
+
   /** Add a looted/rewarded item to the Received bucket (unlimited). */
   receiveItem(key: string) {
     this.received.push(key);
+    this.countUnclaimedZombieRewards();
     this.emit();
   }
 
@@ -343,6 +363,7 @@ export class GameState {
     }
     const legacy = Object.entries(stored).filter(([, count]) => count > 0);
     if (legacy.length) this.storedItems = legacy.map(([key, count]) => ({ key, count }));
+    this.countUnclaimedZombieRewards();
     this.emit();
   }
 

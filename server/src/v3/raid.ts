@@ -421,7 +421,11 @@ export async function finishRaid(
       loot = { name: grant.name, kind: "boost", qty: grant.qty };
     }
     else if (grant.kind === "item") { core.storage.received[grant.name] = (core.storage.received[grant.name] ?? 0) + 1; loot = { name: grant.name, kind: "item" }; }
-    const zombieDrop = rollRaidZombieDropWithPity(raidId, true, Math.random(), zombieDry[String(raidId)] ?? 0);
+    // Same PINNED dice the item roll uses: they widen the rare-zombie chance too, and the
+    // count came from /raid/start (already charged), never from this request.
+    const zombieDrop = rollRaidZombieDropWithPity(
+      raidId, true, Math.random(), zombieDry[String(raidId)] ?? 0, boosts.dice ?? 0
+    );
     // Settle this raid's dry-win streak on every win it could have dropped from. A win that
     // pays (rolled or floored) resets it; a dry one adds to it. Raids with no rare zombie
     // never get a key at all.

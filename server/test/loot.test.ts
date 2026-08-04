@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { rollLoot, resolveLoot, lootEligible, ownedLootCounter, bonusGoldFor, BONUS_GOLD } from "../src/loot";
+import { EPIC_BOSSES } from "../../src/epicBoss/catalog";
 import { RAID_LOOT, dropEcon, raidLoot } from "../src/raidLootCatalog";
 import { rollLootTier } from "../../src/raid/LootTable";
 import { raidBoostBundle } from "../../src/raid/lootBundles";
@@ -21,6 +22,29 @@ describe("raidLootCatalog — mirror of raids.json loot", () => {
     expect(dropEcon("Bonus Gold")).toMatchObject({ gold: true });
     expect(dropEcon("nope")).toBeUndefined();
   });
+  it("every epic-boss prize resolves to real drop metadata", () => {
+    // Reported from the field: an epic prize could be placed, then the server called
+    // it a "bad item" and rolled it back. Claiming runs storage.claim -> planClaim ->
+    // dropEcon(name), and NOT ONE of the 50 prizes across the 8 bosses had an entry —
+    // so every one of them was unplaceable, not just Dr. Groundhog's.
+    for (const boss of EPIC_BOSSES) {
+      for (const prize of boss.loot) {
+        if (prize.stageActor) continue; // a tamed pet, unlocked rather than claimed
+        expect(dropEcon(prize.name), `${boss.id}:${prize.name}`).toBeDefined();
+        expect(dropEcon(prize.name)!.tile, `${boss.id}:${prize.name}`).toBe(prize.tile);
+      }
+    }
+  });
+
+  it("keeps epic prizes out of the raid loot tables", () => {
+    // They are claimable, not raid-droppable: adding drop metadata must not sneak
+    // them into a raid's six tiers.
+    const epic = new Set(EPIC_BOSSES.flatMap((boss) => boss.loot.map((prize) => prize.name)));
+    for (const [id, tiers] of Object.entries(RAID_LOOT))
+      for (const tier of tiers)
+        for (const name of tier) expect(epic.has(name), `${id}:${name}`).toBe(false);
+  });
+
   it("every loot entry across every raid resolves to real drop metadata", () => {
     // A typo in the generated table would silently make an entry always-eligible.
     for (const [id, tiers] of Object.entries(RAID_LOOT)) {
@@ -84,11 +108,15 @@ describe("ownedLootCounter — where a dropped item counts as owned", () => {
     expect(ownedLootCounter({}, noObjects)("Not A Drop")).toBe(0);
   });
 
-  it("accepts an explicit tile for loot that isn't in drops.json", () => {
-    // Epic-boss prizes carry their own tile rather than a drops.json entry.
+  it("counts an epic prize by its own tile OR by the drops.json link", () => {
+    // The explicit-tile argument exists because epic prizes used to have no
+    // drops.json entry at all — the same gap that made them unclaimable. They have
+    // one now, so BOTH forms resolve; the explicit tile stays supported for callers
+    // that already know it.
     const owned = ownedLootCounter({}, [{ catalogKey: "snowOwl" }]);
     expect(owned("Foul Owl's Colossal Snowman", "snowOwl")).toBe(1);
-    expect(owned("Foul Owl's Colossal Snowman")).toBe(0); // no drops.json link to follow
+    expect(owned("Foul Owl's Colossal Snowman")).toBe(1);
+    expect(owned("Foul Owl's Gift Vault")).toBe(0); // a prize genuinely not owned
   });
 });
 

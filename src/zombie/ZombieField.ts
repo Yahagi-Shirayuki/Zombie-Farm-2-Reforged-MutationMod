@@ -464,9 +464,14 @@ export class ZombieField {
   /** Quest/server reward. `serverStored` is the authoritative placement online —
    *  including a Received zombie being claimed, which the caller has already checked
    *  against the Mausoleum cap. Offline the caller decides between the farm and
-   *  Received first, so the local fallback here is only reached for a legacy grant. */
+   *  Received first, so the local fallback here is only reached for a legacy grant.
+   *
+   *  `recordDiscovery: false` is for CLAIMING a reward already sitting in Received:
+   *  the Almanac counted it when it was earned (the collection does not care which
+   *  bucket a unit is in), so counting it again on the move would inflate the tally. */
   grantReward(
-    key: string, col: number, row: number, serverId?: string, serverStored?: boolean
+    key: string, col: number, row: number, serverId?: string, serverStored?: boolean,
+    opts: { recordDiscovery?: boolean } = {}
   ): OwnedZombie | null {
     const def = this.resolve(key);
     if (!def) return null;
@@ -478,7 +483,7 @@ export class ZombieField {
       // preserve the earned zombie in the Mausoleum instead of dropping the reward.
       if (serverStored !== true && this.canAdd()) { this.addUnit(data); this.syncCount(); }
       else this.stored.push(data);
-      this.state.recordZombieDiscovered(data.key);
+      if (opts.recordDiscovery !== false) this.state.recordZombieDiscovered(data.key);
     } finally { this.harvesting = false; }
     return data;
   }
@@ -861,7 +866,8 @@ export class ZombieField {
    * a new server id to the optimistic local id spawned at harvest time, preserving
    * its position while replacing its identity. */
   reconcileServerRoster(
-    saves: { id: string; key: string; mutation: number; invasions: number; stored: boolean }[],
+    saves: { id: string; key: string; mutation: number; invasions: number; stored: boolean;
+      restored?: boolean }[],
     aliases: Record<string, string> = {}
   ) {
     const desiredIds = new Set(saves.map((save) => save.id));
@@ -892,7 +898,11 @@ export class ZombieField {
         // acquisition this client never created itself (e.g. a Black Market
         // purchase reconciled from the authoritative roster) — count it for the
         // Almanac. Pre-live reconciles are the initial bootstrap, not new grants.
-        if (this.rosterLive && !source) this.state.recordZombieDiscovered(data.key);
+        // `restored` units are the exception: the server is handing back a zombie
+        // this player escrowed on a Black Market listing they then cancelled. It
+        // carries a fresh unit id but it is the same zombie they already own, so
+        // crediting it would let list/cancel cycles farm the lifetime count.
+        if (this.rosterLive && !source && !save.restored) this.state.recordZombieDiscovered(data.key);
       }
     } finally {
       this.harvesting = false;

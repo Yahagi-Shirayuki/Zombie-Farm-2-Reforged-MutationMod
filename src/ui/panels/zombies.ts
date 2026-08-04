@@ -18,6 +18,8 @@ import {
 } from "../../zombie/traits";
 import { statBreakdown } from "../../zombie/statDisplay";
 import { classTierRank } from "../../zombie/taxonomy";
+import { ZOMBIE_SORTS, isZombieSort, sortZombies, type ZombieSort } from "../../zombie/rosterSort";
+import { getZombieSort, setZombieSort } from "../../prefs";
 
 // A closeable modal: the zombie's trading-card (portrait, name board, veterancy /
 // type / invasions) on the LEFT, and its stats (icon row) over abilities (icon
@@ -430,6 +432,8 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
   mkTab("roster", "My Zombies");
   mkTab("almanac", "Zombie Almanac");
 
+  let rosterSort: ZombieSort = getZombieSort();
+
   const renderRoster = () => {
     // Show the complete owned roster here as a safety net for earned zombies. A boss
     // reward sent to storage remains visible and deployable even before the player
@@ -452,12 +456,40 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
       body.appendChild(e);
       return;
     }
-    for (const z of roster) {
+
+    // Ordering picker — only worth showing once there is something to order.
+    if (roster.length > 1) {
+      const label = document.createElement("label");
+      label.className = "zl-sort";
+      label.append("Sort");
+      const select = document.createElement("select");
+      select.className = "prof-input zl-sort-select";
+      select.setAttribute("aria-label", "Sort zombies");
+      for (const option of ZOMBIE_SORTS) {
+        const item = new Option(option.label, option.id);
+        item.selected = option.id === rosterSort;
+        select.appendChild(item);
+      }
+      select.onchange = () => {
+        if (!isZombieSort(select.value)) return;
+        rosterSort = select.value;
+        setZombieSort(rosterSort);
+        body.innerHTML = "";
+        body.scrollTop = 0;
+        renderRoster();
+      };
+      label.appendChild(select);
+      head.appendChild(label);
+    }
+
+    // Sort the INSPECT views, not the raw roster: those carry the farmer's
+    // strength/life multipliers, so the list ranks by the number each card shows.
+    const infos = roster.map((z) => rosterInfo(hud, z));
+    for (const info of sortZombies(infos, rosterSort, (k) => hud.state.abilityUnlocked(k))) {
       const row = document.createElement("div");
       // Use the exact same panel/card composition as the single-zombie modal;
       // the Zombies menu only adds the vertically scrolling list around it.
       row.className = "panel zpanel zl-row";
-      const info = rosterInfo(hud, z);
       row.appendChild(buildZombieCard(hud, info, panel));
       row.appendChild(buildZombieActions(hud, info, close, () => openZombiesPanel(hud, "roster")));
       body.appendChild(row);

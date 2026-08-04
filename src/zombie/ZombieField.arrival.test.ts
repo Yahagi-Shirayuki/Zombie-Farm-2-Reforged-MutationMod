@@ -72,6 +72,28 @@ describe("where a server-granted zombie turns up", () => {
     expect({ col: unit.col, row: unit.row }).toEqual({ col: 3, row: 4 });
   });
 
+  it("credits the Almanac for a unit the client never spawned", () => {
+    const zombies = subject(fieldStub([]), () => ({ col: 12, row: 9 }));
+
+    zombies.reconcileServerRoster([purchase]);
+
+    expect((zombies as never as { state: { recordZombieDiscovered: ReturnType<typeof vi.fn> } })
+      .state.recordZombieDiscovered).toHaveBeenCalledWith(DEF.key);
+  });
+
+  it("does not credit the Almanac for a zombie returned by a cancelled sale", () => {
+    // Listing on the Black Market escrows the unit (the reconcile removes it) and
+    // cancelling hands it back under a NEW server id, so it looks like a first-time
+    // arrival. Counting it let list/cancel cycles inflate the lifetime count.
+    const zombies = subject(fieldStub([]), () => ({ col: 12, row: 9 }));
+
+    zombies.reconcileServerRoster([{ ...purchase, id: "srv-restored", restored: true }]);
+
+    expect(zombies.roster()).toHaveLength(1);
+    expect((zombies as never as { state: { recordZombieDiscovered: ReturnType<typeof vi.fn> } })
+      .state.recordZombieDiscovered).not.toHaveBeenCalled();
+  });
+
   it("restores a legacy save with no stored position onto the farmer", () => {
     const zombies = subject(fieldStub([]), () => ({ col: 7, row: 6 }));
 

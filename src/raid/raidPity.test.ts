@@ -113,3 +113,23 @@ describe("offline rare-zombie pity", () => {
     expect(granted).toEqual([]);
   });
 });
+
+describe("offline rare-zombie luck from Golden Dice", () => {
+  // 0.015 is a miss against the bare 1% and a hit against one die's 2%, so this pins that
+  // finishRaid actually forwards the dice it was handed into the rare-zombie roll.
+  beforeEach(() => { vi.spyOn(Math, "random").mockReturnValue(0.015); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("misses that roll with no dice spent", () => {
+    const { raids, granted } = makeManager();
+    raids.finishRaid(MCDONNELLS, PARTY, WIN, 0, false, 0, true);
+    expect(granted).toEqual([]);
+  });
+
+  it("lands it with one die spent", () => {
+    const { raids, granted } = makeManager();
+    const view = raids.finishRaid(MCDONNELLS, PARTY, WIN, 1, false, 0, true);
+    expect(granted).toEqual([OLD_MC_ZOMBIE_KEY]);
+    expect(view.loot.some((drop) => drop.name === "Old McZombie")).toBe(true);
+  });
+});

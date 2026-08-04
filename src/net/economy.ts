@@ -424,7 +424,10 @@ export class EconomyClient {
     if (sequence !== null && input.type === "harvest" && input.unitId) void this.queue.flush();
   }
 
-  submitInventory(input: InventoryInput, optimistic: { count: number; gold?: number; brains?: number }): void {
+  submitInventory(
+    input: InventoryInput,
+    optimistic: { count: number; gold?: number; brains?: number; xp?: number }
+  ): void {
     if (input.type === "grant") return; // grants are emitted only by server subsystems
     const command: GameplayCommand = input.type === "buy"
       ? { type: "power.buy", key: input.key }
@@ -432,6 +435,9 @@ export class EconomyClient {
     const sequence = this.enqueue(command, {
       gold: optimistic.gold,
       brains: optimistic.brains,
+      // A farm-wide power (Insta-Harvest / Insta-Plow) pays out gold + XP across
+      // every plot it hits; the server owns the real numbers and reconciles.
+      xp: optimistic.xp,
       inventoryKey: input.key,
       inventoryCount: optimistic.count,
       localUnitId: input.unitId,
@@ -679,8 +685,13 @@ export class EconomyClient {
     this.serverInv = { ...result.inventory };
     this.state.syncStorage(result.storage.received, result.storage.stored);
     this.onPetState?.(result.ownedPets, this.state.activePet, this.state.penPets);
-    this.onQuestState?.({ completed: result.quests.completed, progress: result.quests.progress, questChanges: result.questChanges });
+    // Changes BEFORE the wholesale adopt. restoreAuthoritative installs the server's
+    // `completed` set, and applyAuthoritativeChanges only celebrates a quest it did not
+    // already consider complete — so the old order silently swallowed the completion
+    // popup for every epic-boss quest, including the one handing over the event's
+    // signature zombie. The raid lane (submitRaid) posts changes alone for this reason.
     this.onQuestChanges?.(result.questChanges);
+    this.onQuestState?.({ completed: result.quests.completed, progress: result.quests.progress, questChanges: result.questChanges });
     const serverTime = result.serverTime ?? Date.now();
     this.onEpicBossState?.(epicBossRunToClient(result.event, serverTime));
     if (result.lastRaidAt != null) this.state.syncRaidCooldown(serverTimestampToClient(

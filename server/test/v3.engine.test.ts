@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SequencedCommand } from "../../src/net/protocol";
+import { EPIC_BOSSES } from "../../src/epicBoss/catalog";
 import { createCombineRandom } from "../../src/zombie/combineSpecies";
 import { encodeReceivedZombie } from "../../src/zombie/receivedReward";
 import plantRows from "../../public/assets/plants.json";
@@ -1239,28 +1240,81 @@ describe("protocol v3 command engine", () => {
     expect(result.state.roster[0].key).toBe("ZombieActorRegularCrazy");
   });
 
-  it("claims a Received zombie only into an available Mausoleum slot", () => {
-    const marker = encodeReceivedZombie({
-      id: "received-zombie", key: "ZombieActorGirlTier1", mutation: 4, invasions: 3,
-    });
-    const withoutMausoleum = freshGameplayState();
-    withoutMausoleum.storage.received[marker] = 1;
-    const rejected = applyCommandBatch(withoutMausoleum, commands(
-      { type: "storage.claim", itemName: marker },
-    ), { now: 1 });
-    expect(rejected.results[0]).toMatchObject({ status: "rejected", error: "need_mausoleum" });
-
+  // Claiming a Received zombie takes a free ARMY slot first and only falls back to
+  // the Mausoleum, so a full crypt cannot strand a reward the player already earned.
+  const receivedZombieMarker = encodeReceivedZombie({
+    id: "received-zombie", key: "ZombieActorGirlTier1", mutation: 4, invasions: 3,
+  });
+  const claimState = (activeUnits: number, storedUnits = 0, mausoleum?: string): MutableGameplayState => {
     const state = freshGameplayState();
-    state.objects.objects.push({ instanceId: "mausoleum", catalogKey: "mausoleum3", status: "placed" });
-    state.storage.received[marker] = 1;
-    const result = applyCommandBatch(state, commands(
-      { type: "storage.claim", itemName: marker },
-    ), { now: 1 });
+    if (mausoleum) state.objects.objects.push({ instanceId: "tomb", catalogKey: mausoleum, status: "placed" });
+    for (let i = 0; i < activeUnits; i++) {
+      state.roster.push({ id: `a${i}`, key: "ZombieActorGirlTier1", mutation: 0, invasions: 0, stored: false });
+    }
+    for (let i = 0; i < storedUnits; i++) {
+      state.roster.push({ id: `s${i}`, key: "ZombieActorGirlTier1", mutation: 0, invasions: 0, stored: true });
+    }
+    state.storage.received[receivedZombieMarker] = 1;
+    return state;
+  };
+  const claim = (state: MutableGameplayState) => applyCommandBatch(state, commands(
+    { type: "storage.claim", itemName: receivedZombieMarker },
+  ), { now: 1 });
+
+  it("claims a Received zombie straight onto the farm while the army has room", () => {
+    // No Mausoleum placed at all: an empty army is still a valid destination.
+    const result = claim(claimState(0));
     expect(result.results[0]).toMatchObject({ status: "applied", createdIds: ["received-zombie"] });
-    expect(result.state.storage.received[marker]).toBe(0);
+    expect(result.state.storage.received[receivedZombieMarker]).toBe(0);
+    expect(result.state.roster).toContainEqual({
+      id: "received-zombie", key: "ZombieActorGirlTier1", mutation: 4, invasions: 3, stored: false,
+    });
+  });
+
+  it("falls back to a Mausoleum slot once the army is full", () => {
+    const result = claim(claimState(16, 0, "mausoleum3"));
+    expect(result.results[0]).toMatchObject({ status: "applied", createdIds: ["received-zombie"] });
     expect(result.state.roster).toContainEqual({
       id: "received-zombie", key: "ZombieActorGirlTier1", mutation: 4, invasions: 3, stored: true,
     });
+  });
+
+  // REGRESSION: three running Zombie Pots hid six crypt occupants from the player.
+  // combine_start flips both parents to `stored` with a `pot:` lock, and the client
+  // filters those rows out of the roster it reconciles — so the Mausoleum read 21/25
+  // in the UI and 27/25 on the server. The claim the client allowed came back
+  // `storage_full` and the reward snapped into Received, over and over, with nothing
+  // in the game to explain it and no way to free a unit sealed inside a pot.
+  it("does not charge Zombie Pot reservations to the Mausoleum", () => {
+    const state = claimState(16, 21, "mausoleum5"); // 25 slots, 21 visibly occupied
+    for (let i = 0; i < 6; i++) {
+      state.roster.push({
+        id: `pot${i}`, key: "ZombieActorGirlTier1", mutation: 0, invasions: 0,
+        stored: true, lockedByRaid: `pot:pot-${Math.floor(i / 2)}`,
+      });
+    }
+    const result = claim(state);
+    expect(result.results[0]).toMatchObject({ status: "applied", createdIds: ["received-zombie"] });
+    expect(result.state.roster).toContainEqual({
+      id: "received-zombie", key: "ZombieActorGirlTier1", mutation: 4, invasions: 3, stored: true,
+    });
+  });
+
+  it("still refuses once the VISIBLE crypt is full, pot reservations aside", () => {
+    const state = claimState(16, 25, "mausoleum5");
+    state.roster.push({
+      id: "pot0", key: "ZombieActorGirlTier1", mutation: 0, invasions: 0,
+      stored: true, lockedByRaid: "pot:pot-0",
+    });
+    expect(claim(state).results[0]).toMatchObject({ status: "rejected", error: "storage_full" });
+  });
+
+  it("refuses a Received zombie only when BOTH the army and the crypt are full", () => {
+    expect(claim(claimState(16)).results[0])
+      .toMatchObject({ status: "rejected", error: "need_mausoleum" });
+    // mausoleum3 is 15 slots.
+    expect(claim(claimState(16, 15, "mausoleum3")).results[0])
+      .toMatchObject({ status: "rejected", error: "storage_full" });
   });
 
   // ---- Mausoleum upgrade ladder (mausoleum3 -> 4 -> 5 -> 6 -> 7, +5 slots each) ----
@@ -1534,6 +1588,32 @@ describe("protocol v3 command engine", () => {
     expect(result.state.storage.received["Circus Tent"]).toBe(0);
     expect(result.state.objects.objects).toEqual([]);
     expect(result.state.balance.gold).toBe(initialGold + 1);
+  });
+
+  it("can sell every Epic Boss prize, for the same one gold as any other reward", () => {
+    // Two gaps met here. The prizes had no drops.json/raidLootCatalog row, so claiming
+    // one was refused as a "bad item"; and 40 of the 50 had no objectCatalog row, so
+    // object.refund refused the sale even once the claim worked. They are priced at
+    // cost 0 like every other earned decoration, so a free prize sells for the game's
+    // one-gold minimum rather than minting its source brain price (1,000/brain).
+    const prizes = EPIC_BOSSES.flatMap((boss) => boss.loot.filter((prize) => !prize.stageActor));
+    expect(prizes.length).toBe(50);
+    const state = freshGameplayState();
+    state.storage.received = Object.fromEntries(prizes.map((prize) => [prize.name, 1]));
+    const initialGold = state.balance.gold;
+    const result = applyCommandBatch(state, commands(
+      ...prizes.flatMap((prize, i) => [
+        { type: "storage.claim" as const, itemName: prize.name, clientInstanceId: `prize-${i}` },
+        { type: "object.refund" as const, instanceId: `prize-${i}` },
+      ]),
+    ), { now: 10 });
+    const refused = result.results
+      .map((entry, i) => ({ entry, prize: prizes[Math.floor(i / 2)].name }))
+      .filter(({ entry }) => entry.status !== "applied")
+      .map(({ entry, prize }) => `${prize}: ${JSON.stringify(entry)}`);
+    expect(refused).toEqual([]);
+    expect(result.state.objects.objects).toEqual([]);
+    expect(result.state.balance.gold).toBe(initialGold + prizes.length);
   });
 
   it("cannot claim a Received reward twice", () => {

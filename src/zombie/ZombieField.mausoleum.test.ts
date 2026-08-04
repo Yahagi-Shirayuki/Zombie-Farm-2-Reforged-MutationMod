@@ -61,3 +61,38 @@ describe("Mausoleum upgrade ladder", () => {
     expect(withMausoleum(undefined).store("z0")).toBe(false);
   });
 });
+
+describe("grantReward Almanac accounting", () => {
+  /** Same stub farm as above, but keeping the GameState so the tally is readable.
+   *  Grants are forced into the Mausoleum (`serverStored`) because the asset stub
+   *  carries no zombie models to build a deployed actor from. */
+  const harness = () => {
+    const state = new GameState();
+    const field = {
+      zombiePotId: () => "pot",
+      mausoleumId: () => "tomb",
+      objectDefOf: () => tombs[0],
+      inBounds: () => true,
+      isPassable: () => true,
+    } as unknown as Field;
+    const zombies = new ZombieField(
+      {} as GameAssets, field, state, (key) => (key === def.key ? def : undefined)
+    );
+    return { zombies, state };
+  };
+
+  it("counts the species by default, at the moment the reward is earned", () => {
+    const { zombies, state } = harness();
+    zombies.grantReward(def.key, 0, 0, "earned", true);
+    expect(state.zombieDiscovered[def.key]).toBe(1);
+  });
+
+  it("does not count again when a Received reward is claimed into a slot", () => {
+    const { zombies, state } = harness();
+    // Earned earlier and filed in Received, so the Almanac already holds it.
+    state.recordZombieDiscovered(def.key);
+    zombies.grantReward(def.key, 0, 0, "claimed", true, { recordDiscovery: false });
+    expect(state.zombieDiscovered[def.key]).toBe(1);
+    expect(zombies.roster().map((unit) => unit.id)).toContain("claimed");
+  });
+});

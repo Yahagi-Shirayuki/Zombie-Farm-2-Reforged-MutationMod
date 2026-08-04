@@ -108,6 +108,11 @@ export interface LootDrop {
   /** How many were won. Omitted (or 1) for the ordinary single drop; a bundled boost
    *  (Insta-Grow) carries its bundle size so the panel can show "x10". */
   qty?: number;
+  /** Where the prize actually went, when that is not "straight onto the farm". A
+   *  reward zombie earned with a full army is filed in Received and has to be
+   *  claimed, and the results panel is the only place the player reliably looks —
+   *  a toast fired behind this panel is not a notification. */
+  note?: string;
 }
 
 /** The results-panel label for a drop: bare name, or "name x10" for a bundle. */
@@ -661,7 +666,9 @@ export class RaidManager {
         // and the next one hands it over outright (see zombieDrops.ts). Streak settles on
         // every win of a raid that has one; raids without a rare zombie never get a key.
         const dryKey = String(raid.id);
-        const zombieDrop = rollRaidZombieDropWithPity(raid.id, true, Math.random(), this.state.zombieDryWins[dryKey] ?? 0);
+        // `dice` — the Golden Dice spent on this fight — widens the rare-zombie chance the
+        // same way it shifts the item roll's tier.
+        const zombieDrop = rollRaidZombieDropWithPity(raid.id, true, Math.random(), this.state.zombieDryWins[dryKey] ?? 0, dice);
         if (hasRaidZombieDrop(raid.id)) {
           this.state.zombieDryWins[dryKey] = nextRaidZombieDryWins(this.state.zombieDryWins[dryKey] ?? 0, !!zombieDrop);
         }

@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { planClaim, planStore, planRetrieve } from "../src/storage";
 import { SHED_SLOTS, BASE_SHED_SLOTS } from "../src/objectCatalog";
+import { EPIC_BOSSES } from "../../src/epicBoss/catalog";
+
+/** Every epic-boss prize that is claimed out of Received (pets are not). */
+const EPIC_PRIZES = EPIC_BOSSES.flatMap((boss) =>
+  boss.loot.filter((prize) => !prize.stageActor).map((prize) => ({ boss: boss.id, ...prize })));
 
 describe("planClaim — Received -> the thing it represents", () => {
   it("claims a boost drop into the boost inventory, by NAME", () => {
@@ -10,6 +15,32 @@ describe("planClaim — Received -> the thing it represents", () => {
 
   it("claims a decoration into the placeable it becomes (drops.json `tile`)", () => {
     expect(planClaim("Windmill", 1)).toEqual({ ok: true, kind: "object", objectKey: "windmill" });
+  });
+
+  it("claims every epic-boss prize into its placeable", () => {
+    // The field report: an epic prize placed on the farm came back as a "bad item"
+    // and was rolled back. planClaim resolves through dropEcon(name), and no epic
+    // prize had drop metadata — so all 50, across all 8 bosses, were unclaimable.
+    expect(EPIC_PRIZES.length).toBeGreaterThan(40);
+    const refused: string[] = [];
+    for (const prize of EPIC_PRIZES) {
+      const plan = planClaim(prize.name, 1);
+      if (!plan.ok || plan.kind !== "object" || plan.objectKey !== prize.tile) {
+        refused.push(`${prize.boss}:${prize.name} -> ${JSON.stringify(plan)}`);
+      }
+    }
+    expect(refused).toEqual([]);
+  });
+
+  it("lets an epic prize go into the shed and come back out", () => {
+    // planStore/planRetrieve read the same table, so they failed the same way — a
+    // prize that could not be claimed could not be shelved either.
+    for (const prize of EPIC_PRIZES.slice(0, 5)) {
+      expect(planStore(prize.name, 1, 0, 8), prize.name)
+        .toEqual({ ok: true, kind: "object", objectKey: prize.tile });
+      expect(planRetrieve(prize.name, 1), prize.name)
+        .toEqual({ ok: true, kind: "object", objectKey: prize.tile });
+    }
   });
 
   it("refuses to claim an item that isn't there", () => {

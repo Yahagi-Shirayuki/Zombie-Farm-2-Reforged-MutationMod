@@ -33,7 +33,7 @@ import { QuestBus, QuestEvent } from "./quest/events";
 import { objectQuestAliases } from "./quest/objectVariants";
 import { QuestSystem } from "./quest/QuestSystem";
 import { QuestDef, questRewardInfo } from "./quest/types";
-import { RaidManager, RaidResultView } from "./raid/RaidManager";
+import { RaidManager, RaidResultView, type LootDrop } from "./raid/RaidManager";
 import { RaidScene } from "./raid/RaidScene";
 import { RAID_COOLDOWN_MS } from "./raid/RaidCatalog";
 import { reconcilePartySelection } from "./raid/partySelection";
@@ -873,11 +873,32 @@ async function main() {
   const grantEarnedZombie = (key: string): OwnedZombie | null => {
     if (zombies.canAdd()) return zombies.grantReward(key, walk.tile.col, walk.tile.row);
     if (!onlineFarm) {
+      // Earned is earned: the Almanac counts the species here rather than waiting for
+      // the claim, so the collection never differentiates by which bucket holds a unit.
+      state.recordZombieDiscovered(key);
       state.receiveItem(encodeReceivedZombie({
         id: crypto.randomUUID(), key, mutation: zombieDefs.get(key)?.mutation ?? 0, invasions: 0,
       }));
     }
     return null;
+  };
+
+  /** Put a server-awarded zombie on the results panel, where the player actually
+   *  looks. A prize that could not go straight onto the farm used to be announced
+   *  only by a toast fired the instant before the panel covered it — for an Epic
+   *  Boss milestone that meant the event's signature zombie arrived unannounced.
+   *  Also counts the species for the Almanac when it went to Received: nothing
+   *  claims it into the roster, so no other path would. */
+  const rewardZombieDrop = (
+    unit: { key: string; stored: boolean; received?: boolean }
+  ): LootDrop => {
+    if (unit.received) state.recordZombieDiscovered(unit.key);
+    return {
+      name: zombieDefs.get(unit.key)?.name ?? "Reward zombie",
+      icon: zombiePortrait(unit.key),
+      qty: 1,
+      note: unit.received ? "Waiting in Received" : unit.stored ? "Sent to the Mausoleum" : undefined,
+    };
   };
 
   // The data-driven quest engine (all 96 quests from quests.json). Rewards route to
@@ -970,6 +991,8 @@ async function main() {
     if (onlineGameplayBlocked()) return;
     if (state.boostCount(def.key) <= 0) return;
     giftUnitId = null;
+    powerGold = 0;
+    powerXp = 0;
     if (!applyBoost(def)) return; // only consume if it did something
     // ONLINE: the server owns the count — decrement there (optimistic + reconcile).
     // A gift voucher redeems into a zombie, so it also carries the spawned unit's id:
@@ -982,11 +1005,13 @@ async function main() {
         : growTarget
           ? { type: "use" as const, key: def.key, oc: growTarget.oc, or: growTarget.or }
           : { type: "use" as const, key: def.key };
-      state.onInventory(action, { count: -1 });
+      state.onInventory(action, { count: -1, gold: powerGold, xp: powerXp });
     } else state.useBoost(def.key);
     giftUnitId = null;
     powerUnitIds = [];
     growTarget = null;
+    powerGold = 0;
+    powerXp = 0;
   };
   hud.canUseBoost = (def) =>
     def.effect !== "plow" ||
@@ -1039,6 +1064,12 @@ async function main() {
   let giftUnitId: string | null = null;
   let powerUnitIds: { id: string; oc: number; or: number }[] = [];
   let growTarget: { oc: number; or: number } | null = null;
+  // ONLINE: what a farm-wide power (Insta-Harvest / Insta-Plow) just paid out, summed
+  // over every plot and tree it hit. The server owns these rewards, but sending them as
+  // the power command's optimistic delta keeps the top-bar counters rising with the
+  // per-plot popups instead of a beat later, on reconcile.
+  let powerGold = 0;
+  let powerXp = 0;
 
   // Apply a farm-usable boost's effect. Returns true if it actually did anything
   // (so a no-op — e.g. Insta-Harvest with nothing ripe — doesn't waste the boost).
@@ -1062,6 +1093,10 @@ async function main() {
         if (!r) continue;
         const cropCenter = field.plotCenterOf(pl.oc, pl.or);
         popHarvestIcon(r, cropCenter.x, cropCenter.y);
+        // Every plot pays exactly what harvesting it by hand would (see JobSystem):
+        // farmer-adjusted gold for a vegetable, XP for both kinds.
+        const gold = r.zombieKey ? 0 : state.farmerHarvestGold(r.sell);
+        const xp = harvestXp(r.xp, field.hasPlowFree());
         let harvestAliases: readonly string[] = [];
         if (state.onFarm) {
           if (r.zombieKey) {
@@ -1073,10 +1108,11 @@ async function main() {
             powerUnitIds.push({ id: unit.id, oc: pl.oc, or: pl.or });
           }
           // The server receives one semantic power command from onUseBoost below;
-          // individual optimistic harvests must not become commands.
+          // individual optimistic harvests must not become commands. Their totals
+          // ride along as that command's optimistic delta so the counters move now.
         } else {
-          if (r.sell) state.addGold(state.farmerHarvestGold(r.sell));
-          state.addXp(harvestXp(r.xp, field.hasPlowFree()));
+          if (gold) state.addGold(gold);
+          state.addXp(xp);
           if (r.zombieKey) {
             const context = mutationContexts.get(`${pl.oc}:${pl.or}`) ?? r.mutationContext!;
             harvestAliases = unitSubjectAliasesOf(
@@ -1085,12 +1121,22 @@ async function main() {
             );
           }
         }
+        powerGold += gold;
+        powerXp += xp;
         questBus.post(
           r.isZombie ? QuestEvent.ZombieHarvested : QuestEvent.CropHarvested,
           r.name, 1, harvestAliases
         );
-        if (!r.isZombie && awardOfflineEpicBossToken(r.growMs, r.sell, cropCenter.x, cropCenter.y)) {
-          floatText(c.x, c.y - 28, "+1 Boss Token!");
+        const bossToken = !r.isZombie &&
+          awardOfflineEpicBossToken(r.growMs, r.sell, cropCenter.x, cropCenter.y);
+        // Each plot pops its OWN reward numbers, in this one frame, so the farm
+        // reads as having been harvested all at once (as the original game did).
+        if (r.zombieKey) {
+          floatText(cropCenter.x, cropCenter.y, `+${xp}xp`);
+        } else {
+          floatText(cropCenter.x, cropCenter.y, `+${gold}g${r.fertilized ? " ×2" : ""}`);
+          if (xp) floatText(cropCenter.x, cropCenter.y, `+${xp}xp`, 0.42);
+          if (bossToken) floatText(cropCenter.x, cropCenter.y, "+1 Boss Token!", xp ? 0.84 : 0.42);
         }
         harvested++;
       }
@@ -1098,33 +1144,38 @@ async function main() {
       // single power command below awards them authoritatively; locally we mirror
       // the normal tree harvest's gold, quest event, and regrow timer.
       for (const id of field.ripeTreeIds()) {
-        const def = field.objectDefOf(id);
+        const treeDef = field.objectDefOf(id);
+        const treeAt = field.objectWorkPoint(id);
         const baseGold = field.harvestObject(id);
-        if (!def || baseGold === null) continue;
-        if (!state.onFarm) {
-          state.addGold(state.farmerHarvestGold(baseGold));
-        }
-        questBus.post(QuestEvent.CropHarvested, def.name);
+        if (!treeDef || baseGold === null) continue;
+        const gold = state.farmerHarvestGold(baseGold);
+        if (!state.onFarm) state.addGold(gold);
+        powerGold += gold;
+        questBus.post(QuestEvent.CropHarvested, treeDef.name);
+        if (treeAt) floatText(treeAt.x, treeAt.y, `+${gold}g`);
         harvested++;
       }
       if (harvested) floatText(c.x, c.y, `Harvested ${harvested}!`);
       return harvested > 0;
     }
     if (def.effect === "plow") {
-      const n = field.replowSpent();
-      const xp = n * plowXp(field.hasPlowFree());
+      const plowed = field.replowSpent();
+      const xp = plowXp(field.hasPlowFree());
       // The boost replaces only the gold cost: its XP matches the same plots being
-      // plowed manually. Online balance rewards are applied authoritatively below.
-      if (n && !state.onInventory) state.addXp(xp);
-      for (let i = 0; i < n; i++) {
+      // plowed manually. Online the server credits it authoritatively; the total
+      // rides along as the power command's optimistic delta (see onUseBoost).
+      if (plowed.length && !state.onInventory) state.addXp(xp * plowed.length);
+      powerXp += xp * plowed.length;
+      for (const pl of plowed) {
         questBus.post(QuestEvent.SoilPlowed, "Plow");
         questBus.post(QuestEvent.NewSoilPlowed, "Plow");
+        // Same as harvest: every plot shows its own reward in this one frame.
+        const at = field.plotCenterOf(pl.oc, pl.or);
+        floatText(at.x, at.y, "Plowed!");
+        if (xp) floatText(at.x, at.y, `+${xp}xp`, 0.42);
       }
-      if (n) {
-        floatText(c.x, c.y, `Plowed ${n}!`);
-        if (xp) floatText(c.x, c.y, `+${xp}xp`, 0.42);
-      }
-      return n > 0;
+      if (plowed.length) floatText(c.x, c.y, `Plowed ${plowed.length}!`);
+      return plowed.length > 0;
     }
     if (def.effect === "gift") {
       if (!def.giftZombieKey) return false;
@@ -2990,7 +3041,7 @@ async function main() {
         "Retreat from battle?", `This attempt will end and ${def.name} will escape.`, "Retreat"
       ),
       onFinish: (outcome, finalTick, inputs) => {
-        const presentResult = (result: ReturnType<EpicBossManager["finish"]>, drops: { name: string; icon: string }[]) => {
+        const presentResult = (result: ReturnType<EpicBossManager["finish"]>, drops: LootDrop[]) => {
         state.setEpicBossRun(result.run);
         const currency = result.defeatedLevel === null
           ? { brains: 0, gold: 0 }
@@ -3040,8 +3091,10 @@ async function main() {
           void finishEpicBossOnline(epicSessionId, finalTick, inputs).then((server) => {
             zombies.recordInvasion(server.survivors);
             zombies.removeCasualties(server.losses);
+            const rewardDrops: LootDrop[] = [];
             for (const unit of server.newZombies) {
               if (!unit.received) zombies.grantReward(unit.key, walk.tile.col, walk.tile.row, unit.id, unit.stored);
+              rewardDrops.push(rewardZombieDrop(unit));
               hud.showToast(`${zombieDefs.get(unit.key)?.name ?? "Epic reward zombie"} joined your ${unit.received ? "Received storage" : unit.stored ? "Mausoleum" : "farm"}!`);
             }
             economy?.adoptEpicBossResult(server);
@@ -3053,7 +3106,10 @@ async function main() {
               completed: !!server.event.completedAt,
               escaped: server.escaped,
             };
-            presentResult(result, server.loot ? [{ name: server.loot.name, icon: epicAsset(def, def.lootIcon) }] : []);
+            presentResult(result, [
+              ...(server.loot ? [{ name: server.loot.name, icon: epicAsset(def, def.lootIcon) }] : []),
+              ...rewardDrops,
+            ]);
           }).catch(() => {
             hud.showToast("The fight result could not be verified. Reconnecting will recover it.");
             if (raidScene) { app.stage.removeChild(raidScene.container); raidScene.destroy(); raidScene = null; }
@@ -3235,7 +3291,7 @@ async function main() {
             // so advance it from the verified outcome as soon as it lands (closing the
             // result panel is the other, later, chance).
             tutorial?.onRaidResolved();
-            const drops = res.loot
+            const drops: LootDrop[] = res.loot
               ? [{ name: res.loot.name, icon: raids.lootIconFor(res.loot.name), qty: res.loot.qty ?? 1 }]
               : [];
             if (res.newZombie) {
@@ -3248,11 +3304,7 @@ async function main() {
                   res.newZombie.stored
                 );
               }
-              drops.push({
-                name: zombieDefs.get(res.newZombie.key)?.name ?? "Rare zombie",
-                icon: zombiePortrait(res.newZombie.key),
-                qty: 1,
-              });
+              drops.push(rewardZombieDrop(res.newZombie));
               hud.showToast(
                 `${zombieDefs.get(res.newZombie.key)?.name ?? "Rare zombie"} joined your ${res.newZombie.received ? "Received storage" : res.newZombie.stored ? "Mausoleum" : "farm"}!`
               );
@@ -3399,7 +3451,9 @@ async function main() {
         const def = zombieDefs.get(zombie.key);
         return {
           index, name: def?.name ?? "Zombie reward", icon: zombiePortrait(zombie.key),
-          kind: "zombie", actionLabel: "Store in Mausoleum",
+          kind: "zombie",
+          // Names the destination the claim will actually pick (see onClaimReceived).
+          actionLabel: zombies.canAdd() ? "Deploy to farm" : "Store in Mausoleum",
         };
       }
       const boost = assets.boosts.find((b) => b.name === entry);
@@ -3429,10 +3483,19 @@ async function main() {
     if (entry == null) return;
     const zombie = parseReceivedZombie(entry);
     if (zombie) {
-      if (!field.mausoleumId()) { hud.showToast("Place a Mausoleum before claiming this zombie."); return; }
-      if (zombies.mausoleumFull) { hud.showToast("Make room in the Mausoleum first."); return; }
+      // Deploy onto the farm whenever the army has room, and fall back to the
+      // Mausoleum only when it does not — mirrors the Worker's storage.claim, so both
+      // sides agree on where the unit lands (client zombieMax already carries the
+      // placed army bonus online). A full crypt must not strand an earned reward
+      // while there is a free army slot standing empty.
+      const deploy = zombies.canAdd();
+      if (!deploy && !field.mausoleumId()) { hud.showToast("Place a Mausoleum before claiming this zombie."); return; }
+      if (!deploy && zombies.mausoleumFull) { hud.showToast("Make room in the Mausoleum first."); return; }
       if (economy && !economy.submitStorageClaim(entry, {})) return;
-      zombies.grantReward(zombie.key, walk.tile.col, walk.tile.row, zombie.id, true);
+      // The Almanac counted this species when the reward was EARNED; claiming only
+      // moves it, so counting again here would inflate the lifetime tally.
+      zombies.grantReward(zombie.key, walk.tile.col, walk.tile.row, zombie.id, !deploy,
+        { recordDiscovery: false });
       state.takeReceivedAt(index);
       saveManager.flushCritical();
       return;

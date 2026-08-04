@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { GameState } from "./GameState";
+import { encodeReceivedZombie } from "./zombie/receivedReward";
 
 // The shed's contents are owned by the OBJECT projection: a packed decoration is a
 // server object with status "stored", adopted through syncObjectStorage. The legacy
@@ -42,5 +43,56 @@ describe("GameState item storage projections", () => {
     s.syncCapacities(16, 16);
     expect(s.storageItemCap).toBe(16);
     expect(s.storedItems).toEqual([{ key: "beachBall", count: 1 }]);
+  });
+});
+
+// The Almanac is a collection of what the player OWNS, and an earned reward parked in
+// Received is owned — it just has not been moved into a slot yet. A grant path that
+// filed one there used to leave the species silhouetted until it was claimed.
+describe("Almanac counts unclaimed reward zombies", () => {
+  const marker = (key: string, id = "r1") =>
+    encodeReceivedZombie({ id, key, mutation: 0, invasions: 0 });
+
+  it("counts a reward zombie sitting in the online Received bucket", () => {
+    const s = new GameState();
+    s.syncStorage({ [marker("ZombieActorOmegaDrZombie")]: 1 }, {});
+    expect(s.zombieDiscovered.ZombieActorOmegaDrZombie).toBe(1);
+  });
+
+  it("counts every unclaimed copy", () => {
+    const s = new GameState();
+    s.syncStorage({
+      [marker("ZombieActorDrZombie", "a")]: 1,
+      [marker("ZombieActorDrZombie", "b")]: 1,
+    }, {});
+    expect(s.zombieDiscovered.ZombieActorDrZombie).toBe(2);
+  });
+
+  it("is a floor, not an increment — repeated syncs cannot inflate the tally", () => {
+    const s = new GameState();
+    const received = { [marker("ZombieActorOmegaDrZombie")]: 1 };
+    s.syncStorage(received, {});
+    s.syncStorage(received, {});
+    s.syncStorage(received, {});
+    expect(s.zombieDiscovered.ZombieActorOmegaDrZombie).toBe(1);
+  });
+
+  it("never lowers a count already earned at grant time", () => {
+    const s = new GameState();
+    for (let i = 0; i < 6; i++) s.recordZombieDiscovered("ZombieActorDrZombie");
+    s.syncStorage({ [marker("ZombieActorDrZombie")]: 1 }, {});
+    expect(s.zombieDiscovered.ZombieActorDrZombie).toBe(6);
+  });
+
+  it("counts an offline award the moment it lands in Received", () => {
+    const s = new GameState();
+    s.receiveItem(marker("ZombieActorOmegaDrZombie"));
+    expect(s.zombieDiscovered.ZombieActorOmegaDrZombie).toBe(1);
+  });
+
+  it("ignores ordinary decor entries", () => {
+    const s = new GameState();
+    s.syncStorage({ "Dr. Groundhog's Tricycle": 1 }, {});
+    expect(s.zombieDiscovered).toEqual({});
   });
 });

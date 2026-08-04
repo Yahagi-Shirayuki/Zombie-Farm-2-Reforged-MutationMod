@@ -358,6 +358,9 @@ describe("Black Market", () => {
       expect(after.gameplay.roster).toEqual(expect.arrayContaining([
         expect.objectContaining({
           key: "ZombieActorRegularTier1", mutation: 2, invasions: 4, stored: expectedStored,
+          // The returned zombie is the seller's own, back under a new unit id. The
+          // flag is how the client knows not to credit it to the Zombie Almanac.
+          restored: true,
         }),
       ]));
     };

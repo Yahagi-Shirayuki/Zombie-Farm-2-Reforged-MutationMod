@@ -489,5 +489,49 @@ and it shows in task that I still need to buy one more", quest 27 Candyland).
   count jumps to the right value); an early purchase does not.
 
 
+EPIC-BOSS PRIZES WERE UNCLAIMABLE (field report: "you can put them into ur farm, the
+system calls it a bad item and rolls it back", Dr. Groundhog).
+
+  FIXED, and it was NOT limited to Dr. Groundhog: not one of the 50 decor prizes
+  across all 8 epic bosses had an entry in public/assets/raids/drops.json. Claiming a
+  Received item runs storage.claim -> planClaim -> dropEcon(name), which reads that
+  table, so every epic prize resolved to "bad_item" and the optimistic placement was
+  rolled back by the next reconcile. planStore and planRetrieve read the same table,
+  so a prize could not be shelved either — the report understated the blast radius.
+
+  The prize names/tiles were already in each boss's catalog.json; prep_drops.py now
+  emits them alongside the raid drops (icon "", since the prize's art is the placeable
+  its `tile` names), and server/src/raidLootCatalog.ts mirrors the 50 new rows.
+  Guarded by server/test/storage.test.ts (every prize claims, stores and retrieves)
+  and server/test/loot.test.ts (every prize resolves; none leaked into a raid tier).
+
+  Two knock-on improvements: the Received card now resolves each prize's real art
+  (drgroundhogLabTable.png etc.) instead of falling through to nothing, and
+  ownedLootCounter can resolve a prize by name without the caller passing its tile —
+  the loot.test.ts case asserting the opposite was encoding this very gap.
+
+  A SECOND gate sat behind the claim: object.refund resolves through objectEcon, and
+  40 of the 50 prizes had no row in server/src/objectCatalog.ts either — so a prize
+  that now claimed fine still could not be SOLD ("bad_item"). Every category-"reward"
+  placeable is mirrored now, and objectCatalogSync.test.ts gained the coverage check
+  that was missing all along (its price/level tests skip absent keys, so a GAP was
+  silent; only orphans in the other direction were caught).
+
+  Their price came with a trap. The source sold Epic prizes for brains, to let you
+  skip the fight, so their placeables rows carried 1-4 brains and refunds convert at
+  1,000 gold each. Reforged never sells them (category "reward" is absent from the
+  Market), so honouring that price meant a free prize cashed out for 1,000-4,000
+  gold. They are priced at cost 0 now, exactly like the other 54 earned decorations,
+  which pays the game's one-gold minimum. prep_placeables.py treats the Epic tiles as
+  reward-only so a regenerate keeps it that way.
+
+  NOT REPRODUCED: the second half of the report, that a prize does not appear on the
+  victory loot screen. openRaidResult renders an epic prize correctly when given one
+  (verified live), every boss's lootIcon file exists, and both the offline and online
+  paths pass the prize into the view. The roll is 35% per cleared level, so a run that
+  granted nothing is the likeliest reading. Worth re-asking the reporter once the
+  claim fix is deployed.
+
+
 Additional Features/Fixes
 - 

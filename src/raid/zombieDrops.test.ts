@@ -9,9 +9,11 @@ import {
   hasRaidZombieDrop,
   nextRaidZombieDryWins,
   RAID_ZOMBIE_PITY_WINS,
+  raidZombieDropRate,
   rollRaidZombieDrop,
   rollRaidZombieDropWithPity,
   TEDDY_ZOMBIE_KEY,
+  ZOMBIE_LUCK_DICE_CAP,
 } from "./zombieDrops";
 
 describe("rare raid zombie drops", () => {
@@ -39,6 +41,39 @@ describe("rare raid zombie drops", () => {
     expect(rollRaidZombieDrop(2, true, 0)).toBeNull();
     expect(rollRaidZombieDrop(10, true, -0.1)).toBeNull();
     expect(rollRaidZombieDrop(11, true, Number.NaN)).toBeNull();
+  });
+});
+
+describe("Golden Dice raise the rare-zombie rate", () => {
+  it("adds one base rate per die", () => {
+    expect(raidZombieDropRate(1, 0)).toBeCloseTo(0.01, 10); // no dice: unchanged
+    expect(raidZombieDropRate(1, 1)).toBeCloseTo(0.02, 10);
+    expect(raidZombieDropRate(1, 2)).toBeCloseTo(0.03, 10);
+    expect(raidZombieDropRate(1, 5)).toBeCloseTo(0.06, 10); // the five a full loot table allows
+    expect(raidZombieDropRate(7, 5)).toBeCloseTo(0.048, 10); // event zombies: 0.8% base
+  });
+
+  it("widens the winning roll window accordingly", () => {
+    // 0.015 misses at one die's 2%... but not at zero dice's 1%.
+    expect(rollRaidZombieDrop(1, true, 0.015, 0)).toBeNull();
+    expect(rollRaidZombieDrop(1, true, 0.015, 1)?.key).toBe(OLD_MC_ZOMBIE_KEY);
+    expect(rollRaidZombieDrop(1, true, 0.055, 5)?.key).toBe(OLD_MC_ZOMBIE_KEY);
+    expect(rollRaidZombieDrop(1, true, 0.061, 5)).toBeNull();
+  });
+
+  it("still pays nothing on a loss or for a raid with no rare zombie", () => {
+    expect(rollRaidZombieDrop(1, false, 0.0, 10)).toBeNull();
+    expect(rollRaidZombieDrop(2, true, 0.0, 10)).toBeNull();
+    expect(raidZombieDropRate(2, 10)).toBe(0);
+  });
+
+  it("clamps a garbage or oversized dice count instead of guaranteeing the drop", () => {
+    const capped = raidZombieDropRate(1, ZOMBIE_LUCK_DICE_CAP);
+    expect(capped).toBeCloseTo(0.11, 10);
+    expect(raidZombieDropRate(1, 10_000)).toBe(capped);
+    expect(raidZombieDropRate(1, -5)).toBeCloseTo(0.01, 10);
+    expect(raidZombieDropRate(1, Number.NaN)).toBeCloseTo(0.01, 10);
+    expect(capped).toBeLessThan(1);
   });
 });
 
@@ -70,6 +105,14 @@ describe("rare zombie pity floor", () => {
 
   it("does not override a natural drop", () => {
     expect(rollRaidZombieDropWithPity(1, true, 0, 0)?.key).toBe(OLD_MC_ZOMBIE_KEY);
+  });
+
+  it("passes dice through to the natural roll before falling back to the floor", () => {
+    // Inside the diced window: a real roll, well short of the guarantee.
+    expect(rollRaidZombieDropWithPity(1, true, 0.015, 0, 1)?.key).toBe(OLD_MC_ZOMBIE_KEY);
+    expect(rollRaidZombieDropWithPity(1, true, 0.015, 0, 0)).toBeNull();
+    // Dice don't disturb the guarantee either way.
+    expect(rollRaidZombieDropWithPity(1, true, MISS, RAID_ZOMBIE_PITY_WINS, 5)?.key).toBe(OLD_MC_ZOMBIE_KEY);
   });
 
   it("counts dry wins up and resets whenever the zombie lands", () => {

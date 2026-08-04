@@ -653,12 +653,13 @@ export class Field {
     return out;
   }
 
-  /** Insta-Plow: re-plow every harvested (dirt/hole) plot. Returns the count. */
-  replowSpent(): number {
-    let done = 0;
+  /** Insta-Plow: re-plow every harvested (dirt/hole) plot in one pass. Returns the
+   *  plots it plowed, so the caller can pop each one's own reward numbers at once. */
+  replowSpent(): { oc: number; or: number }[] {
+    const done: { oc: number; or: number }[] = [];
     for (const p of this.plots.values())
       if (p.state === "dirt" || p.state === "hole") {
-        if (this.tillAt(p.oc, p.or)) done++;
+        if (this.tillAt(p.oc, p.or)) done.push({ oc: p.oc, or: p.or });
       }
     return done;
   }
@@ -1424,30 +1425,28 @@ export class Field {
 
   // Tint the object under the Remove tool's cursor so the player sees what will be
   // removed; pass null to clear. No-op if it's already the highlighted object.
+  //
+  // A recoloured placeable (Black Fence Gate, Pink Iron Fence) is the base art plus
+  // a sprite tint, so the wash has to compose with that colour rather than replace
+  // it: clearing back to white would strip the recolour and leave the pale base art
+  // until the farm was rebuilt, and washing to bare red would flash a black gate
+  // bright. Multiply both ways — white is the identity, so an untinted object is
+  // unaffected.
   setObjectHighlight(id: string | null) {
     if (id === this.highlightedObj) return;
-    const tintOverlay = (container: Container | undefined, tint: number) => {
-      for (const child of container?.children ?? []) if (child instanceof Sprite) child.tint = tint;
+    const applyWash = (obj: FarmObject | undefined, wash: number) => {
+      if (!obj) return;
+      const tint = multiplyObjectTint(objectTint(obj.def.color), wash);
+      for (const sprite of [obj.sprite, obj.rearSprite, obj.frontSprite, obj.gateSprite]) {
+        if (sprite) sprite.tint = tint;
+      }
+      for (const overlay of [obj.rearOverlay, obj.frontOverlay]) {
+        for (const child of overlay?.children ?? []) if (child instanceof Sprite) child.tint = tint;
+      }
     };
-    const prev = this.highlightedObj ? this.objects.get(this.highlightedObj) : null;
-    if (prev) {
-      prev.sprite.tint = 0xffffff;
-      if (prev.rearSprite) prev.rearSprite.tint = 0xffffff;
-      if (prev.frontSprite) prev.frontSprite.tint = 0xffffff;
-      if (prev.gateSprite) prev.gateSprite.tint = 0xffffff;
-      tintOverlay(prev.rearOverlay, 0xffffff);
-      tintOverlay(prev.frontOverlay, 0xffffff);
-    }
+    applyWash(this.highlightedObj ? this.objects.get(this.highlightedObj) : undefined, 0xffffff);
     this.highlightedObj = id;
-    const next = id ? this.objects.get(id) : null;
-    if (next) {
-      next.sprite.tint = 0xff7a6a; // reddish "will remove" wash
-      if (next.rearSprite) next.rearSprite.tint = 0xff7a6a;
-      if (next.frontSprite) next.frontSprite.tint = 0xff7a6a;
-      if (next.gateSprite) next.gateSprite.tint = 0xff7a6a;
-      tintOverlay(next.rearOverlay, 0xff7a6a);
-      tintOverlay(next.frontOverlay, 0xff7a6a);
-    }
+    applyWash(id ? this.objects.get(id) : undefined, 0xff7a6a); // reddish "will remove" wash
   }
   objectDefOf(id: string): PlaceableDef | null {
     return this.objects.get(id)?.def ?? null;

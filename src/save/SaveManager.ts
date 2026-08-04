@@ -605,6 +605,10 @@ export class SaveManager {
     this.state.zombieDiscovered = Object.keys(discovered).length
       ? discovered
       : backfillDiscovered(data.ownedZombies ?? []);
+    // `received` was assigned straight onto the state above, so the reward zombies
+    // parked in it have not been through receiveItem/syncStorage yet. Owned is owned:
+    // count them here too, or an unclaimed prize opens the Almanac as a silhouette.
+    this.state.countUnclaimedZombieRewards();
     if (data.farm.w && data.farm.h) this.field.resize(data.farm.w, data.farm.h);
     this.state.ownedClimates = data.farm.ownedClimates ?? ["grass"];
     if (!this.state.ownedClimates.includes("grass")) this.state.ownedClimates.unshift("grass");

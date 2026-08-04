@@ -138,6 +138,12 @@ export interface RosterUnitProjection {
   invasions: number;
   stored: boolean;
   lockedByRaid?: string;
+  /** True when the unit is the player's OWN zombie coming back out of Black Market
+   *  escrow (they cancelled their sale). It arrives under a new server unit id, so
+   *  without this the client would read it as a first-time arrival and credit the
+   *  Zombie Almanac again. Absent on every other unit — and on an older Worker,
+   *  where the client simply keeps the pre-fix behaviour. */
+  restored?: boolean;
 }
 
 export interface GameplayProjection {

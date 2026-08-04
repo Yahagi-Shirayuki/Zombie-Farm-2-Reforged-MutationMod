@@ -29,7 +29,7 @@ describe("objectCatalog mirrors placeables.json", () => {
     for (const row of rows) {
       if (CLIENT_PRICED.has(row.key)) continue;
       const econ = OBJECTS[row.key];
-      if (!econ) continue; // coverage is asserted separately below
+      if (!econ) continue; // coverage is asserted by the two tests at the bottom
       const brains = !!row.brainsNeeded;
       if (econ.cost !== row.cost || econ.brains !== brains) {
         mismatched.push(
@@ -69,5 +69,27 @@ describe("objectCatalog mirrors placeables.json", () => {
     const assetKeys = new Set(rows.map((row) => row.key));
     const orphans = Object.keys(OBJECTS).filter((key) => !assetKeys.has(key));
     expect(orphans).toEqual([]);
+  });
+
+  it("carries a server entry for EVERY object the asset has", () => {
+    // The gap this closes: 40 of the 50 Epic Boss prizes had no row here, and
+    // object.refund resolves through objectEcon — so a prize the player had earned
+    // and placed could not be sold at all (`bad_item`). Absence is silent, which is
+    // why the mismatch tests above skip missing keys; this is the one that catches it.
+    const gaps = rows.filter((row) => !OBJECTS[row.key]).map((row) => `${row.key} (${row.name})`);
+    expect(gaps).toEqual([]);
+  });
+
+  it("prices earned rewards at zero so selling one cannot mint gold", () => {
+    // A "reward" is never sold in the Market — it is claimed from Received for free.
+    // The source DID sell the Epic Boss prizes for brains (to skip the fight), and
+    // carrying that price through meant selling a free prize paid its brain value at
+    // 1,000 gold each: 1,000-4,000 gold per prize, out of nothing. Priced at zero,
+    // the refund is the game's one-gold minimum, exactly like every other reward.
+    const priced = rows
+      .filter((row) => (row as { category?: string }).category === "reward")
+      .filter((row) => row.cost !== 0 || row.brainsNeeded || OBJECTS[row.key]?.cost !== 0)
+      .map((row) => `${row.key}: ${row.cost}${row.brainsNeeded ? " brains" : " gold"}`);
+    expect(priced).toEqual([]);
   });
 });

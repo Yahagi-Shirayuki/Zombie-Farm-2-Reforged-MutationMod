@@ -23,8 +23,21 @@ casualty rules apply, and Epic Boss attack order is stored separately.
 Every attempt costs either one Boss Token or 1 brain (`EPIC_BOSS_FIGHT_BRAIN_COST`, reduced
 from 10 by the brainflation revert); there is no retry timer. While
 an event is active, harvesting a vegetable crop can yield a Boss Token. The chance uses
-the recovered 35% starter-loot rate as a ceiling and scales with both grow time and
-harvest value, so longer and more valuable crops are more efficient. Tokens can be
+the recovered 35% starter-loot rate as a per-harvest ceiling, so no crop is ever a
+guaranteed token.
+
+Supply is tuned in tokens per **plot-day** rather than per harvest, because a plot is
+recycled — a 15-minute crop harvests 96 times a day and a 24-hour crop once. The rate
+is a hump in grow time that peaks in the **2-4 hour** band at roughly 0.9-1.0 tokens
+per plot-day; a 15-minute crop earns about 45% of that and a 30-minute one about 65%,
+and the 24-hour band is held at the ceiling, which works out to 0.35 per plot-day.
+Harvest value still separates crops of equal grow time, but weakly (about 1.4x across
+the 4-hour crops) so the time band dominates the choice. (Before this tuning the rule
+was `0.35 * sqrt(time * value)`, which was *documented* as favouring long crops but per
+plot-hour did the opposite — a 15-minute Meat Flower out-earned a 24-hour Heartichoke
+4.3 to 1, making spam the optimal play.)
+
+Tokens can be
 hoarded during the run, but expire when that boss event ends. Damage survives an escape.
 If two hours elapse from the first attempt at the current level, that level returns to
 full HP. Winning advances immediately to the next full-health level. A fight begun

@@ -45,6 +45,7 @@ interface RosterRow {
   invasions: number;
   stored: number;
   locked_by_raid: string | null;
+  from_escrow: number;
 }
 interface RaidRow {
   id: string;
@@ -128,7 +129,7 @@ async function loadRows(db: D1Database, accountId: string, now: number) {
     db.prepare("SELECT * FROM quest_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<CoreRow>(),
     db.prepare("SELECT version, current_json FROM presentations_v3 WHERE account_id = ?").bind(accountId).first<PresentationRow>(),
-    db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, locked_by_raid
+    db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, locked_by_raid, from_escrow
       FROM roster_v3 WHERE account_id = ? ORDER BY created_at, unit_id`).bind(accountId).all<RosterRow>(),
     db.prepare(`SELECT id, raid_id, roster_json, started_at, earliest_finish_at, expires_at
       FROM raid_sessions_v3 WHERE account_id = ? AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1`)
@@ -158,6 +159,10 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
     invasions: u.invasions,
     stored: !!u.stored,
     ...(u.locked_by_raid ? { lockedByRaid: u.locked_by_raid } : {}),
+    // A zombie handed back by a cancelled Black Market sale. It reaches the client
+    // under a new unit id, so the flag is what stops the Almanac counting the
+    // player's own zombie as freshly obtained every list/cancel cycle.
+    ...(u.from_escrow ? { restored: true as const } : {}),
   }));
   const epicBoss = projectRun(rows.epicBoss);
   if (epicBoss) {

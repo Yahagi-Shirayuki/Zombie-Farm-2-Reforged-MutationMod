@@ -18,8 +18,10 @@
 // Everything here is pure + headless-testable; no Pixi, no game-state object.
 // ---------------------------------------------------------------------------
 
-import { StatMeta, STATS, displayStat, veterancyMultiplier, veterancy, ABILITY_POOL } from "./traits";
-import { ABILITY_KIND, ABILITY_COMBAT, activeAbilities, AbilityCombatEffect } from "./abilities";
+// Type-only where the import IS a type: prefs -> rosterSort -> here drags this module
+// into the Worker's compile graph, and the server tsconfig runs verbatimModuleSyntax.
+import { STATS, displayStat, veterancyMultiplier, veterancy, ABILITY_POOL, type StatMeta } from "./traits";
+import { ABILITY_KIND, ABILITY_COMBAT, activeAbilities, type AbilityCombatEffect } from "./abilities";
 import { mutationBonus } from "./mutations";
 
 /** The minimum a zombie must carry to resolve its displayed stats. */

@@ -4957,11 +4957,13 @@ export class Hud {
       `<div class="rr-row rr-loot"><span class="rr-l">Loot</span></div>` +
       (view.loot.length
         ? `<div class="rr-loot-items">${view.loot
-            .map((l) =>
-              l.icon
-                ? `<span class="rr-loot-i" title="${lootDropLabel(l)}"><img src="${l.icon}"><span>${lootDropLabel(l)}</span></span>`
-                : `<span class="rr-loot-i rr-loot-noimg">${lootDropLabel(l)}</span>`
-            )
+            .map((l) => {
+              const note = l.note ? `<em class="rr-loot-note">${l.note}</em>` : "";
+              const title = l.note ? `${lootDropLabel(l)} — ${l.note}` : lootDropLabel(l);
+              return l.icon
+                ? `<span class="rr-loot-i" title="${title}"><img src="${l.icon}"><span>${lootDropLabel(l)}</span>${note}</span>`
+                : `<span class="rr-loot-i rr-loot-noimg" title="${title}">${lootDropLabel(l)}${note}</span>`;
+            })
             .join("")}</div>`
         : `<div class="rr-loot-none">—</div>`);
     const extra = view.abilityUnlock ? `<div class="rr-unlock">${view.abilityUnlock}</div>` : "";

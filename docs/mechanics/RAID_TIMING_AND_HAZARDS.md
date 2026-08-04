@@ -163,8 +163,18 @@ it that way when touching the result panel or the fight's brain pickup.
 
 **Rare zombies are a separate roll, with the same treatment.** Four raids independently roll a
 special zombie on a win (`src/raid/zombieDrops.ts`): Old McDonnell's → Old McZombie at **1%**,
-Summer Break / Tree World / Valentine's Day → Diver / Forest / Teddy at **0.8%**. That roll gets
-its own pity, counted **per raid**: after `RAID_ZOMBIE_PITY_WINS = 100` wins of *that* raid
+Summer Break / Tree World / Valentine's Day → Diver / Forest / Teddy at **0.8%**.
+
+**Golden Dice raise that rate too — a deliberate divergence.** In the source the dice touch only
+the item tier roll; here each die spent adds one further base rate to the rare-zombie chance
+(`ZOMBIE_LUCK_PER_DIE = 1`, so 1 die doubles it, 2 dice triple it), matching what the boost's own
+description already promises about "rare items". Old McZombie runs 1 → 2 → 3 → … → **6%** across
+the five dice a full six-tier loot table allows (`maxLuckTiers`); the event zombies 0.8 → **4.8%**.
+The count is the same PINNED one the item roll uses — charged at `/raid/start`, never taken from
+the finish request — and it is clamped (`ZOMBIE_LUCK_DICE_CAP`) so a forged count can't make the
+drop certain.
+
+**The rare-zombie roll also has its own pity**, counted **per raid**: after `RAID_ZOMBIE_PITY_WINS = 100` wins of *that* raid
 without *its* zombie, the next win of it hands the zombie over
 (`rollRaidZombieDropWithPity`). Winning a different raid does nothing for it, a loss is not a
 completion, and receiving the zombie (rolled or guaranteed) resets that raid's count to 0 — so a

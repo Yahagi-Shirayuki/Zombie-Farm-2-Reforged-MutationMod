@@ -638,5 +638,405 @@
   "tile": "zombieXingSign",
   "unique": false,
   "limit": 0
+ },
+ "Bully Frog's Lily Jukebox": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "lilyJukebox",
+  "unique": false,
+  "limit": 0
+ },
+ "Bully Frog's Mossy Couch": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "mossyCouch",
+  "unique": false,
+  "limit": 0
+ },
+ "Bully Frog's Toad Stool": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "toadStool",
+  "unique": false,
+  "limit": 0
+ },
+ "Bully Frog's Muddy Pool": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "muddyPool",
+  "unique": false,
+  "limit": 0
+ },
+ "Bully Frog's Carnivorous Plants": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "carnivorousPlants",
+  "unique": false,
+  "limit": 0
+ },
+ "Bully Frog's Fireflies": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "fireflies",
+  "unique": false,
+  "limit": 0
+ },
+ "Bully Frog's Swamp Cabin": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "swamp_Cabin",
+  "unique": false,
+  "limit": 0
+ },
+ "Bully Frog's Squirmy Worms": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "squirmyWorms",
+  "unique": false,
+  "limit": 0
+ },
+ "Dr. Groundhog's Evil Device": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "drgroundhogEvilDevice",
+  "unique": false,
+  "limit": 0
+ },
+ "Dr. Groundhog's Tricycle": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "drgroundhogTricycle",
+  "unique": false,
+  "limit": 0
+ },
+ "Dr. Groundhog's Nut Stash": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "drgroundhogNutStash",
+  "unique": false,
+  "limit": 0
+ },
+ "Dr. Groundhog's Lab Shelves": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "drgroundhogLabShelves",
+  "unique": false,
+  "limit": 0
+ },
+ "Dr. Groundhog's Lab Table": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "drgroundhogLabTable",
+  "unique": false,
+  "limit": 0
+ },
+ "Dr. Groundhog's Lab": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "drgroundhogEvilLab",
+  "unique": false,
+  "limit": 0
+ },
+ "Dr. Groundhog's Burrow": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "drgroundhogBurrow",
+  "unique": false,
+  "limit": 0
+ },
+ "Dr. Groundhog's Distillery": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "drgroundhogDistillery",
+  "unique": false,
+  "limit": 0
+ },
+ "Farmhand Snowman": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "snowFarmhand",
+  "unique": false,
+  "limit": 0
+ },
+ "Lumberjack Snowman": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "snowLumberjack",
+  "unique": false,
+  "limit": 0
+ },
+ "Boss Farmer Snowman": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "snowOlMcDonnell",
+  "unique": false,
+  "limit": 0
+ },
+ "Zombie Snowman": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "snowZombie",
+  "unique": false,
+  "limit": 0
+ },
+ "Foul Owl's Colossal Snowman": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "snowOwl",
+  "unique": false,
+  "limit": 0
+ },
+ "Foul Owl's Gift Incinerator": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "antiHolidayIncinerator",
+  "unique": false,
+  "limit": 0
+ },
+ "Foul Owl's Evil Carriage": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "evilCarriage",
+  "unique": false,
+  "limit": 0
+ },
+ "Foul Owl's Gift Vault": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "antiHolidayVault",
+  "unique": false,
+  "limit": 0
+ },
+ "General Larvaelus' Banner": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "generalLarvaelusBanner",
+  "unique": false,
+  "limit": 0
+ },
+ "General Larvaelus' Blue Portal": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "generalLarvaelusTeleporterA",
+  "unique": false,
+  "limit": 0
+ },
+ "General Larvaelus' Red Portal": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "generalLarvaelusTeleporterB",
+  "unique": false,
+  "limit": 0
+ },
+ "General Larvaelus' Portal": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "teleporter",
+  "unique": false,
+  "limit": 0
+ },
+ "Loco Locust's Cactus Target": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "cactusTarget",
+  "unique": false,
+  "limit": 0
+ },
+ "Loco Locust's Saddle": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "saddle",
+  "unique": false,
+  "limit": 0
+ },
+ "Loco Locust's Rocking Horse": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "rockingHorse",
+  "unique": false,
+  "limit": 0
+ },
+ "Loco Locust's Boots": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "boots",
+  "unique": false,
+  "limit": 0
+ },
+ "Loco Locust's Banjo": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "banjo",
+  "unique": false,
+  "limit": 0
+ },
+ "Loco Locust's Saloon": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "saloon",
+  "unique": false,
+  "limit": 0
+ },
+ "Loco Locust's Hideout": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "hideout",
+  "unique": false,
+  "limit": 0
+ },
+ "Loco Locust's Gun Rack": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "gunRack",
+  "unique": false,
+  "limit": 0
+ },
+ "Mystical Mamba Banner": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "mysticalMambaBanner",
+  "unique": false,
+  "limit": 0
+ },
+ "Mystical Mamba's Wish Machine": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "mysticalMambasWishMachineLeft",
+  "unique": false,
+  "limit": 0
+ },
+ "Rocky Rhino's Banner": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "rockyRhinosBanner",
+  "unique": false,
+  "limit": 0
+ },
+ "Rocky Rhino's Cave": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "rockyRhinosCave",
+  "unique": false,
+  "limit": 0
+ },
+ "Rocky Rhino's Gong": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "rockyRhinosGong",
+  "unique": false,
+  "limit": 0
+ },
+ "Rocky Rhino's Sculpture": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "rockyRhinosSculpture",
+  "unique": false,
+  "limit": 0
+ },
+ "Skunkarella's Perfume": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "perfumeVat",
+  "unique": false,
+  "limit": 0
+ },
+ "Skunkarella's Scarecrow": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "fashionableScarecrow",
+  "unique": false,
+  "limit": 0
+ },
+ "Skunkarella's Mirror": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "evilMirror",
+  "unique": false,
+  "limit": 0
+ },
+ "Skunkarella's Gravestone": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "bedazzledGravestone",
+  "unique": false,
+  "limit": 0
+ },
+ "Skunkarella's Fountain": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "fancyFountain",
+  "unique": false,
+  "limit": 0
+ },
+ "Skunkarella's Gazebo": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "crystalGazebo",
+  "unique": false,
+  "limit": 0
+ },
+ "Skunkarella's Car": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "diamondCar",
+  "unique": false,
+  "limit": 0
+ },
+ "Skunkarella's Home": {
+  "icon": "",
+  "brains": false,
+  "gold": false,
+  "tile": "jewelHome",
+  "unique": false,
+  "limit": 0
  }
 }

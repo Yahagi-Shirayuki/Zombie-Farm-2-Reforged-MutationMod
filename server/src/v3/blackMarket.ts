@@ -544,9 +544,12 @@ export async function cancel(
     .bind(now, operationId, orderId, accountId, accountId, expectedVersion);
   const guard = "EXISTS(SELECT 1 FROM black_market_orders WHERE id=? AND status='CANCELLED' AND closed_operation_id=?)";
   const statements: D1PreparedStatement[] = [claim];
+  // from_escrow=1: this is the seller's own zombie coming home, not an acquisition.
+  // Without the mark the client sees an unfamiliar unit id and credits the Zombie
+  // Almanac, so list/cancel cycles inflated that species' lifetime count.
   if (row.kind === "SELL_ZOMBIE") statements.push(db.prepare(`INSERT INTO roster_v3
-    (account_id,unit_id,zombie_key,mutation,invasions,stored,created_at)
-    SELECT ?,?,?,?,?,${recipientStoredSql},? WHERE ${guard}`).bind(accountId, restoredId, row.zombie_key,
+    (account_id,unit_id,zombie_key,mutation,invasions,stored,from_escrow,created_at)
+    SELECT ?,?,?,?,?,${recipientStoredSql},1,? WHERE ${guard}`).bind(accountId, restoredId, row.zombie_key,
       row.escrow_mutation ?? 0, row.escrow_invasions ?? 0,
       accountId, accountId, accountId, now, orderId, operationId));
   else statements.push(db.prepare(`UPDATE balances SET brains=brains+? WHERE account_id=? AND ${guard}`)

@@ -24,6 +24,7 @@ ASSET_DIRS = [
 ]
 OUT_DIR = os.path.join(ROOT, "public", "assets", "raids")
 LOOT_DIR = os.path.join(OUT_DIR, "loot")
+EPIC_DIR = os.path.join(ROOT, "public", "assets", "epic-bosses")
 
 
 def build_index():
@@ -69,9 +70,34 @@ def main():
                      "unique": bool(info.get("unique", False)),
                      "limit": int(info.get("limit", 0))}
 
+    # ---- Epic-boss prizes ---------------------------------------------------
+    # Drops.json covers RAID loot only, but an epic-boss prize is claimed through the
+    # very same path: storage.claim -> planClaim -> dropEcon(name). Without an entry
+    # here every epic decoration resolved to "bad_item" and the server rolled back the
+    # placement, so all 50 prizes across all 8 bosses were unplaceable. Store/retrieve
+    # (planStore / planRetrieve) read the same table and failed the same way.
+    #
+    # `icon` stays empty: the prize's own art is the placeable its `tile` names, and
+    # the results panel already prefers that over a loot glyph.
+    epic = 0
+    for boss in sorted(os.listdir(EPIC_DIR)) if os.path.isdir(EPIC_DIR) else []:
+        catalog_path = os.path.join(EPIC_DIR, boss, "catalog.json")
+        if not os.path.exists(catalog_path):
+            continue
+        catalog = json.load(open(catalog_path, encoding="utf-8"))
+        for entry in catalog.get("loot", []):
+            name, tile = entry.get("name"), entry.get("tile")
+            # A `stageActor` prize is a tamed PET, unlocked directly rather than
+            # claimed out of Received — it needs no drop metadata.
+            if not name or not tile or entry.get("stageActor") or name in out:
+                continue
+            out[name] = {"icon": "", "brains": False, "gold": False, "tile": tile,
+                         "unique": bool(entry.get("unique", False)), "limit": 0}
+            epic += 1
+
     with open(os.path.join(OUT_DIR, "drops.json"), "w", encoding="utf-8") as f:
         json.dump(out, f, indent=1)
-    print(f"drops: {len(out)} items, {copied} sprites copied -> {LOOT_DIR}")
+    print(f"drops: {len(out)} items ({epic} epic-boss prizes), {copied} sprites copied -> {LOOT_DIR}")
     if missing:
         print(f"  no standalone art for {len(missing)}: {', '.join(missing[:12])}")
 

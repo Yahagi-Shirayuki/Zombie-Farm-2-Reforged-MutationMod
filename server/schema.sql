@@ -510,6 +510,10 @@ CREATE TABLE IF NOT EXISTS roster_v3 (
   invasions        INTEGER NOT NULL DEFAULT 0,
   stored           INTEGER NOT NULL DEFAULT 0,
   locked_by_raid   TEXT,
+  -- 1 when this row is an escrowed zombie handed back by a cancelled Black Market
+  -- sale. The unit is not a new acquisition, so the client must not credit it to
+  -- the Zombie Almanac (see migration 0039).
+  from_escrow      INTEGER NOT NULL DEFAULT 0,
   created_at       INTEGER NOT NULL,
   PRIMARY KEY (account_id, unit_id)
 );

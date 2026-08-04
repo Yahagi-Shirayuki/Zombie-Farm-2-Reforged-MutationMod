@@ -9,6 +9,7 @@
 //     pack in is future work (see README "Current Gaps").
 
 import { DEFAULT_FRIEND_SORT, isFriendSort, type FriendSort } from "./social/friendSort";
+import { DEFAULT_ZOMBIE_SORT, isZombieSort, type ZombieSort } from "./zombie/rosterSort";
 
 export type SpriteSet = "zf1" | "zf2";
 // How lush the decorative foliage ringing the farm is. All three fill the whole
@@ -25,6 +26,7 @@ const SPRITE_KEY = "zf2r.spriteSet";
 const FARM_BG_KEY = "zf2r.farmBackground";
 const DAY_NIGHT_KEY = "zf2r.dayNight";
 const FRIEND_SORT_KEY = "zf2r.friendSort";
+const ZOMBIE_SORT_KEY = "zf2r.zombieSort";
 const HAZARD_TIP_KEY = "zf2r.seenHazardTip";
 
 /** Which sprite pack to render with. Defaults to ZF2 (the only pack wired today). */
@@ -82,6 +84,17 @@ export function getFriendSort(): FriendSort {
 
 export function setFriendSort(sort: FriendSort): void {
   localStorage.setItem(FRIEND_SORT_KEY, sort);
+}
+
+/** How the "My Zombies" roster is ordered. Like the friends sort this is a view
+ *  preference, not progression, so it stays device-local instead of in the save. */
+export function getZombieSort(): ZombieSort {
+  const value = localStorage.getItem(ZOMBIE_SORT_KEY);
+  return isZombieSort(value) ? value : DEFAULT_ZOMBIE_SORT;
+}
+
+export function setZombieSort(sort: ZombieSort): void {
+  localStorage.setItem(ZOMBIE_SORT_KEY, sort);
 }
 
 /** Whether the player has been shown the "tap/click hazards to damage them" tip,

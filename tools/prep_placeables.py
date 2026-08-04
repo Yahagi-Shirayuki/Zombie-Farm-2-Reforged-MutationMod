@@ -158,6 +158,19 @@ REWARD_ONLY_DECOR = {
     "rockBunny", "greenGift", "redGift", "yellowGift", "teddyBear", "loveShack",
 }
 
+
+def is_reward_only(tile):
+    """True for a placeable Reforged only ever AWARDS — never sells.
+
+    The source let you buy an Epic Boss prize with brains to skip the fight;
+    Reforged does not (category "reward" is absent from the Market's tabs), so
+    carrying the source's brain price gave those rows a sell-back value they were
+    never paid for — selling a free prize minted 1,000-4,000 gold. Priced like every
+    other earned decoration instead: cost 0, so the refund is the game's one-gold
+    minimum. KEEP IN SYNC with server/src/objectCatalog.ts.
+    """
+    return tile in REWARD_ONLY_DECOR or tile in EPIC_REWARD_TILES
+
 # Source `subCategory:"decor"` rows that Reforged treats as BUILDINGS, not scenery.
 # A functional object is one-per-farm (client and server both derive the purchase
 # limit from this category) and sits in the Market's Functional Items tab. The Pet
@@ -565,7 +578,7 @@ def main():
                 # Grouping for the quest matcher: buying any recolor also answers to
                 # its siblings' names, so "buy a Fence" takes a Blue Fence.
                 "variantOf": tile,
-                **market_economics(e, key, tile, tile in REWARD_ONLY_DECOR,
+                **market_economics(e, key, tile, is_reward_only(tile),
                                    bool(e.get("brainsNeeded", False)), category),
             })
             tint = market_tint(e)
@@ -665,7 +678,7 @@ def main():
         if m:
             slots = int(m.group(1))
         # Reward-only decor is never sold: no price, no level gate, no purchase XP.
-        reward_only = tile in REWARD_ONLY_DECOR
+        reward_only = is_reward_only(tile)
         row = {
             "key": key,
             "name": e["name"],

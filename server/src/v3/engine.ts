@@ -217,6 +217,27 @@ function placedCapacity(state: MutableGameplayState): { army: number; storage: n
   return { army, storage };
 }
 
+/** A unit reserved inside a Zombie Pot occupies NEITHER the farm nor the Mausoleum.
+ *
+ * combine_start flips both parents to `stored` with a `pot:<id>` lock — deliberately,
+ * to free their army slots — and the rows survive only so collection can derive and
+ * validate the child (they are deleted the moment it is collected). The client hides
+ * them outright: main.ts filters `pot:` locks out of the roster it reconciles, so they
+ * appear in no count the player can see, and nothing in the UI can reach them to free
+ * a slot.
+ *
+ * Counting them as crypt occupants therefore made the Mausoleum read FULL to the
+ * server and roomy to the player: every claim the client allowed came straight back
+ * as `storage_full` and the reward snapped into Received again — an unbreakable loop
+ * with no visible cause, two hidden slots per running pot. Occupancy means units the
+ * player can see and act on. */
+const reservedInPot = (unit: RosterUnitProjection): boolean =>
+  unit.lockedByRaid?.startsWith("pot:") ?? false;
+const activeUnits = (state: MutableGameplayState): number =>
+  state.roster.filter((unit) => !unit.stored && !reservedInPot(unit)).length;
+const storedUnits = (state: MutableGameplayState): number =>
+  state.roster.filter((unit) => unit.stored && !reservedInPot(unit)).length;
+
 /** Does the account already hold this species? A unique award waiting in Received
  * counts as owned, so a second voucher cannot mint a duplicate in the window before
  * the first copy is claimed into the Mausoleum. */
@@ -233,7 +254,7 @@ function ownsZombieKey(state: MutableGameplayState, key: string): boolean {
  * no roster row yet, so its id must not be reported as created. */
 function addAwardedZombie(state: MutableGameplayState, key: string, id: string): boolean {
   const cap = placedCapacity(state);
-  const active = state.roster.filter((u) => !u.stored).length;
+  const active = activeUnits(state);
   if (active >= cap.army) {
     const marker = encodeReceivedZombie({ id, key, mutation: zombieDefaultMutation(key), invasions: 0 });
     state.storage.received[marker] = 1;
@@ -289,8 +310,8 @@ function rewardHarvest(
     // A grown zombie enters the active army first, then an available Mausoleum.
     // If both are full, the ripe crop remains planted.
     const cap = placedCapacity(state);
-    const active = state.roster.filter((unit) => !unit.stored).length;
-    const stored = state.roster.filter((unit) => unit.stored).length;
+    const active = activeUnits(state);
+    const stored = storedUnits(state);
     if (active >= cap.army && stored >= cap.storage) {
       return { ok: false, error: "capacity_full" };
     }
@@ -848,8 +869,7 @@ function applyOne(
       const resultKey = combinedSpecies(a, b, Math.min(requestedLevel, level));
       if (!resultKey) return reject(sequence, "special_pair");
       const capacity = placedCapacity(state);
-      const activeAfterParents = state.roster.filter((unit) => !unit.stored).length -
-        Number(!a.stored) - Number(!b.stored);
+      const activeAfterParents = activeUnits(state) - Number(!a.stored) - Number(!b.stored);
       if (marker && activeAfterParents >= capacity.army) {
         return reject(sequence, "capacity_full");
       }
@@ -868,7 +888,7 @@ function applyOne(
         delete remaining[command.potId];
         state.potSlots = remaining;
       }
-      const stored = marker ? false : state.roster.filter((unit) => !unit.stored).length >= capacity.army;
+      const stored = marker ? false : activeUnits(state) >= capacity.army;
       state.roster.push({ id, key: resultKey, mutation, invasions: 0, stored });
       created.push(id);
       if (!reserved) events.push(combinerCombined(a, b));
@@ -947,11 +967,18 @@ function applyOne(
       if (zombie) {
         if (have < 1) return reject(sequence, "none_owned");
         const cap = placedCapacity(state);
-        if (cap.storage <= 0) return reject(sequence, "need_mausoleum");
-        if (state.roster.filter((unit) => unit.stored).length >= cap.storage) return reject(sequence, "storage_full");
         if (state.roster.some((unit) => unit.id === zombie.id)) return reject(sequence, "already_owned");
+        // The farm first, exactly like addAwardedZombie. This claim used to be
+        // Mausoleum-ONLY, so a player whose army had since made room still could not
+        // take delivery of a reward they had already earned — a full crypt stranded it
+        // indefinitely. Storage is the fallback, not the requirement.
+        const stored = activeUnits(state) >= cap.army;
+        if (stored) {
+          if (cap.storage <= 0) return reject(sequence, "need_mausoleum");
+          if (storedUnits(state) >= cap.storage) return reject(sequence, "storage_full");
+        }
         state.storage.received[command.itemName] = have - 1;
-        state.roster.push({ ...zombie, stored: true });
+        state.roster.push({ ...zombie, stored });
         return { sequence, status: "applied", createdIds: [zombie.id] };
       }
       const plan = planClaim(command.itemName, have);

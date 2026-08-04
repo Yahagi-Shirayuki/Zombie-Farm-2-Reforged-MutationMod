@@ -650,7 +650,8 @@
 
 /* ---- Zombie roster (Zombies menu) ---- */
 #hud .zroster { display: flex; flex-direction: column; gap: 10px; width: min(560px, 88vw); }
-#hud .zr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+#hud .zr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap; }
 #hud .zr-head h2 { margin: 0; font-size: 20px; }
 #hud .zr-total { font-size: 15px; font-weight: 800; color: #b6f36a; }
 #hud .zr-total .zr-sub { color: #9fd3e8; font-weight: 700; }
@@ -902,6 +903,10 @@
 #hud .rr-loot-i img { width: 82px; height: 82px; object-fit: contain;
   background: rgba(74,49,23,.12); border: 2px solid #8a6a34; border-radius: 12px; padding: 4px; }
 #hud .rr-loot-i span { font-size: 10px; font-weight: 700; text-align: center; line-height: 1.1; }
+/* "Waiting in Received" under a prize that could not go straight onto the farm. */
+#hud .rr-loot-note { font-size: 9px; font-weight: 800; font-style: normal; text-align: center;
+  line-height: 1.1; color: #7a3f12; background: #ffe9a8; border: 1px solid #b98b3f;
+  border-radius: 6px; padding: 1px 4px; }
 #hud .rr-loot-i.rr-loot-noimg { width: auto; font-size: 12px; font-weight: 800; background: #4a3117;
   color: #ffe9a8; padding: 4px 9px; border-radius: 8px; }
 #hud .rr-loot-none { font-size: 14px; opacity: .5; padding: 2px; }
@@ -1834,6 +1839,11 @@
 
 /* ---- Zombies menu tabs + Zombie Almanac (ui/panels/zombies.ts) ---- */
 #hud .zl-tabs { margin: 0 0 2px; }
+/* Roster ordering picker — matches the friends-list sort control. */
+#hud .zl-sort { display: flex; align-items: center; gap: 6px; margin-left: auto;
+  font-size: 12px; color: #c9b98f; }
+#hud .zl-sort-select { flex: 0 0 auto; width: auto; min-width: 0; padding: 5px 8px;
+  font-size: 12px; }
 /* The almanac grid scrolls inside .zl-list, so it must not cap its own height. */
 #hud .alm-grid { max-height: none; overflow: visible; width: 100%; }
 #hud .alm-section { grid-column: 1 / -1; margin: 6px 0 0; font-size: 14px; font-weight: 800;

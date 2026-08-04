@@ -86,6 +86,7 @@ manual `schema.sql` touched the table):
 | `0036_raid_brain_pity` | `ALTER TABLE raid_state_v3 ADD COLUMN brain_dry_streak` | Fails if `brain_dry_streak` exists. Every account starts the streak at 0 — no backfill is possible, since dry invasions before this were never counted. |
 | `0037_raid_zombie_pity` | `ALTER TABLE raid_state_v3 ADD COLUMN zombie_dry_json` | Fails if `zombie_dry_json` exists. Every account starts empty (`'{}'`) — as above, dry wins before this were never counted, and `progress_json` records lifetime wins, not wins since the last rare zombie. |
 | `0038_gift_reward_roll` | Two `ALTER TABLE gifts ADD COLUMN reward_*` statements | Fails if either column exists. Gifts already sitting unclaimed in an inbox take the defaults (`'brain'` / `1`) and so still pay the single brain their sender was promised. |
+| `0039_roster_escrow_return` | `ALTER TABLE roster_v3 ADD COLUMN from_escrow` | Fails if `from_escrow` exists. Every existing unit starts at 0 — zombies restored from a cancelled sale before this were already credited to the Almanac, and those counts never decrease. |
 
 The remaining current migrations use repeatable deletes or `CREATE … IF NOT EXISTS`
 (including `0029_restore_ledger`, which recreates the `ledger` table dropped by the v3
@@ -127,6 +128,9 @@ wrangler d1 execute zombiefarm --remote --command \
   `0037` — `/raid/finish` selects it and fails the settlement without it.
 - For rolled gift contents, verify `gifts.reward_kind` and `gifts.reward_amount` exist
   after migration `0038` — `POST /gifts` writes both and the send fails without them.
+- For Black Market sale cancellation, verify `roster_v3.from_escrow` exists after
+  migration `0039` — the bootstrap roster projection selects it, and the cancel that
+  returns the escrowed zombie writes it, so both fail without it.
 
 ## Going forward
 
