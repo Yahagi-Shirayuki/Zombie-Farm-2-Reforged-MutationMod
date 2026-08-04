@@ -134,13 +134,13 @@
   "replaces": "armF"
  },
  "8192": {
-  "file": "pumpkinHatFeature",
+  "file": "pumpkinHead",
   "group": "head",
   "headRel": false,
-  "ox": 10,
-  "oy": 40,
+  "ox": 6,
+  "oy": 36,
   "ax": 0.73,
-  "ay": 0.75,
+  "ay": 0.85,
   "z": 4
  },
  "eyebiscusHat": {

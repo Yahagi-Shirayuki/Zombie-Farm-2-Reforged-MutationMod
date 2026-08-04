@@ -1,4 +1,4 @@
-import { addMutation, slotOf } from "./mutations";
+import { addMutation, bitGrowable, slotOf } from "./mutations";
 
 /** Mutation-bearing vegetable crops. Tier-4 visual variants intentionally share
  * the same mutation bit as their underlying Carrot/Cauliflower mutation. */
@@ -18,8 +18,9 @@ export const CROP_MUTATIONS: Readonly<Record<string, number>> = {
   lima_beans: 1024,
   venus_flytrap: 2048,
   dragon_fruit: 4096,
-  // Headless-only: resolveCropMutations passes the harvested zombie's body type to
-  // addMutation, so this bit lands on a headless zombie and is refused on any other.
+  // Grows on the headless family ONLY (bitGrowable): a zombie that already has a head
+  // never grows a pumpkin, however many are planted beside it. It can still inherit
+  // one in the Zombie Pot — that is the only route to a Regular wearing it.
   pumpking: 8192,
 };
 
@@ -61,6 +62,9 @@ export function resolveCropMutations(
   const successes: { bit: number; roll: number }[] = [];
   for (const [bit, count] of counts) {
     if (slotOf(bit) === null) continue;
+    // A mutation this body type can't grow never even rolls — no wasted roll, and no
+    // dependence on addMutation to refuse it further down.
+    if (!bitGrowable(bit, !!options.headless)) continue;
     const roll = random();
     const chance = options.guaranteed ? 1 : Math.min(1, count * CROP_MUTATION_CHANCE);
     if (chance >= 1 || roll < chance) successes.push({ bit, roll });

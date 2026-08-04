@@ -42,6 +42,13 @@ describe("crop-adjacency mutations", () => {
     expect(resolveCropMutations(0, ["pumpking"], { guaranteed: true, headless: true }))
       .toBe(8192);
     expect(resolveCropMutations(0, ["pumpking"], { guaranteed: true })).toBe(0);
+    // A zombie with a head of its own grows none, however many are planted around it
+    // or how sure the roll is — the Zombie Pot is its only route to one. The crops
+    // beside it still mutate normally.
+    expect(resolveCropMutations(0, Array(8).fill("pumpking"), { random: () => 0 })).toBe(0);
+    expect(resolveCropMutations(0, ["pumpking", "celery"], {
+      guaranteed: true, random: () => 1,
+    })).toBe(64);
     // It fills the head slot a headless zombie has no other way to use, and leaves
     // the arm/body/neck rolls alone.
     expect(resolveCropMutations(0, ["pumpking", "celery", "onion"], {

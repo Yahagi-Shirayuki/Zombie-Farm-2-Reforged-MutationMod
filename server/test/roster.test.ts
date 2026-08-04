@@ -42,10 +42,13 @@ describe("rosterCatalog", () => {
     expect(legalMutation("ZombieActorRegularTier1", 4 | 8 | 128)).toBe(4 | 8 | 128);
     expect(legalMutation("ZombieActorMadeUp", 4)).toBe(4); // unknown key: leave it alone
   });
-  it("keeps Pumpking on headless species and strips it everywhere else", () => {
+  it("keeps Pumpking on every species — only GROWING it is headless-only", () => {
+    // Wearability is what this gate decides, and a Pot combine can hand the pumpkin
+    // to a child of any body type (src/zombie/mutations.ts combineMasks). Stripping
+    // it here would delete the mutation the player just bred for.
     expect(legalMutation("ZombieActorHeadlessTier1", 8192 | 8)).toBe(8192 | 8);
-    expect(legalMutation("ZombieActorRegularTier1", 8192 | 8)).toBe(8);
-    expect(legalMutation("ZombieActorGardenTier4", 8192)).toBe(0);
+    expect(legalMutation("ZombieActorRegularTier1", 8192 | 8)).toBe(8192 | 8);
+    expect(legalMutation("ZombieActorGardenTier4", 8192)).toBe(8192);
   });
   it("defines Black Market gates independently of planting levels", () => {
     expect(blackMarketPurchaseRequirement("ZombieActorRegularTier1")).toEqual({});

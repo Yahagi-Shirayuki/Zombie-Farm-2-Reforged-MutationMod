@@ -150,6 +150,11 @@ function functionalDescription(def: PlaceableDef): string | undefined {
 
 const UI = (n: string) => `${BASE}assets/ui/${n}`;
 
+/** Gift rows the inbox shows before collapsing the rest behind "Show all N". Four
+ *  keeps the section shorter than a phone screen, so "Open all" and the friends list
+ *  below it both stay reachable however many gifts are waiting. */
+const INBOX_PREVIEW = 4;
+
 /** Colour band for a friend's level chip, so the list is scannable without reading
  *  the numbers. Bands follow the game's own gates (15 = red gravestone, 25 = silver,
  *  40 = late game); an unknown level is styled as absent, never as level 0. */
@@ -2829,9 +2834,8 @@ export class Hud {
       0
     );
     // A request nobody could ever fill is worth blocking before the player escrows
-    // brains on it: the selected species may not be able to wear the mutation (a
-    // headless zombie has no head; only a headless one can wear Pumpking), and a
-    // mutation added after the orders table was built can't be stored at all.
+    // brains on it: a headless zombie has no head to wear a head or hair mutation on,
+    // and a mutation added after the orders table was built can't be stored at all.
     const syncMutationChoices = (selling: boolean) => {
       const headless = cardFor(asset.value)?.zombie?.group === "Headless";
       for (const input of mutationChecks) {
@@ -2846,9 +2850,7 @@ export class Hud {
         if (!label) continue;
         label.title = wearable
           ? (storable ? "" : "This mutation can't be requested on the Black Market yet.")
-          : headless
-            ? "A headless zombie can't wear this mutation."
-            : "Only headless zombies can wear this mutation.";
+          : "A headless zombie can't wear this mutation.";
       }
     };
     const refreshComposeStatus = () => {
@@ -3398,6 +3400,9 @@ export class Hud {
     const canOnline = this.onlineAvailable?.() ?? false;
     const online = () => this.socialOnline?.() ?? false;
     let sort = getFriendSort();
+    // Gift rows previewed before the "Show all" expander. Deliberately session-only:
+    // an expanded inbox is a momentary "let me look", not a setting worth persisting.
+    let inboxExpanded = false;
 
     const giftErr = (e: string | null): string | null =>
       e === null ? null
@@ -3641,14 +3646,20 @@ export class Hud {
       if (!online()) return;
       const gifts = this.getInbox?.() ?? [];
       if (!gifts.length) return;
+      // Every row reads "🎁 Gift from ‹name›" — near-identical, and one per friend once
+      // the pending rule is in force. Rendering all of them buried "Open all" and the
+      // friends list under a wall of them, so preview a few and let the player ask for
+      // the rest. Collapse again whenever the inbox shrinks back under the limit.
+      if (gifts.length <= INBOX_PREVIEW) inboxExpanded = false;
+      const shown = inboxExpanded ? gifts : gifts.slice(0, INBOX_PREVIEW);
       const hd = document.createElement("div");
-      hd.className = "fr-inbox-h";
+      hd.className = "fr-inbox-h fr-sticky-h";
       hd.textContent = `🎁 Gifts for you (${gifts.length})`;
       if (gifts.length > 1) {
         hd.appendChild(bulkButton("Open all", "Opening…", confirmOpenAll));
       }
       inboxWrap.appendChild(hd);
-      for (const g of gifts) {
+      for (const g of shown) {
         const row = document.createElement("div");
         row.className = "prof-row fr-inbox-row";
         const nm = document.createElement("div");
@@ -3679,6 +3690,18 @@ export class Hud {
         };
         row.append(nm, claim);
         inboxWrap.appendChild(row);
+      }
+      if (gifts.length > INBOX_PREVIEW) {
+        const more = document.createElement("div");
+        more.className = "prof-row fr-inbox-row fr-inbox-more";
+        const toggle = document.createElement("button");
+        toggle.className = "prof-btn fr-inbox-toggle";
+        toggle.textContent = inboxExpanded
+          ? "Show fewer"
+          : `Show all ${gifts.length} gifts`;
+        toggle.onclick = () => { inboxExpanded = !inboxExpanded; renderInbox(); };
+        more.appendChild(toggle);
+        inboxWrap.appendChild(more);
       }
     };
 

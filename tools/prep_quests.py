@@ -45,6 +45,38 @@ COLOR_WORD = re.compile(
     re.IGNORECASE)
 LEADING_COUNT = re.compile(r"\d+")
 
+# ---- Quest gates the shipped data gets wrong ---------------------------------
+# A quest whose objective needs something the player cannot yet buy or plant sits
+# on the rail as an impossible task. The source gates predate Reforged's own
+# catalogs, so a handful have to be re-cut here — this table is authoritative over
+# Quests.plist, and lives in the generator (not in quests.json) so a regeneration
+# cannot silently revert it, exactly like CROP_REBALANCE in reforge_economy.py.
+#
+# Most of these come from the crop rebalance (tools/reforge_economy.py), which
+# respread the 25 regular crops over levels 1-45: every quest below asked for a
+# crop that now unlocks later than the quest did. Each gate is the highest crop
+# level the quest requires — no higher, so nothing is delayed further than the
+# objective itself demands. src/quest/cropUnlockAlignment.test.ts is what fails if
+# this table and the crop ladder ever drift apart again.
+#
+# `levelRequired` is the quest's OWN gate. The real gate is the highest in its
+# prerequisite chain, so a quest that already inherits enough needs no entry.
+QUEST_LEVEL_OVERRIDES = {
+    # quest id: (level, why)
+    "0":  (3,  "Tomatoes moved to level 3; inherited a level-1 gate from quest 2"),
+    "6":  (9,  "Bread Fruit moved to level 9"),
+    "31": (41, "Corpse Flower moved to level 41"),
+    "32": (29, "Broccoli 23 + Cauliflower 29; the later of the two decides"),
+    "33": (21, "Spineapple moved to level 21"),
+    "57": (44, "Eyebiscus moved to level 44"),
+    "58": (45, "Heartichoke moved to level 45 (the cap, and the capstone crop)"),
+    "59": (45, "Eyebiscus 44 + Heartichoke 45; set explicitly rather than relying "
+               "on inheriting 45 from quest 58"),
+    # Not a crop: The Perfect Yard requires the Lawnmower, which the Market does
+    # not sell until level 45, while the quest shipped at 44.
+    "61": (45, "Lawnmower unlocks at level 45"),
+}
+
 
 def recolor_families():
     """Display name -> base tile, for every color of a multi-color decor item."""
@@ -167,10 +199,11 @@ def main():
     for k, q in quests.items():
         add_quest(k, q)
 
-    # The Perfect Yard requires the Lawnmower, which unlocks at level 45. Do not
-    # surface the quest at the shipped level 44 while one required purchase is
-    # still locked in the Market.
-    out["61"]["levelRequired"] = 45
+    # Re-cut the gates the shipped data gets wrong (see QUEST_LEVEL_OVERRIDES).
+    for qid, (level, _why) in QUEST_LEVEL_OVERRIDES.items():
+        if qid not in out:
+            raise SystemExit(f"quest gate override names unknown quest {qid}")
+        out[qid]["levelRequired"] = level
 
     # Bully Frog's only surviving quest definitions are embedded in its
     # EpicEventEnemy row rather than Quests.plist. Import the unambiguous 3xxx

@@ -116,10 +116,12 @@ export function isHeadlessZombie(key: string): boolean {
 }
 
 /** The mutation mask a unit of `key` may legally carry: head and hair/eye bits are
- *  dropped for the headless family (a Party Zombie can't be carrot-eyed), and the
- *  headless-only Pumpking is dropped for everyone else. The server-side twin of the
- *  client's makeOwned, which scrubs the same bits wherever a mask lands on a unit —
- *  both must agree or the unit's stats diverge. */
+ *  dropped for the headless family (a Party Zombie can't be carrot-eyed), except the
+ *  Pumpking that stands in for the head it hasn't got. Everyone else keeps whatever
+ *  they are given — including a Pumpking inherited in the Pot, which is the only way
+ *  a zombie with a head of its own can get one (it cannot be grown on them). The
+ *  server-side twin of the client's makeOwned, which scrubs the same bits wherever a
+ *  mask lands on a unit — both must agree or the unit's stats diverge. */
 export function legalMutation(key: string, mask: number): number {
   return applyBodyTypeRestriction(mask, isHeadlessZombie(key));
 }

@@ -13,7 +13,7 @@ Scope in numbers:
 | — restored source tiles | — | +110 |
 | — recolour variants | — | +41 |
 | rows carrying their source tint | 5 (monoliths) | **53** |
-| `public/assets/objects/` PNGs | 307 | **410** |
+| `public/assets/objects/` PNGs | 307 | **412** |
 | `server/src/objectCatalog.ts` rows | 267 | **418** |
 | decor labels | a `seasonal` bool | **`evergreen` + 13 seasonal** |
 | decor cards the market offers | 174 | **192** (325 in catalog, 133 withheld) |
@@ -142,8 +142,9 @@ because the generator emitted `color` only for monoliths.
    **16 rows are now tinted, up from 5.**
 2. `emit_sprite()` content-addresses the extracted art, so tiles that share a piece of
    art share the file. Removed 7 duplicate PNGs (307 → 300): the four extra monoliths,
-   both duplicate flower beds, and `spaceWormHoleB` — all verified byte-identical to
-   the file they now point at.
+   both duplicate flower beds, and `spaceWormHoleB` — all byte-identical to the file
+   they now point at. (The Worm Hole match turned out to mean something else: both were
+   EMPTY. See "Art fixes" below.)
 3. Wired the three untinted UI surfaces through a new `setTintedSrc` helper:
    `src/ui/panels/storage.ts` (shed grid), `src/main.ts:3381` (Received cards, skipping
    the tint on loot-atlas art that is already coloured), `src/main.ts:292` → 
@@ -303,6 +304,33 @@ cost in the change.
 
 Note the generator ordering this introduces: `prep_quests.py` reads the generated
 `placeables.json`, so **`prep_placeables.py` runs first**.
+
+### Art fixes (after phases 3-4 shipped)
+
+**Both Worm Holes were invisible** — in the market and on the farm. They are animated
+tiles whose declared `frameName` (`wormhole*_00`) is a fully transparent 111x142
+placeholder; the drawn art lives in the `_01.._04` animation frames. Extracting the
+declared frame produced an empty PNG, which is also why Phase 1's content-dedup merged
+them: they were not "the same art", they were both nothing.
+
+`extract_first_animated_frame` now falls back to the first animation frame with pixels,
+and `is_blank` stops any fully transparent sprite from being emitted at all. Both holes
+now carry their own art (a magenta portal and a teal one, ~8.8k opaque pixels each).
+This was pre-existing — they shipped blank in the original 307.
+
+**The White Flower Bed rendered pink.** A recolour family multiplies one sprite by each
+variant's tint, which assumes neutral base art — every other family (hedge, crate,
+fence, balloon) is authored greyscale. `flowerbed.png` is not: its petals are magenta
+and its TileProperties row is literally named "Red Flower Bed". Multiply can only
+darken, so white is unreachable from magenta, and the source has exactly one flowerbed
+frame — there is no white art to recover. (The original game had the same bug; its
+White Flower Bed took the identity tint and drew the magenta art.)
+
+Fixed by giving that one variant a de-coloured sprite of its own
+(`NEUTRALIZED_VARIANT_SPRITES`), petals greyed by value and leaves untouched. The Red,
+Violet and Yellow beds keep the shared source art and are **pixel-for-pixel unchanged**.
+Measured as drawn: red `(253,130,150)`, violet `(152,130,250)`, yellow `(252,219,0)`,
+white `(253,253,253)`.
 
 ## Label table (draft)
 

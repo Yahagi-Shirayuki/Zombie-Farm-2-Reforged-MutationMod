@@ -17,6 +17,7 @@ import { slotOf } from "./mutations";
 import {
   isMutationForegroundPart,
   matchesMutationReplacement,
+  mutationCoversFace,
   mutationBitsForRendering,
   mutationPartZIndex,
   type MutationReplacement,
@@ -304,8 +305,12 @@ export class ZombieUnit {
       if (replacement) {
         for (const basePart of replaceable[replacement]) basePart.visible = false;
         if (replacement === "head") {
+          // The face either rides in front of the new head or is part of it — see
+          // mutationCoversFace. A pumpkin brings its own.
+          const covers = mutationCoversFace(bit);
           for (const basePart of headForeground) {
-            basePart.zIndex = MUT_BASE_FOREGROUND_Z + basePart.zIndex;
+            if (covers) basePart.visible = false;
+            else basePart.zIndex = MUT_BASE_FOREGROUND_Z + basePart.zIndex;
           }
         }
       }

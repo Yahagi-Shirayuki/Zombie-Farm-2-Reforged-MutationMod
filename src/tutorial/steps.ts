@@ -68,6 +68,13 @@ export function recoverTutorialCropStep(
   if (step !== TutStep.BuyInstaGrow && step !== TutStep.RipenCrop && step !== TutStep.Harvest)
     return step;
   if (!hasCrop) return canPlant ? TutStep.PlantZombie : TutStep.Plow;
+  // The tutorial zombie finishes on its own in ten minutes, so a player who simply
+  // waits (or steps away) comes back to a risen crop with both boost beats already
+  // moot: RipenCrop has nothing left to speed up, and BuyInstaGrow would still demand
+  // a purchase they no longer need — and, on a single starting brain, may no longer
+  // be able to make. A crop that grew itself goes straight to Harvest.
+  if (isRipe && (step === TutStep.BuyInstaGrow || step === TutStep.RipenCrop))
+    return TutStep.Harvest;
   if (step === TutStep.Harvest && !isRipe) return TutStep.RipenCrop;
   return step;
 }

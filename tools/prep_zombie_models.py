@@ -75,17 +75,15 @@ BIT_PART = {
     16: "potatoHead", 32: "coffeeHead", 64: "celeryArm", 128: "broccoliHat",
     256: "garlicHead", 512: "cauliflowerHat", 1024: "limaBeanBody",
     2048: "flytrapCollar", 4096: "dragonArm",
-    # Pumpking (headless-only). Shares JackoZombie's pumpkin art.
-    8192: "pumpkinHatFeature",
-}
-# Rig overrides for a mutation bit whose authored layout doesn't suit how the
-# mutation is worn. Pumpking is worn by HEADLESS zombies, whose rigs store
-# neck=(0,0): the authored hat offsets are head-RELATIVE (they sit the pumpkin on
-# top of an existing head), so deriving them would drop it onto the chest. Author it
-# as a head-slot part instead, filling the same box the default head occupies
-# (bottom -26.5, centre x -4) so the pumpkin becomes the head they never had.
-BIT_RIG_OVERRIDE = {
-    8192: {"headRel": False, "ox": 10, "oy": 40, "ax": 0.73, "ay": 0.75, "z": 4},
+    # Pumpking. `pumpkinHead` is the authored carved jack-o'-lantern: a HEAD-slot part
+    # with the same offsets as every other vegetable head (offsetX 6 / offsetY 36 / z 4,
+    # exactly onionHead's), so it needs no rig override of its own.
+    #
+    # NOT `pumpkinHatFeature`, which is the wide brimmed pumpkin JackoZombie wears ON
+    # TOP of its ordinary head — a hat, not a head. Pointing the bit at it rendered the
+    # mutation as a faceless gourd hovering over the shoulders, and needed a hand-tuned
+    # offset to sit anywhere near right.
+    8192: "pumpkinHead",
 }
 # Tier-4 variants SHARE a stat bit with a lower-tier mutation (Eyebiscus=Carrot bit 4,
 # Heartichoke=Cauliflower bit 512) but have their OWN hair art. We emit a per-model
@@ -97,10 +95,10 @@ VARIANT_OVERRIDE = {
     "ZombieActorRegularTier4Heartichoke": (512, "heartichokeBody"),
 }
 # Every mutation part name (incl. the Tier-4 variants + the generic mutationArm),
-# stripped from runtime base models. pumpkinHatFeature is exempt: it doubles as
-# JackoZombie's own hat, and stripping it would take that species' head away — a
-# Regular can never carry the Pumpking bit, so there is no double-render risk.
-MUT_PARTS = (set(BIT_PART.values()) - {"pumpkinHatFeature"}) | {
+# stripped from runtime base models. No exemption is needed: JackoZombie's own
+# pumpkin is `pumpkinHatFeature`, which is not a mutation part at all, and no base
+# model draws the carved `pumpkinHead`.
+MUT_PARTS = set(BIT_PART.values()) | {
     "eyebiscusHat", "heartichokeBody", "mutationArm",
 }
 
@@ -389,8 +387,6 @@ def main():
             "ox": L["offsetX"], "oy": L["offsetY"],
             "ax": L["pivotX"], "ay": 1 - L["pivotY"], "z": L.get("z", 0),
         }
-        if target.isdigit() and int(target) in BIT_RIG_OVERRIDE:
-            mutations[target].update(BIT_RIG_OVERRIDE[int(target)])
         if part in {"turnipArm", "celeryArm", "dragonArm"}:
             mutations[target]["replaces"] = "armF"
         elif part in {"limaBeanBody", "heartichokeBody"}:

@@ -1,9 +1,25 @@
 import type { ZombieDef } from "../assets";
-import { bitsOf } from "./mutations";
+import { bitsOf, HEADLESS_HEAD_MASK } from "./mutations";
 
 export type MutationReplacement = "body" | "armF" | "head";
 
 const CARROT_MUTATION_BIT = 4;
+
+/**
+ * Does this mutation replace the whole head, face and all?
+ *
+ * The vegetable heads are worn AROUND the zombie's own face: an Onionhead keeps its
+ * eyes, jaw and teeth in front of the onion, which is the entire reason head parts
+ * are re-layered rather than hidden. The pumpkin is not one of those — it is a
+ * carved head with a face already on it, so a zombie showing its own eyes and jaw
+ * through it would be wearing two faces at once.
+ *
+ * Only matters for a zombie that HAS a face: the headless family it was authored for
+ * has no head parts to hide.
+ */
+export function mutationCoversFace(bit: number): boolean {
+  return (bit & HEADLESS_HEAD_MASK) !== 0;
+}
 
 /** Carrot-eyed and its Eyebiscus visual override are eye attachments, so they
  * must remain visible above every authored body part, mutation, and actor FX. */

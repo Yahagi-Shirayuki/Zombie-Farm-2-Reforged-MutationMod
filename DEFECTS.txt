@@ -445,5 +445,25 @@ Deploy / migration notes for this pass
   was removed rather than recreating a table protocol v3 does not use.
 
 
+DECOR ART (found after the restoration shipped, both pre-existing).
+
+  Worm Hole A/B rendered NOTHING, in the market and on the farm. They are animated
+  tiles whose declared frameName (wormhole*_00) is a fully transparent placeholder;
+  the drawn art is in the _01.._04 animation frames. prep_placeables now falls back
+  to the first animation frame that has pixels (extract_first_animated_frame), and
+  is_blank() refuses to emit a fully transparent sprite at all — so this class of
+  fault fails loudly instead of shipping an invisible object. NOTE this also explains
+  why the Phase 1 content-dedup merged the two: they were not the same art, they were
+  both empty.
+
+  The White Flower Bed rendered PINK. A recolour family multiplies one sprite by each
+  variant's tint, which needs neutral base art — every other family is authored
+  greyscale. flowerbed.png is not: its petals are magenta and its TileProperties row
+  is named "Red Flower Bed". Multiply only darkens, so white is unreachable, and the
+  source has just one flowerbed frame. That one variant now gets a de-coloured sprite
+  of its own (NEUTRALIZED_VARIANT_SPRITES); Red/Violet/Yellow keep the shared source
+  art unchanged. This is AUTHORED art, not recovered — the original had the same bug.
+
+
 Additional Features/Fixes
 - 

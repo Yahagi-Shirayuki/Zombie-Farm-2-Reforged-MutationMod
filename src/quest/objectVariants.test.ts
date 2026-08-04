@@ -55,12 +55,17 @@ describe("the shipped catalog's recolour families", () => {
   });
 
   it("has every variant share its base's art and footprint", () => {
+    // The one exception is deliberate: no multiply can turn the magenta flowerbed
+    // petals white, so the White Flower Bed carries a de-coloured sprite of its own
+    // (see NEUTRALIZED_VARIANT_SPRITES in tools/prep_placeables.py).
+    const OWN_ART = new Set(["flowerBed_white"]);
     const byKey = new Map(catalog.map((entry) => [entry.key, entry]));
     const wrong: string[] = [];
     for (const entry of catalog) {
       if (!entry.variantOf) continue;
       const base = byKey.get(entry.variantOf)!;
-      if (entry.sprite !== base.sprite) wrong.push(`${entry.key}: sprite`);
+      if (entry.sprite !== base.sprite && !OWN_ART.has(entry.key))
+        wrong.push(`${entry.key}: sprite`);
       if (entry.tileW !== base.tileW || entry.tileH !== base.tileH)
         wrong.push(`${entry.key}: footprint`);
     }

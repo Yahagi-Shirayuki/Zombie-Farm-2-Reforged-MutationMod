@@ -229,7 +229,15 @@ export class TutorialController {
     this.removeBlocker();
     this.disarmSkip(); // a half-tapped skip must not carry into the next beat
     this.layer.classList.toggle("invade-step", step === TutStep.Invade);
+    // Only a narrative beat wants a clickable bubble; on every other beat Tim floats
+    // above the boost market and must not intercept taps meant for it.
+    this.layer.classList.toggle("narrative-step", def.kind === "narrative");
     this.layer.classList.remove("invasion-menu-open");
+    // The boost market deliberately has no close button, so leaving its beat for ANY
+    // reason — including recoverTutorialCropStep's skip when the crop ripened on its
+    // own — has to take the panel with it, or the player is left holding a panel
+    // nothing can dismiss.
+    if (step !== TutStep.BuyInstaGrow) this.d.hud.closeMarket();
     this.d.hud.setTutorialMenuTarget(def.kind === "menu" ? (def.menuLabel ?? null) : null);
 
     // Menu beats need the (mobile) menu column visible to anchor the arrow.

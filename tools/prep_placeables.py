@@ -365,6 +365,66 @@ def extract_from_atlas(fl, fn):
     return im.rotate(-90, expand=True) if rotated else im
 
 
+# ---- Variants that need their own de-coloured sprite (authored, NOT source art) --
+# A recolor family multiplies ONE sprite by each variant's tint, which assumes the
+# base art is neutral — every other family (hedge, crate, fence, balloon) is authored
+# greyscale. flowerbed.png is not: its petals are magenta and its TileProperties row
+# is literally named "Red Flower Bed".
+#
+# Multiply can only darken, so no tint can turn those petals white and the White
+# Flower Bed rendered pink. The source has exactly one flowerbed frame, so there is
+# no white art to recover. Rather than neutralise the shared base — which would also
+# repaint the Red, Violet and Yellow beds that look right today — the white variant
+# alone gets its own sprite with the petals greyed out. Leaves are untouched; they
+# are green in every variant of the original too.
+NEUTRALIZED_VARIANT_SPRITES = {"flowerBed_white"}
+
+
+def neutralize_petals(img):
+    """Grey out the coloured (non-green) pixels so a tint can recolour them.
+
+    A petal pixel is one whose red beats its green; leaves and their shading are
+    the other way round. Value (max channel) is kept so highlights and shadows
+    survive and only the hue is dropped.
+    """
+    out = img.copy()
+    pixels = out.load()
+    for y in range(out.height):
+        for x in range(out.width):
+            r, g, b, a = pixels[x, y]
+            if a and r > g:
+                value = max(r, g, b)
+                pixels[x, y] = (value, value, value, a)
+    return out
+
+
+def is_blank(img):
+    """True when every pixel is transparent — nothing would be drawn."""
+    return img is None or img.getbbox() is None
+
+
+def extract_first_animated_frame(tp):
+    """First frame with actual pixels from an animated tile's animation.
+
+    Some animated decor rests on an EMPTY frame: both Worm Holes declare
+    `frameName` wormhole*_00, which is a fully transparent 111x142 placeholder, and
+    the visible art lives in the _01.._04 animation frames. Extracting the declared
+    frame yields an invisible object — the two Worm Holes shipped as blank cards and
+    blank farm tiles because of exactly this.
+    """
+    for anim in tp.get("animationDictionaries", []) or []:
+        fl = anim.get("animationFrameList") or tp.get("frameList")
+        names = anim.get("animationFrames") or []
+        single = anim.get("animationFrameName")
+        if single:
+            names = [single, *names]
+        for fn in names:
+            frame = extract_from_atlas(fl, fn)
+            if not is_blank(frame):
+                return frame
+    return None
+
+
 def extract_multiplepieces(tp):
     """Composite a `multiplePieces` object into one static sprite.
 
@@ -468,7 +528,9 @@ def main():
     seen = set()  # tile keys with at least one emitted market/reward object
     counts = {"tree": 0, "decor": 0, "functional": 0, "reward": 0}
     skipped = 0
+    skipped_keys = []
     base_row = {}  # tile -> the catalog row holding that tile's art
+    base_img = {}  # tile -> that row's extracted sprite
     signatures = {}  # tile -> {(name, tint)} already emitted
     keys_taken = set()
     variant_count = 0
@@ -511,6 +573,12 @@ def main():
                 row["color"] = tint
             else:
                 row.pop("color", None)
+            # A variant whose colour no tint can reach gets art of its own rather
+            # than the family's shared sprite (see NEUTRALIZED_VARIANT_SPRITES).
+            if key in NEUTRALIZED_VARIANT_SPRITES and base_img.get(tile) is not None:
+                neutral = neutralize_petals(base_img[tile].convert("RGBA"))
+                row["sprite"] = emit_sprite(key, neutral)
+                row["nativeW"], row["nativeH"] = neutral.width, neutral.height
             catalog.append(row)
             counts[category] += 1
             variant_count += 1
@@ -549,7 +617,11 @@ def main():
             # one rectangle within a shared sheet) rather than an atlas frame.
             # Without this fallback named quest items such as Gravestone, Heart
             # Gravestone, and the Cupid Statues silently disappear from the market.
-            if sprite_img is None and tp.get("spriteSheet"):
+            # An animated tile can REST on an empty frame; use its first drawn
+            # animation frame rather than shipping an invisible object.
+            if is_blank(sprite_img) and tp.get("animationDictionaries"):
+                sprite_img = extract_first_animated_frame(tp) or sprite_img
+            if is_blank(sprite_img) and tp.get("spriteSheet"):
                 loose = image(tp["spriteSheet"])
                 if loose is not None:
                     sprite_img = loose.copy()
@@ -575,10 +647,10 @@ def main():
                     if fw and fh and (fx > 0 or fy > 0):
                         sprite_img = sprite_img.crop((fx, fy, fx + int(fw), fy + int(fh)))
 
-        if sprite_img is None:
+        if is_blank(sprite_img):
             skipped += 1
+            skipped_keys.append(key)
             continue
-
         out_name = emit_sprite(key, sprite_img)
         seen.add(tile)
         counts[category] += 1
@@ -639,6 +711,7 @@ def main():
         catalog.append(row)
         # Recolors of this tile clone the row above and override name/color.
         base_row[tile] = row
+        base_img[tile] = sprite_img
         signatures[tile] = {(e["name"], tuple(market_tint(e) or ()))}
 
     # ---- Raid-reward decorations (Phase 6) ----------------------------------
@@ -678,7 +751,7 @@ def main():
                     if fw and fh and (fx > 0 or fy > 0):
                         sprite_img = sprite_img.crop((fx, fy, fx + int(fw), fy + int(fh)))
 
-        if sprite_img is None:
+        if is_blank(sprite_img):
             reward_skipped.append(name)
             continue
 
@@ -759,6 +832,8 @@ def main():
     print(f"placeables: {len(catalog)} objects -> {counts} "
           f"+ {reward_count} reward decor (skipped {skipped} market, "
           f"{len(reward_skipped)} reward w/o art)")
+    if skipped_keys:
+        print(f"  no art (dropped): {', '.join(skipped_keys)}")
     if reward_skipped:
         print(f"  reward w/o art: {', '.join(reward_skipped)}")
     tinted = sum(1 for c in catalog if c.get("color"))

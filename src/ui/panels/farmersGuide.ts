@@ -93,7 +93,7 @@ export const FARMERS_GUIDE_PAGES: GuidePage[] = [
       },
       {
         title: "Headless Zombies",
-        body: "A headless zombie has no head to mutate, so head and hair mutations never take on one — plant beside its arms, body and neck crops instead. Pumpking is the exception, and it runs the other way: the pumpkin becomes the head it never had, so only a headless zombie can grow one.",
+        body: "A headless zombie has no head to mutate, so head and hair mutations never take on one — plant beside its arms, body and neck crops instead. Pumpking is the exception, and it runs the other way: the pumpkin becomes the head it never had, so only a headless zombie can grow one. Any zombie can wear one, mind — put a Pumpking-headed zombie in the Zombie Pot and the pumpkin passes to the result, whatever comes out.",
       },
       {
         title: "Zombie Pot",

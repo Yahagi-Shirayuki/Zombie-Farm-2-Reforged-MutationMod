@@ -5,7 +5,7 @@
   "messageComplete": "You completed Tomato Farmin'!",
   "tip": "These take 4 hours to grow.",
   "sprite": "Icon_Quest_HarvestVegetables.png",
-  "levelRequired": -1,
+  "levelRequired": 3,
   "prerequisiteQuest": 2,
   "requirements": [
    {
@@ -1357,7 +1357,7 @@
   "messageComplete": "You completed Corpse Party!",
   "tip": "This is much more cheerful than you might think.",
   "sprite": "Icon_Quest_HarvestVegetables.png",
-  "levelRequired": 24,
+  "levelRequired": 41,
   "prerequisiteQuest": -1,
   "requirements": [
    {
@@ -1394,7 +1394,7 @@
   "messageComplete": "You completed Broccoflower!",
   "tip": "The favored food for vegetarian zombies.",
   "sprite": "Icon_Quest_HarvestVegetables.png",
-  "levelRequired": 19,
+  "levelRequired": 29,
   "prerequisiteQuest": -1,
   "requirements": [
    {
@@ -1431,7 +1431,7 @@
   "messageComplete": "You completed A Fruit and a Spine!",
   "tip": "This fast crop only takes 15 minutes to grow!",
   "sprite": "Icon_Quest_HarvestVegetables.png",
-  "levelRequired": 14,
+  "levelRequired": 21,
   "prerequisiteQuest": -1,
   "requirements": [
    {
@@ -2699,7 +2699,7 @@
   "messageComplete": "You completed Eye See You!",
   "tip": "These take 12 hours to grow.",
   "sprite": "Icon_Quest_HarvestVegetables.png",
-  "levelRequired": 41,
+  "levelRequired": 44,
   "prerequisiteQuest": -1,
   "requirements": [
    {
@@ -2736,7 +2736,7 @@
   "messageComplete": "You completed We Heart Crops!",
   "tip": "These take a full day to grow.",
   "sprite": "Icon_Quest_HarvestVegetables.png",
-  "levelRequired": 43,
+  "levelRequired": 45,
   "prerequisiteQuest": 57,
   "requirements": [
    {
@@ -2773,7 +2773,7 @@
   "messageComplete": "You completed Creepy Crops!",
   "tip": "This will take you at least a full day.",
   "sprite": "Icon_Quest_HarvestVegetables.png",
-  "levelRequired": 44,
+  "levelRequired": 45,
   "prerequisiteQuest": 58,
   "requirements": [
    {
@@ -2810,7 +2810,7 @@
   "messageComplete": "You completed Bread Farm!",
   "tip": "These take 1 hour to grow.",
   "sprite": "Icon_Quest_HarvestVegetables.png",
-  "levelRequired": 5,
+  "levelRequired": 9,
   "prerequisiteQuest": -1,
   "requirements": [
    {

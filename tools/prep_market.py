@@ -13,6 +13,10 @@ against Market.json and writes back the authoritative fields:
 The curated SET and order (which crops have art) are preserved as-is; only the
 per-entry economy numbers are refreshed from source. Re-runnable / idempotent.
 
+Two Reforged retunes override the source and are applied AFTER the join, so a
+re-run cannot revert them: brain prices (all catalogs) and the regular crops'
+level/cost/sell/xp rebalance. Both live in tools/reforge_economy.py.
+
 Run from the repo root (the folder containing ZF2R_extracted/ and zombiefarm/):
     python zombiefarm/tools/prep_market.py
 """
@@ -21,7 +25,7 @@ import os
 import re
 import sys
 
-from reforge_economy import brain_price
+from reforge_economy import CROP_REBALANCE, brain_price, rebalance_crop
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GAMEPLAY = os.path.join(ROOT, "ZF2R_extracted", "data", "json", "gameplay", "Market.json")
@@ -111,6 +115,7 @@ def main():
 
     # ---- plants: join by display name ----
     plants = load(PLANTS)
+    rebalanced = 0
     for p in plants:
         s = plant_src.get(p["name"])
         if not s:
@@ -121,9 +126,20 @@ def main():
         p["growMs"] = (s.get("growTime") or 900) * 1000
         p["level"] = s.get("level", 1)
         p["xp"] = s.get("xp", 1)
+        # The regular crops take the rebalance (see tools/reforge_economy.py) LAST,
+        # so it wins over the source values just read. Grow time is not rebalanced.
+        # Without this the join above would revert the whole thing on every re-run.
+        rebalanced += rebalance_crop(p["key"], p)
         # Standalone 27-58px produce art used by the source Market and harvest
         # pickup animation. This is intentionally distinct from the full plot art.
         p["icon"] = s["spriteSheet"]
+
+    unknown = set(CROP_REBALANCE) - {p["key"] for p in plants}
+    if unknown:
+        # A typo or a renamed key would otherwise be a silent no-op that quietly
+        # leaves that crop on its ZF2 economy.
+        print("ERROR rebalance keys not in plants.json:", *sorted(unknown), sep="\n  ")
+        sys.exit(1)
 
     # ---- zombies: join by unitKey (== catalog key) ----
     zombies = load(ZOMBIES)
@@ -286,7 +302,8 @@ def main():
         json.dump(zombies, f, indent=1)
         f.write("\n")
 
-    print(f"plants:  {len(plants)} enriched (levels {min(p['level'] for p in plants)}"
+    print(f"plants:  {len(plants)} enriched, {rebalanced} rebalanced "
+          f"(levels {min(p['level'] for p in plants)}"
           f"-{max(p['level'] for p in plants)})")
     print(f"zombies: {len(zombies)} enriched (levels {min(z['level'] for z in zombies)}"
           f"-{max(z['level'] for z in zombies)})")

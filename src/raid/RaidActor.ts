@@ -9,6 +9,7 @@ import {
   isMutationForegroundPart,
   matchesMutationReplacement,
   mutationBitsForRendering,
+  mutationCoversFace,
   mutationPartZIndex,
   type MutationReplacement,
 } from "../zombie/mutationVisual";
@@ -146,6 +147,9 @@ export class RaidActor {
         else if (slot === "body") replacements.add("body");
       }
     }
+    // A head mutation that carries its own face (the pumpkin) takes the zombie's
+    // eyes and jaw with the skull, instead of leaving them in front of it.
+    const coversFace = mutationParts.some(({ bit }) => mutationCoversFace(bit));
     const [r, g, b] = m.color;
     const tint = (r << 16) | (g << 8) | b;
     this.renderScale = MODEL_BASE * (m.scale ?? 1);
@@ -158,7 +162,8 @@ export class RaidActor {
       if (
         replacements.has("head")
         && p.group === "head"
-        && matchesMutationReplacement(p.file, "head")
+        && (matchesMutationReplacement(p.file, "head")
+          || (coversFace && isMutationForegroundPart(p.file)))
       ) continue;
       const tex = assets.zombiePartTex[p.file];
       if (!tex) continue;

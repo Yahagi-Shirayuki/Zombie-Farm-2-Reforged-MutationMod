@@ -37,6 +37,17 @@ describe("tutorial sequence", () => {
     expect(recoverTutorialCropStep(TutStep.Harvest, true, false, true)).toBe(TutStep.Harvest);
   });
 
+  // The tutorial zombie ripens on its own in ten minutes. A player who waits it out
+  // used to be held at the boost beats anyway — asked to buy an Insta-Grow they no
+  // longer needed, out of the single brain a new farm starts with.
+  it("sends a crop that grew on its own straight to Harvest", () => {
+    expect(recoverTutorialCropStep(TutStep.BuyInstaGrow, true, false, true)).toBe(TutStep.Harvest);
+    expect(recoverTutorialCropStep(TutStep.RipenCrop, true, false, true)).toBe(TutStep.Harvest);
+    // Still growing: both beats stand.
+    expect(recoverTutorialCropStep(TutStep.BuyInstaGrow, true, false, false)).toBe(TutStep.BuyInstaGrow);
+    expect(recoverTutorialCropStep(TutStep.RipenCrop, true, false, false)).toBe(TutStep.RipenCrop);
+  });
+
   it("rewinds missing tutorial crops to the earliest valid recovery action", () => {
     expect(recoverTutorialCropStep(TutStep.RipenCrop, false, true, false)).toBe(TutStep.PlantZombie);
     expect(recoverTutorialCropStep(TutStep.Harvest, false, false, false)).toBe(TutStep.Plow);

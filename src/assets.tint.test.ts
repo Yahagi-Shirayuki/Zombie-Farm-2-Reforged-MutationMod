@@ -54,13 +54,31 @@ describe("the catalog's authored tints", () => {
     expect(identity).toEqual([]);
   });
 
+  it("gives the Worm Holes art of their own", () => {
+    // Both declare an animated tile whose resting frame (_00) is fully transparent,
+    // so they shipped as invisible cards and invisible farm objects. The generator
+    // now falls back to the first DRAWN animation frame — which also makes the two
+    // distinct, since they had been sharing one empty file.
+    const holes = catalog.filter((entry) => /^spaceWormHole/.test(entry.key));
+    expect(holes).toHaveLength(2);
+    expect(new Set(holes.map((entry) => entry.sprite)).size).toBe(2);
+    for (const hole of holes) expect(hole.nativeW * hole.nativeH).toBeGreaterThan(0);
+  });
+
   it("keeps recoloured tiles on their base tile's single sprite file", () => {
-    // Colour is data. Two rows wanting the same art in different colours share the
-    // file and differ in `color` — they never ship a second copy of the pixels.
+    // Colour is data: rows wanting the same art in different colours share the file
+    // and differ in `color`, never shipping a second copy of the pixels. The White
+    // Flower Bed is the deliberate exception — the base petals are magenta and a
+    // multiply cannot brighten, so white is unreachable without its own sprite.
     const flowerBeds = catalog.filter((entry) => /^flowerBed/.test(entry.key));
-    expect(flowerBeds.length).toBeGreaterThan(1);
-    expect(new Set(flowerBeds.map((entry) => entry.sprite)).size).toBe(1);
-    expect(new Set(flowerBeds.map((entry) => objectTint(entry.color))).size)
-      .toBe(flowerBeds.length);
+    expect(flowerBeds).toHaveLength(4);
+    const tinted = flowerBeds.filter((entry) => entry.key !== "flowerBed_white");
+    expect(new Set(tinted.map((entry) => entry.sprite)).size).toBe(1);
+    expect(new Set(tinted.map((entry) => objectTint(entry.color))).size)
+      .toBe(tinted.length);
+
+    const white = flowerBeds.find((entry) => entry.key === "flowerBed_white")!;
+    expect(white.sprite).not.toBe(tinted[0].sprite);
+    expect(white.color).toBeUndefined(); // its art is already the right colour
   });
 });

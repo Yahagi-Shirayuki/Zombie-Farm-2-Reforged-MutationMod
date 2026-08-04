@@ -4,6 +4,7 @@ import { slotOf } from "./mutations";
 import {
   isMutationForegroundPart,
   matchesMutationReplacement,
+  mutationCoversFace,
   mutationBitsForRendering,
   mutationPartZIndex,
   type MutationReplacement,
@@ -96,8 +97,12 @@ export function buildZombiePortraitRig(
     if (replacement) {
       for (const basePart of replaceable[replacement]) basePart.visible = false;
       if (replacement === "head") {
+        // Same rule as the farm and raid rigs: a head mutation with a face of its
+        // own hides the zombie's, rather than sitting behind it.
+        const covers = mutationCoversFace(bit);
         for (const basePart of headForeground) {
-          basePart.zIndex = MUT_BASE_FOREGROUND_Z + basePart.zIndex;
+          if (covers) basePart.visible = false;
+          else basePart.zIndex = MUT_BASE_FOREGROUND_Z + basePart.zIndex;
         }
       }
     }

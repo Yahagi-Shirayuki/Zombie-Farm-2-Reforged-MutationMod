@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  applyBodyTypeRestriction, canReceive, combineMasks, HEADLESS_FORBIDDEN_MASK,
-  HEADLESS_ONLY_MASK, mutationBonus, mutationLabel, SLOT_MASK,
+  applyBodyTypeRestriction, bitGrowable, canReceive, combineMasks, HEADLESS_FORBIDDEN_MASK,
+  HEADLESS_HEAD_MASK, mutationBonus, mutationLabel, SLOT_MASK,
 } from "./mutations";
 
 // Ground truth: combineZombieMutationFlag:withZombieFlag: / randMutation: — per slot,
@@ -41,9 +41,9 @@ describe("combineMasks — deterministic per-slot inheritance", () => {
 });
 
 describe("headless restriction — no head or hair/eye mutations", () => {
-  it("covers every head and hair/eye bit except headless-only Pumpking", () => {
+  it("covers every head and hair/eye bit except the headless family's own Pumpking", () => {
     expect(HEADLESS_FORBIDDEN_MASK)
-      .toBe((SLOT_MASK.head | SLOT_MASK.hair_eye) & ~HEADLESS_ONLY_MASK);
+      .toBe((SLOT_MASK.head | SLOT_MASK.hair_eye) & ~HEADLESS_HEAD_MASK);
     // Pinned: server/migrations/0035_headless_mutation_repair.sql clears this literal.
     expect(HEADLESS_FORBIDDEN_MASK).toBe(951);
   });
@@ -57,35 +57,46 @@ describe("headless restriction — no head or hair/eye mutations", () => {
   });
 });
 
-describe("Pumpking — the headless-only head mutation", () => {
-  const PUMPKING = HEADLESS_ONLY_MASK;
+describe("Pumpking — grown only on the headless family, worn by anyone", () => {
+  const PUMPKING = HEADLESS_HEAD_MASK;
 
   it("pays the head slot's best attack bonus", () => {
     expect(mutationBonus(PUMPKING)).toEqual({ str: 3, con: 0, dex: 0 });
     expect(mutationLabel(PUMPKING)).toBe("Pumpking");
   });
 
-  it("lands on a headless zombie and nowhere else", () => {
+  it("GROWS on a headless zombie and on nothing else", () => {
+    // The crop-adjacency gate. A zombie with a head of its own never grows one,
+    // however many pumpkings are planted around it.
+    expect(bitGrowable(PUMPKING, true)).toBe(true);
+    expect(bitGrowable(PUMPKING, false)).toBe(false);
+    // Every other mutation grows exactly where it can be worn.
+    expect(bitGrowable(256, false)).toBe(true); // garlic on a normal zombie
+    expect(bitGrowable(256, true)).toBe(false); // ...never on a headless one
+    expect(bitGrowable(8, true)).toBe(true); // turnip arm: fine on both
+  });
+
+  it("is WEARABLE by anyone, so an inherited one is never scrubbed off", () => {
     expect(canReceive(0, PUMPKING, true)).toBe(true);
-    expect(canReceive(0, PUMPKING, false)).toBe(false);
+    expect(canReceive(0, PUMPKING, false)).toBe(true);
     expect(applyBodyTypeRestriction(PUMPKING | 8, true)).toBe(PUMPKING | 8);
-    expect(applyBodyTypeRestriction(PUMPKING | 8, false)).toBe(8);
+    expect(applyBodyTypeRestriction(PUMPKING | 8, false)).toBe(PUMPKING | 8);
   });
 
   it("still obeys one-per-slot against the other head mutations", () => {
-    // A headless zombie can't hold them anyway, but a mask that somehow has one
-    // must not gain a second head mutation.
     expect(canReceive(PUMPKING, 256, true)).toBe(false); // garlic (head) blocked
-    expect(canReceive(256, PUMPKING, false)).toBe(false);
+    expect(canReceive(256, PUMPKING, false)).toBe(false); // head slot already taken
     expect(canReceive(PUMPKING, PUMPKING, true)).toBe(true); // already has it: no-op
   });
 
-  it("does not cost a non-headless child its own head mutation in the Pot", () => {
-    // Garlic (256) vs Pumpking (8192) both sit in the head slot. The higher bit
-    // normally wins, but a non-headless child can't wear Pumpking — garlic survives.
-    expect(combineMasks(256, PUMPKING, false)).toBe(256);
-    expect(combineMasks(256, PUMPKING, true)).toBe(PUMPKING); // headless child keeps it
-    expect(combineMasks(PUMPKING, 8, false)).toBe(8);
+  it("reaches a non-headless child through the Pot, winning the head slot", () => {
+    // Garlic (256) vs Pumpking (8192) both sit in the head slot, and the higher bit
+    // wins — so a headless parent hands its pumpkin to a child of any body type.
+    // This is the ONLY route: it cannot be grown on a zombie that has a head.
+    expect(combineMasks(256, PUMPKING, false)).toBe(PUMPKING);
+    expect(combineMasks(PUMPKING, 256, false)).toBe(PUMPKING); // order-independent
+    expect(combineMasks(256, PUMPKING, true)).toBe(PUMPKING); // headless child too
+    expect(combineMasks(PUMPKING, 8, false)).toBe(PUMPKING | 8); // arm rides along
   });
 });
 

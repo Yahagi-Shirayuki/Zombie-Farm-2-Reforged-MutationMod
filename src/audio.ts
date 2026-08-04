@@ -74,6 +74,271 @@ function fightStrikeFile({ team, attackName = "", impact, sfxFile }: FightStrike
   return "audio/punch.wav";
 }
 
+// Exact authored length, in seconds, of every track we loop — taken from the
+// original uncompressed source each MP3 was encoded from.
+//
+// Our MP3s carry a bare Xing header with no LAME gapless tag, so nothing tells a
+// decoder how much of the stream is encoder delay and end padding. Every decoder
+// therefore renders that padding (52-75 ms here) as real silence, which is the
+// audible blip at the loop point. These lengths are what let the loop region
+// address only the authored audio inside the padded decode. A track absent from
+// the table simply loops its whole decoded buffer, as before.
+const AUTHORED_SECONDS: Record<string, number> = {
+  "SFXambience.mp3": 8,
+  "dayFarmBGM.mp3": 1376780 / 44100,
+  "alienStageBGM.mp3": 15.36,
+  "enrageBGM.mp3": 222821 / 44100,
+  "farmStageBGM.mp3": 64,
+  "fightBGM.mp3": 185684 / 44100,
+  "ninjaStageBGM.mp3": 24,
+  "pirateStageBGM.mp3": 207529 / 44100,
+  "robotStageBGM.mp3": 61.44,
+  "winBGM.mp3": 453600 / 44100,
+};
+
+/** Cross-fade used when a decoded buffer takes over from the streaming element. */
+const HANDOVER_MS = 150;
+
+/**
+ * Where the authored audio actually sits inside a decoded buffer.
+ *
+ * Browsers strip differing amounts of MP3 encoder delay on their own (some all of
+ * it, some the 529-sample decoder delay, some none), so the head is measured
+ * rather than assumed. It can only ever lie within the padding surplus
+ * `buffer.duration - authored`, and every source here has signal at sample 0, so
+ * the first sample above a relative floor inside that window is the true start.
+ */
+function loopRegion(buffer: AudioBuffer, authored: number | undefined) {
+  const whole = { start: 0, end: buffer.duration };
+  if (!authored || !(buffer.duration > authored) || typeof buffer.getChannelData !== "function") {
+    return whole;
+  }
+  const rate = buffer.sampleRate;
+  const surplus = Math.min(Math.ceil((buffer.duration - authored) * rate), buffer.length);
+  const data = buffer.getChannelData(0);
+  let peak = 0;
+  for (let i = 0, n = Math.min(buffer.length, surplus + rate); i < n; i++) {
+    peak = Math.max(peak, Math.abs(data[i]));
+  }
+  if (peak === 0) return whole; // a silent decode tells us nothing
+  const floor = peak * 0.01;
+  let head = 0;
+  while (head < surplus && Math.abs(data[head]) <= floor) head++;
+  return { start: head / rate, end: Math.min(head / rate + authored, buffer.duration) };
+}
+
+/**
+ * A long track that has to loop seamlessly (music beds, the ambience bed).
+ *
+ * A media element cannot do this. `loop = true` makes it seek back to zero, which
+ * re-primes the demuxer, and on top of that it plays the encoder padding described
+ * above — together, the audible half-beat of dead air at every loop point.
+ *
+ * Web Audio has neither problem: an AudioBufferSourceNode wraps a sample index
+ * with no seek at all, and `loopStart`/`loopEnd` let us point it at just the
+ * authored audio. The element is kept as the immediate-start path (decoding needs
+ * the whole file, streaming does not) and as the fallback wherever Web Audio is
+ * unavailable; once the buffer lands, playback cross-fades over to it and every
+ * later seam is sample-accurate.
+ */
+class LoopTrack {
+  private el: HTMLAudioElement;
+  private source: AudioBufferSourceNode | null = null;
+  private amp: GainNode | null = null;
+  private buffer: AudioBuffer | null = null;
+  private region = { start: 0, end: 0 };
+  private decodeStarted = false;
+  private wantPlay = false;
+  private startedAt = 0;   // ctx.currentTime when `source` started
+  private startedFrom = 0; // offset into the loop region at that moment
+  private offset = 0;      // resume position while stopped
+  private fade: ReturnType<typeof setInterval> | null = null;
+  private vol = 1;
+
+  constructor(
+    private readonly url: string,
+    private readonly authored: number | undefined,
+    private readonly looping: boolean,
+    private readonly context: () => AudioContext | null,
+  ) {
+    // Created up front (not on first play) so channel volumes can be applied
+    // before anything starts, and lazy so the bytes are only fetched once the
+    // channel is actually enabled.
+    this.el = new Audio(url);
+    this.el.loop = looping;
+    this.el.preload = "none";
+  }
+
+  get volume() { return this.vol; }
+  set volume(value: number) {
+    this.vol = value;
+    this.el.volume = value;
+    if (this.amp && this.fade === null) this.amp.gain.value = value;
+  }
+
+  /** Whether nothing is actually coming out right now — including after a start
+   *  the browser's autoplay policy rejected, which is what re-arms the gesture
+   *  listener. `wantPlay` is intent and deliberately separate: a blocked start
+   *  still wants to play. */
+  get paused() { return !this.source && this.el.paused; }
+
+  /** Begin fetching and decoding without playing, so a later start is instant. */
+  warm() { this.decode(); }
+
+  /** Restart from the top on the next play (the non-looping victory sting). */
+  rewind() {
+    this.offset = 0;
+    if (this.el.currentTime > 0) this.el.currentTime = 0;
+  }
+
+  play(): Promise<void> {
+    this.wantPlay = true;
+    this.decode();
+    const ctx = this.context();
+    if (ctx && this.buffer) {
+      if (ctx.state === "running") {
+        if (!this.source) this.startSource(this.offset);
+        return Promise.resolve();
+      }
+      // Backgrounding suspends the context, and resuming it is async. Wait for it
+      // rather than falling back to the element: the element is the gappy path, and
+      // nothing would ever hand playback back to the buffer, so one
+      // background/foreground cycle would otherwise cost gapless looping for the
+      // rest of the session. A rejection here re-arms the gesture listener.
+      return ctx.resume().then(() => {
+        if (this.wantPlay && !this.source) this.startSource(this.offset);
+      });
+    }
+    this.el.volume = this.vol;
+    return this.el.play();
+  }
+
+  pause() {
+    this.offset = this.position();
+    this.wantPlay = false;
+    this.stopSource();
+    this.el.pause();
+  }
+
+  /** Release the decoded buffer and the media resource. Music buffers are tens of
+   *  megabytes decoded, so a finished raid track must not outlive the raid. */
+  dispose() {
+    this.wantPlay = false;
+    this.stopSource();
+    this.endFade();
+    this.el.pause();
+    this.el.src = "";
+    this.buffer = null;
+  }
+
+  // --- internals -----------------------------------------------------------
+  /** Seconds into the loop region right now, whichever path is playing. */
+  private position(): number {
+    const ctx = this.context();
+    const length = this.region.end - this.region.start;
+    if (this.source && ctx && length > 0) {
+      const elapsed = this.startedFrom + (ctx.currentTime - this.startedAt);
+      return this.looping ? elapsed % length : Math.min(elapsed, length);
+    }
+    // A streaming element reports its position within the padded stream, which is
+    // the same timeline the decoded buffer uses.
+    if (!this.el.paused && Number.isFinite(this.el.currentTime)) {
+      return Math.max(0, this.el.currentTime - this.region.start);
+    }
+    return this.offset;
+  }
+
+  private decode() {
+    if (this.decodeStarted || this.buffer) return;
+    const ctx = this.context();
+    if (!ctx) return; // no Web Audio: the element stays in charge
+    this.decodeStarted = true;
+    void fetch(this.url)
+      .then((response) => response.arrayBuffer())
+      .then((data) => ctx.decodeAudioData(data))
+      .then((decoded) => {
+        this.buffer = decoded;
+        this.region = loopRegion(decoded, this.authored);
+        if (this.wantPlay && ctx.state === "running") this.handover();
+      })
+      // A failed fetch/decode simply leaves this track on the element, which is
+      // exactly the old behaviour — never a hard failure.
+      .catch(() => { /* stays on the streaming element */ });
+  }
+
+  /** The buffer arrived while the element was streaming: start the gapless source
+   *  at the element's position and cross-fade, so the switch itself is inaudible. */
+  private handover() {
+    const streaming = !this.el.paused;
+    this.startSource(this.position(), streaming ? HANDOVER_MS / 1000 : 0);
+    if (!streaming || !this.source) return;
+    const from = this.el.volume;
+    const steps = 6;
+    let step = 0;
+    this.endFade();
+    this.fade = setInterval(() => {
+      step++;
+      this.el.volume = Math.max(0, from * (1 - step / steps));
+      if (step < steps) return;
+      this.endFade();
+      this.el.pause();
+      this.el.volume = this.vol;
+      if (this.amp) this.amp.gain.value = this.vol;
+    }, HANDOVER_MS / steps);
+  }
+
+  private endFade() {
+    if (this.fade === null) return;
+    clearInterval(this.fade);
+    this.fade = null;
+  }
+
+  private startSource(offset: number, fadeIn = 0) {
+    const ctx = this.context();
+    if (!ctx || !this.buffer) return;
+    this.stopSource();
+    const length = this.region.end - this.region.start;
+    const from = length > 0 ? Math.min(offset, length) : 0;
+    const source = ctx.createBufferSource();
+    source.buffer = this.buffer;
+    if (this.looping) {
+      source.loop = true;
+      source.loopStart = this.region.start;
+      source.loopEnd = this.region.end;
+    }
+    const amp = ctx.createGain();
+    amp.gain.value = fadeIn > 0 ? 0 : this.vol;
+    if (fadeIn > 0 && typeof amp.gain.linearRampToValueAtTime === "function") {
+      amp.gain.linearRampToValueAtTime(this.vol, ctx.currentTime + fadeIn);
+    }
+    source.connect(amp).connect(ctx.destination);
+    source.onended = () => {
+      if (source !== this.source) return; // superseded by a restart
+      this.source = null;
+      this.wantPlay = false; // a non-looping sting finished on its own
+    };
+    // Non-looping stings are bounded explicitly so the trailing padding never plays.
+    source.start(0, this.region.start + from, this.looping ? undefined : length - from);
+    this.source = source;
+    this.amp = amp;
+    this.startedAt = ctx.currentTime;
+    this.startedFrom = from;
+  }
+
+  private stopSource() {
+    if (!this.source) return;
+    const source = this.source;
+    this.source = null;
+    source.onended = null;
+    try {
+      source.stop();
+    } catch { /* never started */ }
+    source.disconnect();
+    this.amp?.disconnect();
+    this.amp = null;
+  }
+}
+
 // Ambient farm life: a quiet continuous bed, plus an occasional rooster/crow so
 // the farm never sounds dead. One-shots fire on a randomized 18-42s timer.
 const AMBIENCE_BED = "SFXambience.mp3";
@@ -145,8 +410,8 @@ export class AudioManager {
   sfxVolume = 1;
   ambienceVolume = 1;
   muteWhenUnfocused = false;
-  private bgm: HTMLAudioElement;
-  private ambBed: HTMLAudioElement;
+  private bgm: LoopTrack;
+  private ambBed: LoopTrack;
   private ambTimer: ReturnType<typeof setTimeout> | null = null;
   private oneShots = new Set<HTMLAudioElement>();
   // Finished one-shot elements, pooled per file for reuse. Raid combat fires up to
@@ -165,21 +430,17 @@ export class AudioManager {
   // While a raid is up, its looping stage BGM replaces the farm bgm. `raidBgm`
   // holds the active raid track (and `raidFile` its filename); the farm bgm is
   // paused for the raid's duration.
-  private raidBgm: HTMLAudioElement | null = null;
-  private victoryBgm: HTMLAudioElement | null = null;
+  private raidBgm: LoopTrack | null = null;
+  private victoryBgm: LoopTrack | null = null;
   private raidFile = "";
   private zombieBarkSource: (() => { group: string; key: string } | null) | null = null;
 
   constructor() {
-    this.bgm = new Audio(A("dayFarmBGM.mp3"));
-    this.bgm.loop = true;
+    this.bgm = this.track("dayFarmBGM.mp3", true);
     this.bgm.volume = 0.4;
-    this.bgm.preload = "none";
 
-    this.ambBed = new Audio(A(AMBIENCE_BED));
-    this.ambBed.loop = true;
+    this.ambBed = this.track(AMBIENCE_BED, true);
     this.ambBed.volume = 0.25;
-    this.ambBed.preload = "none";
 
     // Restore persisted channel toggles. Autoplay may be blocked until the user
     // interacts, so arm a one-shot gesture listener to (re)start any looping
@@ -266,9 +527,15 @@ export class AudioManager {
   }
 
   // --- music ---------------------------------------------------------------
+  /** Build a seamless-looping track, giving it the authored length that lets it
+   *  skip the encoder padding baked into our MP3s. */
+  private track(file: string, looping: boolean): LoopTrack {
+    return new LoopTrack(A(file), AUTHORED_SECONDS[file], looping, () => this.audioContext());
+  }
+
   // The looping track that should be playing right now: the raid stage BGM while
   // a raid is up, otherwise the farm bgm.
-  private activeBgm(): HTMLAudioElement {
+  private activeBgm(): LoopTrack {
     return this.raidBgm ?? this.bgm;
   }
 
@@ -351,8 +618,7 @@ export class AudioManager {
     if (this.raidFile !== file) {
       this.exitRaid(true); // tear down any prior raid track without resuming farm
       this.bgm.pause();     // farm bed steps aside for the whole raid
-      const a = new Audio(A(file));
-      a.loop = true;
+      const a = this.track(file, true);
       a.volume = 0.4 * this.musicVolume * this.masterVolume;
       this.raidBgm = a;
       this.raidFile = file;
@@ -363,9 +629,10 @@ export class AudioManager {
     for (const cue of FIGHT_CUE_FILES) this.buffer(A(cue));
     // Warm the short victory cue while the battle is running so the decisive tick
     // never waits on its first network fetch/decode.
-    if (!this.victoryBgm) {
-      this.victoryBgm = new Audio(A("winBGM.mp3"));
-      this.victoryBgm.preload = "auto";
+    if (!this.victoryBgm && this.musicOn) {
+      this.victoryBgm = this.track("winBGM.mp3", false);
+      this.victoryBgm.volume = 0.4 * this.musicVolume * this.masterVolume;
+      this.victoryBgm.warm();
     }
     if (this.musicOn && this.canPlay()) void this.raidBgm!.play().catch(() => this.arm());
   }
@@ -377,9 +644,8 @@ export class AudioManager {
     if (this.raidFile !== file) {
       this.exitRaid(true);
       this.bgm.pause();
-      const audio = this.victoryBgm ?? new Audio(A(file));
-      audio.currentTime = 0;
-      audio.loop = false;
+      const audio = this.victoryBgm ?? this.track(file, false);
+      audio.rewind();
       audio.volume = 0.4 * this.musicVolume * this.masterVolume;
       this.raidBgm = audio;
       this.raidFile = file;
@@ -392,10 +658,18 @@ export class AudioManager {
   exitRaid(keepFarmPaused = false) {
     if (this.raidBgm) {
       if (this.raidBgm === this.victoryBgm) this.victoryBgm = null;
-      this.raidBgm.pause();
-      this.raidBgm.src = "";
+      // Decoded music is tens of megabytes; a finished raid's track must not
+      // outlive the raid alongside the farm bed.
+      this.raidBgm.dispose();
       this.raidBgm = null;
       this.raidFile = "";
+    }
+    // A raid that ended without a win leaves the warmed victory sting decoded.
+    // Only on a real exit: the `keepFarmPaused` swaps are entering another raid or
+    // playing that very sting, both of which still want it.
+    if (!keepFarmPaused) {
+      this.victoryBgm?.dispose();
+      this.victoryBgm = null;
     }
     if (!keepFarmPaused && this.musicOn && this.canPlay()) void this.bgm.play().catch(() => this.arm());
   }

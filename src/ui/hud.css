@@ -147,6 +147,17 @@
 #hud .prof-input { flex: 1 1 auto; min-width: 0; padding: 6px 9px; border-radius: 7px; border: 2px solid #1e1207;
   background: #2a1c0c; color: #ffe9a8; font: 700 14px system-ui, sans-serif; }
 /* friends panel */
+/* This panel grows with the friend list and the gift inbox, so it has to scroll on
+   EVERY screen. The generic panel-scroll rule is inside the touch/narrow media query,
+   which left a tall panel centred with its top — close button, inbox header and all —
+   stranded above the viewport on a desktop mouse. Bounded here, scoped to this panel
+   rather than changing every panel in the game. */
+#hud .fr-bg { box-sizing: border-box; padding: 12px; }
+#hud .fr-bg > .panel { max-height: 100%; overflow-y: auto; overscroll-behavior: contain; }
+/* A scroll container can't have a visible overflow axis, so the close button's usual
+   16px overhang past the corner would be clipped. Tuck it inside instead — the same
+   thing the touch layout already does for exactly this reason. */
+#hud .fr-bg > .panel > .panelclose { top: 2px; right: 2px; z-index: 3; }
 #hud .fr-note { margin-top: 6px; font-size: 12px; line-height: 1.4; color: #c9b98f; }
 #hud .fr-empty { padding: 10px 4px; font-size: 13px; color: #b6a986; font-style: italic; }
 #hud .prof-badge.fr-gifts { background: #7a4bc9; color: #f0e8ff; }
@@ -163,8 +174,22 @@
 #hud .copyable:hover { filter: brightness(1.08); box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
 #hud .copyable:active { filter: brightness(.92); }
 #hud .fr-gsi { flex: 0 0 auto; }
-#hud .fr-inbox-h { margin-top: 12px; margin-bottom: 4px; font-weight: 800; font-size: 13px; color: #ffd98a;
+/* Section headers read as a band across the panel. The opaque fill is what lets the
+   inbox one stick (below) without scrolled rows showing through; the panel's own
+   background is a gradient no single colour would match at every scroll position. */
+#hud .fr-inbox-h { margin: 12px -24px 4px; padding: 6px 24px 5px;
+  background: #5e3b1e; box-shadow: inset 0 -1px 0 rgba(255,217,138,.22);
+  font-weight: 800; font-size: 13px; color: #ffd98a;
   display: flex; align-items: center; gap: 8px; }
+/* Only the INBOX header sticks, so "Open all" stays reachable once the list is
+   expanded. Friend requests deliberately don't: two sticky headers at the same offset
+   in one scroll container overlap each other on the way past. */
+#hud .fr-sticky-h { position: sticky; top: -20px; z-index: 2; }
+/* "Show all 12" / "Show fewer" — a full-width, quieter row under the previewed gifts. */
+#hud .fr-inbox-more { justify-content: center; padding: 6px 11px;
+  background: rgba(255,193,60,.07); box-shadow: inset 0 0 0 1px rgba(255,193,60,.2); }
+#hud .prof-btn.fr-inbox-toggle { margin: 0; padding: 4px 12px; font-size: 12px;
+  background: linear-gradient(#7a5220, #5e3d15); }
 /* Bulk actions ("Gift all", "Open all") sit at the end of their section header /
    toolbar row, visually lighter than the per-row buttons they stand in for. */
 #hud .fr-toolbar:empty { display: none; }
@@ -1674,9 +1699,13 @@
 
 /* ---- Tim Buckwheat guided tutorial ---- */
 /* The layer that hosts Tim, the arrow, the blocker and the skip button. Sits
-   above every panel (level-up/quest-complete are z-index 24). It is itself
+   above every panel (level-up/quest-complete are z-index 24) AND above the
+   tutorial's own market (41) — its z-index makes it a stacking context, so the
+   children's z-indexes below are ordered inside it and cannot climb out on their
+   own. That is why this value, not the skip button's 43, is what keeps the escape
+   hatch (and Tim's instructions) on top of the boost panel. It is itself
    pointer-events:none; children opt in. */
-#hud .tut-layer { position: fixed; inset: 0; z-index: 40; pointer-events: none; }
+#hud .tut-layer { position: fixed; inset: 0; z-index: 42; pointer-events: none; }
 /* Tutorial tools use the same compact selected-tool button as the normal collapsed
    HUD. Keep the active Multi/Plow/Insta-Grow icon at bottom-right without showing
    the full bottom bar; refreshTools() already keeps this icon and boost count live. */
@@ -1688,6 +1717,12 @@
 #hud.tutorial .invade-shortcut:not(.tut-highlight) { display: none !important; }
 #hud.tutorial .tut-highlight { pointer-events: auto !important; }
 #hud.tutorial .mkt-bg.tut-market { z-index: 41; pointer-events: auto; }
+/* The boost panel is a full-viewport backdrop with no close button, so anything it
+   opens must sit ABOVE it or the beat dead-ends: the purchase confirm (26) and the
+   card's description popup (24) both used to mount underneath, leaving the player
+   tapping a Buy button they could neither see nor reach. Above the tutorial layer
+   (42) too, so Tim can never cover the confirm's own buttons. */
+#hud.tutorial .game-confirm-bg, #hud.tutorial .info-bg { z-index: 43; }
 #hud .tut-layer.invade-step .tut-tim {
   left: auto; right: max(12px, env(safe-area-inset-right)); bottom: 0;
   flex-direction: row-reverse;
@@ -1711,12 +1746,16 @@
 @keyframes tutGlow { 0%,100% { box-shadow: 0 0 0 3px #ffe27a, 0 0 12px 3px rgba(255,210,80,.7); }
   50% { box-shadow: 0 0 0 4px #fff0a8, 0 0 22px 7px rgba(255,210,80,1); } }
 /* Tim's slide-up popup: anchored at bottom-left. The right-side width reserve keeps
-   even a wrapped speech bubble clear of the selected-tool button. */
+   even a wrapped speech bubble clear of the selected-tool button. He floats above the
+   boost market (see .tut-layer), so he must not swallow taps aimed at the panel behind
+   him: only a narrative beat needs a clickable bubble (tap-to-continue), and no panel
+   is ever open on one. */
 #hud .tut-tim { position: fixed; left: max(12px, env(safe-area-inset-left)); bottom: 0;
-  pointer-events: auto; display: flex; align-items: flex-end; gap: 10px;
+  pointer-events: none; display: flex; align-items: flex-end; gap: 10px;
   transform: translateY(110%); transition: transform .45s cubic-bezier(.2,.9,.25,1.1);
   max-width: calc(100vw - 100px); z-index: 42; }
 #hud .tut-tim.in { transform: translateY(0); }
+#hud .tut-layer.narrative-step .tut-bubble { pointer-events: auto; }
 #hud .tut-tim-sprite { width: 150px; height: auto; flex: 0 0 auto;
   filter: drop-shadow(0 3px 6px rgba(0,0,0,.5)); pointer-events: none;
   transform: translateY(6px); }

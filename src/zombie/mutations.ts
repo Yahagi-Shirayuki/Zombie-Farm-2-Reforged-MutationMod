@@ -48,7 +48,7 @@ export const MUTATIONS: Record<number, MutationDef> = {
   1024: { bit: 1024, key: "limabean", name: "Lima Bean", slot: "body", stat: "con", amount: 3 },
   2048: { bit: 2048, key: "flytrap", name: "Flytrap", slot: "neck", stat: "con", amount: 4 },
   4096: { bit: 4096, key: "dragon", name: "Dragon-arm", slot: "arm", stat: "str", amount: 4 },
-  // HEADLESS-ONLY (see HEADLESS_ONLY_MASK). Pumpking never had a MutationIcons entry
+  // The headless family's own head (see HEADLESS_HEAD_MASK). Pumpking never had a MutationIcons entry
   // or a market mutant in ZF2 — it shipped as a crop-adjacency-only mutation and the
   // one head exception the headless family could wear (MUTATION_CATALOG_CORRECTED.md
   // §"Legacy / crop-adjacency-only", report §11), so its bonus is ours to choose:
@@ -104,30 +104,44 @@ export const HEADLESS_SLOTS: ReadonlySet<Slot> = new Set<Slot>(["body", "arm", "
 
 // ...with one exception, which runs the other way: Pumpking is the head mutation
 // authored FOR the headless family — the pumpkin becomes the head they never had, so
-// a zombie that already owns a head can't wear it. It is the only bit in this mask.
-export const HEADLESS_ONLY_MASK = 8192;
+// it is the one head bit a headless zombie may hold. It is the only bit in this mask.
+//
+// ANYONE can WEAR it, but only a headless zombie can GROW it: a crop-adjacency roll
+// refuses the pumpkin on a zombie that already has a head (see bitGrowable). Every
+// other zombie reaches it through the Zombie Pot, inheriting it from a headless
+// parent — that route, and only that route, is how a Regular ends up wearing one.
+export const HEADLESS_HEAD_MASK = 8192;
 
 /** Head/hair-eye bits a headless zombie may NOT hold (Pumpking excluded — see above).
  *  Pinned by server/migrations/0035_headless_mutation_repair.sql. */
 export const HEADLESS_FORBIDDEN_MASK =
-  (SLOT_MASK.head | SLOT_MASK.hair_eye) & ~HEADLESS_ONLY_MASK;
+  (SLOT_MASK.head | SLOT_MASK.hair_eye) & ~HEADLESS_HEAD_MASK;
 
-/** Can this body type wear `bit` at all? Two-way: headless bars head/hair-eye, and
- *  everyone else bars the headless-only mutations. Unknown bits are never allowed. */
+/** Can this body type WEAR `bit` at all? Only the headless family is restricted, and
+ *  only in the two slots it hasn't got — the pumpkin that stands in for its head is
+ *  wearable by everyone. Unknown bits are never allowed. */
 export function bitAllowed(bit: number, isHeadless: boolean): boolean {
   const slot = slotOf(bit);
   if (slot === null) return false;
-  if ((bit & HEADLESS_ONLY_MASK) !== 0) return isHeadless;
-  return isHeadless ? HEADLESS_SLOTS.has(slot) : true;
+  if (!isHeadless) return true;
+  return HEADLESS_SLOTS.has(slot) || (bit & HEADLESS_HEAD_MASK) !== 0;
+}
+
+/** Can this body type GROW `bit` from an adjacent crop? The wearing rule, minus the
+ *  pumpkin: a zombie that already has a head never grows one, whatever it is planted
+ *  beside. The Zombie Pot is the only way it reaches them. */
+export function bitGrowable(bit: number, isHeadless: boolean): boolean {
+  if (!bitAllowed(bit, isHeadless)) return false;
+  return isHeadless || (bit & HEADLESS_HEAD_MASK) === 0;
 }
 
 /**
  * Drop the mutations this body type can't hold: head + hair/eye for a headless
- * zombie, the headless-only ones for everybody else. Applied wherever a mask lands
- * on a unit, so a combine result never carries a mutation it can't show.
+ * zombie, nothing for anybody else. Applied wherever a mask lands on a unit, so a
+ * combine result never carries a mutation it can't show.
  */
 export function applyBodyTypeRestriction(mask: number, isHeadless: boolean): number {
-  return isHeadless ? mask & ~HEADLESS_FORBIDDEN_MASK : mask & ~HEADLESS_ONLY_MASK;
+  return isHeadless ? mask & ~HEADLESS_FORBIDDEN_MASK : mask;
 }
 
 /**
@@ -189,7 +203,12 @@ export function mutationBonus(mask: number): { str: number; con: number; dex: nu
 export function combineMasks(a: number, b: number, isHeadlessChild = false): number {
   // Each parent first loses what the CHILD's body type can't wear, so a mutation the
   // child could keep never loses its slot to one that is about to be stripped (a
-  // garlic head must survive a Pumpking parent when the child isn't headless).
+  // headless child must keep a Pumpking parent's head rather than lose the slot to
+  // the garlic head it is about to shed).
+  //
+  // This is also the ONE way the pumpkin reaches a zombie that has a head of its own:
+  // it can't be grown on one (bitGrowable), but nothing stops it being inherited, and
+  // as the highest head bit it wins the slot outright.
   const maskA = applyBodyTypeRestriction(a, isHeadlessChild);
   const maskB = applyBodyTypeRestriction(b, isHeadlessChild);
   let child = 0;

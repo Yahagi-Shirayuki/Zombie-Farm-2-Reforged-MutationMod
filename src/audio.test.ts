@@ -9,6 +9,7 @@ class MockAudio extends EventTarget {
   volume = 1;
   preload = "";
   paused = true;
+  currentTime = 0;
   src: string;
   playCalls = 0;
   pauseCalls = 0;
@@ -348,6 +349,9 @@ describe("AudioManager one-shot effects", () => {
     MockAudio.rejectPlay = false;
     MockSource.started = [];
     storage = new Map();
+    // These cases count buffer sources and decodes, and the looping music/ambience
+    // beds now use both. Silence those channels so the numbers are purely one-shots.
+    storage.set(SETTINGS_KEY, JSON.stringify({ music: false, ambience: false }));
     context = new MockContext();
     const windowTarget = new EventTarget() as EventTarget & { AudioContext: unknown };
     windowTarget.AudioContext = function () { return context; } as unknown;
@@ -388,7 +392,9 @@ describe("AudioManager one-shot effects", () => {
   });
 
   it("applies the sfx and master volumes to the buffered voice", async () => {
-    storage.set(SETTINGS_KEY, JSON.stringify({ masterVolume: 0.5, sfxVolume: 0.4 }));
+    storage.set(SETTINGS_KEY, JSON.stringify({
+      music: false, ambience: false, masterVolume: 0.5, sfxVolume: 0.4,
+    }));
     const audio = new AudioManager();
     const gains: { gain: { value: number } }[] = [];
     context.createGain = () => {
@@ -461,5 +467,183 @@ describe("AudioManager one-shot effects", () => {
     // The attempted resume leaves it running for the next cue.
     audio.fightStrike({ team: "player", attackName: "ZombieBite" });
     expect(MockSource.started).toHaveLength(1);
+  });
+});
+
+// Our music MP3s carry no LAME gapless tag, so decoders render the encoder's
+// delay + end padding as real silence, and a media element's `loop` seek adds a
+// stall on top. Both are audible as a blip at every loop point, so looping tracks
+// play from a decoded buffer whose loop region covers only the authored audio.
+describe("AudioManager gapless music looping", () => {
+  const RATE = 44100;
+  /** dayFarmBGM's authored length, and the padding a decoder adds around it. */
+  const AUTHORED = 1376780 / RATE;
+  const HEAD = 1105; // encoder delay samples left at the head of the decode
+  const TAIL = 1199;
+
+  class MockGain {
+    gain = { value: 0, linearRampToValueAtTime: () => {} };
+    connect = (destination: unknown) => destination;
+    disconnect = () => {};
+  }
+
+  class MockSource {
+    static started: MockSource[] = [];
+    buffer: AudioBuffer | null = null;
+    loop = false;
+    loopStart = 0;
+    loopEnd = 0;
+    startArgs: unknown[] = [];
+    onended: (() => void) | null = null;
+    connect = (destination: unknown) => destination;
+    disconnect = () => {};
+    stop = () => {};
+    start = (...args: unknown[]) => {
+      this.startArgs = args;
+      MockSource.started.push(this);
+    };
+  }
+
+  /** A decode of a padded MP3: silence, then the authored audio, then padding. */
+  function paddedBuffer(): AudioBuffer {
+    const length = HEAD + Math.round(AUTHORED * RATE) + TAIL;
+    const data = new Float32Array(length);
+    for (let i = HEAD; i < length - TAIL; i++) data[i] = 0.5;
+    return {
+      duration: length / RATE,
+      length,
+      sampleRate: RATE,
+      numberOfChannels: 1,
+      getChannelData: () => data,
+    } as unknown as AudioBuffer;
+  }
+
+  let context: {
+    state: string;
+    currentTime: number;
+    decodeAudioData: () => Promise<AudioBuffer>;
+    resume: () => Promise<void>;
+  };
+  const settleDecode = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+
+  beforeEach(() => {
+    MockAudio.instances = [];
+    MockAudio.rejectPlay = false;
+    MockSource.started = [];
+    context = {
+      state: "running",
+      currentTime: 0,
+      destination: {},
+      createBufferSource: () => new MockSource(),
+      createGain: () => new MockGain(),
+      decodeAudioData: () => Promise.resolve(paddedBuffer()),
+      resume: () => Promise.resolve(),
+      suspend: () => Promise.resolve(),
+    } as never;
+    const windowTarget = new EventTarget() as EventTarget & { AudioContext: unknown };
+    windowTarget.AudioContext = function () { return context; } as unknown;
+    const documentTarget = new EventTarget();
+    Object.defineProperties(documentTarget, {
+      hidden: { get: () => false },
+      hasFocus: { value: () => true },
+    });
+    vi.stubGlobal("window", windowTarget);
+    vi.stubGlobal("document", documentTarget);
+    vi.stubGlobal("Audio", MockAudio);
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({ arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) }));
+    vi.stubGlobal("localStorage", {
+      getItem: () => JSON.stringify({ music: true, ambience: false }),
+      setItem: () => {},
+    });
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("loops the authored audio only, skipping the encoder padding", async () => {
+    new AudioManager();
+    await settleDecode();
+
+    const [music] = MockSource.started;
+    expect(music.loop).toBe(true);
+    // The head silence is measured out of the decode, and the region ends exactly
+    // one authored length later — so the seam carries no dead air from either end.
+    expect(music.loopStart).toBeCloseTo(HEAD / RATE, 5);
+    expect(music.loopEnd - music.loopStart).toBeCloseTo(AUTHORED, 5);
+    // Playback starts inside the region too, not on the leading silence.
+    expect(music.startArgs[1]).toBeCloseTo(HEAD / RATE, 5);
+  });
+
+  it("streams from the element first, then hands over to the gapless buffer", async () => {
+    new AudioManager();
+    const [element] = MockAudio.instances;
+
+    // Decoding needs the whole file, so the element covers the start as before.
+    expect(element.playCalls).toBe(1);
+    expect(MockSource.started).toHaveLength(0);
+
+    await settleDecode();
+    expect(MockSource.started).toHaveLength(1);
+  });
+
+  it("bounds a non-looping sting to its authored length", async () => {
+    const audio = new AudioManager();
+    audio.enterRaid("farmStageBGM.mp3");
+    audio.playRaidVictory();
+    await settleDecode();
+
+    const sting = MockSource.started[MockSource.started.length - 1];
+    expect(sting.loop).toBe(false);
+    // start(when, offset, duration): begins past the delay and stops before the
+    // trailing padding rather than playing it out.
+    expect(sting.startArgs[1]).toBeCloseTo(HEAD / RATE, 5);
+    expect(sting.startArgs[2]).toBeCloseTo(453600 / RATE, 5); // winBGM's authored length
+  });
+
+  it("loops the whole buffer when a track has no authored length on file", async () => {
+    const audio = new AudioManager();
+    await settleDecode();
+    MockSource.started = [];
+
+    audio.enterRaid("someUnknownStage.mp3");
+    await settleDecode();
+
+    const track = MockSource.started[MockSource.started.length - 1];
+    expect(track.loopStart).toBe(0);
+    expect(track.loopEnd).toBeCloseTo(paddedBuffer().duration, 5);
+  });
+
+  it("returns to the buffer, not the element, after a background/foreground cycle", async () => {
+    new AudioManager();
+    await settleDecode();
+    expect(MockSource.started).toHaveLength(1);
+    const element = MockAudio.instances[0];
+    const playsWhileBuffered = element.playCalls;
+
+    // Backgrounding suspends the context; resuming it is async, so a naive check of
+    // `state === "running"` on the way back would strand music on the gappy element
+    // path for the rest of the session.
+    window.dispatchEvent(new Event("pagehide"));
+    context.state = "suspended";
+    // Real resumes settle on a later tick, which is exactly what a synchronous
+    // `state === "running"` check gets wrong.
+    context.resume = () => Promise.resolve().then(() => { context.state = "running"; });
+
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settleDecode();
+
+    expect(MockSource.started).toHaveLength(2);
+    expect(element.playCalls).toBe(playsWhileBuffered);
+  });
+
+  it("drops a finished raid track's decoded buffer instead of holding it", async () => {
+    const audio = new AudioManager();
+    audio.enterRaid("farmStageBGM.mp3");
+    await settleDecode();
+
+    const raid = MockAudio.instances.find((a) => a.src.includes("farmStageBGM"))!;
+    audio.exitRaid();
+
+    expect(raid.src).toBe("");
   });
 });
