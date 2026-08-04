@@ -58,13 +58,19 @@ describe("tintedImage", () => {
 });
 
 describe("the monoliths this exists for", () => {
-  const monoliths = catalog.filter((entry) => /^monolith/.test(entry.key));
+  // The FUNCTIONAL monoliths — the five farm-effect stones that share tex1009.png.
+  // Match on category, not the key prefix: the decorative Egg Monolith and Broken
+  // Monolith are ordinary decor with art of their own and no tint to tell apart.
+  const monoliths = catalog.filter(
+    (entry) => /^monolith/.test(entry.key) && entry.category === "functional"
+  );
 
   it("are one sprite distinguished only by colour", () => {
     expect(monoliths.length).toBeGreaterThan(1);
-    // Same art, one file per key: the def's colour is the ONLY thing telling a
-    // Plowing Monolith from a Speed Monolith on screen.
-    for (const entry of monoliths) expect(entry.sprite).toBe(`${entry.key}.png`);
+    // Literally ONE file shared by every key — the def's colour is the only thing
+    // telling a Plowing Monolith from a Speed Monolith on screen. They used to ship
+    // as five byte-identical PNGs, which hid that.
+    expect(new Set(monoliths.map((entry) => entry.sprite)).size).toBe(1);
     const coloured = monoliths.filter((entry) => !isNeutralTint(objectTint(entry.color)));
     expect(coloured.map((entry) => entry.key).sort()).toEqual([
       "monolithCombine", "monolithMutation", "monolithPlowing", "monolithSpeed",

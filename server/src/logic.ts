@@ -44,6 +44,21 @@ export function canSendGift(lastSentAt: number | null, now: number): boolean {
   return lastSentAt === null || now - lastSentAt >= DAY_MS;
 }
 
+/** How recently a friend played, at the only resolution friends are shown it.
+ *  Deliberately coarse: the exact timestamp is a behavioural detail about when
+ *  someone is at their computer, and nothing in the UI needs more than this. */
+export type FriendActivity = "today" | "week" | "away";
+
+/** Bucket a last-online instant for display to a FRIEND. The raw value never
+ *  leaves the server — /friends projects this enum instead. */
+export function friendActivity(lastOnlineAt: number, now: number): FriendActivity {
+  const elapsed = now - lastOnlineAt;
+  if (!Number.isFinite(elapsed) || elapsed < 0) return "today"; // clock skew ⇒ most recent
+  if (elapsed < DAY_MS) return "today";
+  if (elapsed < 7 * DAY_MS) return "week";
+  return "away";
+}
+
 /** What a claimed gift pays out. `amount` is brains for "brain", gold for "gold". */
 export interface GiftReward {
   kind: "brain" | "gold";

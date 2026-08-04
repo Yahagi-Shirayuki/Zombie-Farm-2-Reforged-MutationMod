@@ -22,6 +22,7 @@ import {
   type BlackMarketMutationResponse,
   type BlackMarketOrderKind,
   type BlackMarketSummary,
+  type FriendActivity,
   type GiftReward,
   type PresentationProjection,
   type PresentationRequest,
@@ -306,6 +307,13 @@ export interface FriendView {
   friendCode: string;
   level?: number;
   giftOnCooldown?: boolean;
+  /** Blocked specifically because they still hold an unopened gift from me (as
+   *  opposed to simply having been gifted today). */
+  giftPending?: boolean;
+  /** Lifetime gifts this friend has sent me. */
+  giftsReceived?: number;
+  /** How recently they played, at the only resolution the server discloses. */
+  activity?: FriendActivity;
 }
 export interface InboxGift {
   id: string;
@@ -547,10 +555,12 @@ export const getFriendSave = (accountId: string) =>
 export const addFriend = (code: string) =>
   req<{ ok: true }>("POST", "/friends/add", { code });
 
-/** Send a brain. The first two daily sends are free; later sends cost 100 gold.
- * Throws ApiError(409) without enough gold or ApiError(429) at the daily limit. */
+/** Send a gift. The first two daily sends are free; later sends cost 100 gold, with
+ * no ceiling on how many friends you can reach. Throws ApiError(409) without enough
+ * gold or when they still hold an unopened gift (`gift_pending`), and ApiError(429)
+ * if they were already gifted today. */
 export const sendGift = (toAccountId: string) =>
-  req<{ ok: true; xpAwarded?: number; giftsRemaining?: number; balance?: Balance; accountVersion?: number; lastRaidAt?: number; serverTime?: number }>(
+  req<{ ok: true; xpAwarded?: number; giftsSentToday?: number; balance?: Balance; accountVersion?: number; lastRaidAt?: number; serverTime?: number }>(
     "POST", "/gifts", { toAccountId }
   );
 
@@ -997,5 +1007,8 @@ export function toFriend(f: FriendView): Friend {
     giftsSent: 0,
     friendCode: f.friendCode,
     giftOnCooldown: f.giftOnCooldown ?? false,
+    giftPending: f.giftPending ?? false,
+    giftsReceived: f.giftsReceived ?? 0,
+    activity: f.activity,
   };
 }

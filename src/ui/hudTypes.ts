@@ -122,6 +122,7 @@ export interface ObjectActions {
 /** One thing a new level opened up, shown as a framed tile in the level-up popup. */
 export interface LevelUpUnlock {
   icon: string;
+  tint?: number; // packed placeable tint, so the card matches the farm
   name: string;
   kind: string; // "Invasion" | "Item" | "Boost" | …
 }
@@ -151,6 +152,7 @@ export interface ReceivedView {
   index: number;
   name: string;
   icon: string; // image URL ("" = no art)
+  tint?: number; // packed placeable tint, so the card matches the farm
   kind: "placeable" | "boost" | "brains" | "zombie" | "trophy";
   actionLabel: string; // "Place" | "Claim" | "" (trophy: display only)
   sellable?: boolean;

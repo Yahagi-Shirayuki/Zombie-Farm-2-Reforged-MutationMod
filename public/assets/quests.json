@@ -1219,7 +1219,7 @@
     "notificationID": "kItemBoughtNotification",
     "notificationObject": "Balloon",
     "countTotal": 2,
-    "text": "Buy 2 Red Balloons",
+    "text": "Buy 2 Balloons",
     "type": 2,
     "sprite": "Icon_Quest_Decorating.png"
    }
@@ -1247,24 +1247,8 @@
    {
     "notificationID": "kItemBoughtNotification",
     "notificationObject": "Red Flower Bed",
-    "countTotal": 2,
-    "text": "Buy 2 Red Flower Beds",
-    "type": 2,
-    "sprite": "Icon_Quest_Decorating.png"
-   },
-   {
-    "notificationID": "kItemBoughtNotification",
-    "notificationObject": "Violet Flower Bed",
-    "countTotal": 2,
-    "text": "Buy 2 Violet Flower Beds",
-    "type": 2,
-    "sprite": "Icon_Quest_Decorating.png"
-   },
-   {
-    "notificationID": "kItemBoughtNotification",
-    "notificationObject": "Yellow Flower Bed",
-    "countTotal": 2,
-    "text": "Buy 2 Yellow Flower Beds",
+    "countTotal": 6,
+    "text": "Buy 6 Flower Beds",
     "type": 2,
     "sprite": "Icon_Quest_Decorating.png"
    }
@@ -3263,7 +3247,7 @@
     "notificationID": "kItemBoughtNotification",
     "notificationObject": "Fence",
     "countTotal": 4,
-    "text": "Buy 4 White Fences",
+    "text": "Buy 4 Fences",
     "type": 2,
     "sprite": "stex0037.png"
    },
@@ -3271,7 +3255,7 @@
     "notificationID": "kItemBoughtNotification",
     "notificationObject": "Fence Gate",
     "countTotal": 1,
-    "text": "Buy 1 White Fence Gate",
+    "text": "Buy 1 Fence Gate",
     "type": 2,
     "sprite": "stex0038.png"
    }

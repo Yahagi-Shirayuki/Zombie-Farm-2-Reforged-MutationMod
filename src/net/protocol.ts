@@ -156,6 +156,12 @@ export interface GameplayProjection {
   /** Permanent dynamic-pricing flag: first Zombie Pot is gold, later Pots are brains. */
   zombiePotBought?: boolean;
   tutorialRewarded: boolean;
+  /** Per running Zombie Pot, the parent id that went into SLOT 1 — the slot that decides
+   *  the result species. Recorded when the combine starts because the collect command
+   *  arrives an hour later from a client that may have rebuilt its job from the roster,
+   *  which is ordered by creation and so cannot be read as slot order. Server-owned:
+   *  entries appear on `roster.combine_start` and are dropped on `roster.combine`. */
+  potSlots?: Record<string, string>;
   raids: { progress: Record<string, number>; lastRaidAt: number };
   raidRevival?: {
     sessionId: string;
@@ -175,6 +181,24 @@ export interface SocialBootstrap {
   incomingRequestCount: number;
   inboxCount: number;
 }
+
+/** How recently a friend played, at the only resolution the server discloses to them.
+ *  Deliberately coarse — the raw last-online instant never leaves the server. */
+export type FriendActivity = "today" | "week" | "away";
+
+/** Online gift economy, mirroring server/src/db.ts. There is no ceiling on gifts per
+ *  day — gold is the only brake, and the per-recipient rules (once a day, and not
+ *  while they hold an unopened one from you) are enforced server-side. These live
+ *  here only so the client can quote a cost before sending (the "Gift all"
+ *  confirmation). server/test/logic.test.ts asserts the two copies stay equal. */
+export const FREE_DAILY_GIFTS = 2;
+export const GIFT_GOLD_COST = 100;
+export const GIFT_XP_REWARD = 5;
+
+/** Friends per account, mirroring server/src/db.ts. The cap bounds ACCEPTING, not
+ *  receiving — requests keep arriving at a full list and wait in the inbox — so the
+ *  client needs the number only to explain a refused accept. */
+export const MAX_FRIENDS = 50;
 
 /** What opening a friend's gift paid out. The contents are rolled by the server when
  *  the gift is SENT and stored on it, so nothing the recipient does can change them —

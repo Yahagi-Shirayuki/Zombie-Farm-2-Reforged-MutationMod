@@ -26,6 +26,85 @@ UI = os.path.join(OUT, "ui")
 
 CTRL = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")  # invalid XML control bytes
 
+# ---- Objective wording vs. what the objective actually accepts ---------------
+# Decor sold in several colors is ONE item for quest purposes: buying any Fence
+# satisfies "Fence", because every recolor answers to its siblings' names (see
+# src/quest/objectVariants.ts). The source objective text names a color anyway —
+# "Buy 4 White Fences" against the requirement "Fence", "Buy 2 Red Balloons"
+# against "Balloon" — which tells the player to hunt a specific card that is not
+# actually required, and in the Flower Bed case is now outright wrong.
+#
+# So: when an objective's subject belongs to a recolor family, the color adjective
+# comes out of its text. Objectives naming genuinely distinct art keep theirs — the
+# Easter eggs and circus flags are separate sprites, not tints, and "Orange Tree"
+# is a fruit.
+#
+# NOTE: reads the generated placeables.json, so prep_placeables.py runs first.
+COLOR_WORD = re.compile(
+    r"\b(white|red|blue|black|pink|yellow|violet|purple|green|silver|gold|orange|brown)\s+",
+    re.IGNORECASE)
+LEADING_COUNT = re.compile(r"\d+")
+
+
+def recolor_families():
+    """Display name -> base tile, for every color of a multi-color decor item."""
+    path = os.path.join(OUT, "placeables.json")
+    if not os.path.exists(path):
+        return {}
+    rows = json.load(open(path, encoding="utf-8"))
+    by_key = {r["key"]: r for r in rows}
+    families = {}
+    for row in rows:
+        base = row.get("variantOf")
+        if not base or base not in by_key:
+            continue
+        families[row["name"]] = base
+        families[by_key[base]["name"]] = base
+    return families
+
+
+def decolor_objective(text, subject, families):
+    """Drop the color adjective from `text` when any color satisfies `subject`."""
+    if subject not in families:
+        return text
+    return COLOR_WORD.sub("", text, count=1)
+
+
+def merge_recolor_objectives(reqs, families):
+    """Fold objectives that decoloring left indistinguishable.
+
+    Quest 28 asks for 2 Red, 2 Violet and 2 Yellow Flower Beds. Those are three
+    tints of one sprite, so any flower bed satisfies any of the three lines — and
+    once the color comes out of the text they render as the same sentence three
+    times. Merged, that is one honest "Buy 6 Flower Beds" for the same six items.
+
+    Only same-family, same-event, same-text neighbours merge, so objectives that
+    merely read alike but need different things are left alone.
+    """
+    out = []
+    wording = []  # each accumulator's text BEFORE its count was rewritten
+    for r in reqs:
+        prev = out[-1] if out else None
+        family = families.get(r["notificationObject"])
+        mergeable = (
+            prev is not None
+            and family is not None
+            and families.get(prev["notificationObject"]) == family
+            and prev["notificationID"] == r["notificationID"]
+            and prev["type"] == r["type"]
+            # Compare the ORIGINAL wording: after a merge the accumulator reads
+            # "Buy 4 ..." and would stop matching the third "Buy 2 ..." sibling.
+            and wording[-1] == r["text"]
+        )
+        if not mergeable:
+            out.append(dict(r))
+            wording.append(r["text"])
+            continue
+        prev["countTotal"] += r["countTotal"]
+        # "Buy 2 Flower Beds" x3 -> "Buy 6 Flower Beds"
+        prev["text"] = LEADING_COUNT.sub(str(prev["countTotal"]), wording[-1], count=1)
+    return out
+
 
 def load_plist(path):
     raw = CTRL.sub(b"", open(path, "rb").read())
@@ -35,6 +114,7 @@ def load_plist(path):
 def main():
     os.makedirs(UI, exist_ok=True)
     quests = load_plist(os.path.join(APP, "Quests.plist"))
+    families = recolor_families()
 
     # Normalize: keep the fields the runtime needs, coerce questID to int, and
     # default the sparse optional flags so the TS side has a stable shape.
@@ -43,11 +123,12 @@ def main():
     def add_quest(k, q):
         reqs = []
         for r in q.get("requirements", []):
+            subject = r.get("notificationObject", "")
             reqs.append({
                 "notificationID": r.get("notificationID", ""),
-                "notificationObject": r.get("notificationObject", ""),
+                "notificationObject": subject,
                 "countTotal": int(r.get("countTotal", 1)),
-                "text": r.get("text", ""),
+                "text": decolor_objective(r.get("text", ""), subject, families),
                 "type": int(r.get("type", 2)),
                 "sprite": r.get("sprite", ""),
             })
@@ -63,11 +144,18 @@ def main():
             "sprite": sprite,
             "levelRequired": int(q.get("levelRequired", -1)),
             "prerequisiteQuest": int(q.get("prerequisiteQuest", -1)),
-            "requirements": reqs,
+            "requirements": merge_recolor_objectives(reqs, families),
             "rewardType": int(q.get("rewardType", 0)),
             "rewardValue": int(q.get("rewardValue", 0)) if q.get("rewardValue") is not None else 0,
             "rewardItem": q.get("rewardItem") or "",
-            "rewardItemKey": q.get("rewardItemKey") or "",
+            # An ITEM reward (rewardType 3) is granted into Received, which resolves
+            # placeables by DISPLAY NAME — so its key is the display name and the
+            # source omits the redundant field. Only ZOMBIE rewards (type 5) carry a
+            # separate key (a ZombieActor* id). Without this fallback, regenerating
+            # blanks the reward on the eight type-3 quests and they grant nothing.
+            "rewardItemKey": (q.get("rewardItemKey")
+                              or (q.get("rewardItem") if int(q.get("rewardType", 0)) == 3 else "")
+                              or ""),
             "tutorialQuest": bool(q.get("tutorialQuest", False)),
             "epicEvent": bool(q.get("epicEvent", False)),
             "seasonal": bool(q.get("seasonal", False)),

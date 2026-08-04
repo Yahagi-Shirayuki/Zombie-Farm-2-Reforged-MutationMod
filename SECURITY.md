@@ -200,13 +200,24 @@ the README in the same change.
 ### Social and abuse controls
 
 - Friendships require consent; blocks are checked in both directions.
-- Brain gifts require friendship and are doubly capped in SQL: a `(from_id, to_id, day_bucket)`
-  uniqueness constraint allows one gift per friend per day (`already_gifted_today`), and the
-  insert's own `WHERE` clause caps a sender at 10 gifts per day overall (`daily_gift_limit`).
-  The first two daily sends are free; the same statement requires at least 100 authoritative gold
-  before inserting sends 3–10, and successful paid sends atomically debit that gold. These rules
-  are enforced in SQL, so failed, duplicate, or racing sends cannot bypass the cap or overdraw the
-  sender. A unique grant record prevents duplicate claims.
+- A friend list is capped at 50, and the cap bounds ACCEPTING rather than receiving: requests
+  still arrive at a full list and wait in the inbox, and only the accept is refused
+  (`friends_full`). Because a friendship is written in BOTH directions, every path that forms
+  one checks BOTH parties — `/friends/accept` also refuses when the requester has filled up
+  since asking (`requester_full`), and the mutual-intent shortcut in `/friends/add` (adding
+  back someone who already asked auto-accepts) applies the same two checks rather than
+  bypassing them. That shortcut stays a non-oracle: it returns the same generic response
+  whether or not it accepted.
+- Gifts require friendship and are doubly bounded in SQL, both bounds PER RECIPIENT: a
+  `(from_id, to_id, day_bucket)` uniqueness constraint allows one gift per friend per day
+  (`already_gifted_today`), and the insert's own `WHERE` clause refuses a send while that
+  recipient still holds an unopened gift from this sender (`gift_pending`), so gifts cannot
+  be stockpiled on a player who never logs in. There is no per-sender daily ceiling — gold is
+  the only limit on breadth: the first two daily sends are free, and the same statement
+  requires at least 100 authoritative gold before inserting any later send, with successful
+  paid sends atomically debiting that gold. These rules are enforced in SQL, so failed,
+  duplicate, or racing sends cannot bypass them or overdraw the sender. A unique grant record
+  prevents duplicate claims.
 - All routes have a global body ceiling. Presentation and command batches have tighter semantic
   limits.
 - Cloudflare rate-limit bindings protect authentication, read, and write tiers before gameplay

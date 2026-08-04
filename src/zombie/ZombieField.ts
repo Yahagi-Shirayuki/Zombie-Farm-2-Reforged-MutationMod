@@ -724,11 +724,23 @@ export class ZombieField {
     const live: { potId: string; parentAId: string; parentBId: string; playerLevel: number }[] = [];
     for (const [potId, parents] of reserved) {
       if (parents.length !== 2) continue;
-      const [a, b] = parents;
       const current = this.potFor(potId).pending;
       const sameParents = current?.parentAId && current.parentBId &&
         new Set([current.parentAId, current.parentBId]).size === 2 &&
-        [current.parentAId, current.parentBId].every((id) => id === a.id || id === b.id);
+        [current.parentAId, current.parentBId].every((id) => parents.some((u) => u.id === id));
+      // SLOT ORDER IS NOT IN THE ROSTER. It arrives in CREATION order, so reading slot 1
+      // off it swaps the Pot's two slots whenever the player fed in the NEWER zombie
+      // first — and slot 1 is what decides the result species (see selectCombineSpecies).
+      // Keep the order this client recorded when the job started; only a job this client
+      // no longer holds falls back to roster order, and the server no longer takes the
+      // collecting client's word for it either (engine.ts `potSlots`).
+      const bySlot = sameParents
+        ? [
+            parents.find((unit) => unit.id === current.parentAId),
+            parents.find((unit) => unit.id === current.parentBId),
+          ]
+        : [];
+      const [a, b] = bySlot[0] && bySlot[1] ? [bySlot[0], bySlot[1]] : parents;
       if (!sameParents) {
         this.potFor(potId).restore(this.hydratePotSave({
           parentAId: a.id,

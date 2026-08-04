@@ -5,7 +5,9 @@
 import type { Hud } from "../../hud";
 import { UI } from "../uiAsset";
 import { BASE } from "../../base";
+import { objectTint } from "../../assets";
 import type { ReceivedView } from "../hudTypes";
+import { setTintedSrc } from "../tintedSprite";
 import { storageBoostRows } from "../storageBoosts";
 
 const INSTA_PLOW_DELAY_MS = 500;
@@ -44,8 +46,7 @@ export function openStorage(hud: Hud, initialTab: string = "Items", managePen = 
   const body = document.createElement("div");
   body.className = "st-body";
 
-  const portraitOf = (key: string) =>
-    hud.objectCards.find((c) => c.def.key === key)?.portrait;
+  const cardOf = (key: string) => hud.objectCards.find((c) => c.def.key === key);
 
   let tab = ["Items", "Pets", "Boosts", "Received"].includes(initialTab) ? initialTab : "Items";
   const render = () => {
@@ -72,8 +73,10 @@ export function openStorage(hud: Hud, initialTab: string = "Items", managePen = 
         const key = flat[i];
         if (key) {
           const img = document.createElement("img");
-          const p = portraitOf(key);
-          if (p) img.src = p;
+          // Greyscale art (a Hedge, a Crate) and every recolour take their colour
+          // from the def's tint, so an untinted thumbnail is the wrong item.
+          const card = cardOf(key);
+          if (card) setTintedSrc(img, card.portrait, objectTint(card.def.color));
           slot.appendChild(img);
           slot.classList.add("filled");
           slot.title = "Place on farm";
@@ -257,7 +260,7 @@ function receivedCard(hud: Hud, v: ReceivedView, bg: HTMLElement, rerender: () =
   por.className = "rcv-por";
   if (v.icon) {
     const img = document.createElement("img");
-    img.src = v.icon;
+    setTintedSrc(img, v.icon, v.tint);
     por.appendChild(img);
   }
   const nm = document.createElement("div");

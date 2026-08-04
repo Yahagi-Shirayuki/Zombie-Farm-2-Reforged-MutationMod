@@ -58,6 +58,41 @@ CHARGES, so a drift there bills a different price than the store shows. The test
 cost/currency/level parity and that no brain price exceeds the 50-brain premium ceiling.
 It passes today — client and server prices agree.
 
+LATER (decor restoration, phase 1). The fixed-point claim above had lapsed for
+prep_placeables.py: 42 rows held `xp: 0` where the generator computes floor(cost/100),
+and re-running the UNMODIFIED generator reproduced all 42. Nothing was mispaid — both
+economy.buyXp and objectCatalog.objectBuyXp read 0 as "derive floor(cost/100)" — so the
+asset and the server mirror were re-synced to the generator and it is a fixed point
+again (three runs, byte-identical). Two related fixes landed with it:
+
+  - `color` was emitted for monoliths ONLY, so the 11 tiles whose art is authored
+    GREYSCALE rendered grey: a Hedge was a white brick, not [0,105,0] dark green. The
+    generator now keeps every 3-channel Market tint and omits white (the identity
+    multiply). prep_placeables.market_tint(); guarded by src/assets.tint.test.ts.
+  - Tiles that share one piece of art shipped a byte-identical PNG per key (five
+    monoliths, three flower beds, two wormholes). prep_placeables.emit_sprite() now
+    content-addresses the extract so they share one file, and the generator sweeps
+    PNGs the catalog no longer references. 307 -> 300 files, no art lost.
+
+Colour is data, not a duplicated PNG: a recolour shares its base tile's sprite and
+differs only in `color`. See docs/DECOR_RESTORATION_PLAN.md.
+
+LATER STILL (decor restoration, phases 2-4). prep_quests.py had drifted from
+quests.json the same way: regenerating BLANKED rewardItemKey on the eight rewardType-3
+quests, which would have made them grant nothing. The source plist sets rewardItem and
+omits the redundant key, because an ITEM reward resolves by display name (only ZOMBIE
+rewards, type 5, carry a separate ZombieActor* key) — the generator now applies that
+fallback. A hand-edited objective text ("Buy 2 Barrels" for the source's "Buy 2 Brown
+Barrels") now regenerates on its own. Both generators re-verified as fixed points.
+
+NOTE the new generator ORDER: prep_quests.py reads the generated placeables.json to
+find recolour families, so prep_placeables.py must run FIRST.
+
+Three hardcoded-count assertions were replaced with the property each was reaching for
+(server/test/objects.test.ts x2, and the monolith case in src/ui/tintedSprite.test.ts,
+whose /^monolith/ key match started catching the restored decorative Egg and Broken
+Monoliths). A count test names no missing key and only ever needs bumping.
+
 
 Deferred investigation
 

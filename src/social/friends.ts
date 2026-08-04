@@ -17,6 +17,8 @@
 // The once-per-day limit is modelled here with lastGiftAt + GIFT_COOLDOWN_MS.
 // ---------------------------------------------------------------------------
 
+import type { FriendActivity } from "../net/protocol";
+
 export interface Friend {
   /** Stable id. Offline: a local "fN". Online: the friend's server account id. */
   id: string;
@@ -34,8 +36,16 @@ export interface Friend {
   giftsSent: number;
   /** The friend's shareable code (online friends only). */
   friendCode?: string;
-  /** Authoritative online status for the server's current daily gift window. */
+  /** Authoritative "can't gift them right now" from the server — either already
+   *  gifted today, or they still hold an unopened gift from me. */
   giftOnCooldown?: boolean;
+  /** Of those two reasons, whether it's the unopened-gift one (online only). */
+  giftPending?: boolean;
+  /** Lifetime gifts this friend has sent ME (online friends only). Local entries
+   *  have no real account behind them, so nobody ever sends them anything. */
+  giftsReceived?: number;
+  /** How recently they played, bucketed server-side (online friends only). */
+  activity?: FriendActivity;
 }
 
 /** Milliseconds in a day — the offline gift cooldown window. */

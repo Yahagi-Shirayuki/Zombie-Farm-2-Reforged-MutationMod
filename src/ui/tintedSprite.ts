@@ -83,3 +83,20 @@ export function tintedImage(src: string, tint: number | undefined): Promise<stri
   cache.set(key, pending);
   return pending;
 }
+
+/** Show `src` in `img` at the colour the farm draws it. The base art goes up
+ *  immediately so nothing waits on the canvas, then the tinted copy replaces it
+ *  (usually the same frame, since the sprite is already cached).
+ *
+ *  Unlike the action sheet, this does not skip a detached `img`. Assigning `src`
+ *  off-document costs nothing, and a caller that appends its cards asynchronously
+ *  would otherwise lose the tint with no sign that it had. */
+export function setTintedSrc(
+  img: HTMLImageElement, src: string, tint: number | undefined
+): void {
+  img.src = src;
+  if (!src || isNeutralTint(tint)) return;
+  void tintedImage(src, tint)
+    .then((tinted) => { img.src = tinted; })
+    .catch(() => { /* keep the untinted art */ });
+}

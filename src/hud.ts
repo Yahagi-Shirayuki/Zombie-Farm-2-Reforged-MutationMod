@@ -15,21 +15,26 @@ import type { RaidCardView, RaidPartyView, RaidResultView, RaidLaunchOpts, LootD
 import { lootDropLabel } from "./raid/RaidManager";
 import type { ProfileIndex } from "./save/profiles";
 import { canGiftBrain, type Friend } from "./social/friends";
+import { planGiftAll, type GiftAllPlan } from "./social/giftAll";
+import { FRIEND_SORTS, isFriendSort, sortFriends } from "./social/friendSort";
 import { isMobile } from "./platform";
-import { type DayNightMode, type FarmBackground } from "./prefs";
+import { getFriendSort, setFriendSort, type DayNightMode, type FarmBackground } from "./prefs";
 import { fmtCooldown, MCDONNELL_ID, VOUCHER_KEY } from "./raid/RaidCatalog";
 import { marketPageSize } from "./marketPageSize";
 import { veterancy } from "./zombie/traits";
 import { COMBINE_SPECIAL_LEVEL } from "./zombie/combineSpecies";
 import { BASE } from "./base";
 import { compareCropMarketOrder, compareItemMarketOrder } from "./marketOrder";
+import { decorAvailable, themeLabel, themeOf } from "./decorThemes";
 import { fillPartySelection, orderPartyRoster } from "./raid/partySelection";
 import { otherPlayMode, playModeDestinationLabel, type PlayMode } from "./playMode";
 import type { UpdateCheckResult } from "./updateCheck";
 import type {
   BlackMarketFulfillmentView, BlackMarketHistoryResponse, BlackMarketListResponse,
-  BlackMarketMutationResponse, BlackMarketOrderKind, BlackMarketOrderView, GiftReward,
+  BlackMarketMutationResponse, BlackMarketOrderKind, BlackMarketOrderView, FriendActivity,
+  GiftReward,
 } from "./net/protocol";
+import { FREE_DAILY_GIFTS, GIFT_GOLD_COST, GIFT_XP_REWARD, MAX_FRIENDS } from "./net/protocol";
 import {
   BLACK_MARKET_CLASS_FILTERS,
   BLACK_MARKET_GROUP_FILTERS,
@@ -86,6 +91,7 @@ interface MktEntry {
   equipped?: boolean;
   description?: string; // "what does it do" blurb shown by the card's magnifier
   tint?: [number, number, number]; // multiplicative object tint from Market data
+  theme?: string; // seasonal badge ("Christmas"); "" or absent for evergreen
   onPick: () => void;
 }
 
@@ -143,6 +149,25 @@ function functionalDescription(def: PlaceableDef): string | undefined {
 }
 
 const UI = (n: string) => `${BASE}assets/ui/${n}`;
+
+/** Colour band for a friend's level chip, so the list is scannable without reading
+ *  the numbers. Bands follow the game's own gates (15 = red gravestone, 25 = silver,
+ *  40 = late game); an unknown level is styled as absent, never as level 0. */
+function levelTier(level: number | undefined): string {
+  if (level == null) return "fr-lvl-none";
+  if (level >= 40) return "fr-lvl-high";
+  if (level >= 15) return "fr-lvl-mid";
+  return "fr-lvl-low";
+}
+
+/** Wording for the coarse activity bucket the server discloses. Kept short because
+ *  it shares one ellipsising line with the gift count on a phone, and the count is
+ *  the more useful half — the full phrasing lives in the row's title attribute. */
+const ACTIVITY_LABEL: Record<FriendActivity, string> = {
+  today: "seen today",
+  week: "seen this week",
+  away: "seen a while",
+};
 
 /** Player-facing wording for what a gift paid out ("a brain 🧠", "300 gold 💰"). */
 function giftRewardLabel(reward: GiftReward): string {
@@ -1393,8 +1418,11 @@ export class Hud {
   /** Claim a gift (credited server-side). Resolves to what it paid out, to null if
    *  it had already been opened (nothing credited, nothing to reveal), or to an
    *  error message to show the player. Contents are rolled when the gift is SENT, so
-   *  they are unknown here until the claim comes back. */
-  onClaimGift: ((id: string) => Promise<GiftReward | null | string>) | null = null;
+   *  they are unknown here until the claim comes back. `refreshInbox: false` skips
+   *  the post-claim inbox pull so "Open all" costs one refresh, not one per gift. */
+  onClaimGift:
+    | ((id: string, opts?: { refreshInbox?: boolean }) => Promise<GiftReward | null | string>)
+    | null = null;
   /** Pull pending incoming friend requests into the cache. */
   refreshRequests: (() => Promise<void>) | null = null;
   /** Cached pending incoming friend requests (people asking to befriend me). */
@@ -1594,6 +1622,10 @@ export class Hud {
         }));
       if (tab === "Items") {
         let cards = this.objectCards.filter((c) => c.category === ITEM_CAT[sub]);
+        // Seasonal decor is sold only while its theme is on the allow-list. The
+        // server enforces the same rule on the buy, so a hidden card cannot be
+        // bought by other means either. Owning one is never affected.
+        cards = cards.filter((c) => decorAvailable(c.def));
         if (sub === "Decors")
           cards = [...cards].sort((a, b) => compareItemMarketOrder(a.def, b.def));
         // Limited functional items leave the Market once the player owns the
@@ -1636,6 +1668,7 @@ export class Hud {
               ? fmtCooldown(c.def.growMs)
               : undefined,
             description: functionalDescription(c.def), tint: c.def.color,
+            theme: themeLabel(themeOf(c.def)),
             onPick: () => { if (this.onBuy) this.onBuy(c.def); bg.remove(); },
           };
         });
@@ -2075,6 +2108,14 @@ export class Hud {
 
     const body = document.createElement("div");
     body.className = "mkt-body";
+    // Seasonal decor is only on the shelf while its theme is active — say which,
+    // so a card the player will not find again next week reads as limited.
+    if (en.theme) {
+      const badge = document.createElement("div");
+      badge.className = "mkt-theme";
+      badge.textContent = en.theme;
+      body.appendChild(badge);
+    }
     const img = document.createElement("img");
     img.className = "mkt-portrait";
     img.loading = "lazy"; // only fetch portraits as cards scroll into view
@@ -2510,6 +2551,55 @@ export class Hud {
     };
     switchActions.appendChild(switchFarm);
     panel.appendChild(switchActions);
+  }
+
+  /** Confirm a bulk friends-panel action ("Gift all", "Open all") before it runs.
+   *  `lines` is the breakdown shown under the question — for gifting that is what it
+   *  will cost, so the player never spends gold on a number they didn't see first.
+   *  Shares the confirm-panel styling with confirmFriendAction. */
+  private confirmBulkAction(opts: {
+    title: string;
+    lead: string;
+    lines: string[];
+    confirmLabel: string;
+    failToast: string;
+    onConfirm: () => void | Promise<void>;
+  }) {
+    const { panel, close } = openModal({
+      host: this.el, bgClass: "fr-confirm-bg", panelClass: "confirm-panel",
+      title: opts.title, replaceSelector: ".fr-confirm-bg",
+    });
+
+    const msg = document.createElement("p");
+    msg.className = "confirm-msg";
+    msg.append(opts.lead);
+    for (const line of opts.lines) {
+      const detail = document.createElement("span");
+      detail.className = "confirm-warn";
+      detail.textContent = line;
+      msg.append(document.createElement("br"), detail);
+    }
+
+    const btns = document.createElement("div");
+    btns.className = "zbtns";
+    const cancel = document.createElement("button");
+    cancel.className = "zbtn locate";
+    cancel.textContent = "Cancel";
+    cancel.onclick = () => close();
+    const confirm = document.createElement("button");
+    confirm.className = "zbtn sell";
+    confirm.textContent = opts.confirmLabel;
+    confirm.onclick = async () => {
+      confirm.disabled = true;
+      cancel.disabled = true;
+      // Close first: the action below is a sequence of network calls, and leaving a
+      // dead modal over the panel while they run reads as a hang.
+      close();
+      try { await opts.onConfirm(); }
+      catch { this.showToast(opts.failToast); }
+    };
+    btns.append(cancel, confirm);
+    panel.append(msg, btns);
   }
 
   /** Confirm a destructive social action before touching local or server state. */
@@ -3291,28 +3381,29 @@ export class Hud {
     x.onclick = () => bg.remove();
     const h = document.createElement("h2");
     h.textContent = "Friends";
-    const giftCostNote = document.createElement("div");
-    giftCostNote.className = "fr-note";
-    giftCostNote.textContent =
-      "Gifting costs 100 gold after 2 free gifts a day, but provides 5 exp";
+    // One note, not two: the old pair overlapped and one of them still promised a
+    // brain per gift, which stopped being true when contents became a roll.
     const note = document.createElement("div");
     note.className = "fr-note";
     const acctBar = document.createElement("div");
     acctBar.className = "fr-acct";
     const requestsWrap = document.createElement("div");
     const inboxWrap = document.createElement("div");
+    const toolbar = document.createElement("div");
+    toolbar.className = "fr-toolbar";
     const list = document.createElement("div");
     list.className = "prof-list";
-    panel.append(x, h, giftCostNote, note, acctBar, requestsWrap, inboxWrap, list);
+    panel.append(x, h, note, acctBar, requestsWrap, inboxWrap, toolbar, list);
 
     const canOnline = this.onlineAvailable?.() ?? false;
     const online = () => this.socialOnline?.() ?? false;
+    let sort = getFriendSort();
 
     const giftErr = (e: string | null): string | null =>
       e === null ? null
         : e === "already_gifted_today" ? "You already gifted them today."
-        : e === "daily_gift_limit" ? "You've sent all 10 of today's gifts."
-        : e === "insufficient_gold" ? "You need 100 gold to send another gift today."
+        : e === "gift_pending" ? "They haven't opened your last gift yet."
+        : e === "insufficient_gold" ? `You need ${GIFT_GOLD_COST} gold to send another gift today.`
         : e === "not_friends" ? "You're not friends yet."
         : e === "recipient_inbox_full" ? "Their gift inbox is full right now."
         : e === "rate_limited" ? "Slow down a moment, then try again."
@@ -3375,6 +3466,176 @@ export class Hud {
       }
     };
 
+    // ---- bulk actions --------------------------------------------------
+    // Both are just the single-gift path in a loop: every send and every claim is
+    // still validated, charged, and fenced individually server-side. Sequential on
+    // purpose — claims contend for the account fence, and serial sends keep the
+    // gold check honest instead of racing ten of them at the balance.
+
+    /** True while a batch is running: blocks a second batch from interleaving. */
+    let bulkBusy = false;
+    const runBatch = async (batch: () => Promise<void>) => {
+      if (bulkBusy) return;
+      bulkBusy = true;
+      renderAll();
+      try { await batch(); }
+      finally { bulkBusy = false; renderAll(); }
+    };
+
+    /** Whether this friend can receive a gift right now. Online the server owns the
+     *  window (giftOnCooldown); offline it's the local 24h timer. */
+    const canGiftNow = (f: Friend) =>
+      online() ? !f.giftOnCooldown : canGiftBrain(f, Date.now());
+
+    /** Friends who can still receive a gift from me today, in display order. */
+    const giftableFriends = () => (this.getFriends?.() ?? []).filter(canGiftNow);
+
+    /** Error codes that mean "stop the whole batch", not "skip this one friend".
+     *  gift_pending and recipient_inbox_full are per-recipient, so the batch skips
+     *  past them and keeps going. */
+    const batchStopping = new Set([
+      "insufficient_gold", "rate_limited",
+      "offline", "not_configured", "no_session", "unauthorized",
+    ]);
+
+    const runGiftAll = async (plan: GiftAllPlan) => {
+      const goldBefore = this.state.gold;
+      let sent = 0;
+      let failure: string | null = null;
+      for (const id of plan.targets) {
+        const err = online()
+          ? await (this.onGiftBrainOnline?.(id) ?? Promise.resolve("offline"))
+          : (this.onGiftBrain?.(id) ? null : "already_gifted_today");
+        if (err) {
+          failure ??= err;
+          if (batchStopping.has(err)) break;
+          continue; // a per-recipient problem (full inbox) must not end the batch
+        }
+        sent++;
+      }
+      await refresh();
+      if (!sent) {
+        this.showToast(giftErr(failure) ?? "Nobody could receive a gift right now.");
+        return;
+      }
+      // Report the gold the balance ACTUALLY moved by, not the quoted estimate.
+      const spent = Math.max(0, goldBefore - this.state.gold);
+      const parts = [`Sent ${sent} gift${sent === 1 ? "" : "s"}!`];
+      if (online()) parts.push(`+${sent * GIFT_XP_REWARD} XP`);
+      if (spent > 0) parts.push(`−${spent.toLocaleString()} gold`);
+      const missed = plan.targets.length - sent;
+      if (missed > 0) parts.push(`${missed} couldn't be delivered`);
+      this.showToast(parts.join(" · "));
+    };
+
+    const confirmGiftAll = () => {
+      const eligible = giftableFriends();
+      if (!eligible.length) {
+        this.showToast("Every friend has already had a gift from you today.");
+        return;
+      }
+      if (!online()) {
+        // The local list has no economy behind it: gifting costs the player nothing.
+        this.confirmBulkAction({
+          title: "Gift all friends?",
+          lead: `Send a gift to ${eligible.length} friend${eligible.length === 1 ? "" : "s"}?`,
+          lines: [],
+          confirmLabel: "Send",
+          failToast: "Couldn't send those gifts.",
+          onConfirm: () => runBatch(() => runGiftAll({
+            targets: eligible.map((f) => f.id), freeCount: eligible.length,
+            paidCount: 0, goldCost: 0, skippedForGold: 0,
+          })),
+        });
+        return;
+      }
+      // Only the free tier depends on today's send count, and a friend blocked by an
+      // UNOPENED gift wasn't necessarily gifted today — so count the ones actually on
+      // today's cooldown rather than every ineligible friend.
+      const sentToday = (this.getFriends?.() ?? [])
+        .filter((f) => f.giftOnCooldown && !f.giftPending).length;
+      const plan = planGiftAll({
+        eligibleIds: eligible.map((f) => f.id), sentToday, gold: this.state.gold,
+      });
+      if (!plan.targets.length) {
+        this.showToast(`You need ${GIFT_GOLD_COST} gold to send another gift today.`);
+        return;
+      }
+      const cost = plan.paidCount === 0
+        ? `All ${plan.freeCount === 1 ? "of it is" : "free"} — no gold.`
+        : plan.freeCount > 0
+          ? `${plan.freeCount} free + ${plan.paidCount} × ${GIFT_GOLD_COST} gold = ${plan.goldCost.toLocaleString()} gold.`
+          : `${plan.paidCount} × ${GIFT_GOLD_COST} gold = ${plan.goldCost.toLocaleString()} gold.`;
+      const lines = [cost, `You have ${this.state.gold.toLocaleString()} gold. Each gift earns you ${GIFT_XP_REWARD} XP.`];
+      if (plan.skippedForGold > 0) {
+        lines.push(`${plan.skippedForGold} friend${plan.skippedForGold === 1 ? "" : "s"} left out — not enough gold for them.`);
+      }
+      this.confirmBulkAction({
+        title: "Gift all friends?",
+        lead: `Send a gift to ${plan.targets.length} friend${plan.targets.length === 1 ? "" : "s"}?`,
+        lines,
+        confirmLabel: plan.goldCost > 0 ? `Send (${plan.goldCost.toLocaleString()} gold)` : "Send",
+        failToast: "Couldn't send those gifts.",
+        onConfirm: () => runBatch(() => runGiftAll(plan)),
+      });
+    };
+
+    const runOpenAll = async () => {
+      const gifts = [...(this.getInbox?.() ?? [])];
+      let brains = 0;
+      let gold = 0;
+      let opened = 0;
+      let emptied = 0; // already opened elsewhere — nothing credited
+      let failure: string | null = null;
+      for (const g of gifts) {
+        // refreshInbox:false — one pull at the end instead of one per gift.
+        const result = await (this.onClaimGift?.(g.id, { refreshInbox: false })
+          ?? Promise.resolve("You're offline right now."));
+        if (typeof result === "string") { failure = result; break; }
+        if (!result) { emptied++; continue; }
+        opened++;
+        if (result.kind === "brain") brains += result.amount;
+        else gold += result.amount;
+      }
+      await refresh();
+      if (!opened) {
+        this.showToast(failure ?? (emptied ? "Those gifts had already been opened." : "No gifts to open."));
+        return;
+      }
+      const haul = [
+        brains > 0 ? `${brains} brain${brains === 1 ? "" : "s"} 🧠` : null,
+        gold > 0 ? `${gold.toLocaleString()} gold 💰` : null,
+      ].filter(Boolean).join(" and ");
+      this.showToast(`Opened ${opened} gift${opened === 1 ? "" : "s"}: ${haul}!`);
+      // A stopped batch leaves the rest in the inbox; say so rather than going quiet.
+      if (failure) this.showToast(failure);
+    };
+
+    const confirmOpenAll = () => {
+      const gifts = this.getInbox?.() ?? [];
+      if (!gifts.length) return;
+      this.confirmBulkAction({
+        title: "Open all gifts?",
+        lead: `Open all ${gifts.length} gift${gifts.length === 1 ? "" : "s"} in your inbox?`,
+        // Deliberately no preview of the haul: contents stay sealed until opened.
+        lines: ["You'll see what each one held once they're open."],
+        confirmLabel: "Open all",
+        failToast: "Couldn't open those gifts.",
+        onConfirm: () => runBatch(runOpenAll),
+      });
+    };
+
+    /** A bulk button. `busyLabel` shows while a batch is in flight; both buttons are
+     *  disabled for the duration so a second press can't interleave with the first. */
+    const bulkButton = (label: string, busyLabel: string, run: () => void) => {
+      const btn = document.createElement("button");
+      btn.className = "prof-btn play fr-bulk";
+      btn.textContent = bulkBusy ? busyLabel : label;
+      btn.disabled = bulkBusy;
+      btn.onclick = run;
+      return btn;
+    };
+
     const renderInbox = () => {
       inboxWrap.innerHTML = "";
       if (!online()) return;
@@ -3383,6 +3644,9 @@ export class Hud {
       const hd = document.createElement("div");
       hd.className = "fr-inbox-h";
       hd.textContent = `🎁 Gifts for you (${gifts.length})`;
+      if (gifts.length > 1) {
+        hd.appendChild(bulkButton("Open all", "Opening…", confirmOpenAll));
+      }
       inboxWrap.appendChild(hd);
       for (const g of gifts) {
         const row = document.createElement("div");
@@ -3441,7 +3705,17 @@ export class Hud {
         accept.onclick = async () => {
           accept.disabled = true;
           const err = await (this.onAcceptRequest?.(r.fromAccountId) ?? Promise.resolve("offline"));
-          if (err) { this.showToast("Couldn't accept that request."); accept.disabled = false; }
+          // A full list still RECEIVES requests, so a refusal here needs to say which
+          // side is full — otherwise the request just sits there looking broken.
+          if (err) {
+            this.showToast(
+              err === "friends_full"
+                ? `Your friends list is full (${MAX_FRIENDS}). Remove someone to accept.`
+                : err === "requester_full" ? `${r.name}'s friends list is full.`
+                : "Couldn't accept that request."
+            );
+            accept.disabled = false;
+          }
           else { this.showToast(`You and ${r.name} are now friends! 🧟`); await refresh(); }
         };
         const reject = document.createElement("button");
@@ -3458,6 +3732,41 @@ export class Hud {
       }
     };
 
+    const renderToolbar = () => {
+      toolbar.innerHTML = "";
+      const friends = this.getFriends?.() ?? [];
+      if (friends.length < 2) return; // one friend — nothing to sort or batch
+      const label = document.createElement("label");
+      label.className = "fr-sort";
+      label.append("Sort");
+      const select = document.createElement("select");
+      select.className = "prof-input fr-sort-select";
+      for (const option of FRIEND_SORTS) {
+        // "Gifts to you" is meaningless for the local list — nobody sends to it.
+        if (option.id === "giftsReceived" && !online()) continue;
+        const item = document.createElement("option");
+        item.value = option.id;
+        item.textContent = option.label;
+        item.selected = option.id === sort;
+        select.appendChild(item);
+      }
+      select.onchange = () => {
+        if (!isFriendSort(select.value)) return;
+        sort = select.value;
+        setFriendSort(sort);
+        renderList();
+      };
+      label.appendChild(select);
+      const ready = giftableFriends().length;
+      const btn = bulkButton(`Gift all 🎁${ready ? ` (${ready})` : ""}`, "Sending…", confirmGiftAll);
+      btn.classList.add("fr-gift");
+      btn.disabled = btn.disabled || !ready;
+      btn.title = ready
+        ? "Send a gift to every friend who can still receive one today"
+        : "Everyone has already had a gift from you today.";
+      toolbar.append(label, btn);
+    };
+
     const renderList = () => {
       const friends = this.getFriends?.() ?? [];
       list.innerHTML = "";
@@ -3469,51 +3778,81 @@ export class Hud {
           : "No friends yet. Add one below to get started.";
         list.appendChild(empty);
       }
-      for (const f of friends) {
+      for (const f of sortFriends(friends, sort, canGiftNow)) {
         const row = document.createElement("div");
         row.className = "prof-row fr-friend-row";
+        const head = document.createElement("div");
+        head.className = "fr-friend-head";
         const summary = document.createElement("button");
         summary.className = "fr-friend-summary";
         summary.type = "button";
         summary.setAttribute("aria-expanded", "false");
+        // Level rides at the FRONT of the row rather than inside the drawer: it is
+        // the stat players scan the list by, and hiding it behind a tap meant
+        // opening every friend in turn to compare.
+        const lvl = document.createElement("span");
+        lvl.className = `fr-lvl ${levelTier(f.level)}`;
+        lvl.textContent = f.level == null ? "–" : String(f.level);
+        lvl.title = f.level == null ? "Level unavailable" : `Level ${f.level}`;
         const nm = document.createElement("span");
         nm.className = "fr-friend-name-wrap";
         const nameText = document.createElement("span");
         nameText.className = "fr-friend-name";
         nameText.textContent = f.name?.trim() || "Unnamed friend";
-        nm.appendChild(nameText);
-        if (!online() && f.giftsSent > 0) {
-          const b = document.createElement("span");
-          b.className = "prof-badge fr-gifts";
-          b.textContent = `🎁 ${f.giftsSent}`;
-          b.title = `${f.giftsSent} gift${f.giftsSent === 1 ? "" : "s"} sent`;
-          nm.appendChild(b);
+        const meta = document.createElement("span");
+        meta.className = "fr-friend-meta";
+        // Online: how generous they've been to me + how recently they played.
+        // Offline: the local list only knows what I've sent them.
+        // A phone row has room for roughly one of the two halves spelled out, so the
+        // gift count drops to its badge form there — it's the half players asked to
+        // see, and the title attribute keeps the full reading available.
+        const sentToYou = isMobile() ? "" : " sent to you";
+        const bits = online()
+          ? [
+            f.giftsReceived ? `🎁 ${f.giftsReceived}${sentToYou}` : null,
+            f.activity ? ACTIVITY_LABEL[f.activity] : null,
+          ]
+          : [f.giftsSent ? `🎁 ${f.giftsSent}${isMobile() ? "" : " sent"}` : null];
+        meta.textContent = bits.filter(Boolean).join(" · ");
+        // The line ellipsises on a narrow phone, so keep the unabbreviated reading
+        // available on the row itself.
+        if (meta.textContent) {
+          meta.title = online()
+            ? `${f.giftsReceived ?? 0} gift${f.giftsReceived === 1 ? "" : "s"} sent to you`
+              + (f.activity ? ` · ${ACTIVITY_LABEL[f.activity]}` : "")
+            : `${f.giftsSent} gift${f.giftsSent === 1 ? "" : "s"} sent`;
         }
-        const more = document.createElement("span");
+        nm.append(nameText);
+        if (meta.textContent) nm.appendChild(meta);
+        const more = document.createElement("button");
         more.className = "fr-friend-more";
-        more.textContent = "Actions";
-        more.setAttribute("aria-hidden", "true");
+        more.type = "button";
+        more.textContent = "⋯";
+        more.setAttribute("aria-label", `More actions for ${f.name}`);
+        more.setAttribute("aria-expanded", "false");
         const menu = document.createElement("div");
         menu.className = "fr-friend-menu";
         menu.hidden = true;
         const menuId = `friend-actions-${f.id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
         menu.id = menuId;
         summary.setAttribute("aria-controls", menuId);
-        const level = document.createElement("div");
-        level.className = "fr-friend-level";
-        level.textContent = f.level == null ? "Level unavailable" : `Level ${f.level}`;
+        more.setAttribute("aria-controls", menuId);
         const acts = document.createElement("div");
         acts.className = "prof-actions";
+        // Gifting is the whole point of the panel, so it stays on the row itself;
+        // only visit/remove/block live behind the drawer.
         const gift = document.createElement("button");
-        gift.className = "prof-btn play fr-gift";
-        const giftCoolingDown = online()
-          ? !!f.giftOnCooldown
-          : !canGiftBrain(f, Date.now());
+        gift.className = "prof-btn play fr-gift fr-gift-inline";
+        const giftCoolingDown = !canGiftNow(f);
         gift.disabled = giftCoolingDown;
-        gift.textContent = giftCoolingDown ? "Gifted 🎁" : "Gift 🎁";
-        gift.title = giftCoolingDown
-          ? "You already gifted this friend during the current cooldown."
-          : "Send this friend a gift";
+        // Two different reasons to be blocked, and the player can act on one of them
+        // (wait for tomorrow) but not the other (wait for THEM), so name which it is.
+        gift.textContent = giftCoolingDown ? (f.giftPending ? "Waiting 🎁" : "Gifted 🎁") : "Gift 🎁";
+        gift.title = !giftCoolingDown
+          ? "Send this friend a gift"
+          : f.giftPending
+            ? "They haven't opened your last gift yet — you can send another once they do."
+            : "You already gifted this friend today.";
         gift.onclick = async () => {
           if (online()) {
             gift.disabled = true;
@@ -3522,16 +3861,15 @@ export class Hud {
             else {
               f.giftOnCooldown = true;
               this.showToast(`Sent a gift to ${f.name}! +5 XP`);
-              renderList();
+              renderFriends();
             }
           } else {
             if (this.onGiftBrain?.(f.id)) {
               this.showToast(`Sent a gift to ${f.name}! 🎁`);
-              renderList();
+              renderFriends();
             }
           }
         };
-        acts.appendChild(gift);
         // Visit (online only): open a read-only view of this friend's farm. f.id
         // is the friend's account id server-side, which the visit fetch needs.
         if (online()) {
@@ -3567,19 +3905,23 @@ export class Hud {
           del.textContent = "Remove";
           del.onclick = () => this.confirmFriendAction(f, "remove", async () => {
             await this.onRemoveFriend?.(f.id);
-            renderList();
+            renderFriends();
           });
           acts.appendChild(del);
         }
-        menu.append(level, acts);
-        summary.append(nm, more);
-        summary.onclick = () => {
+        menu.append(acts);
+        summary.append(lvl, nm);
+        const toggle = () => {
           const opening = !row.classList.contains("is-open");
           row.classList.toggle("is-open", opening);
           summary.setAttribute("aria-expanded", String(opening));
+          more.setAttribute("aria-expanded", String(opening));
           menu.hidden = !opening;
         };
-        row.append(summary, menu);
+        summary.onclick = toggle;
+        more.onclick = toggle;
+        head.append(summary, gift, more);
+        row.append(head, menu);
         list.appendChild(row);
       }
       // Add-friend row: by code online, by name offline.
@@ -3607,7 +3949,7 @@ export class Hud {
           await refresh();
         } else {
           this.onAddFriend?.(v);
-          renderList();
+          renderFriends();
         }
       };
       add.onclick = commit;
@@ -3618,13 +3960,19 @@ export class Hud {
 
     const renderNote = () => {
       note.textContent = !canOnline
-        ? "Send a friend a brain each day. (Local list — sign-in isn't set up on this build.)"
+        ? "Send each friend a gift a day. (Local list — sign-in isn't set up on this build.)"
         : online()
-          ? "Share your code so friends can add you, then send each friend a brain a day."
+          ? `One gift per friend a day (once they've opened the last one). ${FREE_DAILY_GIFTS} free, then ${GIFT_GOLD_COST} gold each — and ${GIFT_XP_REWARD} XP every time.`
           : "Sign in to connect with friends online. You can still keep a local list below.";
     };
 
-    const renderAll = () => { renderNote(); renderAcct(); renderRequests(); renderInbox(); renderList(); };
+    // The toolbar's "Gift all (N)" count and the rows both read the same cooldown
+    // state, so gifting one friend has to repaint BOTH — repainting only the list
+    // left the count one gift stale.
+    const renderFriends = () => { renderToolbar(); renderList(); };
+    const renderAll = () => {
+      renderNote(); renderAcct(); renderRequests(); renderInbox(); renderFriends();
+    };
     const refresh = async () => {
       if (online()) {
         try {

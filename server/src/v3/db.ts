@@ -83,6 +83,12 @@ const coreFrom = (state: GameplayProjection) => ({
   zombieMax: state.zombieMax,
   zombiePotBought: state.zombiePotBought,
   tutorialRewarded: state.tutorialRewarded,
+  // Which parent is in slot 1 of each running Pot. It has to outlive the request that
+  // started the combine — the collect arrives an hour later — and it deliberately lives
+  // HERE rather than in the roster's reservation marker: the marker is projected to
+  // clients, and an older bundle parses its pot id straight out of that string, so
+  // decorating it would make those clients read one job as two and retire it.
+  potSlots: state.potSlots,
 });
 
 async function ensureV3(db: D1Database, accountId: string, now: number): Promise<void> {
@@ -175,6 +181,7 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
     zombieMax: core.zombieMax ?? 16,
     zombiePotBought: core.zombiePotBought ?? false,
     tutorialRewarded: core.tutorialRewarded ?? false,
+    potSlots: core.potSlots ?? {},
     roster,
     raids: { progress: parse(rows.raidState.progress_json, {}), lastRaidAt: rows.raidState.last_started_at },
     raidRevival: rows.raidRevival ? {

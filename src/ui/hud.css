@@ -163,39 +163,69 @@
 #hud .copyable:hover { filter: brightness(1.08); box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
 #hud .copyable:active { filter: brightness(.92); }
 #hud .fr-gsi { flex: 0 0 auto; }
-#hud .fr-inbox-h { margin-top: 12px; margin-bottom: 4px; font-weight: 800; font-size: 13px; color: #ffd98a; }
+#hud .fr-inbox-h { margin-top: 12px; margin-bottom: 4px; font-weight: 800; font-size: 13px; color: #ffd98a;
+  display: flex; align-items: center; gap: 8px; }
+/* Bulk actions ("Gift all", "Open all") sit at the end of their section header /
+   toolbar row, visually lighter than the per-row buttons they stand in for. */
+#hud .fr-toolbar:empty { display: none; }
+#hud .fr-toolbar { margin-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#hud .fr-toolbar .prof-btn.fr-bulk { margin-left: auto; }
+#hud .prof-btn.fr-bulk { margin-left: auto; flex: 0 0 auto; padding: 4px 10px; font-size: 12px; }
 #hud .fr-inbox-row { background: rgba(255,193,60,.12); box-shadow: inset 0 0 0 1px rgba(255,193,60,.3); }
 /* Friend cards keep the name permanently visible. The action drawer uses a
    regular button/div pair instead of native details/summary, whose layout varies
    between desktop Chromium and mobile WebKit. */
 #hud .fr-friend-row { display: block; padding: 0; overflow: hidden; }
+/* Row head: level chip + name/meta (the expand target), then the inline Gift
+   button, then the ⋯ drawer toggle. Gift is deliberately NOT in the drawer — it's
+   the panel's primary action and shouldn't cost a tap to reach. */
+#hud .fr-friend-head { display: flex; align-items: center; gap: 6px;
+  padding: 5px 7px 5px 8px; box-sizing: border-box; }
 #hud button.fr-friend-summary { appearance: none; -webkit-appearance: none;
-  display: flex; align-items: center; width: 100%; min-width: 0;
-  min-height: 46px; padding: 7px 8px 7px 12px; box-sizing: border-box;
-  border: 0; border-radius: 0; margin: 0; background: transparent;
+  display: flex; align-items: center; gap: 9px; flex: 1 1 auto; min-width: 0;
+  min-height: 40px; padding: 3px 2px; box-sizing: border-box;
+  border: 0; border-radius: 8px; margin: 0; background: transparent;
   color: #f4e9cf; text-align: left; cursor: pointer; outline: none;
   font: inherit; box-shadow: none; }
 #hud .fr-friend-summary:focus-visible { box-shadow: inset 0 0 0 2px #d9ff9b; }
-#hud .fr-friend-name-wrap { display: flex; align-items: center; gap: 8px;
+/* Level chip. Bands mirror the game's own unlock gates (15 / 40). */
+#hud .fr-lvl { display: grid; place-items: center; flex: 0 0 auto;
+  min-width: 32px; height: 32px; padding: 0 5px; border-radius: 9px;
+  font: 800 13px/1 system-ui, sans-serif; text-shadow: none; }
+#hud .fr-lvl-low { background: #b4b2a9; color: #2c2c2a; }
+#hud .fr-lvl-mid { background: #8ec74f; color: #173404; }
+#hud .fr-lvl-high { background: #efa027; color: #412402; }
+#hud .fr-lvl-none { background: rgba(255,255,255,.12); color: #c9b98f; }
+#hud .fr-friend-name-wrap { display: flex; flex-direction: column; gap: 1px;
   flex: 1 1 auto; min-width: 0; color: #f4e9cf; }
 #hud .fr-friend-name { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; font-size: 15px; line-height: 24px; font-weight: 700;
+  white-space: nowrap; font-size: 15px; line-height: 20px; font-weight: 700;
   color: #f4e9cf; -webkit-text-fill-color: #f4e9cf; }
+#hud .fr-friend-meta { display: block; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 15px;
+  font-weight: 600; color: #c9b98f; -webkit-text-fill-color: #c9b98f; }
+#hud .prof-btn.fr-gift-inline { flex: 0 0 auto; padding: 6px 10px; font-size: 12px; }
 #hud .fr-friend-more { display: grid; place-items: center; flex: 0 0 auto;
-  min-width: 70px; height: 32px; padding: 0 9px;
+  width: 32px; height: 32px; padding: 0;
   border: 2px solid #1e1207; border-radius: 8px; cursor: pointer;
   color: #f4e9cf; background: linear-gradient(#7a5220, #5e3d15);
-  font: 800 12px/1 system-ui, sans-serif; letter-spacing: .02em; text-shadow: 0 1px 1px #000; }
-#hud .fr-friend-summary:hover .fr-friend-more { filter: brightness(1.12); }
+  font: 800 15px/1 system-ui, sans-serif; text-shadow: 0 1px 1px #000; }
+#hud .fr-friend-more:hover { filter: brightness(1.12); }
+/* Sort control sits opposite Gift all in the toolbar. */
+#hud .fr-sort { display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: #c9b98f; }
+#hud .fr-sort-select { flex: 0 0 auto; width: auto; min-width: 0; padding: 5px 8px;
+  font-size: 12px; }
 #hud .fr-friend-menu { display: none; padding: 0 10px 10px;
   border-top: 1px solid rgba(216,188,132,.22); }
 #hud .fr-friend-row.is-open .fr-friend-menu { display: flex; flex-direction: column;
   align-items: stretch; gap: 8px; }
-#hud .fr-friend-level { display: block; padding-top: 8px; color: #d8bc84;
-  font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
-#hud .fr-friend-row .prof-actions { display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 7px; }
-#hud .fr-friend-row .prof-btn { width: 100%; min-height: 38px; }
+/* Drawer buttons stretch to fill; scoped to the MENU so the inline Gift button on
+   the row head keeps its own compact width. */
+#hud .fr-friend-menu .prof-actions { display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 7px;
+  padding-top: 8px; }
+#hud .fr-friend-menu .prof-btn { width: 100%; min-height: 38px; }
 /* quest-complete toast */
 #hud .qtoast { position: fixed; top: 72px; left: 50%; transform: translate(-50%, -12px);
   pointer-events: none; background: linear-gradient(#3c5a10, #2a3f0b);
@@ -1033,6 +1063,15 @@
 #hud .mkt-body > .mkt-portrait { grid-area: portrait; justify-self: center;
   max-height: 50px; max-width: 100%; object-fit: contain;
   image-rendering: auto; }
+/* Seasonal badge: this decor is on the shelf only while its theme is running.
+   Absolutely placed so it never disturbs the card's portrait/sell/time/cost grid. */
+#hud .mkt-theme { position: absolute; top: 24px; left: 0; z-index: 2;
+  max-width: 100%; box-sizing: border-box; padding: 1px 5px;
+  border-radius: 0 7px 7px 0; border: 1px solid #4f2f13; border-left: 0;
+  background: linear-gradient(#8e5fbe, #6b3f97); color: #f6ecff;
+  font-size: 9px; line-height: 12px; font-weight: 700; letter-spacing: .2px;
+  text-shadow: 0 1px 1px rgba(0,0,0,.45);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #hud .mkt-sell { font-size: 11px; font-weight: 700; color: #3f7a1e; display: flex;
   grid-area: sell; align-items: center; gap: 2px; }
 #hud .mkt-sell img { height: 12px; max-height: 12px; }

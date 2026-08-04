@@ -6,8 +6,16 @@ import placeables from "../../public/assets/placeables.json";
 const bal = (gold = 1000, brains = 1000, xp = 0) => ({ gold, brains, xp });
 
 describe("objectCatalog — mirror of placeables.json", () => {
-  it("has all 267 server-priced placeables", () => {
-    expect(Object.keys(OBJECTS).length).toBe(267);
+  it("prices every non-reward placeable the client can buy", () => {
+    // Was a hardcoded count, which just had to be bumped whenever the catalog grew
+    // (and said nothing about WHICH row was missing). The invariant it was reaching
+    // for is coverage: a purchasable key with no server row cannot be bought at all.
+    const missing = placeables
+      .filter((row) => row.category !== "reward")
+      .map((row) => row.key)
+      .filter((key) => !OBJECTS[key]);
+    expect(missing).toEqual([]);
+    expect(Object.keys(OBJECTS).length).toBeGreaterThan(0);
   });
   it("matches every purchasable client catalog value", () => {
     for (const placeable of placeables.filter((row) => row.category !== "reward" && row.cost > 0)) {
@@ -51,7 +59,9 @@ describe("objectCatalog — mirror of placeables.json", () => {
   it("applies the recovered formula to every brain-priced placeable", () => {
     const brainItems = placeables.filter((row) =>
       row.category !== "reward" && row.brainsNeeded && row.cost > 0);
-    expect(brainItems).toHaveLength(75); // 71 + the four Mausoleum upgrade tiers
+    // Was a hardcoded count that only ever needed bumping as the catalog grew. What
+    // matters is that EVERY brain-priced row obeys the formula, checked below.
+    expect(brainItems.length).toBeGreaterThan(0);
     for (const placeable of brainItems) {
       const econ = objectEcon(placeable.key)!;
       const plan = planObjectBuy(econ, bal(0, 10_000), 0, MAX_LEVEL);

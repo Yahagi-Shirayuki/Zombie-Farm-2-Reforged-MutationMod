@@ -4,7 +4,7 @@
 // they live here as plain functions rather than methods. Hud keeps thin
 // open*/openPanel wrappers that forward to these.
 import { openModal } from "../Modal";
-import { tintedImage } from "../tintedSprite";
+import { setTintedSrc, tintedImage } from "../tintedSprite";
 import { UI } from "../uiAsset";
 import type { LevelUpView, QuestCompleteView, ObjectActions } from "../hudTypes";
 
@@ -20,9 +20,9 @@ export function renderLevelUp(host: HTMLElement, view: LevelUpView): void {
   const unlockHtml = view.unlocks.length
     ? `<div class="lvl-sub">Unlocked</div><div class="lvl-unlocks">${view.unlocks
         .map(
-          (u) =>
+          (u, i) =>
             `<span class="lvl-slot" title="${u.name}"><span class="lvl-frame">` +
-            `<img src="${u.icon}" onerror="this.style.visibility='hidden'"></span>` +
+            `<img data-unlock="${i}" src="${u.icon}" onerror="this.style.visibility='hidden'"></span>` +
             `<span class="lvl-nm">${u.name}</span><span class="lvl-tag">${u.kind}</span></span>`
         )
         .join("")}</div>`
@@ -32,6 +32,13 @@ export function renderLevelUp(host: HTMLElement, view: LevelUpView): void {
     `<div class="lvl-burst">LEVEL UP!</div>` +
     `<div class="lvl-num">You reached level ${view.level}</div>` +
     unlockHtml;
+
+  // Unlocked decor is announced in the colour it will be on the farm. The markup
+  // is built as a string, so the tints are applied to the <img>s afterwards.
+  for (const img of panel.querySelectorAll<HTMLImageElement>("img[data-unlock]")) {
+    const unlock = view.unlocks[Number(img.dataset.unlock)];
+    if (unlock) setTintedSrc(img, unlock.icon, unlock.tint);
+  }
 
   const done = document.createElement("button");
   done.className = "lvl-go";

@@ -8,6 +8,8 @@
 //     persisted and exposed, but nothing swaps art on it yet. Wiring the ZF1 art
 //     pack in is future work (see README "Current Gaps").
 
+import { DEFAULT_FRIEND_SORT, isFriendSort, type FriendSort } from "./social/friendSort";
+
 export type SpriteSet = "zf1" | "zf2";
 // How lush the decorative foliage ringing the farm is. All three fill the whole
 // camera view out to the max zoom-out edge; they differ only in tree density.
@@ -22,6 +24,7 @@ export function isFarmBackground(value: unknown): value is FarmBackground {
 const SPRITE_KEY = "zf2r.spriteSet";
 const FARM_BG_KEY = "zf2r.farmBackground";
 const DAY_NIGHT_KEY = "zf2r.dayNight";
+const FRIEND_SORT_KEY = "zf2r.friendSort";
 const HAZARD_TIP_KEY = "zf2r.seenHazardTip";
 
 /** Which sprite pack to render with. Defaults to ZF2 (the only pack wired today). */
@@ -68,6 +71,17 @@ export function getDayNightMode(): DayNightMode {
 
 export function setDayNightMode(mode: DayNightMode): void {
   localStorage.setItem(DAY_NIGHT_KEY, mode);
+}
+
+/** How the friends list is ordered. Purely a display choice, so it lives here with
+ *  the other view preferences rather than in the save. */
+export function getFriendSort(): FriendSort {
+  const value = localStorage.getItem(FRIEND_SORT_KEY);
+  return isFriendSort(value) ? value : DEFAULT_FRIEND_SORT;
+}
+
+export function setFriendSort(sort: FriendSort): void {
+  localStorage.setItem(FRIEND_SORT_KEY, sort);
 }
 
 /** Whether the player has been shown the "tap/click hazards to damage them" tip,

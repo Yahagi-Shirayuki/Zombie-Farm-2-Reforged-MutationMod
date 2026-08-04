@@ -848,17 +848,19 @@ describe("protocol v3 command engine", () => {
   });
 
   it("derives brain decor XP from the post-revert price instead of raw catalog XP", () => {
+    // Evergreen decor on purpose: a seasonal key would be rejected by the theme
+    // allow-list, which is a different rule than the one under test here.
     const state = freshGameplayState();
     state.balance.brains = 100;
     const bought = applyCommandBatch(state, commands({
       type: "object.buy",
-      catalogKey: "heartFountain",
-      clientInstanceId: "heart-fountain",
+      catalogKey: "spaceSolarSystem",
+      clientInstanceId: "solar-system",
     }), { now: 100 });
 
     expect(bought.results[0].status).toBe("applied");
-    expect(bought.state.balance.brains).toBe(90);
-    expect(bought.state.balance.xp).toBe(1000); // 10 brains * decor multiplier 100
+    expect(bought.state.balance.brains).toBe(95);
+    expect(bought.state.balance.xp).toBe(500); // 5 brains * decor multiplier 100
   });
 
   it("sells brain-priced decor for 1,000 gold per brain without refunding brains", () => {
@@ -867,18 +869,51 @@ describe("protocol v3 command engine", () => {
     state.balance.brains = 100;
     const bought = applyCommandBatch(state, commands({
       type: "object.buy",
-      catalogKey: "heartFountain",
-      clientInstanceId: "heart-fountain",
+      catalogKey: "spaceSolarSystem",
+      clientInstanceId: "solar-system",
     }), { now: 100 });
 
     const sold = applyCommandBatch(bought.state, commands({
       type: "object.refund",
-      instanceId: "heart-fountain",
+      instanceId: "solar-system",
     }), { now: 101 });
 
     expect(sold.results[0]).toMatchObject({ status: "applied" });
-    expect(sold.state.balance.gold).toBe(initialGold + 10_000);
-    expect(sold.state.balance.brains).toBe(90);
+    expect(sold.state.balance.gold).toBe(initialGold + 5_000);
+    expect(sold.state.balance.brains).toBe(95);
+  });
+
+  it("refuses to sell decor whose season is not running", () => {
+    // heartFountain is labelled `valentines`, which is not on ACTIVE_THEMES. The
+    // market hides the card; this is what makes hiding it enforceable.
+    const state = freshGameplayState();
+    state.balance.brains = 100;
+    const bought = applyCommandBatch(state, commands({
+      type: "object.buy",
+      catalogKey: "heartFountain",
+      clientInstanceId: "heart-fountain",
+    }), { now: 100 });
+
+    expect(bought.results[0]).toMatchObject({ status: "rejected", error: "locked" });
+    expect(bought.state.balance.brains).toBe(100); // nothing charged
+  });
+
+  it("still places and stores decor bought in a season that has since ended", () => {
+    // Gating is on BUYING only — a farm built during an event must keep working.
+    const state = freshGameplayState();
+    state.objects.objects.push({
+      instanceId: "old-fountain", catalogKey: "heartFountain", status: "placed",
+    });
+
+    const stored = applyCommandBatch(state, commands({
+      type: "object.status", instanceId: "old-fountain", status: "stored",
+    }), { now: 100 });
+    expect(stored.results[0]).toMatchObject({ status: "applied" });
+
+    const replaced = applyCommandBatch(stored.state, commands({
+      type: "object.status", instanceId: "old-fountain", status: "placed",
+    }), { now: 101 });
+    expect(replaced.results[0]).toMatchObject({ status: "applied" });
   });
 
   it("rejects duplicate functional buys even when the owned copy is stored", () => {
@@ -963,6 +998,71 @@ describe("protocol v3 command engine", () => {
       .toEqual(["harvested"]);
     expect(result.state.roster.filter((unit) => unit.lockedByRaid === "pot:pot-1").map((unit) => unit.id))
       .toEqual(["a", "b"]);
+    // The reservation marker is the same on both parents — an older client parses its
+    // pot id straight out of it — so slot 1 is recorded beside it instead. It has to
+    // survive the hour the pair spends in the Pot: it decides the child's species.
+    expect(result.state.potSlots).toEqual({ "pot-1": "a" });
+  });
+
+  it("collects the slot-1 species even when the collect command reverses the parents", () => {
+    const state = freshGameplayState();
+    state.roster = [
+      // Creation order puts the slot-2 parent FIRST — exactly what the roster projection
+      // hands a client that has to rebuild its Pot job, and what used to get sent back.
+      { id: "older-regular", key: "ZombieActorRegularTier1", mutation: 8, invasions: 0, stored: false },
+      { id: "newer-garden", key: "ZombieActorGardenTier1", mutation: 0, invasions: 0, stored: false },
+    ];
+
+    const started = applyCommandBatch(state, commands(
+      { type: "roster.combine_start", potId: "pot-1", parentAId: "newer-garden", parentBId: "older-regular" },
+    ), { now: 1 });
+    expect(started.results[0].status).toBe("applied");
+
+    const collected = applyCommandBatch(started.state, commands(
+      { type: "roster.combine", potId: "pot-1", parentAId: "older-regular", parentBId: "newer-garden" },
+    ), { now: 2, id: () => "child" });
+
+    expect(collected.results[0]).toMatchObject({ status: "applied", createdIds: ["child"] });
+    expect(collected.state.roster).toContainEqual(expect.objectContaining({
+      id: "child", key: "ZombieActorGardenTier1", mutation: 8,
+    }));
+    // The finished job releases its slot record rather than leaking one per pot.
+    expect(collected.state.potSlots).toEqual({});
+  });
+
+  it("still trusts the command's order for a job started before slots were recorded", () => {
+    const state = freshGameplayState();
+    state.roster = [
+      { id: "a", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: true, lockedByRaid: "pot:pot-1" },
+      { id: "b", key: "ZombieActorGardenTier1", mutation: 0, invasions: 0, stored: true, lockedByRaid: "pot:pot-1" },
+    ];
+
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", potId: "pot-1", parentAId: "b", parentBId: "a" },
+    ), { now: 1, id: () => "child" });
+
+    expect(result.results[0]).toMatchObject({ status: "applied" });
+    expect(result.state.roster).toContainEqual(expect.objectContaining({
+      id: "child", key: "ZombieActorGardenTier1",
+    }));
+  });
+
+  it("leaves the reservation marker readable by clients that predate slot records", () => {
+    const state = freshGameplayState();
+    state.roster = [
+      { id: "a", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: false },
+      { id: "b", key: "ZombieActorGardenTier1", mutation: 0, invasions: 0, stored: false },
+    ];
+
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine_start", potId: "o1", parentAId: "b", parentBId: "a" },
+    ), { now: 1 });
+
+    // An older bundle groups a job by `lockedByRaid.slice(4)`. Both parents must still
+    // yield the same pot id, or it reads one combine as two orphans and retires it —
+    // which cancels the local job while the server keeps holding the pair.
+    expect(new Set(result.state.roster.map((unit) => unit.lockedByRaid?.slice(4))))
+      .toEqual(new Set(["o1"]));
   });
 
   it("keeps a ready Pot pending while all active slots are full", () => {

@@ -211,6 +211,21 @@ export async function listFriends(
   return res.results ?? [];
 }
 
+/** Lifetime gifts each friend has sent ME, keyed by their account id. Claimed and
+ *  unclaimed alike — this is a "who actually reciprocates" signal for the friends
+ *  list, not an inbox count. One indexed group-by over idx_gifts_inbox (to_id, ...),
+ *  so it costs the same whether you have three friends or three hundred. */
+export async function giftsReceivedFrom(
+  db: D1Database,
+  accountId: string
+): Promise<Map<string, number>> {
+  const res = await db
+    .prepare("SELECT from_id, COUNT(*) AS n FROM gifts WHERE to_id = ? GROUP BY from_id")
+    .bind(accountId)
+    .all<{ from_id: string; n: number }>();
+  return new Map((res.results ?? []).map((row) => [row.from_id, row.n]));
+}
+
 /** Account ids this sender has already gifted in a server-owned day bucket. */
 export async function giftedRecipientIds(
   db: D1Database,
@@ -220,6 +235,20 @@ export async function giftedRecipientIds(
   const res = await db
     .prepare("SELECT to_id FROM gifts WHERE from_id = ? AND day_bucket = ?")
     .bind(accountId, giftDayBucket)
+    .all<{ to_id: string }>();
+  return new Set((res.results ?? []).map((row) => row.to_id));
+}
+
+/** Account ids still holding an UNOPENED gift from this sender. A second gift can't
+ *  be sent until they open the first, so nobody stockpiles a pile of them from one
+ *  friend — and the friends list can grey out the button before the send is tried. */
+export async function pendingGiftRecipientIds(
+  db: D1Database,
+  accountId: string
+): Promise<Set<string>> {
+  const res = await db
+    .prepare("SELECT DISTINCT to_id FROM gifts WHERE from_id = ? AND claimed_at IS NULL")
+    .bind(accountId)
     .all<{ to_id: string }>();
   return new Set((res.results ?? []).map((row) => row.to_id));
 }
@@ -269,6 +298,12 @@ export async function removeFriendship(
     db.prepare("DELETE FROM friendships WHERE a_id = ? AND b_id = ?").bind(b, a),
   ]);
 }
+
+/** Graph size cap per account. This bounds ACCEPTING, not receiving: a full account
+ *  still collects incoming requests in its inbox (they queue until it makes room),
+ *  and only the accept is refused. Because a friendship is stored in BOTH directions,
+ *  every accept path has to check BOTH parties — see /friends/accept. */
+export const MAX_FRIENDS = 50;
 
 export async function countFriends(db: D1Database, accountId: string): Promise<number> {
   const row = await db
@@ -415,9 +450,10 @@ export async function blockedEitherWay(
   return !!row;
 }
 
-/** Gift sending remains once per UTC day per recipient and is additionally capped
- * per sender/day. The first two sends each day are free; later sends cost gold. */
-export const DAILY_GIFT_LIMIT = 10;
+/** Gift sending is bounded PER RECIPIENT, not per sender-day: once per UTC day, and
+ * never while that recipient still has an unopened gift from this sender. There is no
+ * ceiling on how many different friends you may gift in a day — gold is the only
+ * brake, and the first two sends each day are free. */
 export const FREE_DAILY_GIFTS = 2;
 export const GIFT_GOLD_COST = 100;
 export const GIFT_XP_REWARD = 5;
@@ -425,7 +461,7 @@ export const GIFT_XP_REWARD = 5;
 export type GiftSendStatus =
   | "sent"
   | "already_gifted_today"
-  | "daily_gift_limit"
+  | "gift_pending"
   | "insufficient_gold"
   | "conflict";
 
@@ -438,8 +474,10 @@ export interface GiftSendResult {
 }
 
 /** Atomically create a gift, charge any post-free-tier cost, and award sender XP.
- * The conditional INSERT enforces both the daily cap and sufficient gold, while
- * idx_gifts_once still prevents two sends to the same recipient. The gift's contents
+ * The conditional INSERT enforces sufficient gold and that the recipient has no
+ * unopened gift from this sender, while idx_gifts_once still prevents two sends to
+ * the same recipient in one UTC day. Both bounds are per RECIPIENT — a sender may
+ * gift as many different friends in a day as they can pay for. The gift's contents
  * are rolled here and stored on the row (see rollGiftReward); neither party learns
  * them until the recipient opens it. */
 export async function sendGiftWithReward(
@@ -456,14 +494,16 @@ export async function sendGiftWithReward(
   const id = idFromBytes(rand(16));
   // Contents are decided HERE, once, and stored on the row — never re-rolled at open
   // time. `reward` is chosen before the conditional INSERT so a gift that fails its
-  // daily-cap/gold check simply discards the roll.
+  // pending/gold check simply discards the roll.
   const reward = rollReward();
   const guard = "EXISTS(SELECT 1 FROM gifts WHERE id=? AND from_id=?)";
   const results = await db.batch([
     db.prepare(
       `INSERT INTO gifts (id, from_id, to_id, type, created_at, day_bucket, reward_kind, reward_amount)
        SELECT ?, ?, ?, 'brain', ?, ?, ?, ?
-       WHERE (SELECT COUNT(*) FROM gifts WHERE from_id = ? AND day_bucket = ?) < ?
+       WHERE NOT EXISTS (
+           SELECT 1 FROM gifts WHERE from_id = ? AND to_id = ? AND claimed_at IS NULL
+         )
          AND (
            (SELECT COUNT(*) FROM gifts WHERE from_id = ? AND day_bucket = ?) < ?
            OR EXISTS (SELECT 1 FROM balances WHERE account_id = ? AND gold >= ?)
@@ -471,7 +511,7 @@ export async function sendGiftWithReward(
        ON CONFLICT (from_id, to_id, day_bucket) DO NOTHING`
     ).bind(
       id, from, to, now, bucket, reward.kind, reward.amount,
-      from, bucket, DAILY_GIFT_LIMIT,
+      from, to,
       from, bucket, FREE_DAILY_GIFTS,
       from, GIFT_GOLD_COST
     ),
@@ -496,21 +536,26 @@ export async function sendGiftWithReward(
   const sent = (results[0]?.meta.changes ?? 0) === 1;
   if (sent) await creditLevelUps(db, from, now);
 
-  const [balance, runtime, duplicate, daily, raidState] = await Promise.all([
+  const [balance, runtime, duplicate, pending, daily, raidState] = await Promise.all([
     getOrSeedBalance(db, from, seed),
     db.prepare("SELECT account_version FROM account_runtime_v3 WHERE account_id=?")
       .bind(from).first<{ account_version: number }>(),
     sent ? Promise.resolve(null) : db.prepare(
       "SELECT 1 AS found FROM gifts WHERE from_id=? AND to_id=? AND day_bucket=?"
     ).bind(from, to, bucket).first<{ found: number }>(),
+    sent ? Promise.resolve(null) : db.prepare(
+      "SELECT 1 AS found FROM gifts WHERE from_id=? AND to_id=? AND claimed_at IS NULL"
+    ).bind(from, to).first<{ found: number }>(),
     db.prepare("SELECT COUNT(*) AS n FROM gifts WHERE from_id=? AND day_bucket=?")
       .bind(from, bucket).first<{ n: number }>(),
     db.prepare("SELECT last_started_at FROM raid_state_v3 WHERE account_id=?")
       .bind(from).first<{ last_started_at: number }>(),
   ]);
   const sentToday = daily?.n ?? 0;
+  // Order matters: an unopened gift sent TODAY trips both guards, and the more
+  // specific "you already gifted them today" is the more useful thing to say.
   const status: GiftSendStatus = sent ? "sent" : duplicate ? "already_gifted_today" :
-    sentToday >= DAILY_GIFT_LIMIT ? "daily_gift_limit" :
+    pending ? "gift_pending" :
       sentToday >= FREE_DAILY_GIFTS && balance.gold < GIFT_GOLD_COST ? "insufficient_gold" : "conflict";
   return {
     status,

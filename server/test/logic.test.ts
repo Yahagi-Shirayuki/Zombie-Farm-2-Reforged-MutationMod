@@ -17,7 +17,11 @@ import {
   GIFT_REWARD_TOTAL_WEIGHT,
   giftRewardForRoll,
   rollGiftReward,
+  friendActivity,
 } from "../src/logic";
+import { FREE_DAILY_GIFTS, GIFT_GOLD_COST, GIFT_XP_REWARD } from "../src/db";
+import * as db from "../src/db";
+import * as protocol from "../../src/net/protocol";
 import type { SaveGame } from "../src/env";
 
 describe("importEligible — save-import cutoff gate", () => {
@@ -302,5 +306,53 @@ describe("gift reward roll — contents decided at SEND time", () => {
 
   it("guarantees a brain for the first gift opened each day", () => {
     expect(FIRST_DAILY_GIFT_REWARD).toEqual({ kind: "brain", amount: 1 });
+  });
+});
+
+describe("gift economy constants — client mirror stays in step", () => {
+  // src/net/protocol.ts carries a copy so the "Gift all" dialog can quote a price
+  // before sending. The server is authoritative; this test is the tripwire that
+  // stops the two drifting apart and quoting the player a cost that never applies.
+  it("matches the values the client prices Gift all with", () => {
+    expect(protocol.FREE_DAILY_GIFTS).toBe(FREE_DAILY_GIFTS);
+    expect(protocol.GIFT_GOLD_COST).toBe(GIFT_GOLD_COST);
+    expect(protocol.GIFT_XP_REWARD).toBe(GIFT_XP_REWARD);
+  });
+
+  it("matches the friend cap the client names in its refusal message", () => {
+    // The client prints this number when an accept is refused, so a drift would tell
+    // the player to trim to a limit that isn't the one being enforced.
+    expect(protocol.MAX_FRIENDS).toBe(db.MAX_FRIENDS);
+  });
+
+  it("publishes no per-day send ceiling on either side", () => {
+    // Gifts per day are bounded per RECIPIENT only. A reintroduced constant here
+    // would silently start trimming "Gift all" batches again.
+    expect(protocol).not.toHaveProperty("DAILY_GIFT_LIMIT");
+    expect(db).not.toHaveProperty("DAILY_GIFT_LIMIT");
+  });
+});
+
+describe("friendActivity — coarse last-seen shown to friends", () => {
+  const now = 1_800_000_000_000;
+  it("buckets a recent session as today", () => {
+    expect(friendActivity(now, now)).toBe("today");
+    expect(friendActivity(now - DAY_MS + 1, now)).toBe("today");
+  });
+  it("buckets the rest of the week as week", () => {
+    expect(friendActivity(now - DAY_MS, now)).toBe("week");
+    expect(friendActivity(now - 7 * DAY_MS + 1, now)).toBe("week");
+  });
+  it("buckets anything older as away", () => {
+    expect(friendActivity(now - 7 * DAY_MS, now)).toBe("away");
+    expect(friendActivity(now - 400 * DAY_MS, now)).toBe("away");
+  });
+  it("never leaks finer resolution than the three buckets", () => {
+    // Two sessions eleven hours apart must be indistinguishable to a friend.
+    expect(friendActivity(now - 1000, now)).toBe(friendActivity(now - 11 * 3600_000, now));
+  });
+  it("treats a future/NaN timestamp as most recent rather than throwing", () => {
+    expect(friendActivity(now + 60_000, now)).toBe("today");
+    expect(friendActivity(NaN, now)).toBe("today");
   });
 });

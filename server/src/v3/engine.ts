@@ -29,6 +29,8 @@ import { resolveCropMutations, touchingPlotOffsets } from "../../../src/zombie/c
 import { createCombineRandom, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
 import { harvestXp, plowXp } from "../../../src/farmRewards";
 import { questSubjectMatches } from "../../../src/quest/matching";
+import { objectQuestAliases } from "../../../src/quest/objectVariants";
+import { decorAvailable } from "../../../src/decorThemes";
 import {
   combineSubject, combineSubjectAliases, mutantSubjectIndex, unitQuestSubjects,
   unitSubjectAliases,
@@ -43,6 +45,10 @@ export const PLOW_COST_V3 = 10;
 
 interface ObjectRule {
   name: string;
+  /** Base tile this row recolours (see quest/objectVariants). */
+  variantOf?: string;
+  /** Seasonal label; absent = evergreen (see src/decorThemes). */
+  theme?: string;
   category: string;
   armyMax: number;
   storageSlots: number;
@@ -130,6 +136,9 @@ const objectRules = new Map(
     zombiePot: r.key === "zombieCombiner",
   }])
 );
+/** Recolour siblings a bought object also answers to, so "buy a Fence" counts a
+ *  Blue Fence. Must match the client's own map or the two disagree on progress. */
+const objectAliases = objectQuestAliases(objectRows as (ObjectRule & { key: string })[]);
 /** The Mausoleum upgrade ladder, cheapest tier first. Each tier is its own catalog
  *  key worth five more zombie slots, and its price is the INCREMENTAL cost of that
  *  step — so the ladder must be climbed one rung at a time (see object.upgrade) or
@@ -606,6 +615,10 @@ function applyOne(
       if (!econ || econ.cost <= 0) return reject(sequence, "bad_item");
       if (state.objects.objects.length >= MAX_FUNCTIONAL_OBJECTS) return reject(sequence, "object_limit");
       if (level < econ.level) return reject(sequence, "locked");
+      // Seasonal decor sells only while its theme is on the allow-list. The market
+      // hides those cards; this is what makes hiding them enforceable. BUYING only —
+      // object.place/status/restore stay open so an owned decor is never stranded.
+      if (!decorAvailable(objectRules.get(command.catalogKey))) return reject(sequence, "locked");
       // Only the base Mausoleum is sold; its upgrade tiers are reachable solely
       // through object.upgrade, one rung at a time.
       const buySlots = objectRules.get(command.catalogKey)?.zombieSlots ?? 0;
@@ -636,7 +649,8 @@ function applyOne(
       state.objects.objects.push({ instanceId, catalogKey: command.catalogKey, status: "placed",
         ...(isZombiePot ? { purchaseCost: cost, purchaseCurrency: currency } : {}),
         ...(rule?.growMs ? { readyAt: options.now + rule.growMs } : {}) });
-      events.push({ type: "kItemBoughtNotification", subject: rule?.name ?? command.catalogKey });
+      events.push({ type: "kItemBoughtNotification", subject: rule?.name ?? command.catalogKey,
+        aliases: objectAliases.get(command.catalogKey) as string[] | undefined });
       return { sequence, status: "applied", createdIds: [instanceId] };
     }
     case "object.refund": {
@@ -698,7 +712,8 @@ function applyOne(
       }
       const rule = objectRules.get(command.catalogKey);
       obj.readyAt = rule?.growMs ? options.now + rule.growMs : undefined;
-      events.push({ type: "kItemBoughtNotification", subject: rule?.name ?? command.catalogKey });
+      events.push({ type: "kItemBoughtNotification", subject: rule?.name ?? command.catalogKey,
+        aliases: objectAliases.get(command.catalogKey) as string[] | undefined });
       return { sequence, status: "applied" };
     }
     case "object.status": {
@@ -764,6 +779,10 @@ function applyOne(
       b.stored = true;
       a.lockedByRaid = marker;
       b.lockedByRaid = marker;
+      // ...and WHICH parent went into slot 1 is remembered here, because that is what
+      // picks the child's species and it is the one thing the collect command an hour
+      // later cannot be trusted for. See potSlots.
+      state.potSlots = { ...state.potSlots, [command.potId]: a.id };
       events.push(combinerCombined(a, b));
       return { sequence, status: "applied" };
     }
@@ -772,15 +791,23 @@ function applyOne(
       const marker = command.potId ? `pot:${command.potId}` : undefined;
       // Unlocked fallback keeps pots started by the pre-reservation client
       // collectable after upgrade; new starts always take the marker path.
-      const a = state.roster.find((u) => u.id === command.parentAId &&
+      const first = state.roster.find((u) => u.id === command.parentAId &&
         (marker ? u.lockedByRaid === marker : !u.lockedByRaid)) ??
         (marker ? state.roster.find((u) => u.id === command.parentAId && !u.lockedByRaid) : undefined);
-      const b = state.roster.find((u) => u.id === command.parentBId &&
+      const second = state.roster.find((u) => u.id === command.parentBId &&
         (marker ? u.lockedByRaid === marker : !u.lockedByRaid)) ??
         (marker ? state.roster.find((u) => u.id === command.parentBId && !u.lockedByRaid) : undefined);
-      if (!a || !b) return reject(sequence, "not_owned");
-      const reserved = !!marker && a.lockedByRaid === marker && b.lockedByRaid === marker;
-      if (marker && !reserved && (a.lockedByRaid || b.lockedByRaid)) return reject(sequence, "not_owned");
+      if (!first || !second) return reject(sequence, "not_owned");
+      const reserved = !!marker && first.lockedByRaid === marker && second.lockedByRaid === marker;
+      if (marker && !reserved && (first.lockedByRaid || second.lockedByRaid)) return reject(sequence, "not_owned");
+      // WHICH PARENT WAS SLOT 1 comes from what this pot recorded at START, not from the
+      // command: slot 1 decides the child's species, and the command's order is only as
+      // good as the collecting client's memory of a job it began an hour ago. A client
+      // that rebuilt the job from the authoritative roster used to send them back in
+      // CREATION order, handing the player slot 2's species. A job started before the pot
+      // recorded its slots has nothing to consult, so it keeps trusting the command.
+      const startedSlotOne = command.potId ? state.potSlots?.[command.potId] : undefined;
+      const [a, b] = startedSlotOne === second.id ? [second, first] : [first, second];
       if (rewardOnlyZombies.has(a.key) || rewardOnlyZombies.has(b.key)) return reject(sequence, "reward_only");
       // The slot-1 restriction is enforced when a job STARTS (combine_start). Collection
       // deliberately does not re-check it: a job persisted before the rule — reserved or
@@ -811,6 +838,11 @@ function applyOne(
         resultKey, combineMasks(a.mutation, b.mutation, isHeadlessZombie(resultKey))
       );
       state.roster = state.roster.filter((u) => u.id !== a.id && u.id !== b.id);
+      if (command.potId && state.potSlots?.[command.potId]) {
+        const remaining = { ...state.potSlots };
+        delete remaining[command.potId];
+        state.potSlots = remaining;
+      }
       const stored = marker ? false : state.roster.filter((unit) => !unit.stored).length >= capacity.army;
       state.roster.push({ id, key: resultKey, mutation, invasions: 0, stored });
       created.push(id);
@@ -1026,6 +1058,7 @@ export function freshGameplayState(): MutableGameplayState {
     zombieMax: 16,
     zombiePotBought: false,
     tutorialRewarded: false,
+    potSlots: {},
     raids: { progress: {}, lastRaidAt: 0 },
     epicBoss: null,
   };

@@ -30,6 +30,7 @@ import { getVisitTarget, enterVisit, exitVisit, clearVisitTarget } from "./net/v
 import { EconomyClient } from "./net/economy";
 import { epicBossRunToClient, serverTimestampToClient } from "./net/clock";
 import { QuestBus, QuestEvent } from "./quest/events";
+import { objectQuestAliases } from "./quest/objectVariants";
 import { QuestSystem } from "./quest/QuestSystem";
 import { QuestDef, questRewardInfo } from "./quest/types";
 import { RaidManager, RaidResultView } from "./raid/RaidManager";
@@ -262,8 +263,13 @@ async function main() {
   const placeByName = new Map<string, PlaceableDef>();
   for (const o of assets.placeables) {
     placeCatalog.set(o.key, o);
-    placeByName.set(o.name, o); // loot/quest rewards are keyed by display name
+    // Loot/quest rewards are keyed by display name. A recolour family repeats a
+    // name (both Fence Gate states are "Fence Gate"), so the FIRST row wins and a
+    // variant never displaces the base a reward looks up.
+    if (!placeByName.has(o.name)) placeByName.set(o.name, o);
   }
+  // "Buy a Fence" counts the Blue Fence the player actually bought.
+  const objectAliases = objectQuestAliases(assets.placeables);
   hud.setPlaceables(
     assets.placeables.map((o) => ({
       name: o.name, cost: o.cost, level: o.level, brainsNeeded: o.brainsNeeded,
@@ -289,7 +295,10 @@ async function main() {
     }
     for (const o of assets.placeables) {
       if (o.level > from && o.level <= to)
-        unlocks.push({ icon: `${BASE}assets/objects/${o.sprite}`, name: o.name, kind: "Item" });
+        unlocks.push({
+          icon: `${BASE}assets/objects/${o.sprite}`, tint: objectTint(o.color),
+          name: o.name, kind: "Item",
+        });
     }
     for (const b of assets.boosts) {
       if (b.level > from && b.level <= to)
@@ -2153,7 +2162,7 @@ async function main() {
       floatText(c.x, c.y, `-${def.cost}${def.brainsNeeded ? "b" : "g"}`);
       showPurchaseXp(xp, c);
     }
-    questBus.post(QuestEvent.ItemBought, def.name);
+    questBus.post(QuestEvent.ItemBought, def.name, 1, objectAliases.get(def.key) ?? []);
   };
 
   // Buying an object from the market: load its sprite(s) (lazy). A shed or Mausoleum
@@ -2784,13 +2793,17 @@ async function main() {
     inboxCache = gifts.map((g) => ({ id: g.id, fromName: g.fromName }));
   };
   hud.getInbox = () => inboxCache;
-  hud.onClaimGift = async (id) => {
+  hud.onClaimGift = async (id, opts) => {
     try {
       // Gift claims are server-fenced independently of the gameplay writer. Do not
       // let a paused queue or a writer lease held by another tab block acceptance.
       const claimed = economy ? await economy.claimGift(id) : await api.claimGift(id);
-      try { await hud.refreshInbox?.(); }
-      catch (refreshError) { console.warn("[gift] inbox refresh failed", errCode(refreshError)); }
+      // "Open all" suppresses this and refreshes once at the end: one pull per gift
+      // would double the request count of a bulk open for no benefit.
+      if (opts?.refreshInbox !== false) {
+        try { await hud.refreshInbox?.(); }
+        catch (refreshError) { console.warn("[gift] inbox refresh failed", errCode(refreshError)); }
+      }
       // The server decides (and reports) the contents. A claim that credited nothing
       // (already opened on another device) has no reward to reveal — say so rather
       // than guessing at a payout the player never received.
@@ -3379,6 +3392,9 @@ async function main() {
       if (pdef)
         return {
           index, name: entry, icon: dropArt || `${BASE}assets/objects/${pdef.sprite}`,
+          // Only the catalog sprite carries the def's tint; a loot atlas image is
+          // already coloured and must not be multiplied again.
+          tint: dropArt ? undefined : objectTint(pdef.color),
           kind: "placeable", actionLabel: "Place", sellable: pdef.category !== "functional",
         };
       return { index, name: entry, icon: dropArt, kind: "trophy", actionLabel: "" };
@@ -3550,7 +3566,7 @@ async function main() {
     const c = tileCenter(col, row);
     floatText(c.x, c.y, `-${cost}${useBrains ? "b" : "g"}`);
     showPurchaseXp(xp, c);
-    questBus.post(QuestEvent.ItemBought, def.name);
+    questBus.post(QuestEvent.ItemBought, def.name, 1, objectAliases.get(def.key) ?? []);
     // That may have been the last copy the player is allowed: a Blue Grave, a
     // monolith, the third Zombie Pot. Leave placement mode rather than trail a
     // ghost of something no further tap could ever put down.

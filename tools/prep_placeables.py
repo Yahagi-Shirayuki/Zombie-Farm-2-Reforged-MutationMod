@@ -14,11 +14,13 @@ Three Market sub-categories become the Items sections in-game:
   - "decor"      -> Decors       (art from Decors*/tex* atlases; deduped by tile)
   - "special"    -> Functional   (no atlas art; uses the loose market icon PNG)
 
-Entries are deduped by their `tile` (many market rows are color variants of one
-sprite). Only entries whose art can be resolved are emitted.
+Market rows that share a `tile` but differ in name+tint become recolor VARIANTS of
+one base row (same art, own `color`); identical repeats collapse. Only entries whose
+art can be resolved are emitted.
 
 Run from the repo root:  python zombiefarm/tools/prep_placeables.py
 """
+import hashlib
 import io
 import json
 import os
@@ -57,69 +59,88 @@ EPIC_REWARD_TILES = {
     "mysticalMambaBanner", "mysticalMambasWishMachineLeft", "mysticalMambasWishMachineRight",
 }
 
-# ---- Catalog curation (hand-maintained, NOT derivable from source) -----------
-# The shipped Items catalog is a CURATED subset of the source decor. These 110
-# holiday/seasonal/themed decors (Christmas, Halloween, Easter, Valentine's,
-# St Patrick's, Lunar New Year, dinosaur/space/underwater sets) have never been in
-# placeables.json in any commit — the generator grew past the asset over time, so
-# re-running it used to add 110 unshipped store items and extract their PNGs.
+# ---- Decor themes (hand-authored, NOT derivable from source) ----------------
+# Nothing in Market.json says which holiday a decor belongs to: only 4 rows carry an
+# enableDate, and flagNeeded/pflag are progression flags for sheds and graves. ZF2
+# gated events by server content push, so the labels have to be authored here.
 #
-# Nothing in the source data distinguishes them (no seasonal/event flag), so the
-# list is explicit. DELETE an entry here to ship that decor.
-SEASONAL_DECOR_EXCLUDED = {
-    "appleBobbing", "aqueduct", "bigDragonBoat", "birthdayBalloonsRight",
-    "birthdayTimStatue", "blueBox", "blueSatchet", "boulder", "candelabra",
-    "candleAltarDay", "chariot", "chocolateBunnyA", "chocolateBunnyB", "colossus",
-    "column", "cornucopia", "cupidTopiary", "dinosaurFern", "dinosaurFootprint",
-    "dinosaurJeep", "dinosaurRaptor", "dinosaurSkull", "dinosaurTriceratops",
-    "dragonStatue", "eggTree", "enormoPumpkin", "fancyChair", "fancyCoatOfArms",
-    "fancyMustache", "fancyTeacup", "fancyTeakettle", "fancyUmbrellaTree",
-    "festiveFence", "giantPeep", "giftBasket", "hauntedHouse", "holidayBalloonRed",
-    "holidayBalloonWhite", "holidayBalloonYellow", "holidayHeartTopiary",
-    "holidayRoseBushRed", "holidayRoseBushWhite", "holidayRoseBushYellow",
-    "iceSculpture", "igloo", "lotusLantern", "luckPlant", "mayflower", "monolithBusted",
-    "monolithEgg", "newYearBallLeft", "newYearBallRight", "newYearBannerLeft",
-    "newYearBannerRight", "newYearTree", "organ", "pagoda", "patioBench", "patioTable",
-    "pond", "pond1", "pond2", "pond3", "pond4", "pond5", "pond6", "pond7", "pumpkin",
-    "redLantern", "redSatchet", "redTractor", "riceDumpling", "riceDumplingPile",
-    "sleigh", "smallDragonBoat", "snowBalls", "snowCannon", "snowFort", "snowMan",
-    "soilDivider", "spaceCrater", "spaceLunarLander", "spaceMoon", "spaceRocketShip",
-    "spookyStrawmanRight", "stPatricksClover", "stPatricksPotOfGold",
-    "stPatricksShamrock", "stoneDivider", "stoneLion", "sugarSkull", "temple",
-    "treeAutumn1", "treeAutumn2", "treeAutumn3", "trojanHorse", "underwaterCoral",
-    "underwaterMermaid", "underwaterShip", "underwaterTreasure", "urn",
-    "winterSnowWoman", "xmasArch", "xmasCandle", "xmasFence", "xmasGifts",
-    "xmasGingerbreadHouse", "xmasTree", "xmasWreath", "yellowSatchet"
+# Each tile gets at most ONE label. Anything absent is `evergreen` and always on
+# sale; a labelled tile is sold only while its label is on the market allow-list
+# (src/decorThemes.ts). Six themed-but-not-calendar sets deliberately have NO label —
+# Roman/Greek, dinosaur, space, underwater, fancy/tea and the ponds are ordinary
+# catalog that happens to share a look, and they are level-gated like everything else.
+#
+# See docs/DECOR_RESTORATION_PLAN.md for the full table and its rationale.
+DECOR_THEMES = {
+    "christmas": """
+        xmasCandle xmasTree sleigh giftBasket xmasFence xmasArch snowMan xmasGifts
+        xmasGingerbreadHouse xmasWreath giantCandyCane greenGift redGift yellowGift
+        teddyBear""",
+    "winter": """
+        snowFort snowBalls igloo iceSculpture snowCannon winterSnowWoman snowHedge_01
+        logCabin""",
+    "newYear": "newYearBallLeft newYearBallRight newYearBannerLeft newYearBannerRight",
+    "lunarNewYear": """
+        stoneLion urn redLantern pagoda riceDumpling lotusLantern bigDragonBoat
+        riceDumplingPile luckPlant yellowSatchet blueSatchet redSatchet smallDragonBoat
+        dragonStatue newYearTree""",
+    "valentines": """
+        cupidTopiary holidayBalloonRed holidayBalloonWhite holidayBalloonYellow
+        holidayHeartTopiary holidayRoseBushWhite holidayRoseBushYellow holidayRoseBushRed
+        cupidStatueA cupidStatueB heartGravestone heartHedge heartCandle heartFountain
+        holidayChocolateFountain teddyValentine loveShack""",
+    "easter": """
+        chocolateBunnyA chocolateBunnyB eggTree monolithEgg giantPeep easterEggBlue
+        easterEggGreen easterEggPink easterEggPurple easterEggWhite easterGrass peepPink
+        peepYellow goldEgg bigEasterEggBlue bigEasterEggGreen bigEasterEggPink
+        easterBasket eggBush eggLamp rockBunny""",
+    "stPatricks": """
+        stPatricksClover stPatricksPotOfGold stPatricksShamrock stPatricksIrishFlag
+        stPatricksFountain""",
+    "halloween": """
+        hauntedHouse candelabra organ spookyStrawmanRight candleAltarDay festiveFence
+        sugarSkull skeletonCouple boxoLantern""",
+    "harvest": """
+        patioBench appleBobbing patioTable treeAutumn1 treeAutumn2 treeAutumn3 mayflower
+        pumpkin enormoPumpkin cornucopia""",
+    "independence": """
+        drinksCooler starTopiary bbqGrill libertySnareDrum libertyMonument
+        barrelOfFireworks sculptureOfLiberty libertyBell""",
+    "anniversary": """
+        birthdayTimStatue birthdayBalloonsRight zombieGift birthdayCakeThirdYearRight""",
+    "summer": """
+        umbrellaYellow umbrellaOrange tikiHeadSmall tikiHeadLarge sandCastle
+        lifeguardChair surfboardRed surfboardBlue beachBall pailAndShovel""",
+    "pirate": """
+        powderKeg cannon pirateCratePlain shipWheel rumBarrel rope pirateCrate gibbetCage
+        pirateBarrel cannonBalls cursedChest islandRelic pirateSack pirateBag""",
+}
+THEME_OF_TILE = {
+    tile: theme for theme, tiles in DECOR_THEMES.items() for tile in tiles.split()
 }
 
-# Seasonal/event decor that IS intentionally sold in Reforged. Source Market
-# rows have no seasonal flag, so keep this classification explicit just like the
-# excluded catalog above. The Market uses it to group permanent decor first and
-# these limited-theme sets afterward, with each group ordered by unlock level.
-SEASONAL_MARKET_DECOR = {
-    # Halloween, anniversary, and Valentine's Day
-    "skeletonCouple", "boxoLantern", "zombieGift", "birthdayCakeThirdYearRight",
-    "cupidStatueA", "cupidStatueB", "heartGravestone", "heartHedge",
-    "heartCandle", "heartFountain", "holidayChocolateFountain",
-    # Summer/beach
-    "umbrellaYellow", "umbrellaOrange", "tikiHeadSmall", "tikiHeadLarge",
-    "sandCastle", "lifeguardChair", "surfboardRed", "surfboardBlue",
-    "beachBall", "pailAndShovel",
-    # Easter
-    "easterEggBlue", "easterEggGreen", "easterEggPink", "easterEggPurple",
-    "easterEggWhite", "easterGrass", "peepPink", "peepYellow", "goldEgg",
-    "bigEasterEggBlue", "bigEasterEggGreen", "bigEasterEggPink", "easterBasket",
-    "eggBush", "eggLamp",
-    # Pirate event
-    "powderKeg", "cannon", "pirateCratePlain", "shipWheel", "rumBarrel", "rope",
-    "pirateCrate", "gibbetCage", "pirateBarrel", "cannonBalls", "cursedChest",
-    "islandRelic", "pirateSack", "pirateBag",
-    # Independence Day
-    "drinksCooler", "starTopiary", "bbqGrill", "libertySnareDrum",
-    "libertyMonument", "barrelOfFireworks", "sculptureOfLiberty", "libertyBell",
-    # St. Patrick's Day, space event, and winter holiday
-    "stPatricksIrishFlag", "stPatricksFountain", "spaceWormHoleA",
-    "spaceWormHoleB", "spaceSolarSystem", "fancyFireplace",
+# Unlock levels for the evergreen decor restored alongside the themed sets. 106 of
+# the 110 restored rows carry no source level (the generator would default them to
+# 1, dumping them all into the level-1 store), and holiday rows do not need one
+# because their label is the gate. These 31 are the evergreen remainder.
+#
+# Seeded from the shipped catalog's own price curve — level ~= 9.72*log10(gold) - 12,
+# fitted on the 90 gold decor/tree rows, r2 = 0.38 — then nudged toward the levels
+# carrying the fewest unlocks, holding price order and level order in agreement.
+# The 9 evergreen tiles that DO carry a source level keep it (the six Roman/Greek
+# pieces at 5, pond 16, boulder 22, blueBox 25).
+EVERGREEN_LEVELS = {
+    "pond7": 13, "pond5": 14, "pond3": 16, "pond1": 17, "pond4": 17, "pond6": 18,
+    "pond2": 19, "soilDivider": 19, "stoneDivider": 19, "dinosaurSkull": 19,
+    "underwaterCoral": 21, "spaceCrater": 21,
+    "spaceLunarLander": 22, "fancyCoatOfArms": 22, "fancyTeacup": 22,
+    "dinosaurFootprint": 25, "monolithBusted": 25, "underwaterMermaid": 25,
+    "dinosaurRaptor": 25, "spaceRocketShip": 25,
+    "fancyUmbrellaTree": 26, "underwaterTreasure": 27, "dinosaurJeep": 27,
+    "dinosaurFern": 28, "fancyTeakettle": 28,
+    "underwaterShip": 29, "dinosaurTriceratops": 29,
+    "fancyMustache": 30, "spaceMoon": 31, "fancyChair": 31,
+    "redTractor": 34,
 }
 
 # Hand-set premium brain prices. These deliberately skip the brainflation retune —
@@ -159,15 +180,132 @@ MAUSOLEUM_TIERS = [
     ("mausoleum7", "Mausoleum V", 10, MAUSOLEUM_BASE_SLOTS + 20),
 ]
 
-# These quest objectives target separately named color variants that share one
-# TileProperties key. Most same-tile Market rows are redundant recolors, but these
-# must remain distinct catalog cards or the corresponding buy objectives cannot be
-# completed. The first row keeps the source tile key; preserved variants receive a
-# stable name-derived suffix below.
-QUEST_VARIANT_KEYS = {
+# ---- Recolor variants --------------------------------------------------------
+# 17 TileProperties keys carry several Market rows that differ ONLY by display name
+# and tint: one Hedge sprite is sold as six colors, one crate as seven. The catalog
+# used to keep just the first row of each, which threw away 43 buyable items.
+#
+# A variant is a full catalog row that reuses the base row's art and footprint and
+# overrides name/color, so it costs no extra pixels — see emit_sprite and D1 in
+# docs/DECOR_RESTORATION_PLAN.md.
+COLOR_WORDS = {
+    "pink", "blue", "red", "black", "white", "yellow", "violet",
+    "green", "silver", "gold", "orange", "purple",
+}
+
+# Two variants shipped before this scheme existed, under hand-picked keys. Those
+# keys are in live saves and in server/src/objectCatalog.ts, so they are pinned
+# rather than regenerated.
+LEGACY_VARIANT_KEYS = {
     "Violet Flower Bed": "flowerBedViolet",
     "Yellow Flower Bed": "flowerBedYellow",
 }
+
+
+def variant_key(tile, name, taken):
+    """Stable catalog key for one recolor of `tile`.
+
+    Source names lead with the color ("Pink Hedge", "White Flower Bed"), so that
+    word is the suffix. A sibling whose name carries no color at all — the plain
+    "Tent" next to the "Red Tent" that holds the base key — becomes `_plain`.
+    """
+    if name in LEGACY_VARIANT_KEYS:
+        return LEGACY_VARIANT_KEYS[name]
+    first = name.strip().split()[0].lower() if name.strip() else ""
+    suffix = first if first in COLOR_WORDS else "plain"
+    key = f"{tile}_{suffix}"
+    # Nothing in the current data collides, but two same-colored siblings must not
+    # silently overwrite each other if the source ever grows one.
+    n = 2
+    while key in taken:
+        key = f"{tile}_{suffix}{n}"
+        n += 1
+    return key
+
+
+def unlock_level(e, tile, reward_only):
+    """Player level this row unlocks at.
+
+    Most restored decor carries no source level. A themed row does not need one —
+    its label decides whether it is on sale at all — so it stays at the source
+    default. Evergreen rows without a source level take an authored one, or the
+    whole set would land at level 1 at once (see EVERGREEN_LEVELS).
+    """
+    if reward_only:
+        return -1
+    source = e.get("level")
+    if source is not None and source > 1:
+        return source
+    return EVERGREEN_LEVELS.get(tile, source if source is not None else 1)
+
+
+def market_economics(e, key, tile, reward_only, brains_priced, category):
+    """Price, level gate, currency and purchase XP for one Market row."""
+    brains = brains_priced and not reward_only
+    if reward_only:
+        cost = 0
+    elif brains:
+        # Brain prices take the brainflation retune, except the few premium
+        # showpieces priced by hand. See tools/reforge_economy.py.
+        cost = PREMIUM_BRAIN_PRICES.get(key) or brain_price(
+            e.get("cost", 0), key, strict=False)
+    else:
+        cost = e.get("cost", 0)
+    return {
+        "cost": cost,
+        "level": unlock_level(e, tile, reward_only),
+        # Fruit-tree rows omit `xp`, and some ordinary gold decor rows carry zero.
+        # The binary's +[MarketDataManager xpFromItem:] awards those normal gold
+        # purchases floor(cost / 100) XP. Preserve positive authored XP and the
+        # informational source XP on brain purchases.
+        "xp": (0 if reward_only
+               else cost // 100 if category == "tree"
+               else cost // 100 if not brains and e.get("xp", 0) <= 0
+               else e.get("xp", 0)),
+        "brainsNeeded": brains,
+    }
+
+
+def market_tint(e):
+    """This row's sprite tint, or None when it is absent or the identity.
+
+    The original game passes the Market RGB through
+    `placeNewObjectTileWithKey:andFilename:andColor:` and applies it as a
+    multiplicative cocos2d sprite tint. Much of the decor art is authored
+    GREYSCALE and takes ALL of its colour from this value — hedge_01, crate,
+    baloon, pen_01 and cemeteryFence_01 all have mean saturation 0 — so a row
+    that loses its tint renders grey. White is the identity multiply, so those
+    rows are omitted to keep the generated catalog compact.
+    """
+    color = e.get("color")
+    if not isinstance(color, list) or len(color) != 3:
+        return None
+    return None if all(channel == 255 for channel in color) else color
+
+
+_sprite_by_digest = {}
+
+
+def emit_sprite(key, img):
+    """Save `img` as <key>.png and return the filename it can be referenced by.
+
+    Several tiles share one piece of art and are told apart ONLY by their Market
+    tint: the five monoliths all draw tex1009.png. Writing a copy per key
+    duplicates the bytes and buries the fact that colour, not art, distinguishes
+    them — so a byte-identical sprite reuses the first file written instead.
+    """
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    data = buf.getvalue()
+    digest = hashlib.sha1(data).hexdigest()
+    shared = _sprite_by_digest.get(digest)
+    if shared:
+        return shared
+    out_name = f"{key}.png"
+    with open(os.path.join(OBJDIR, out_name), "wb") as fh:
+        fh.write(data)
+    _sprite_by_digest[digest] = out_name
+    return out_name
 
 
 def classify(e):
@@ -330,26 +468,56 @@ def main():
     seen = set()  # tile keys with at least one emitted market/reward object
     counts = {"tree": 0, "decor": 0, "functional": 0, "reward": 0}
     skipped = 0
-    excluded = 0
+    base_row = {}  # tile -> the catalog row holding that tile's art
+    signatures = {}  # tile -> {(name, tint)} already emitted
+    keys_taken = set()
+    variant_count = 0
 
-    # Sort so the cheapest/earliest variant of a shared tile wins.
+    # Sort so the cheapest/earliest variant of a shared tile wins the base key.
     items = [e for e in market if ((e.get("category") == "item" and classify(e)) or e.get("tile") in EPIC_REWARD_TILES)
              and (not e.get("dontShowInMarket") or e.get("tile") in EPIC_REWARD_TILES)]
     items.sort(key=lambda e: (e.get("level", 1), e.get("cost", 0)))
 
     for e in items:
         tile = e.get("tile")
-        if not tile or (tile in seen and e.get("name") not in QUEST_VARIANT_KEYS):
+        if not tile:
             continue
-        # Not part of the shipped catalog — skip before any art is written, so the
-        # excluded decors do not leave orphan PNGs in public/assets/objects.
-        if tile in SEASONAL_DECOR_EXCLUDED:
-            excluded += 1
-            continue
-        key = tile if tile not in seen else QUEST_VARIANT_KEYS[e["name"]]
         category = ("reward" if tile in EPIC_REWARD_TILES or tile in REWARD_ONLY_DECOR
                     else "functional" if tile in FUNCTIONAL_OVERRIDE_TILES
                     else classify(e))
+
+        # A later Market row for art already emitted is either a genuine recolor
+        # (its own card) or a straight duplicate of a row already written — the
+        # Gazebo, the Pond and the Zombie Pot are each listed twice, identically.
+        if tile in base_row:
+            signature = (e["name"], tuple(market_tint(e) or ()))
+            if signature in signatures[tile]:
+                continue
+            signatures[tile].add(signature)
+            key = variant_key(tile, e["name"], keys_taken)
+            keys_taken.add(key)
+            row = dict(base_row[tile])  # same art, footprint, pivot, sounds
+            row.update({
+                "key": key,
+                "name": e["name"],
+                # Grouping for the quest matcher: buying any recolor also answers to
+                # its siblings' names, so "buy a Fence" takes a Blue Fence.
+                "variantOf": tile,
+                **market_economics(e, key, tile, tile in REWARD_ONLY_DECOR,
+                                   bool(e.get("brainsNeeded", False)), category),
+            })
+            tint = market_tint(e)
+            if tint:
+                row["color"] = tint
+            else:
+                row.pop("color", None)
+            catalog.append(row)
+            counts[category] += 1
+            variant_count += 1
+            continue
+
+        key = tile
+        keys_taken.add(key)
         tp = tileprops.get(tile, {})
 
         sprite_img = None
@@ -411,8 +579,7 @@ def main():
             skipped += 1
             continue
 
-        out_name = f"{key}.png"
-        sprite_img.save(os.path.join(OBJDIR, out_name))
+        out_name = emit_sprite(key, sprite_img)
         seen.add(tile)
         counts[category] += 1
         # Fruit-tree growing-state sprite (saved as <tile>_growing.png).
@@ -427,38 +594,20 @@ def main():
             slots = int(m.group(1))
         # Reward-only decor is never sold: no price, no level gate, no purchase XP.
         reward_only = tile in REWARD_ONLY_DECOR
-        brains = bool(e.get("brainsNeeded", False)) and not reward_only
-        if reward_only:
-            cost = 0
-        elif brains:
-            # Brain prices take the brainflation retune, except the few premium
-            # showpieces priced by hand. See tools/reforge_economy.py.
-            cost = PREMIUM_BRAIN_PRICES.get(key) or brain_price(
-                e.get("cost", 0), key, strict=False)
-        else:
-            cost = e.get("cost", 0)
-        catalog.append({
+        row = {
             "key": key,
             "name": e["name"],
             "category": category,
-            **({"seasonal": True} if key in SEASONAL_MARKET_DECOR else {}),
-            "cost": cost,
-            "level": -1 if reward_only else e.get("level", 1),
-            # Fruit-tree rows omit `xp`, and some ordinary gold decor rows carry
-            # zero. The binary's +[MarketDataManager xpFromItem:] awards those
-            # normal gold purchases floor(cost / 100) XP. Preserve positive
-            # authored XP and the informational source XP on brain purchases.
-            "xp": (0 if reward_only
-                   else cost // 100 if category == "tree"
-                   else cost // 100 if not brains and e.get("xp", 0) <= 0
-                   else e.get("xp", 0)),
-            "brainsNeeded": brains,
-            # The original game passes this Market RGB through
-            # placeNewObjectTileWithKey:andFilename:andColor: and applies it as a
-            # multiplicative cocos2d sprite tint. Functional monoliths deliberately
-            # share tex1009.png and get their distinct appearance from this value.
-            **({"color": e["color"]}
-               if e.get("monolith") and len(e.get("color", [])) == 3 else {}),
+            # Theme label; absent means evergreen. `seasonal` is DERIVED from it and
+            # kept for the existing market sort until that reads `theme` directly.
+            **({"theme": THEME_OF_TILE[tile], "seasonal": True}
+               if tile in THEME_OF_TILE else {}),
+            **market_economics(e, key, tile, reward_only,
+                               bool(e.get("brainsNeeded", False)), category),
+            # Authentic sprite tint (see market_tint): for greyscale art this is the
+            # item's ONLY source of colour, and it is what tells the five monoliths —
+            # one shared tex1009.png — apart.
+            **({"color": market_tint(e)} if market_tint(e) else {}),
             # Whole tiles only: the game reads these via integerValue (truncates),
             # so coerce any fractional footprint (e.g. coolerLarge 1.5) to an int.
             "tileW": max(1, int(tp.get("tileWidth", 1))),
@@ -486,7 +635,11 @@ def main():
             # empty values so the generated catalog stays compact.
             **({"tapSound": tp.get("tapSoundEffect") or tp.get("soundID")}
                if tp.get("tapSoundEffect") or tp.get("soundID") else {}),
-        })
+        }
+        catalog.append(row)
+        # Recolors of this tile clone the row above and override name/color.
+        base_row[tile] = row
+        signatures[tile] = {(e["name"], tuple(market_tint(e) or ()))}
 
     # ---- Raid-reward decorations (Phase 6) ----------------------------------
     # Loot drops that are NOT sold in the market but ARE placeable farm decor.
@@ -529,8 +682,7 @@ def main():
             reward_skipped.append(name)
             continue
 
-        out_name = f"{tile}.png"
-        sprite_img.save(os.path.join(OBJDIR, out_name))
+        out_name = emit_sprite(tile, sprite_img)
         seen.add(tile)
         reward_count += 1
         catalog.append({
@@ -590,14 +742,31 @@ def main():
             catalog.append(tier)
 
     catalog.sort(key=lambda c: (c["category"], c["level"], c["cost"]))
+
+    # public/assets/objects/ is entirely generated, so anything the catalog no
+    # longer references is stale — a rename, a dropped item, or (since emit_sprite)
+    # a duplicate that now shares another key's file. Leaving them behind makes the
+    # directory look like it still holds art the game can reach.
+    referenced = {c["sprite"] for c in catalog} | {
+        c["growingSprite"] for c in catalog if c["growingSprite"]}
+    orphans = sorted(f for f in os.listdir(OBJDIR)
+                     if f.endswith(".png") and f not in referenced)
+    for f in orphans:
+        os.remove(os.path.join(OBJDIR, f))
+
     with open(os.path.join(OUT, "placeables.json"), "w", encoding="utf-8") as f:
         json.dump(catalog, f, indent=1)
     print(f"placeables: {len(catalog)} objects -> {counts} "
           f"+ {reward_count} reward decor (skipped {skipped} market, "
-          f"{excluded} curated out, "
           f"{len(reward_skipped)} reward w/o art)")
     if reward_skipped:
         print(f"  reward w/o art: {', '.join(reward_skipped)}")
+    tinted = sum(1 for c in catalog if c.get("color"))
+    shared = len(catalog) - len({c["sprite"] for c in catalog})
+    print(f"  {tinted} tinted rows, {shared} rows sharing another key's sprite, "
+          f"{variant_count} recolor variants")
+    if orphans:
+        print(f"  removed {len(orphans)} stale png: {', '.join(orphans)}")
 
 
 if __name__ == "__main__":

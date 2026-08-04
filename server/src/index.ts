@@ -30,6 +30,7 @@ import {
   importEligible,
   normalizeFriendCode,
   normalizeUsername,
+  friendActivity,
   type GiftReward,
 } from "./logic";
 import { validateSave, MAX_SAVE_BYTES } from "./validate";
@@ -63,7 +64,7 @@ import * as blackMarket from "./v3/blackMarket";
 const app = new Hono<{ Bindings: Bindings; Variables: Vars }>();
 
 // ---- abuse caps ---------------------------------------------------------
-const MAX_FRIENDS = 1000; // graph size cap per account
+const MAX_FRIENDS = db.MAX_FRIENDS; // graph size cap per account (bounds accepting, not receiving)
 const MAX_PENDING_REQUESTS = 200; // incoming requests we'll hold for a recipient
 const MAX_INBOX = 200; // unclaimed gifts we'll hold / return
 
@@ -446,6 +447,53 @@ app.post("/dev/fixture/orphan-gift-grant", requireAuth, async (c) => {
   }
   const result = await c.env.DB.batch(statements);
   return c.json({ inserted: (result[0]?.meta.changes ?? 0) === 1, settled: !!body.settled });
+});
+
+// Fill MY friends list with placeholder friends so the suite can sit an account
+// exactly at the friend cap without signing in fifty of them. friendships.b_id is a
+// foreign key, so each edge needs a real accounts row behind it — they are created
+// here alongside it. The edge is written ONE WAY (me -> placeholder): only
+// countFriends(me) needs to move, and a one-way row keeps the placeholders themselves
+// at zero friends so they never perturb the other side of a cap check. Dev-only:
+// absent when DEV_AUTH="0" (the deployed value).
+app.post("/dev/fixture/friends-fill", requireAuth, async (c) => {
+  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
+  const body = await c.req.json<{ count?: number }>().catch((): { count?: number } => ({}));
+  const me = c.get("accountId");
+  const want = Number.isFinite(body.count) ? Math.max(0, Math.floor(body.count as number)) : 0;
+  const now = Date.now();
+  const stmts = Array.from({ length: Math.min(want, 500) }, (_, i) => {
+    const id = `fixture-friend-${me}-${i}`;
+    return [
+      c.env.DB.prepare(
+        `INSERT OR IGNORE INTO accounts (id, google_sub, username, friend_code, created_at, last_online_at)
+         VALUES (?, ?, 'Placeholder', ?, ?, ?)`
+      ).bind(id, `sub-${id}`, `ZF-FIXT${i.toString(36).toUpperCase().padStart(5, "0")}${me.slice(0, 4)}`, now, now),
+      c.env.DB.prepare(
+        "INSERT OR IGNORE INTO friendships (a_id, b_id, created_at) VALUES (?, ?, ?)"
+      ).bind(me, id, now),
+    ];
+  }).flat();
+  if (stmts.length) await c.env.DB.batch(stmts);
+  return c.json({ ok: true, count: await db.countFriends(c.env.DB, me) });
+});
+
+// Backdate an unopened gift I SENT into an earlier day bucket, so the suite can clear
+// the once-a-day rule without waiting for midnight and check that the unopened-gift
+// rule still holds on its own. Dev-only: absent when DEV_AUTH="0" (the deployed value).
+app.post("/dev/fixture/gift-backdate", requireAuth, async (c) => {
+  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
+  const body = await c.req.json<{ toAccountId?: string; days?: number }>()
+    .catch((): { toAccountId?: string; days?: number } => ({}));
+  const accountId = c.get("accountId");
+  if (typeof body.toAccountId !== "string") return c.json({ error: "bad_request" }, 400);
+  const days = Number.isFinite(body.days) ? Math.max(1, Math.floor(body.days as number)) : 1;
+  const shift = days * 86_400_000;
+  const res = await c.env.DB.prepare(
+    `UPDATE gifts SET day_bucket = day_bucket - ?, created_at = created_at - ?
+     WHERE from_id = ? AND to_id = ? AND claimed_at IS NULL`
+  ).bind(days, shift, accountId, body.toAccountId).run();
+  return c.json({ ok: true, moved: res.meta.changes ?? 0, days });
 });
 
 // Overwrite the contents a gift in MY inbox was sent with, so the integration suite can
@@ -1243,9 +1291,12 @@ app.get("/state", async (c) => {
 // ---- GET /friends -------------------------------------------------------
 app.get("/friends", async (c) => {
   const accountId = c.get("accountId");
-  const [friends, gifted] = await Promise.all([
+  const now = Date.now();
+  const [friends, gifted, pending, received] = await Promise.all([
     db.listFriends(c.env.DB, accountId),
-    db.giftedRecipientIds(c.env.DB, accountId, dayBucket(Date.now())),
+    db.giftedRecipientIds(c.env.DB, accountId, dayBucket(now)),
+    db.pendingGiftRecipientIds(c.env.DB, accountId),
+    db.giftsReceivedFrom(c.env.DB, accountId),
   ]);
   return c.json(
     friends.map((f) => ({
@@ -1253,7 +1304,16 @@ app.get("/friends", async (c) => {
       name: f.username ?? "Player", // chosen display name only (no PII)
       friendCode: f.friend_code,
       level: levelForXp(f.xp),
-      giftOnCooldown: gifted.has(f.id),
+      // "Can't gift them right now", for either reason. giftPending distinguishes the
+      // two so the UI can explain which one is in the way.
+      giftOnCooldown: gifted.has(f.id) || pending.has(f.id),
+      giftPending: pending.has(f.id) && !gifted.has(f.id),
+      // Lifetime gifts THEY sent ME — my own data about my own inbox, so no
+      // disclosure about them beyond what they chose to send.
+      giftsReceived: received.get(f.id) ?? 0,
+      // Coarse bucket only: friendActivity never lets the raw last-online instant
+      // off the server (see logic.ts).
+      activity: friendActivity(f.last_online_at, now),
     }))
   );
 });
@@ -1346,10 +1406,20 @@ app.post("/friends/add", async (c) => {
   if (!other || other.id === me) return generic;
   if (await db.blockedEitherWay(c.env.DB, me, other.id)) return generic;
   if (await db.areFriends(c.env.DB, me, other.id)) return generic;
-  // If they already asked me, accept immediately (mutual intent). Otherwise cap
-  // their pending inbox and file the request.
+  // If they already asked me, accept immediately (mutual intent) — but only if the
+  // friendship would actually fit. A full list may still RECEIVE: when either of us
+  // is at the cap their request simply stays pending in my inbox, to be accepted once
+  // room is made. Without this check adding-them-back would be a way around the cap.
+  // Still a non-oracle: the response is generic either way, so nothing about their
+  // account (or mine) is disclosed here.
   if (await db.requestExists(c.env.DB, other.id, me)) {
-    await db.acceptRequest(c.env.DB, me, other.id, Date.now());
+    const [mine, theirs] = await Promise.all([
+      db.countFriends(c.env.DB, me),
+      db.countFriends(c.env.DB, other.id),
+    ]);
+    if (mine < MAX_FRIENDS && theirs < MAX_FRIENDS) {
+      await db.acceptRequest(c.env.DB, me, other.id, Date.now());
+    }
     return generic;
   }
   const pending = await db.countIncomingRequests(c.env.DB, other.id);
@@ -1365,9 +1435,16 @@ app.post("/friends/accept", async (c) => {
     .catch(() => ({ fromAccountId: "" }));
   const me = c.get("accountId");
   if (!fromAccountId || fromAccountId === me) return c.json({ error: "bad_request" }, 400);
-  if ((await db.countFriends(c.env.DB, me)) >= MAX_FRIENDS) {
-    return c.json({ error: "friends_full" }, 409);
-  }
+  // Accepting is what the cap bounds — the request itself was allowed in and stays in
+  // the inbox on refusal, so nothing is lost by trying. BOTH sides are checked because
+  // acceptRequest writes the friendship in both directions: if the requester filled up
+  // while their request sat here, accepting would push THEM past the cap.
+  const [mine, theirs] = await Promise.all([
+    db.countFriends(c.env.DB, me),
+    db.countFriends(c.env.DB, fromAccountId),
+  ]);
+  if (mine >= MAX_FRIENDS) return c.json({ error: "friends_full" }, 409);
+  if (theirs >= MAX_FRIENDS) return c.json({ error: "requester_full" }, 409);
   const ok = await db.acceptRequest(c.env.DB, me, fromAccountId, Date.now());
   if (!ok) return c.json({ error: "no_request" }, 404);
   const other = await db.accountById(c.env.DB, fromAccountId);
@@ -1434,8 +1511,8 @@ app.post("/gifts", async (c) => {
   if (result.status === "already_gifted_today") {
     return c.json({ error: "already_gifted_today" }, 429);
   }
-  if (result.status === "daily_gift_limit") {
-    return c.json({ error: "daily_gift_limit" }, 429);
+  if (result.status === "gift_pending") {
+    return c.json({ error: "gift_pending" }, 409);
   }
   if (result.status === "insufficient_gold") {
     return c.json({ error: "insufficient_gold" }, 409);
@@ -1444,7 +1521,7 @@ app.post("/gifts", async (c) => {
   return c.json({
     ok: true,
     xpAwarded: db.GIFT_XP_REWARD,
-    giftsRemaining: Math.max(0, db.DAILY_GIFT_LIMIT - result.sentToday),
+    giftsSentToday: result.sentToday,
     balance: result.balance,
     accountVersion: result.accountVersion,
     lastRaidAt: result.lastRaidAt,

@@ -239,6 +239,38 @@ describe("ZombieField combine save migration", () => {
     expect(zombies.potFor("pot").busy).toBe(true);
   });
 
+  it("keeps the started slot order when the authoritative roster disagrees", () => {
+    const state = new GameState();
+    const defs = new Map<string, Partial<ZombieDef>>([
+      ["garden", { key: "garden", tier: 1, group: "Garden", category: "normal" }],
+      ["ordinary", { key: "ordinary", tier: 1, group: "Regular", category: "normal" }],
+    ]);
+    const field = { zombiePotId: () => "pot" } as unknown as Field;
+    const zombies = new ZombieField(
+      {} as GameAssets, field, state, (key) => defs.get(key) as ZombieDef | undefined
+    );
+    // The player put the NEWER garden zombie in slot 1 — that is what sets the species.
+    zombies.restorePots({ pot: {
+      parentAId: "new-garden", parentBId: "old-ordinary", keyA: "garden", keyB: "ordinary",
+      maskA: 0, maskB: 0, playerLevel: 17, reserved: true, startedAt: 0, finishAt: 0,
+    } });
+
+    // The server returns its roster in creation order, so the slot-2 parent comes first.
+    const recovered = zombies.reconcileServerPots([
+      { id: "old-ordinary", key: "ordinary", mutation: 0, lockedByRaid: "pot:pot" },
+      { id: "new-garden", key: "garden", mutation: 0, lockedByRaid: "pot:pot" },
+    ], true);
+
+    // These ids become the collect command's parentA/parentB: swapping them would make
+    // the server hand back a Regular Zombie instead of the Garden Zombie in slot 1.
+    expect(recovered.live).toEqual([{
+      potId: "pot", parentAId: "new-garden", parentBId: "old-ordinary", playerLevel: 17,
+    }]);
+    expect(zombies.potFor("pot").pending).toMatchObject({
+      parentAId: "new-garden", parentBId: "old-ordinary", keyA: "garden", keyB: "ordinary",
+    });
+  });
+
   it("recovers an orphaned authoritative Pot reservation as ready", () => {
     const state = new GameState();
     const defs = new Map<string, Partial<ZombieDef>>([

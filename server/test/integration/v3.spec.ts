@@ -67,11 +67,46 @@ describe("protocol v3 API", () => {
     expect(immediate.status, JSON.stringify(immediate.body)).toBe(200);
   });
 
-  it("makes two gifts free, charges 100 gold for gifts 3-10, and caps the day at ten", async () => {
+  it("remembers which parent was in Zombie Pot slot 1 across the hour it runs", async () => {
+    const session = await signIn(uniqueSub("pot-slot-order"));
+    await grantRoster(session, [
+      // Reserved in creation order, which is the order the roster projection returns —
+      // and the order a client that rebuilt its Pot job used to send back at collect.
+      { id: "pot-slot-older", key: "ZombieActorRegularTier1", mutation: 8, stored: false },
+      { id: "pot-slot-newer", key: "ZombieActorGardenTier1", mutation: 0, stored: false },
+    ]);
+
+    const before = await call<any>("POST", "/bootstrap", session.token, {});
+    const started = await call<any>("POST", "/commands", session.token,
+      commandBody(before.body, "pot-slot-start", 1, [
+        { type: "roster.combine_start", potId: "o1", parentAId: "pot-slot-newer", parentBId: "pot-slot-older" },
+      ]));
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    expect(started.body.results[0].status).toBe("applied");
+
+    // Re-bootstrap: the slot record has to survive the round trip through D1, not just
+    // live inside the request that started the combine.
+    const mid = await call<any>("POST", "/bootstrap", session.token, {});
+    const collected = await call<any>("POST", "/commands", session.token,
+      commandBody(mid.body, "pot-slot-collect", 2, [
+        { type: "roster.combine", potId: "o1", parentAId: "pot-slot-older", parentBId: "pot-slot-newer" },
+      ]));
+    expect(collected.status, JSON.stringify(collected.body)).toBe(200);
+    expect(collected.body.results[0].status).toBe("applied");
+
+    const childId = collected.body.results[0].createdIds[0];
+    const child = collected.body.gameplay.roster.find((unit: any) => unit.id === childId);
+    // Slot 1 was the Garden Zombie, so that is the species — the reversed collect
+    // command must not turn it back into a plain Zombie.
+    expect(child).toMatchObject({ key: "ZombieActorGardenTier1", mutation: 8 });
+  });
+
+  it("makes two gifts free, charges 100 gold after that, and imposes NO per-day ceiling", async () => {
     const sender = await signIn(uniqueSub("gift-xp-sender"));
-    await grantBalance(sender, { gold: 800 });
+    await grantBalance(sender, { gold: 1300 });
+    // Thirteen recipients — comfortably past the ten-a-day limit that used to apply.
     const recipients = await Promise.all(
-      Array.from({ length: 11 }, () => signIn(uniqueSub("gift-xp-recipient")))
+      Array.from({ length: 13 }, () => signIn(uniqueSub("gift-xp-recipient")))
     );
     for (const recipient of recipients) await befriend(sender, recipient);
 
@@ -82,15 +117,116 @@ describe("protocol v3 API", () => {
       ));
     }
 
-    expect(sends.slice(0, 10).every((send) => send.status === 200)).toBe(true);
-    expect(sends[0].body).toMatchObject({ xpAwarded: 5, giftsRemaining: 9, balance: { gold: 800, xp: 5 } });
-    expect(sends[1].body).toMatchObject({ xpAwarded: 5, giftsRemaining: 8, balance: { gold: 800, xp: 10 } });
-    expect(sends[2].body).toMatchObject({ xpAwarded: 5, giftsRemaining: 7, balance: { gold: 700, xp: 15 } });
-    expect(sends[9].body).toMatchObject({ xpAwarded: 5, giftsRemaining: 0, balance: { gold: 0, xp: 50 } });
-    expect(sends[10]).toMatchObject({ status: 429, body: { error: "daily_gift_limit" } });
+    expect(sends.every((send) => send.status === 200)).toBe(true);
+    expect(sends[0].body).toMatchObject({ xpAwarded: 5, giftsSentToday: 1, balance: { gold: 1300, xp: 5 } });
+    expect(sends[1].body).toMatchObject({ xpAwarded: 5, giftsSentToday: 2, balance: { gold: 1300, xp: 10 } });
+    expect(sends[2].body).toMatchObject({ xpAwarded: 5, giftsSentToday: 3, balance: { gold: 1200, xp: 15 } });
+    // The 11th, 12th and 13th sends of the day land like any other.
+    expect(sends[10].body).toMatchObject({ xpAwarded: 5, giftsSentToday: 11, balance: { gold: 400, xp: 55 } });
+    expect(sends[12].body).toMatchObject({ xpAwarded: 5, giftsSentToday: 13, balance: { gold: 200, xp: 65 } });
 
     const after = await call<any>("POST", "/bootstrap", sender.token, {});
-    expect(after.body.gameplay.balance).toMatchObject({ gold: 0, xp: 50 });
+    expect(after.body.gameplay.balance).toMatchObject({ gold: 200, xp: 65 });
+    // 13 gifts sent, 11 of them charged.
+    expect(1300 - after.body.gameplay.balance.gold).toBe(11 * 100);
+  });
+
+  it("refuses a second gift while the recipient still has the first unopened", async () => {
+    const sender = await signIn(uniqueSub("gift-pending-sender"));
+    const recipient = await signIn(uniqueSub("gift-pending-recipient"));
+    await grantBalance(sender, { gold: 5000 });
+    await befriend(sender, recipient);
+
+    expect((await call("POST", "/gifts", sender.token, { toAccountId: recipient.accountId })).status).toBe(200);
+    // Same day: the once-a-day rule is the one in the way, and says so.
+    const sameDay = await call<any>("POST", "/gifts", sender.token, { toAccountId: recipient.accountId });
+    expect(sameDay).toMatchObject({ status: 429, body: { error: "already_gifted_today" } });
+
+    // The friends list must show the block BEFORE the player tries to send.
+    const friends = await call<any[]>("GET", "/friends", sender.token);
+    expect(friends.body.find((f: any) => f.accountId === recipient.accountId))
+      .toMatchObject({ giftOnCooldown: true });
+
+    // Backdating the send to yesterday clears the once-a-day rule; the unopened gift
+    // must still block it, and the reason reported must switch accordingly.
+    await call("POST", "/dev/fixture/gift-backdate", sender.token, { toAccountId: recipient.accountId });
+    const nextDay = await call<any>("POST", "/gifts", sender.token, { toAccountId: recipient.accountId });
+    expect(nextDay).toMatchObject({ status: 409, body: { error: "gift_pending" } });
+    const stillBlocked = await call<any[]>("GET", "/friends", sender.token);
+    expect(stillBlocked.body.find((f: any) => f.accountId === recipient.accountId))
+      .toMatchObject({ giftOnCooldown: true, giftPending: true });
+
+    // Nothing was charged for either refusal.
+    expect((await call<any>("POST", "/bootstrap", sender.token, {})).body.gameplay.balance.gold).toBe(5000);
+
+    // Once they open it, the sender is free to gift again.
+    const inbox = await call<Array<{ id: string }>>("GET", "/gifts/inbox", recipient.token);
+    expect((await call("POST", "/gifts/claim", recipient.token, { giftId: inbox.body[0].id })).status).toBe(200);
+    expect((await call("POST", "/gifts", sender.token, { toAccountId: recipient.accountId })).status).toBe(200);
+  });
+
+  // ---- friend cap: bounds ACCEPTING, never receiving --------------------
+  // A full list keeps collecting requests; only the accept is refused. The cap is 50,
+  // and /dev/fixture/friends-fill seats an account on it rather than signing in fifty.
+  // Asserts the seeding actually landed: friendships.b_id is a foreign key, so a
+  // fixture that failed to create its placeholder accounts would leave the list EMPTY
+  // and every cap assertion below would pass for the wrong reason.
+  const fillFriends = async (s: { token: string }, count: number) => {
+    const r = await call<any>("POST", "/dev/fixture/friends-fill", s.token, { count });
+    expect(r.status).toBe(200);
+    expect(r.body.count).toBe(count);
+  };
+
+  it("a full account still RECEIVES requests but cannot accept them", async () => {
+    const full = await signIn(uniqueSub("cap-full"));
+    const asker = await signIn(uniqueSub("cap-asker"));
+    await fillFriends(full, 50);
+
+    // Receiving is untouched: the request lands in the inbox as usual.
+    await call("POST", "/friends/add", asker.token, { code: full.friendCode });
+    const reqs = await call<any[]>("GET", "/friends/requests", full.token);
+    expect(reqs.body.map((r: any) => r.fromAccountId)).toContain(asker.accountId);
+
+    // Only the accept is refused — and the request survives it, so nothing is lost.
+    const refused = await call<any>("POST", "/friends/accept", full.token, { fromAccountId: asker.accountId });
+    expect(refused).toMatchObject({ status: 409, body: { error: "friends_full" } });
+    const still = await call<any[]>("GET", "/friends/requests", full.token);
+    expect(still.body.map((r: any) => r.fromAccountId)).toContain(asker.accountId);
+  });
+
+  it("refuses an accept that would push the REQUESTER past the cap", async () => {
+    const full = await signIn(uniqueSub("cap-req-full"));
+    const other = await signIn(uniqueSub("cap-req-other"));
+    // Filed while there was still room; the requester fills up while it sits pending.
+    await call("POST", "/friends/add", full.token, { code: other.friendCode });
+    await fillFriends(full, 50);
+    const refused = await call<any>("POST", "/friends/accept", other.token, { fromAccountId: full.accountId });
+    expect(refused).toMatchObject({ status: 409, body: { error: "requester_full" } });
+    expect((await call<any[]>("GET", "/friends", other.token)).body).toHaveLength(0);
+  });
+
+  it("adding back someone who already asked does not bypass the cap", async () => {
+    const full = await signIn(uniqueSub("cap-mutual-full"));
+    const asker = await signIn(uniqueSub("cap-mutual-asker"));
+    await call("POST", "/friends/add", asker.token, { code: full.friendCode });
+    await fillFriends(full, 50);
+    // Mutual intent normally auto-accepts; at the cap it must not, and must stay a
+    // non-oracle while refusing.
+    const r = await call<any>("POST", "/friends/add", full.token, { code: asker.friendCode });
+    expect(r.status).toBe(200);
+    expect((await call<any[]>("GET", "/friends", asker.token)).body).toHaveLength(0);
+    // The request is still pending, so it works the moment room is made.
+    const reqs = await call<any[]>("GET", "/friends/requests", full.token);
+    expect(reqs.body.map((req: any) => req.fromAccountId)).toContain(asker.accountId);
+  });
+
+  it("accepts normally one under the cap", async () => {
+    const near = await signIn(uniqueSub("cap-near"));
+    const asker = await signIn(uniqueSub("cap-near-asker"));
+    await fillFriends(near, 49);
+    await call("POST", "/friends/add", asker.token, { code: near.friendCode });
+    expect((await call("POST", "/friends/accept", near.token, { fromAccountId: asker.accountId })).status).toBe(200);
+    expect((await call<any[]>("GET", "/friends", asker.token)).body).toHaveLength(1);
   });
 
   it("does not send, charge, or award XP when a paid gift lacks 100 gold", async () => {
@@ -303,6 +439,37 @@ describe("protocol v3 API", () => {
     const again = await call<any>("POST", "/gifts/claim", recipient.token, { giftId: gifts[2] });
     expect(again.body).toMatchObject({ credited: false, alreadyClaimed: true, reward: null });
     expect(again.body.balance).toMatchObject({ gold: gold + 500, brains: brains + 2 });
+  });
+
+  it("tells the friends list how generous each friend has been, and how recently they played", async () => {
+    const me = await signIn(uniqueSub("friend-stats-me"));
+    const generous = await signIn(uniqueSub("friend-stats-generous"));
+    const quiet = await signIn(uniqueSub("friend-stats-quiet"));
+    await befriend(generous, me);
+    await befriend(quiet, me);
+
+    // `generous` gifts me; `quiet` never does. One send is all today's rules allow
+    // per sender, so the lifetime count here is 1 vs 0.
+    expect((await call("POST", "/gifts", generous.token, { toAccountId: me.accountId })).status).toBe(200);
+
+    const friends = await call<any[]>("GET", "/friends", me.token);
+    expect(friends.status).toBe(200);
+    const rows = Object.fromEntries(friends.body.map((f: any) => [f.accountId, f]));
+    expect(rows[generous.accountId]).toMatchObject({ giftsReceived: 1, activity: "today" });
+    expect(rows[quiet.accountId]).toMatchObject({ giftsReceived: 0, activity: "today" });
+
+    // The count is lifetime, not an inbox count: claiming must not reset it.
+    const inbox = await call<Array<{ id: string }>>("GET", "/gifts/inbox", me.token);
+    expect((await call("POST", "/gifts/claim", me.token, { giftId: inbox.body[0].id })).status).toBe(200);
+    const after = await call<any[]>("GET", "/friends", me.token);
+    expect(after.body.find((f: any) => f.accountId === generous.accountId).giftsReceived).toBe(1);
+
+    // Only the coarse bucket is disclosed — never the raw last-online instant.
+    for (const row of after.body) {
+      expect(["today", "week", "away"]).toContain(row.activity);
+      expect(row).not.toHaveProperty("lastOnlineAt");
+      expect(row).not.toHaveProperty("last_online_at");
+    }
   });
 
   it("keeps a gift's contents sealed until it is opened", async () => {

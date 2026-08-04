@@ -240,6 +240,14 @@ export interface PlaceableDef {
   brainsNeeded?: boolean;
   /** Original Market RGB, applied multiplicatively to the object sprite. */
   color?: [number, number, number];
+  /** Base tile this row recolours — same art and footprint, different `color`.
+   *  Absent on ordinary items and on the family's base row. Quest objectives treat
+   *  a whole family as one item (see quest/objectVariants). */
+  variantOf?: string;
+  /** Seasonal label (christmas, easter, …). Absent = evergreen, always on sale.
+   *  A labelled row is buyable only while its label is on the market allow-list;
+   *  see src/decorThemes.ts. */
+  theme?: string;
   tileW: number; // footprint width in tiles
   tileH: number; // footprint height in tiles
   // Movement collision can be WIDER than the placement footprint. A fence occupies a
