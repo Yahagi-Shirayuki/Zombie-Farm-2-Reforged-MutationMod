@@ -933,8 +933,11 @@ app.get("/black-market/history", async (c) => {
   return c.json(await blackMarket.history(c.env.DB, c.get("accountId")));
 });
 
+// Collecting is no longer pure bookkeeping: it is also where the recipient takes
+// delivery of a traded zombie, which mints a roster row — hence the mutation gate.
 app.post("/black-market/orders/:id/collect", async (c) => {
   if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
+  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
   const result = await blackMarket.collect(c.env.DB, c.get("accountId"), c.req.param("id"), Date.now());
   if (!("ok" in result)) return c.json({ error: result.error }, result.status);
   return c.json(result);
@@ -2338,9 +2341,12 @@ app.post("/roster/actions", async (c) => {
         const a = byId.get(r.id);
         if (!a) return [];
         if (a.type === "combineCollect") {
+          // No kCombinerHarvestedNotification here: that event now means "the Pot
+          // produced a species neither parent was" (isCombinePromotion), and this
+          // legacy path only accepts a result that IS one of the two parent keys —
+          // so a promotion cannot reach it. The v3 combine command emits it.
           return [
             { id: `roster:${r.id}:combine`, type: "kCombinerCombinedNotification", subject: r.combinedSubject ?? "" },
-            { id: `roster:${r.id}:collect`, type: "kCombinerHarvestedNotification", subject: r.subject },
           ];
         }
         return [];

@@ -36,6 +36,21 @@ function isSilverKey(key: string): boolean {
   return /Tier4/.test(key);
 }
 
+/**
+ * Did the Pot produce a species that neither parent was? Only such a genuine
+ * promotion — a matched pair breeding up to its silver, or the rare tier-5 roll
+ * — counts for the "Combine for a <silver>" quests (21 / 22).
+ *
+ * Without this the objectives were self-serving: slot 1 wins by default, so a
+ * player who already owned a Zombarian could re-cook it against anything (or
+ * against a second Zombarian, which `isSilverKey` keeps at tier 4) and get the
+ * same Zombarian back out — collecting it fired the harvest notification and
+ * closed the requirement without breeding anything.
+ */
+export function isCombinePromotion(resultKey: string, keyA: string, keyB: string): boolean {
+  return resultKey !== keyA && resultKey !== keyB;
+}
+
 export interface CombineSpeciesParent {
   key: string;
   /** Body type — the only trait besides `isSpecial` that still affects selection

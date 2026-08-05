@@ -10,6 +10,7 @@ import type {
   BlackMarketOrderView,
   BlackMarketSummary,
   BlackMarketTradeStats,
+  ClaimedUnit,
 } from "../../../src/net/protocol";
 import objectRows from "../../../public/assets/placeables.json";
 import { SLOTS, SLOT_MASK } from "../../../src/zombie/mutations";
@@ -27,23 +28,46 @@ const DAILY_LIMIT = 50 as const;
 const MAX_PRICE = 1_000_000;
 const PAGE_SIZE = 30;
 
-const objectArmyCapacityCases = (objectRows as Array<{ key: string; armyMax?: number }>)
-  .filter((object) => Number.isSafeInteger(object.armyMax) && (object.armyMax ?? 0) > 0)
-  .map((object) => `WHEN '${object.key.replaceAll("'", "''")}' THEN ${object.armyMax}`)
-  .join(" ");
+const placedObjectCases = (field: "armyMax" | "zombieSlots") =>
+  (objectRows as Array<{ key: string; armyMax?: number; zombieSlots?: number }>)
+    .filter((object) => Number.isSafeInteger(object[field]) && (object[field] ?? 0) > 0)
+    .map((object) => `WHEN '${object.key.replaceAll("'", "''")}' THEN ${object[field]}`)
+    .join(" ");
 
-/** SQL expression used while inserting a traded zombie. Keeping this decision inside
- * the fulfillment batch makes two simultaneous deliveries observe authoritative roster
- * occupancy in transaction order instead of both claiming the final active slot. */
-const recipientStoredSql = `CASE WHEN
-  (SELECT COUNT(*) FROM roster_v3 WHERE account_id=? AND stored=0) >=
-  (COALESCE((SELECT CAST(json_extract(current_json,'$.zombieMax') AS INTEGER)
+const placedObjects = `FROM object_documents_v3 documents, json_each(documents.current_json) entry
+  WHERE documents.account_id=? AND json_extract(entry.value,'$.status')='placed'`;
+
+/** Deployed units the army cap limits. A unit reserved in a Zombie Pot is already
+ *  `stored`, so it never counts here. */
+const ACTIVE_UNITS = "(SELECT COUNT(*) FROM roster_v3 WHERE account_id=? AND stored=0)";
+/** Mausoleum occupants. Pot reservations are deliberately excluded: they are flagged
+ *  `stored` purely to free their army slot, the client hides them, and counting them
+ *  would make the crypt read full to the server and roomy to the player (see the
+ *  `reservedInPot` note in engine.ts). */
+const CRYPT_UNITS = `(SELECT COUNT(*) FROM roster_v3 WHERE account_id=? AND stored=1
+  AND (locked_by_raid IS NULL OR locked_by_raid NOT LIKE 'pot:%'))`;
+/** zombieMax plus every placed object that raises it (Zombie Monolith). */
+const ARMY_CAP = `(COALESCE((SELECT CAST(json_extract(current_json,'$.zombieMax') AS INTEGER)
     FROM gameplay_documents_v3 WHERE account_id=?),16) +
-   COALESCE((SELECT SUM(CASE json_extract(entry.value,'$.catalogKey')
-     ${objectArmyCapacityCases} ELSE 0 END)
-    FROM object_documents_v3 documents, json_each(documents.current_json) entry
-    WHERE documents.account_id=? AND json_extract(entry.value,'$.status')='placed'),0))
-  THEN 1 ELSE 0 END`;
+  COALESCE((SELECT SUM(CASE json_extract(entry.value,'$.catalogKey')
+    ${placedObjectCases("armyMax")} ELSE 0 END) ${placedObjects}),0))`;
+/** Storage slots of the placed Mausoleum, by tier. ZERO with none placed — the case
+ *  that made a purchase disappear into a crypt the player does not own. */
+const CRYPT_CAP = `COALESCE((SELECT MAX(CASE json_extract(entry.value,'$.catalogKey')
+    ${placedObjectCases("zombieSlots")} ELSE 0 END) ${placedObjects}),0)`;
+
+/** Where a claimed zombie lands: the army first, the Mausoleum once it is full.
+ *  Binds: active-count, zombieMax, army-objects. */
+const claimDestinationSql = `CASE WHEN ${ACTIVE_UNITS} >= ${ARMY_CAP} THEN 1 ELSE 0 END`;
+const claimDestinationBinds = (accountId: string) => [accountId, accountId, accountId];
+
+/** True while EITHER destination has a free slot. Evaluated inside the mutating batch
+ *  so two simultaneous deliveries observe occupancy in transaction order instead of
+ *  both claiming the same last slot. Binds: active, zombieMax, army-objects, crypt
+ *  count, crypt objects. */
+const hasRoomSql = `(${ACTIVE_UNITS} < ${ARMY_CAP} OR ${CRYPT_UNITS} < ${CRYPT_CAP})`;
+const hasRoomBinds = (accountId: string) =>
+  [accountId, accountId, accountId, accountId, accountId];
 
 interface OrderRow {
   id: string;
@@ -58,6 +82,11 @@ interface OrderRow {
   created_at: number;
   escrow_mutation: number | null;
   escrow_invasions: number | null;
+  // Present on every `SELECT o.*`; the traded unit as stamped at settlement, and
+  // whether the recipient has taken delivery of it yet (migrations 0033 / 0040).
+  delivered_mutation?: number | null;
+  delivered_invasions?: number | null;
+  claimed_at?: number | null;
 }
 
 interface ReceiptRow { request_fingerprint: string; order_id: string }
@@ -233,21 +262,36 @@ interface FulfillmentRow {
   escrow_invasions: number | null;
   delivered_mutation: number | null;
   delivered_invasions: number | null;
+  creator_account_id: string;
+  claimed_at: number | null;
   fulfilled_by_name: string | null;
+  creator_name: string | null;
 }
 
-/** The caller's fulfilled-but-uncollected orders, newest first. Settlement has
- * already happened for these; they exist so the creator finally hears about it. */
+/** The caller's settled-but-uncollected orders, newest first. Settlement has already
+ * happened for all of these; they exist so each side finally hears about it — and, for
+ * whoever the trade owes a zombie, so they have somewhere to take delivery.
+ *
+ * Both sides of a sale can hold a card for the same order at once: the seller's says
+ * the brains arrived (`acknowledged_at`), the buyer's still owes them the zombie
+ * (`claimed_at`). The two flags are independent, so one collecting never hides the
+ * other's card. */
 export async function fulfillments(
   db: D1Database,
   accountId: string
 ): Promise<BlackMarketFulfillmentsResponse> {
   const result = await db.prepare(`SELECT o.id,o.kind,o.zombie_key,o.mutated_required,o.price_brains,
       o.created_at,o.closed_at,o.escrow_mutation,o.escrow_invasions,
-      o.delivered_mutation,o.delivered_invasions,a.username AS fulfilled_by_name
-    FROM black_market_orders o LEFT JOIN accounts a ON a.id=o.fulfilled_by_account_id
-    WHERE o.creator_account_id=? AND o.status='FULFILLED' AND o.acknowledged_at IS NULL
-    ORDER BY o.closed_at DESC LIMIT ?`).bind(accountId, FULFILLMENT_PAGE).all<FulfillmentRow>();
+      o.delivered_mutation,o.delivered_invasions,o.creator_account_id,o.claimed_at,
+      a.username AS fulfilled_by_name, ca.username AS creator_name
+    FROM black_market_orders o
+    LEFT JOIN accounts a ON a.id=o.fulfilled_by_account_id
+    JOIN accounts ca ON ca.id=o.creator_account_id
+    WHERE o.status='FULFILLED' AND (
+      (o.creator_account_id=?1 AND o.acknowledged_at IS NULL)
+      OR (o.claimed_at IS NULL AND ?1 = CASE o.kind
+            WHEN 'SELL_ZOMBIE' THEN o.fulfilled_by_account_id ELSE o.creator_account_id END))
+    ORDER BY o.closed_at DESC LIMIT ?2`).bind(accountId, FULFILLMENT_PAGE).all<FulfillmentRow>();
   const views: BlackMarketFulfillmentView[] = (result.results ?? []).map((row) => {
     // The traded unit, whichever direction it moved: a sale's escrowed zombie or the
     // unit the fulfiller handed over for a request. Both are stamped on the order at
@@ -257,6 +301,10 @@ export async function fulfillments(
       (row.kind === "SELL_ZOMBIE" ? row.escrow_mutation : null);
     const invasions = row.delivered_invasions ??
       (row.kind === "SELL_ZOMBIE" ? row.escrow_invasions : null);
+    const mine = row.creator_account_id === accountId;
+    // A sale's buyer is its fulfiller, so "who completed the trade" is the wrong name
+    // to show them — every card names the player on the OTHER side.
+    const counterparty = (mine ? row.fulfilled_by_name : row.creator_name) ?? "Player";
     return {
       id: row.id,
       kind: row.kind,
@@ -266,17 +314,79 @@ export async function fulfillments(
       priceBrains: row.price_brains,
       createdAt: row.created_at,
       fulfilledAt: row.closed_at,
-      fulfilledBy: row.fulfilled_by_name ?? "Player",
+      fulfilledBy: counterparty,
+      ...(row.claimed_at === null && (row.kind === "SELL_ZOMBIE") !== mine
+        ? { awaitingClaim: true }
+        : {}),
     };
   });
   return { fulfillments: views };
 }
 
-/** Acknowledge one fulfilled order so it stops surfacing as uncollected. Pure
- * bookkeeping — it moves no balance, roster, or account version, so plain idempotent
- * UPDATE semantics are enough.
+/** Who the traded zombie belongs to once the order settles: the fulfiller bought it
+ *  on a sale, the creator requested it on a buy. */
+const recipientOf = (row: Pick<OrderRow, "kind" | "creator_account_id"> & {
+  fulfilled_by_account_id?: string | null;
+}): string | null =>
+  row.kind === "SELL_ZOMBIE" ? row.fulfilled_by_account_id ?? null : row.creator_account_id;
+
+/** Does this account have a free army slot or a free Mausoleum slot? Read outside the
+ *  mutating batch to turn "nowhere to put it" into a precise error; the same condition
+ *  is re-asserted inside the batch (`hasRoomSql`) so the answer cannot go stale. */
+async function hasDeliveryRoom(db: D1Database, accountId: string): Promise<boolean> {
+  const row = await db.prepare(`SELECT ${hasRoomSql} AS room`)
+    .bind(...hasRoomBinds(accountId)).first<{ room: number }>();
+  return !!row?.room;
+}
+
+/** Mint a settled trade's zombie into the recipient's roster, army slot first and
+ *  Mausoleum second. Idempotent on `claimed_at`, and refused outright when neither
+ *  destination has room — the unit keeps waiting on the order instead of being flagged
+ *  `stored` into a crypt the player may not own. */
+async function claimDelivery(
+  db: D1Database,
+  accountId: string,
+  row: OrderRow & { fulfilled_by_account_id: string | null },
+  now: number
+): Promise<{ unit: ClaimedUnit } | MarketFailure> {
+  if (!await hasDeliveryRoom(db, accountId)) return { status: 409, error: "no_room" };
+  const unitId = crypto.randomUUID();
+  const mutation = row.delivered_mutation ?? row.escrow_mutation ?? 0;
+  const invasions = row.delivered_invasions ?? row.escrow_invasions ?? 0;
+  // The `/black-market/*` writer middleware opens this caller's operation lease for
+  // the life of the request, so requiring it here is what fences the claim against a
+  // second device — the same guard every other market mutation uses.
+  const claim = db.prepare(`UPDATE black_market_orders SET claimed_at=?,delivered_unit_id=?
+    WHERE id=? AND status='FULFILLED' AND claimed_at IS NULL AND ${hasRoomSql}
+      AND EXISTS(SELECT 1 FROM account_runtime_v3 WHERE account_id=? AND active_batch_id IS NOT NULL)`)
+    .bind(now, unitId, row.id, ...hasRoomBinds(accountId), accountId);
+  const guard = "EXISTS(SELECT 1 FROM black_market_orders WHERE id=? AND delivered_unit_id=?)";
+  const committed = await db.batch([
+    claim,
+    db.prepare(`INSERT INTO roster_v3(account_id,unit_id,zombie_key,mutation,invasions,stored,created_at)
+      SELECT ?,?,?,?,?,${claimDestinationSql},? WHERE ${guard}`)
+      .bind(accountId, unitId, row.zombie_key, mutation, invasions,
+        ...claimDestinationBinds(accountId), now, row.id, unitId),
+    db.prepare(`UPDATE account_runtime_v3 SET account_version=account_version+1,updated_at=?
+      WHERE account_id=? AND ${guard}`).bind(now, accountId, row.id, unitId),
+    db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
+      SELECT ?,?,'black_market_claim',?,? WHERE ${guard}`)
+      .bind(`${accountId}:claim:${unitId}`, accountId,
+        JSON.stringify({ orderId: row.id, zombieKey: row.zombie_key, unitId }), now, row.id, unitId),
+  ]);
+  if ((committed[0]?.meta.changes ?? 0) !== 1) return { status: 409, error: "claim_conflict" };
+  const stored = await db.prepare("SELECT stored FROM roster_v3 WHERE account_id=? AND unit_id=?")
+    .bind(accountId, unitId).first<{ stored: number }>();
+  return { unit: { unitId, zombieKey: row.zombie_key, mutation, invasions, stored: !!stored?.stored } };
+}
+
+/** Collect one settled order: take delivery of the zombie it owes this account (if
+ * any), then acknowledge it so it stops surfacing as uncollected.
  *
- * It DOES echo the current balance. The brains were credited at settlement, by the
+ * The claim runs FIRST and its failure aborts the whole thing — acknowledging an order
+ * whose zombie could not land would dismiss the only card that can still deliver it.
+ *
+ * It also echoes the current balance. The brains were credited at settlement, by the
  * other player's fulfil — an event this account's client never saw — so collecting is
  * the moment it must learn the new total. Reading it here costs one extra SELECT and
  * saves the client a whole second round-trip. */
@@ -287,17 +397,34 @@ export async function collect(
   now: number
 ): Promise<BlackMarketCollectResponse | MarketFailure> {
   if (!validId(orderId)) return { status: 400, error: "bad_market_collect" };
-  const updated = await db.prepare(`UPDATE black_market_orders SET acknowledged_at=?
-    WHERE id=? AND creator_account_id=? AND status='FULFILLED' AND acknowledged_at IS NULL`)
-    .bind(now, orderId, accountId).run();
-  if ((updated.meta.changes ?? 0) === 1) {
-    return { ok: true, alreadyCollected: false, ...await balanceEcho(db, accountId) };
-  }
-  const row = await orderRow(db, orderId);
+  const row = await db.prepare(`SELECT o.*, a.username AS creator_name FROM black_market_orders o
+    JOIN accounts a ON a.id=o.creator_account_id WHERE o.id=?`).bind(orderId)
+    .first<OrderRow & { fulfilled_by_account_id: string | null; claimed_at: number | null }>();
   if (!row) return { status: 404, error: "order_not_found" };
-  if (row.creator_account_id !== accountId) return { status: 403, error: "not_order_owner" };
+  const isCreator = row.creator_account_id === accountId;
+  const owedZombie = recipientOf(row) === accountId && row.claimed_at === null;
+  if (!isCreator && !owedZombie) return { status: 403, error: "not_order_owner" };
   if (row.status !== "FULFILLED") return { status: 409, error: "order_not_fulfilled" };
-  return { ok: true, alreadyCollected: true, ...await balanceEcho(db, accountId) };
+
+  let claimed: ClaimedUnit | undefined;
+  if (owedZombie) {
+    const result = await claimDelivery(db, accountId, row, now);
+    if (!("unit" in result)) return result;
+    claimed = result.unit;
+  }
+  const acknowledged = isCreator
+    ? await db.prepare(`UPDATE black_market_orders SET acknowledged_at=?
+        WHERE id=? AND creator_account_id=? AND status='FULFILLED' AND acknowledged_at IS NULL`)
+      .bind(now, orderId, accountId).run()
+    : null;
+  return {
+    ok: true,
+    // "Already collected" only describes the acknowledgment. A claim that just landed
+    // is news either way, so a fresh delivery never reports as a repeat.
+    alreadyCollected: !claimed && (acknowledged?.meta.changes ?? 0) !== 1,
+    ...(claimed ? { claimed } : {}),
+    ...await balanceEcho(db, accountId),
+  };
 }
 
 /** `{ balance }` for the account, or `{}` if the row is somehow missing — an absent
@@ -537,11 +664,20 @@ export async function cancel(
   if (!row) return { status: 404, error: "order_not_found" };
   if (row.creator_account_id !== accountId) return { status: 403, error: "not_order_owner" };
   if (row.status !== "OPEN") return { status: 409, error: "order_closed" };
+  // Taking a listing down hands the escrowed zombie straight back, so it needs
+  // somewhere to land. With the farm AND the Mausoleum full the cancel is refused
+  // outright rather than restoring a unit into a crypt that may not even exist —
+  // the listing stays open and the player can retry once they free a slot.
+  if (row.kind === "SELL_ZOMBIE" && !await hasDeliveryRoom(db, accountId))
+    return { status: 409, error: "no_room" };
   const restoredId = crypto.randomUUID();
+  const roomGuard = row.kind === "SELL_ZOMBIE"
+    ? { sql: ` AND ${hasRoomSql}`, binds: hasRoomBinds(accountId) }
+    : { sql: "", binds: [] };
   const claim = db.prepare(`UPDATE black_market_orders SET status='CANCELLED',closed_at=?,closed_operation_id=?
     WHERE id=? AND creator_account_id=? AND status='OPEN' AND EXISTS(SELECT 1 FROM account_runtime_v3
-      WHERE account_id=? AND account_version=? AND active_batch_id IS NOT NULL)`)
-    .bind(now, operationId, orderId, accountId, accountId, expectedVersion);
+      WHERE account_id=? AND account_version=? AND active_batch_id IS NOT NULL)${roomGuard.sql}`)
+    .bind(now, operationId, orderId, accountId, accountId, expectedVersion, ...roomGuard.binds);
   const guard = "EXISTS(SELECT 1 FROM black_market_orders WHERE id=? AND status='CANCELLED' AND closed_operation_id=?)";
   const statements: D1PreparedStatement[] = [claim];
   // from_escrow=1: this is the seller's own zombie coming home, not an acquisition.
@@ -549,9 +685,9 @@ export async function cancel(
   // Almanac, so list/cancel cycles inflated that species' lifetime count.
   if (row.kind === "SELL_ZOMBIE") statements.push(db.prepare(`INSERT INTO roster_v3
     (account_id,unit_id,zombie_key,mutation,invasions,stored,from_escrow,created_at)
-    SELECT ?,?,?,?,?,${recipientStoredSql},1,? WHERE ${guard}`).bind(accountId, restoredId, row.zombie_key,
+    SELECT ?,?,?,?,?,${claimDestinationSql},1,? WHERE ${guard}`).bind(accountId, restoredId, row.zombie_key,
       row.escrow_mutation ?? 0, row.escrow_invasions ?? 0,
-      accountId, accountId, accountId, now, orderId, operationId));
+      ...claimDestinationBinds(accountId), now, orderId, operationId));
   else statements.push(db.prepare(`UPDATE balances SET brains=brains+? WHERE account_id=? AND ${guard}`)
     .bind(row.price_brains, accountId, orderId, operationId));
   statements.push(
@@ -618,7 +754,6 @@ export async function fulfill(
   if (creatorRuntime?.active_batch_id && creatorRuntime.active_batch_expires_at > now)
     return { status: 409, error: "counterparty_busy" };
 
-  const recipientUnitId = crypto.randomUUID();
   const mutationAsset = mutationRequirementSql(row.mutation_required);
   const actorAsset = row.kind === "SELL_ZOMBIE"
     ? "EXISTS(SELECT 1 FROM balances WHERE account_id=? AND brains>=?)"
@@ -657,25 +792,20 @@ export async function fulfill(
       db.prepare(`UPDATE balances SET brains=brains-? WHERE account_id=? AND ${guard}`)
         .bind(row.price_brains, accountId, orderId, operationId),
       db.prepare(`UPDATE balances SET brains=brains+? WHERE account_id=? AND ${guard}`)
-        .bind(row.price_brains, row.creator_account_id, orderId, operationId),
-      db.prepare(`INSERT INTO roster_v3(account_id,unit_id,zombie_key,mutation,invasions,stored,created_at)
-        SELECT ?,?,?,?,?,${recipientStoredSql},? WHERE ${guard}`).bind(accountId, recipientUnitId, row.zombie_key,
-          row.escrow_mutation ?? 0, row.escrow_invasions ?? 0,
-          accountId, accountId, accountId, now, orderId, operationId)
+        .bind(row.price_brains, row.creator_account_id, orderId, operationId)
     );
   } else {
     statements.push(
       db.prepare(`DELETE FROM roster_v3 WHERE account_id=? AND unit_id=? AND ${guard}`)
         .bind(accountId, offered!.unitId, orderId, operationId),
       db.prepare(`UPDATE balances SET brains=brains+? WHERE account_id=? AND ${guard}`)
-        .bind(row.price_brains, accountId, orderId, operationId),
-      db.prepare(`INSERT INTO roster_v3(account_id,unit_id,zombie_key,mutation,invasions,stored,created_at)
-        SELECT ?,?,?,?,?,${recipientStoredSql},? WHERE ${guard}`).bind(row.creator_account_id, recipientUnitId,
-          row.zombie_key, offered!.mutation, offered!.invasions,
-          row.creator_account_id, row.creator_account_id, row.creator_account_id,
-          now, orderId, operationId)
+        .bind(row.price_brains, accountId, orderId, operationId)
     );
   }
+  // The traded zombie is NOT minted here. It waits on the order (its species and
+  // stats are stamped in `delivered_*` above) until the recipient claims it, so a
+  // recipient with no free army slot and no Mausoleum cannot be handed a unit that
+  // has nowhere to exist. See `claimDelivery`.
   statements.push(
     db.prepare(`UPDATE account_runtime_v3 SET account_version=account_version+1,updated_at=? WHERE account_id=?
       AND account_version=? AND ${guard}`).bind(now, accountId, expectedVersion, orderId, operationId),
@@ -687,7 +817,8 @@ export async function fulfill(
     db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
       SELECT ?,?,'black_market_fulfill',?,? WHERE ${guard}`)
       .bind(`${accountId}:market:${operationId}`, accountId, JSON.stringify({ orderId, creatorAccountId: row.creator_account_id,
-        zombieKey: row.zombie_key, priceBrains: row.price_brains, recipientUnitId }), now, orderId, operationId)
+        zombieKey: row.zombie_key, priceBrains: row.price_brains,
+        recipientAccountId }), now, orderId, operationId)
   );
   const committed = await db.batch(statements);
   if ((committed[0]?.meta.changes ?? 0) !== 1) return { status: 409, error: "state_conflict" };

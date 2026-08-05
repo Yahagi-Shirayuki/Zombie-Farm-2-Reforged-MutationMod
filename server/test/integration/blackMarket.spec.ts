@@ -9,6 +9,9 @@ const bootstrap = async (session: Awaited<ReturnType<typeof signIn>>) => {
 
 const operation = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 
+/** The writer clientId `signIn` acquires; a command batch's deviceId must equal it. */
+const WRITER_DEVICE = "device-aaaaaaaa";
+
 describe("Black Market", () => {
   it("allows 10 concurrent posts and explains the active limit on the 11th", async () => {
     const poster = await signIn(uniqueSub("market-active-limit"));
@@ -222,21 +225,36 @@ describe("Black Market", () => {
     const buyerAfter = await bootstrap(buyer);
     expect(sellerAfter.gameplay.balance.brains).toBe(sellerBefore.gameplay.balance.brains + 5);
     expect(buyerAfter.gameplay.balance.brains).toBe(buyerBefore.gameplay.balance.brains - 5);
-    expect(buyerAfter.gameplay.roster).toEqual(expect.arrayContaining([
+    // The brains move at settlement, the zombie waits to be collected.
+    expect(buyerAfter.gameplay.roster).toHaveLength(0);
+    const waiting = await call<any>("GET", "/black-market/fulfillments", buyer.token);
+    expect(waiting.body.fulfillments).toEqual([
+      expect.objectContaining({ id: created.body.order.id, awaitingClaim: true }),
+    ]);
+
+    const collected = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, buyer.token, {});
+    expect(collected.status, JSON.stringify(collected.body)).toBe(200);
+    expect(collected.body.claimed).toMatchObject({ zombieKey: "ZombieActorRegularTier1", stored: false });
+    expect((await bootstrap(buyer)).gameplay.roster).toEqual([
       expect.objectContaining({ key: "ZombieActorRegularTier1", mutation: 4, invasions: 3, stored: false }),
-    ]));
+    ]);
+    // Collecting twice must not mint a second copy.
+    const again = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, buyer.token, {});
+    expect(again.status).toBe(403);
+    expect((await bootstrap(buyer)).gameplay.roster).toHaveLength(1);
   });
 
-  it("puts a purchased zombie in storage when the active farm is full", async () => {
+  it("holds a purchase as an uncollectable delivery until the buyer frees a slot", async () => {
     const seller = await signIn(uniqueSub("market-full-seller"));
     const buyer = await signIn(uniqueSub("market-full-buyer"));
     const saleUnitId = `market-sale-${crypto.randomUUID()}`;
     await grantRoster(seller, [{ id: saleUnitId, key: "ZombieActorRegularTier1" }]);
-    await grantRoster(buyer, Array.from({ length: 16 }, (_, index) => ({
+    const blockers = Array.from({ length: 16 }, (_, index) => ({
       id: `market-active-${index}-${crypto.randomUUID()}`,
       key: "ZombieActorGirlTier1",
       stored: false,
-    })));
+    }));
+    await grantRoster(buyer, blockers);
 
     const sellerBefore = await bootstrap(seller);
     const created = await call<any>("POST", "/black-market/orders", seller.token, {
@@ -247,16 +265,45 @@ describe("Black Market", () => {
 
     const buyerBefore = await bootstrap(buyer);
     expect(buyerBefore.gameplay.roster.filter((unit: any) => !unit.stored)).toHaveLength(16);
+    // The purchase itself still goes through — the brains move, the seller is paid.
     const fulfilled = await call<any>("POST", `/black-market/orders/${created.body.order.id}/fulfill`, buyer.token, {
       operationId: operation("full-fulfill"), expectedAccountVersion: buyerBefore.accountVersion,
     });
     expect(fulfilled.status, JSON.stringify(fulfilled.body)).toBe(200);
+    expect((await bootstrap(buyer)).gameplay.roster).toHaveLength(16);
 
+    // With no army slot and no Mausoleum placed, the zombie has nowhere to land, so
+    // the claim is refused rather than flagged into a crypt the buyer does not own.
+    const blocked = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, buyer.token, {});
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error).toBe("no_room");
+    expect((await bootstrap(buyer)).gameplay.roster).toHaveLength(16);
+    // It is still offered, not lost.
+    const waiting = await call<any>("GET", "/black-market/fulfillments", buyer.token);
+    expect(waiting.body.fulfillments).toHaveLength(1);
+
+    const freed = await bootstrap(buyer);
+    const sold = await call<any>("POST", "/commands", buyer.token, {
+      protocolVersion: 3,
+      deviceId: WRITER_DEVICE,
+      batchId: operation("free-a-slot"),
+      firstSequence: 1,
+      expectedAccountVersion: freed.accountVersion,
+      writerGeneration: freed.writer.generation,
+      takeWriter: false,
+      commands: [{ sequence: 1, command: { type: "roster.sell", unitId: blockers[0].id } }],
+    });
+    expect(sold.status, JSON.stringify(sold.body)).toBe(200);
+    expect(sold.body.results[0].status).toBe("applied");
+
+    const collected = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, buyer.token, {});
+    expect(collected.status, JSON.stringify(collected.body)).toBe(200);
+    expect(collected.body.claimed).toMatchObject({ zombieKey: "ZombieActorRegularTier1", stored: false });
     const buyerAfter = await bootstrap(buyer);
     expect(buyerAfter.gameplay.roster).toEqual(expect.arrayContaining([
-      expect.objectContaining({ key: "ZombieActorRegularTier1", stored: true }),
+      expect.objectContaining({ key: "ZombieActorRegularTier1", stored: false }),
     ]));
-    expect(buyerAfter.gameplay.roster.filter((unit: any) => !unit.stored)).toHaveLength(16);
+    expect(buyerAfter.gameplay.roster.filter((unit: any) => unit.stored)).toHaveLength(0);
   });
 
   it("refunds a cancelled brain request and does not refund the daily post count", async () => {
@@ -324,13 +371,15 @@ describe("Black Market", () => {
       unitId: matchingId,
     });
     expect(fulfilled.status).toBe(200);
+    const delivery = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, requester.token, {});
+    expect(delivery.status, JSON.stringify(delivery.body)).toBe(200);
     expect((await bootstrap(requester)).gameplay.roster).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: "ZombieActorRegularTier1", mutation: 128 | 8 }),
     ]));
   });
 
-  it("returns a cancelled sale to the farm unless the active farm is full", async () => {
-    const cancelSale = async (prefix: string, activeCount: number, expectedStored: boolean) => {
+  it("refuses to cancel a sale the seller has no room to take back", async () => {
+    const cancelSale = async (prefix: string, activeCount: number) => {
       const seller = await signIn(uniqueSub(prefix));
       const saleUnitId = `${prefix}-sale-${crypto.randomUUID()}`;
       await grantRoster(seller, [
@@ -349,24 +398,36 @@ describe("Black Market", () => {
       expect(created.status, JSON.stringify(created.body)).toBe(200);
 
       const escrowed = await bootstrap(seller);
-      const cancelled = await call<any>("POST", `/black-market/orders/${created.body.order.id}/cancel`, seller.token, {
-        operationId: operation(`${prefix}-cancel`), expectedAccountVersion: escrowed.accountVersion,
-      });
-      expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200);
-
-      const after = await bootstrap(seller);
-      expect(after.gameplay.roster).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          key: "ZombieActorRegularTier1", mutation: 2, invasions: 4, stored: expectedStored,
-          // The returned zombie is the seller's own, back under a new unit id. The
-          // flag is how the client knows not to credit it to the Zombie Almanac.
-          restored: true,
+      return {
+        seller,
+        orderId: created.body.order.id as string,
+        cancelled: await call<any>("POST", `/black-market/orders/${created.body.order.id}/cancel`, seller.token, {
+          operationId: operation(`${prefix}-cancel`), expectedAccountVersion: escrowed.accountVersion,
         }),
-      ]));
+      };
     };
 
-    await cancelSale("market-cancel-room", 0, false);
-    await cancelSale("market-cancel-full", 16, true);
+    const roomy = await cancelSale("market-cancel-room", 0);
+    expect(roomy.cancelled.status, JSON.stringify(roomy.cancelled.body)).toBe(200);
+    expect((await bootstrap(roomy.seller)).gameplay.roster).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: "ZombieActorRegularTier1", mutation: 2, invasions: 4, stored: false,
+        // The returned zombie is the seller's own, back under a new unit id. The
+        // flag is how the client knows not to credit it to the Zombie Almanac.
+        restored: true,
+      }),
+    ]));
+
+    // A cancel hands the zombie straight back — there is no waiting card to hold it —
+    // so with the army full and no Mausoleum placed the cancel itself is refused. The
+    // listing survives, which is the recoverable outcome.
+    const full = await cancelSale("market-cancel-full", 16);
+    expect(full.cancelled).toMatchObject({ status: 409, body: { error: "no_room" } });
+    const stillListed = await call<any>("GET", "/black-market/orders?kind=SELL_ZOMBIE&mine=true", full.seller.token);
+    expect(stillListed.body.orders).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: full.orderId, status: "OPEN" }),
+    ]));
+    expect((await bootstrap(full.seller)).gameplay.roster).toHaveLength(16);
   });
 
   it("surfaces a fulfilled post to its creator until collected", async () => {
@@ -397,8 +458,9 @@ describe("Black Market", () => {
     });
     expect(fulfilled.status, JSON.stringify(fulfilled.body)).toBe(200);
 
-    // The creator sees the fulfillment with the escrowed unit's details; the
-    // fulfilling buyer has nothing to collect and cannot collect the seller's notice.
+    // BOTH sides hold a card for the same order: the seller's says the brains landed,
+    // the buyer's still owes them the zombie. The two flags are independent, so one
+    // collecting cannot dismiss the other's.
     const pending = await call<any>("GET", "/black-market/fulfillments", seller.token);
     expect(pending.status).toBe(200);
     expect(pending.body.fulfillments).toHaveLength(1);
@@ -406,15 +468,27 @@ describe("Black Market", () => {
       id: orderId, kind: "SELL_ZOMBIE", zombieKey: "ZombieActorRegularTier1",
       mutated: true, mutation: 4, invasions: 2, priceBrains: 5,
     });
-    expect((await call<any>("GET", "/black-market/fulfillments", buyer.token)).body.fulfillments).toEqual([]);
-    const foreign = await call<any>("POST", `/black-market/orders/${orderId}/collect`, buyer.token, {});
-    expect(foreign).toMatchObject({ status: 403, body: { error: "not_order_owner" } });
+    expect(pending.body.fulfillments[0].awaitingClaim).toBeUndefined();
+    const buyerPending = await call<any>("GET", "/black-market/fulfillments", buyer.token);
+    expect(buyerPending.body.fulfillments).toEqual([
+      expect.objectContaining({ id: orderId, awaitingClaim: true }),
+    ]);
 
     const collected = await call<any>("POST", `/black-market/orders/${orderId}/collect`, seller.token, {});
     expect(collected).toMatchObject({ status: 200, body: { ok: true, alreadyCollected: false } });
+    expect(collected.body.claimed).toBeUndefined();
     const again = await call<any>("POST", `/black-market/orders/${orderId}/collect`, seller.token, {});
     expect(again).toMatchObject({ status: 200, body: { ok: true, alreadyCollected: true } });
     expect((await call<any>("GET", "/black-market/fulfillments", seller.token)).body.fulfillments).toEqual([]);
+    // The seller collecting their brains left the buyer's delivery untouched.
+    expect((await call<any>("GET", "/black-market/fulfillments", buyer.token)).body.fulfillments)
+      .toHaveLength(1);
+    const delivered = await call<any>("POST", `/black-market/orders/${orderId}/collect`, buyer.token, {});
+    expect(delivered.status, JSON.stringify(delivered.body)).toBe(200);
+    expect(delivered.body.claimed).toMatchObject({ zombieKey: "ZombieActorRegularTier1", stored: false });
+    // Once claimed, a non-creator has no further business with the order.
+    const foreign = await call<any>("POST", `/black-market/orders/${orderId}/collect`, buyer.token, {});
+    expect(foreign).toMatchObject({ status: 403, body: { error: "not_order_owner" } });
   });
 
   it("surfaces a filled request to the requester with the fulfiller's delivery", async () => {

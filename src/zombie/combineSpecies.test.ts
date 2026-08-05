@@ -4,6 +4,7 @@ import {
   COMBINE_SPECIAL_BY_GROUP,
   COMBINE_SPECIAL_CHANCE,
   createCombineRandom,
+  isCombinePromotion,
   selectCombineSpecies,
   type CombineSpeciesParent,
 } from "./combineSpecies";
@@ -150,5 +151,33 @@ describe("Zombie Pot species selection", () => {
       25,
       missesPromotion
     )).toBe("mutant");
+  });
+});
+
+describe("combine promotion (what the 'combine for a <silver>' quests credit)", () => {
+  const brute = parent("ZombieActorLargeTier3", { group: "Large", tier: 3 });
+
+  it("counts a matched pair that breeds up to its silver", () => {
+    const result = selectCombineSpecies(brute, { ...brute }, 25, missesPromotion)!;
+    expect(isCombinePromotion(result, brute.key, brute.key)).toBe(true);
+  });
+
+  it("counts the rare tier-5 roll", () => {
+    const result = selectCombineSpecies(brute, { ...brute }, 25, promotes)!;
+    expect(isCombinePromotion(result, brute.key, brute.key)).toBe(true);
+  });
+
+  it("does not count a silver re-cooked in slot 1 against anything", () => {
+    const zombarian = parent("ZombieActorLargeTier4", { group: "Large", tier: 4 });
+    const filler = parent("ZombieActorRegularTier1");
+    const result = selectCombineSpecies(zombarian, filler, 25, missesPromotion)!;
+    expect(result).toBe(zombarian.key);
+    expect(isCombinePromotion(result, zombarian.key, filler.key)).toBe(false);
+  });
+
+  it("does not count a matched silver pair that failed to promote", () => {
+    const zombarian = parent("ZombieActorLargeTier4", { group: "Large", tier: 4 });
+    const result = selectCombineSpecies(zombarian, { ...zombarian }, 25, missesPromotion)!;
+    expect(isCombinePromotion(result, zombarian.key, zombarian.key)).toBe(false);
   });
 });

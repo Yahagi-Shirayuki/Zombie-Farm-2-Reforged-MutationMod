@@ -975,6 +975,34 @@ describe("protocol v3 command engine", () => {
     expect(replaced.results[0]).toMatchObject({ status: "applied" });
   });
 
+  it("refuses to pack a Mausoleum or a shed into the shed", () => {
+    // Shelving the crypt would strip its capacity out from under the zombies inside,
+    // leaving them stored in a building the farm no longer has. The client hides the
+    // action; this is the authoritative half. (A shed cannot contain itself either.)
+    const state = freshGameplayState();
+    state.objects.objects.push(
+      { instanceId: "tomb", catalogKey: "mausoleum3", status: "placed" },
+      { instanceId: "shed", catalogKey: "storage03", status: "placed" },
+    );
+    state.roster = [
+      { id: "occupant", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: true },
+    ];
+
+    const result = applyCommandBatch(state, commands(
+      { type: "object.status", instanceId: "tomb", status: "stored" },
+      { type: "object.status", instanceId: "shed", status: "stored" },
+    ), { now: 100 });
+
+    expect(result.results[0]).toMatchObject({ status: "rejected", error: "not_storable" });
+    expect(result.results[1]).toMatchObject({ status: "rejected", error: "not_storable" });
+    expect(result.state.objects.objects.every((object) => object.status === "placed")).toBe(true);
+    // Moving the Mausoleum around the farm is still fine.
+    const moved = applyCommandBatch(result.state, commands({
+      type: "object.status", instanceId: "tomb", status: "placed",
+    }), { now: 101 });
+    expect(moved.results[0]).toMatchObject({ status: "applied" });
+  });
+
   it("moves a bare tilled plot", () => {
     const state = freshGameplayState();
     state.balance.gold = 10_000;
@@ -1233,6 +1261,9 @@ describe("protocol v3 command engine", () => {
   it("stores a combine award when stored parents do not free an active slot", () => {
     const state = freshGameplayState();
     state.zombieMax = 1;
+    // The crypt the parents already occupy — without it there is nowhere to store the
+    // child either, and the combine is refused (see the next case).
+    state.objects.objects.push({ instanceId: "tomb", catalogKey: "mausoleum3", status: "placed" });
     state.roster = [
       { id: "active", key: "ZombieActorHeadlessTier1", mutation: 0, invasions: 0, stored: false },
       { id: "a", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: true },
@@ -1244,6 +1275,50 @@ describe("protocol v3 command engine", () => {
 
     expect(result.results[0]).toMatchObject({ status: "applied", createdIds: ["stored-child"] });
     expect(result.state.roster.find((unit) => unit.id === "stored-child")).toMatchObject({ stored: true });
+  });
+
+  it("refuses a combine whose child would land in a Mausoleum the farm does not have", () => {
+    const state = freshGameplayState();
+    state.zombieMax = 1;
+    // No Mausoleum placed, so crypt capacity is zero. The army is full and consuming
+    // the two stored parents does not free an active slot, so the child has nowhere to
+    // exist — it used to be flagged `stored` into a building that isn't there, which is
+    // how a farm could own a zombie it could never see, deploy, or raid with.
+    state.roster = [
+      { id: "active", key: "ZombieActorHeadlessTier1", mutation: 0, invasions: 0, stored: false },
+      { id: "a", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: true },
+      { id: "b", key: "ZombieActorGirlTier1", mutation: 0, invasions: 0, stored: true },
+    ];
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", parentAId: "a", parentBId: "b" },
+    ), { now: 1, id: () => "homeless-child" });
+
+    expect(result.results[0]).toMatchObject({ status: "rejected", error: "capacity_full" });
+    // Rejecting must leave the parents intact — they are only consumed on success.
+    expect(result.state.roster.map((unit) => unit.id)).toEqual(["active", "a", "b"]);
+  });
+
+  it("lets a crypt-bound parent free the slot its own child then takes", () => {
+    const state = freshGameplayState();
+    state.zombieMax = 1;
+    // A single-slot Mausoleum, both of whose occupants are the parents. Consuming them
+    // frees two slots, so the child fits even though the crypt reads full going in.
+    state.objects.objects.push({ instanceId: "tomb", catalogKey: "mausoleum3", status: "placed" });
+    state.roster = [
+      { id: "active", key: "ZombieActorHeadlessTier1", mutation: 0, invasions: 0, stored: false },
+      ...Array.from({ length: 13 }, (_, index) => ({
+        id: `filler-${index}`, key: "ZombieActorGirlTier1", mutation: 0, invasions: 0, stored: true,
+      })),
+      { id: "a", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: true },
+      { id: "b", key: "ZombieActorGirlTier1", mutation: 0, invasions: 0, stored: true },
+    ];
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", parentAId: "a", parentBId: "b" },
+    ), { now: 1, id: () => "recycled-slot-child" });
+
+    expect(result.results[0]).toMatchObject({ status: "applied" });
+    expect(result.state.roster.find((unit) => unit.id === "recycled-slot-child"))
+      .toMatchObject({ stored: true });
   });
 
   it("uses a mutant only as the mutation donor and never invents mutations", () => {
@@ -1533,6 +1608,59 @@ describe("protocol v3 command engine", () => {
     expect(result.state.roster).toContainEqual(expect.objectContaining({
       id: "child", key: "ZombieActorLargeTier4",
     }));
+  });
+
+  it("credits the 'combine for a silver' quest when the pair actually breeds up", () => {
+    const state = freshGameplayState();
+    state.balance.xp = 20_500;
+    state.quests.completed = ["21"];
+    const [parentAId, parentBId] = commonCombinePairIds();
+    state.roster = [
+      { id: parentAId, key: "ZombieActorLargeTier3", mutation: 0, invasions: 0, stored: false },
+      { id: parentBId, key: "ZombieActorLargeTier3", mutation: 0, invasions: 0, stored: false },
+    ];
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", parentAId, parentBId, playerLevel: 25 }
+    ), { now: 1, id: () => "child" });
+    // Quest 22's requirements are [Party Zombie, Zombarian, Zombee].
+    expect(result.state.quests.progress.find((entry) => entry.questId === "22")?.counts).toEqual([0, 1, 0]);
+  });
+
+  it("does not credit that quest for re-cooking a silver the player already owns", () => {
+    const state = freshGameplayState();
+    state.balance.xp = 20_500;
+    state.quests.completed = ["21"];
+    const [parentAId, parentBId] = commonCombinePairIds();
+    state.roster = [
+      // Slot 1 wins, so this Zombarian comes straight back out — no breeding happened
+      // and the objective must not advance (tester report, 2026-08-05).
+      { id: parentAId, key: "ZombieActorLargeTier4", mutation: 0, invasions: 0, stored: false },
+      { id: parentBId, key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: false },
+    ];
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", parentAId, parentBId, playerLevel: 25 }
+    ), { now: 1, id: () => "child" });
+    expect(result.state.roster).toContainEqual(expect.objectContaining({
+      id: "child", key: "ZombieActorLargeTier4",
+    }));
+    expect(result.state.quests.progress.find((entry) => entry.questId === "22")?.counts ?? [0, 0, 0])
+      .toEqual([0, 0, 0]);
+  });
+
+  it("does not credit it for a matched pair of silvers that fails to promote either", () => {
+    const state = freshGameplayState();
+    state.balance.xp = 20_500;
+    state.quests.completed = ["21"];
+    const [parentAId, parentBId] = commonCombinePairIds();
+    state.roster = [
+      { id: parentAId, key: "ZombieActorLargeTier4", mutation: 0, invasions: 0, stored: false },
+      { id: parentBId, key: "ZombieActorLargeTier4", mutation: 0, invasions: 0, stored: false },
+    ];
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", parentAId, parentBId, playerLevel: 25 }
+    ), { now: 1, id: () => "child" });
+    expect(result.state.quests.progress.find((entry) => entry.questId === "22")?.counts ?? [0, 0, 0])
+      .toEqual([0, 0, 0]);
   });
 
   it("strips head and hair/eye mutations from a headless combine child", () => {

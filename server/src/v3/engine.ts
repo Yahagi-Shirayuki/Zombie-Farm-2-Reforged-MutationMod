@@ -28,7 +28,7 @@ import {
 import { dropsEpicBossToken } from "../../../src/epicBoss/tokens";
 import { combineMasks } from "../../../src/zombie/mutations";
 import { resolveCropMutations, touchingPlotOffsets } from "../../../src/zombie/cropMutations";
-import { createCombineRandom, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
+import { createCombineRandom, isCombinePromotion, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
 import { harvestXp, plowXp } from "../../../src/farmRewards";
 import { questSubjectMatches } from "../../../src/quest/matching";
 import { objectQuestAliases } from "../../../src/quest/objectVariants";
@@ -770,6 +770,14 @@ function applyOne(
     case "object.status": {
       const obj = state.objects.objects.find((o) => o.instanceId === command.instanceId);
       if (!obj) return reject(sequence, "not_owned");
+      // A building that HOLDS things cannot itself be put away — packing the Mausoleum
+      // into the shed would take the crypt out from under its occupants and leave them
+      // stored nowhere, and the shed cannot contain itself. The client's `canStore`
+      // already refuses both; this is the authoritative half of that rule.
+      const rule = objectRules.get(obj.catalogKey);
+      if (command.status === "stored" && ((rule?.zombieSlots ?? 0) > 0 || (rule?.storageSlots ?? 0) > 0)) {
+        return reject(sequence, "not_storable");
+      }
       obj.status = command.status;
       return { sequence, status: "applied" };
     }
@@ -878,6 +886,17 @@ function applyOne(
       if (marker && activeAfterParents >= capacity.army) {
         return reject(sequence, "capacity_full");
       }
+      // Where the child lands once both parents are consumed: the army first, the
+      // Mausoleum once that is full. Neither having room means it has nowhere to exist
+      // — and a farm with no Mausoleum placed has NO crypt room at all — so the combine
+      // is refused rather than flagging the child `stored` into a building the player
+      // does not own. Decided BEFORE the parents leave the roster: rejecting afterwards
+      // would destroy them for nothing. Consuming a crypt-bound parent frees its slot.
+      const stored = marker ? false : activeAfterParents >= capacity.army;
+      const freedCrypt = [a, b].filter((parent) => parent.stored && !reservedInPot(parent)).length;
+      if (stored && storedUnits(state) - freedCrypt >= capacity.storage) {
+        return reject(sequence, "capacity_full");
+      }
       const id = options.id();
       // Mutation inheritance never invents a new bit. It carries one mutation per
       // anatomical slot and deterministically resolves a same-slot conflict. A
@@ -893,15 +912,19 @@ function applyOne(
         delete remaining[command.potId];
         state.potSlots = remaining;
       }
-      const stored = marker ? false : activeUnits(state) >= capacity.army;
       state.roster.push({ id, key: resultKey, mutation, invasions: 0, stored });
       created.push(id);
       if (!reserved) events.push(combinerCombined(a, b));
-      events.push({
-        type: "kCombinerHarvestedNotification",
-        subject: zombieNames.get(resultKey) ?? resultKey,
-        aliases: unitSubjectAliases(zombieNames.get(resultKey) ?? resultKey, mutation, mutantSubjects),
-      });
+      // The harvest notification (the "Combine for a <silver>" quests) is only
+      // earned by a species neither parent was — re-cooking a silver hands slot 1's
+      // own species back and must not close the objective. See isCombinePromotion.
+      if (isCombinePromotion(resultKey, a.key, b.key)) {
+        events.push({
+          type: "kCombinerHarvestedNotification",
+          subject: zombieNames.get(resultKey) ?? resultKey,
+          aliases: unitSubjectAliases(zombieNames.get(resultKey) ?? resultKey, mutation, mutantSubjects),
+        });
+      }
       return { sequence, status: "applied", createdIds: [id] };
     }
     case "shop.size": {

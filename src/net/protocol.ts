@@ -336,17 +336,35 @@ export interface BlackMarketFulfillmentView {
   priceBrains: number;
   createdAt: number;
   fulfilledAt: number;
-  /** Display name of the player who completed the trade. */
+  /** Display name of the OTHER player in the trade, whichever side the viewer is on. */
   fulfilledBy: string;
+  /** This card owes the viewer the traded zombie: the trade settled, but the unit
+   *  waits on the order until they collect it. Collecting is what mints it, and it is
+   *  refused while their farm and Mausoleum are both full. Absent on the pure
+   *  brains-earned card an older Worker is the only source of. */
+  awaitingClaim?: boolean;
 }
 
 export interface BlackMarketFulfillmentsResponse {
   fulfillments: BlackMarketFulfillmentView[];
 }
 
+/** A zombie that a collect just minted into the caller's roster. */
+export interface ClaimedUnit {
+  unitId: string;
+  zombieKey: string;
+  mutation: number;
+  invasions: number;
+  /** True when the army was full and it went to the Mausoleum instead. */
+  stored: boolean;
+}
+
 export interface BlackMarketCollectResponse {
   ok: true;
   alreadyCollected: boolean;
+  /** Set when this collect took delivery of a zombie, so the client knows to refresh
+   *  its authoritative roster (and can say where the unit landed). */
+  claimed?: ClaimedUnit;
   /** The account's authoritative balance, echoed so collecting shows the brains the
    *  trade already paid. Settlement credits them when the OTHER player fulfils the
    *  order, so without this the creator's client keeps a stale balance until its next

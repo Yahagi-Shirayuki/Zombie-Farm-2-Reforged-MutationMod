@@ -33,8 +33,8 @@ import { otherPlayMode, playModeDestinationLabel, type PlayMode } from "./playMo
 import type { UpdateCheckResult } from "./updateCheck";
 import type {
   BlackMarketFulfillmentView, BlackMarketHistoryResponse, BlackMarketListResponse,
-  BlackMarketMutationResponse, BlackMarketOrderKind, BlackMarketOrderView, FriendActivity,
-  GiftReward,
+  BlackMarketMutationResponse, BlackMarketOrderKind, BlackMarketOrderView, ClaimedUnit,
+  FriendActivity, GiftReward,
 } from "./net/protocol";
 import { FREE_DAILY_GIFTS, GIFT_GOLD_COST, GIFT_XP_REWARD, MAX_FRIENDS } from "./net/protocol";
 import {
@@ -1290,6 +1290,10 @@ export class Hud {
   onMausoleumUpgrade: (() => void | Promise<void>) | null = null;
   /** Whether the farm has a free army slot (gates the Deploy action). */
   canDeployZombie: (() => boolean) | null = null;
+  /** Whether an incoming zombie has anywhere to land — a free army slot, or a free
+   *  slot in a Mausoleum that is actually placed. Advisory only: the server decides
+   *  for real when the delivery is claimed. */
+  canTakeZombieDelivery: (() => boolean) | null = null;
   /** Select a deployed zombie and center the camera on it. */
   onZombieLocate: ((id: string) => void) | null = null;
   /** Permanently sell an owned zombie for gold (after confirmation). */
@@ -1308,10 +1312,13 @@ export class Hud {
   ) => Promise<BlackMarketMutationResponse>) | null = null;
   onCancelBlackMarketOrder: ((orderId: string) => Promise<BlackMarketMutationResponse>) | null = null;
   onFulfillBlackMarketOrder: ((order: BlackMarketOrderView, unitId?: string) => Promise<BlackMarketMutationResponse>) | null = null;
-  /** The player's own fulfilled-but-uncollected posts (trade already settled). */
+  /** The caller's settled-but-uncollected trades (both sides). */
   getBlackMarketFulfillments: (() => Promise<BlackMarketFulfillmentView[]>) | null = null;
-  /** Acknowledge one fulfilled post so it stops surfacing as uncollected. */
-  onCollectBlackMarketOrder: ((orderId: string) => Promise<void>) | null = null;
+  /** Collect one settled trade: takes delivery of the zombie it owes (returning the
+   *  unit that landed) and/or acknowledges it. Rejects with `no_room` when a delivery
+   *  has nowhere to go. */
+  onCollectBlackMarketOrder:
+    ((orderId: string, awaitingClaim: boolean) => Promise<ClaimedUnit | null>) | null = null;
   /** Completed-trade ledger (both roles) + lifetime aggregates. */
   getBlackMarketHistory: (() => Promise<BlackMarketHistoryResponse>) | null = null;
   /** The speed-grow (Insta-Grow) boost + a live owned-count getter, for the
@@ -3027,12 +3034,19 @@ export class Hud {
       if (!rows.length) return;
       const header = document.createElement("div");
       header.className = "bm-fulfill-title";
-      header.textContent = "Your posts went through! Collect to dismiss.";
+      header.textContent = rows.some((row) => row.awaitingClaim)
+        ? "Trades settled! Collect to take delivery."
+        : "Your posts went through! Collect to dismiss.";
       const rail = document.createElement("div");
       rail.className = "bm-fulfill-rail";
       fulfillStrip.append(header, rail);
       for (const entry of rows) {
-        const sold = entry.kind === "SELL_ZOMBIE";
+        // A card either owes this player a zombie (they bought it, or their request was
+        // filled) or reports brains that already landed. The zombie is minted by the
+        // Collect below — until then it lives on the order, so nothing can strand it in
+        // a Mausoleum the farm does not have.
+        const claiming = !!entry.awaitingClaim;
+        const sold = entry.kind === "SELL_ZOMBIE" && !claiming;
         const zombieName = cardFor(entry.zombieKey)?.name ?? entry.zombieKey;
         const card = document.createElement("div");
         card.className = "bm-card bm-fulfilled";
@@ -3052,7 +3066,9 @@ export class Hud {
         const body = document.createElement("div");
         const name = document.createElement("div");
         name.className = "bm-name";
-        name.textContent = sold ? `${zombieName} — Sold!` : `${zombieName} — Request filled!`;
+        name.textContent = sold ? `${zombieName} — Sold!`
+          : entry.kind === "SELL_ZOMBIE" ? `${zombieName} — Purchased!`
+          : `${zombieName} — Request filled!`;
         const traits = document.createElement("div");
         traits.className = "bm-fulfill-traits";
         if (entry.mutation !== undefined) {
@@ -3065,9 +3081,14 @@ export class Hud {
         const meta = document.createElement("div");
         meta.className = "bm-meta";
         const when = new Date(entry.fulfilledAt).toLocaleDateString();
+        const room = this.canTakeZombieDelivery?.() ?? true;
         meta.textContent = sold
           ? `Bought by ${entry.fulfilledBy} · ${when}\nThe brains are already in your balance.`
-          : `Delivered by ${entry.fulfilledBy} · ${when}\nThe zombie is on your farm (or stored if it was full).`;
+          : claiming
+            ? `From ${entry.fulfilledBy} · ${when}\n${room
+              ? "Waiting for you — collect to bring it home."
+              : "Your farm and Mausoleum are full. Free a slot, then collect."}`
+            : `Delivered by ${entry.fulfilledBy} · ${when}\nThe zombie is already on your farm.`;
         const cost = document.createElement("div");
         cost.className = "bm-price";
         cost.append(String(entry.priceBrains));
@@ -3080,14 +3101,21 @@ export class Hud {
         action.onclick = async () => {
           action.disabled = true;
           try {
-            await this.onCollectBlackMarketOrder?.(entry.id);
+            const claimed = await this.onCollectBlackMarketOrder?.(entry.id, claiming);
             card.remove();
             if (!rail.childElementCount) fulfillStrip.hidden = true;
             this.showToast(sold
               ? `Cha-ching! ${zombieName} sold to ${entry.fulfilledBy} for ${entry.priceBrains} brains. 🧠`
-              : `${zombieName} has joined your horde! 🧟`);
-          } catch {
-            this.showToast("Could not collect that just now. Try again in a moment.");
+              : claimed?.stored
+                ? `${zombieName} is resting in your Mausoleum — deploy it when there's room. 🧟`
+                : `${zombieName} has joined your horde! 🧟`);
+          } catch (error) {
+            // The delivery is never lost: refused for room, it keeps waiting on the
+            // card, so say what to do instead of the generic retry line.
+            const code = error instanceof Error ? error.message : "";
+            this.showToast(code.startsWith("no_room")
+              ? "No room! Free a farm slot (or a Mausoleum slot) and collect again."
+              : "Could not collect that just now. Try again in a moment.");
             action.disabled = false;
           }
         };
@@ -3248,7 +3276,16 @@ export class Hud {
                 this.showToast("Post cancelled — your escrow was returned.");
                 await renderOrders();
               }
-              catch { this.showToast("Could not cancel that post. Refresh and try again."); action.disabled = false; }
+              catch (error) {
+                // A cancel hands the escrowed zombie straight back — there is no waiting
+                // card to hold it — so it is refused outright when there is nowhere to
+                // put it. The post survives, so say what to free rather than "try again".
+                const code = error instanceof Error ? error.message : "";
+                this.showToast(code.startsWith("no_room")
+                  ? "Your farm and Mausoleum are full — free a slot before taking this zombie back."
+                  : "Could not cancel that post. Refresh and try again.");
+                action.disabled = false;
+              }
             };
             marketCard.appendChild(action);
           } else {
@@ -3264,6 +3301,12 @@ export class Hud {
               if (purchaseLock) { this.showToast(purchaseLock.label); return; }
               let unitId: string | undefined;
               let detail = `Spend ${order.priceBrains} brains for this zombie?`;
+              // Buying with nowhere to put it is allowed — the zombie waits on the
+              // Collect card rather than being forced somewhere — but say so up front
+              // instead of letting it look like the purchase went nowhere.
+              if (order.kind === "SELL_ZOMBIE" && this.canTakeZombieDelivery?.() === false) {
+                detail += "\n\nYour farm and Mausoleum are full, so it will wait to be collected until you free a slot.";
+              }
               if (order.kind === "BUY_ZOMBIE") {
                 const match = await this.chooseBlackMarketZombie(order);
                 if (!match) { this.showToast("You do not own a matching available zombie."); return; }
@@ -3276,9 +3319,12 @@ export class Hud {
                 refreshBalance();
                 const zombieName = cardFor(order.zombieKey)?.name ?? order.zombieKey;
                 this.showToast(order.kind === "SELL_ZOMBIE"
-                  ? `Bought ${zombieName} for ${order.priceBrains} brains! 🧟`
+                  ? `Bought ${zombieName} for ${order.priceBrains} brains — collect it above! 🧟`
                   : `Sold your ${zombieName} for ${order.priceBrains} brains! 🧠`);
                 await renderOrders();
+                // The purchase now waits as a collectable delivery, so surface its card
+                // straight away rather than at the next time the panel opens.
+                await renderFulfillments();
               }
               catch (error) {
                 const code = error instanceof Error ? error.message : "";

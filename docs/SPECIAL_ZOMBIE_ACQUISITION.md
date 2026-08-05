@@ -124,3 +124,18 @@ at all.
 > then higher combat tier, then a coin flip on a tie — see the zombie-pot disassembly
 > notes). Slot-1-wins is a deliberate design divergence from the source game, chosen so
 > the player controls the result instead of the catalog doing it for them.
+
+### What the combine quests credit
+
+Quests 21 and 22 ("Cook Up Some Zombies" / "…Some More") ask for each of the six
+silvers by name, via `kCombinerHarvestedNotification`. That event is emitted **only
+when the child's species is one neither parent was** — a matched pair breeding up, or
+the tier-5 roll (`isCombinePromotion` in `src/zombie/combineSpecies.ts`, applied by
+both the client pot and the authoritative combine command).
+
+Because slot 1 wins by default, an unconditional event let a player who already owned a
+Zombarian — bought as a zombie-field seed, won, or gifted — re-cook it against anything
+and collect the same Zombarian back out, closing the objective without breeding
+anything. (The source game had the same hole for a different reason: a silver paired
+with any veggie mutant won `determineBaseClass` deterministically.) Requiring a real
+promotion is another deliberate divergence.

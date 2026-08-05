@@ -1,4 +1,4 @@
-import { Application, Assets, Container, FederatedPointerEvent, Graphics, Point, Sprite, Text, Texture } from "pixi.js";
+import { Application, Assets, Container, FederatedPointerEvent, Graphics, Point, Sprite, Text, TextStyle, Texture } from "pixi.js";
 import { snapPlowOrigin } from "./plowSelection";
 // Patch Pixi's renderer to use no-eval polyfills for its shader/UBO/uniform/particle
 // codegen (it otherwise uses `new Function`, which the production CSP's script-src
@@ -16,6 +16,7 @@ import { makeOwned, type OwnedZombie } from "./zombie/types";
 import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
 import { almanacEntries, isEpicZombie, obtainHint } from "./zombie/almanac";
 import { POT_DURATION_MS } from "./zombie/ZombiePot";
+import { isCombinePromotion } from "./zombie/combineSpecies";
 import { GameState } from "./GameState";
 import { takeStoredObject } from "./storedObjectOwnership";
 import { Hud, graveNeededFor, LevelUpUnlock, ReceivedView, QuestCompleteView, QuestReward, type Mode } from "./hud";
@@ -676,7 +677,33 @@ async function main() {
     brains: await Assets.load<Texture>(`${BASE}assets/ui/topbar_brain_icon.png`),
     xp: await Assets.load<Texture>(`${BASE}assets/ui/topbar_exp_icon.png`),
   };
-  const floats: { view: Container; ttl: number; delay: number }[] = [];
+  // One shared style rather than a fresh literal per popup: Pixi keys its rasterised
+  // text cache on the style, so sharing one instance keeps every "+31g" hitting the
+  // same cached texture. Never mutate it.
+  const FLOAT_STYLE = new TextStyle({
+    fontFamily: "system-ui, sans-serif", fontSize: 20, fontWeight: "700",
+    fill: 0xffd24a, stroke: { color: 0x3a2400, width: 4 },
+  });
+  const FLOAT_ICON = 25; // px; re-applied on every reuse, since a texture swap resizes
+  type Float = { view: Container; text: Text; icon: Sprite; ttl: number; delay: number };
+  const floats: Float[] = [];
+  // Retired popups are reused instead of destroyed. Insta-Harvest pops every plot's
+  // OWN numbers in a single frame — up to three per plot, plus one per ripe tree — so
+  // a full farm builds hundreds at once. Beyond the allocation churn, destroying a
+  // Text drops its rasterised texture, which meant the next identical "+31g" had to be
+  // measured and re-rendered from scratch. The pool is capped so one huge harvest
+  // doesn't leave that many text textures resident afterwards.
+  const FLOAT_POOL_MAX = 96;
+  const floatPool: Float[] = [];
+  const makeFloat = (): Float => {
+    const text = new Text({ text: "", style: FLOAT_STYLE });
+    text.anchor.set(0.5, 0.5);
+    const icon = new Sprite();
+    icon.anchor.set(0.5);
+    const view = new Container();
+    view.addChild(icon, text);
+    return { view, text, icon, ttl: 0, delay: 0 };
+  };
   const floatText = (x: number, y: number, msg: string, delay = 0) => {
     const currency = /[+-]\d+g\b/.test(msg) ? "gold"
       : /[+-]\d+b\b/.test(msg) ? "brains"
@@ -685,30 +712,26 @@ async function main() {
       .replace(/([+-]\d+)g\b/g, "$1 gold")
       .replace(/([+-]\d+)b\b/g, "$1 brains")
       .replace(/([+-]\d+)xp\b/g, "$1 XP");
-    const view = new Container();
-    const t = new Text({
-      text: readable,
-      style: {
-        fontFamily: "system-ui, sans-serif", fontSize: 20, fontWeight: "700",
-        fill: 0xffd24a, stroke: { color: 0x3a2400, width: 4 },
-      },
-    });
-    t.anchor.set(0.5, 0.5);
+    const f = floatPool.pop() ?? makeFloat();
+    f.text.text = readable;
     if (currency) {
-      const icon = new Sprite(feedbackIcons[currency]);
-      icon.anchor.set(0.5);
-      icon.width = icon.height = 25;
-      const totalW = t.width + 31;
-      icon.x = -totalW / 2 + 12;
-      t.x = 15;
-      view.addChild(icon, t);
+      f.icon.texture = feedbackIcons[currency];
+      f.icon.width = f.icon.height = FLOAT_ICON;
+      f.icon.visible = true;
+      const totalW = f.text.width + 31;
+      f.icon.x = -totalW / 2 + 12;
+      f.text.x = 15;
     } else {
-      view.addChild(t);
+      f.icon.visible = false;
+      f.text.x = 0;
     }
-    view.position.set(x, y);
-    view.visible = delay <= 0;
-    world.addChild(view);
-    floats.push({ view, ttl: 1.1, delay });
+    f.view.position.set(x, y);
+    f.view.alpha = 1;
+    f.view.visible = delay <= 0;
+    f.ttl = 1.1;
+    f.delay = delay;
+    world.addChild(f.view);
+    floats.push(f);
   };
 
   // Purchases made on the farm use the same delayed world-space XP reward as a
@@ -2315,6 +2338,7 @@ async function main() {
   };
   hud.canStoreZombies = () => !!field.mausoleumId() && !zombies.mausoleumFull;
   hud.canDeployZombie = () => zombies.canAdd();
+  hud.canTakeZombieDelivery = () => zombies.canHarvestZombie();
   hud.onZombieRename = (id, requested) => {
     const name = zombies.rename(id, requested);
     if (name) saveManager.flushCritical();
@@ -2407,7 +2431,12 @@ async function main() {
       if (combined?.subject) {
         questBus.post(QuestEvent.CombinerCombined, combined.subject, 1, combined.aliases);
       }
-      questBus.post(QuestEvent.CombinerHarvested, z.typeName, 1, unitSubjectAliasesOf(z));
+      // Only a species neither parent was counts as "combined for" — see
+      // isCombinePromotion. A job with no snapshot to compare against keeps the
+      // old unconditional behavior rather than silently losing quest progress.
+      if (!pending || isCombinePromotion(z.key, pending.keyA, pending.keyB)) {
+        questBus.post(QuestEvent.CombinerHarvested, z.typeName, 1, unitSubjectAliasesOf(z));
+      }
       const c = tileCenter(z.col, z.row);
       floatText(c.x, c.y, z.mutation ? `${z.name}!` : z.name);
       // No toast naming the result: the Pot's ready view already shows the finished
@@ -2801,17 +2830,24 @@ async function main() {
     return result;
   };
   hud.getBlackMarketFulfillments = async () => (await api.blackMarketFulfillments()).fulfillments;
-  hud.onCollectBlackMarketOrder = async (orderId) => {
-    // Collection is pure acknowledgment — the trade settled when it happened — so no
-    // writer preparation is needed. The BALANCE still has to move on screen here: the
-    // brains were credited at settlement, by the counterparty's fulfil, an event this
-    // client never observed. Without adopting a fresh balance the payout stays
-    // invisible until the next bootstrap or command batch.
+  hud.onCollectBlackMarketOrder = async (orderId, awaitingClaim) => {
+    // A card that owes this account a zombie mints it here, so that side needs the
+    // same writer preparation as any other external mutation. A pure acknowledgment
+    // (the brains-earned card) still does not.
+    if (awaitingClaim) await economy?.prepareExternalMutation();
+    // The BALANCE has to move on screen either way: the brains were credited at
+    // settlement, by the counterparty's fulfil, an event this client never observed.
+    // Without adopting a fresh balance the payout stays invisible until the next
+    // bootstrap or command batch.
     const result = await api.collectBlackMarketOrder(orderId);
+    // A claimed zombie arrives as a roster row this client has never seen, so take the
+    // authoritative refresh rather than the cheap balance adopt.
+    if (result.claimed) await economy?.refreshAuthoritative();
     // Remain compatible while the manually deployed Worker rolls forward: an older
     // one omits the balance, so pay for a second round-trip only in that case.
-    if (result.balance) economy?.adoptExternalBalance(result.balance);
+    else if (result.balance) economy?.adoptExternalBalance(result.balance);
     else await economy?.refreshAuthoritative();
+    return result.claimed ?? null;
   };
   hud.getBlackMarketHistory = () => api.blackMarketHistory();
   hud.refreshFriends = async () => {
@@ -2931,7 +2967,14 @@ async function main() {
     }).catch(() => { /* best-effort toast; offline boot must not surface an error */ });
     void hud.getBlackMarketFulfillments?.().then((rows) => {
       const n = rows.length;
-      if (n) hud.showToast(n === 1
+      if (!n) return;
+      // A zombie waiting to be claimed is the more urgent of the two — it is not on the
+      // farm yet — so it names the toast whenever the batch contains one.
+      const zombies = rows.filter((row) => row.awaitingClaim).length;
+      if (zombies) hud.showToast(zombies === 1
+        ? "A Black Market zombie is waiting for you! Visit the market to collect. 🧟"
+        : `${zombies} Black Market zombies are waiting for you! Visit the market to collect. 🧟`);
+      else hud.showToast(n === 1
         ? "One of your Black Market posts was fulfilled! Visit the market to collect. 💰"
         : `${n} of your Black Market posts were fulfilled! Visit the market to collect. 💰`);
     }).catch(() => { /* best-effort toast; a market-disabled server must not surface an error */ });
@@ -4642,8 +4685,10 @@ async function main() {
       f.view.alpha = Math.min(1, f.ttl);
       if (f.ttl <= 0) {
         world.removeChild(f.view);
-        f.view.destroy({ children: true });
         floats.splice(i, 1);
+        // Back to the pool for the next popup; only the overflow is really destroyed.
+        if (floatPool.length < FLOAT_POOL_MAX) floatPool.push(f);
+        else f.view.destroy({ children: true });
       }
     }
     for (let i = harvestFx.length - 1; i >= 0; i--) {
@@ -4730,7 +4775,9 @@ async function main() {
         if (combined?.subject) {
           questBus.post(QuestEvent.CombinerCombined, combined.subject, 1, combined.aliases);
         }
-        questBus.post(QuestEvent.CombinerHarvested, z.typeName, 1, unitSubjectAliasesOf(z));
+        if (!pending || isCombinePromotion(z.key, pending.keyA, pending.keyB)) {
+          questBus.post(QuestEvent.CombinerHarvested, z.typeName, 1, unitSubjectAliasesOf(z));
+        }
       }
       return z;
     },
