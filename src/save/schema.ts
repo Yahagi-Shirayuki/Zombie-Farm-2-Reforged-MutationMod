@@ -163,8 +163,12 @@ export interface PlayerSave {
 export interface FarmerAppearanceSave {
   ownedHeads?: number[];
   ownedBodies?: number[];
+  /** The head worn — appearance only, and the face friends see beside your name. */
   headId?: number;
   bodyId?: number;
+  /** The head whose bonus is pinned. Absent/null = the worn head supplies it,
+   *  which is what every save written before the two-slot split means. */
+  bonusHeadId?: number | null;
 }
 
 export interface PetCollectionSave {

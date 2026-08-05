@@ -49,6 +49,8 @@ export type GameplayCommand =
   | { type: "shop.climate"; terrain: string }
   | { type: "farmer.buy"; headId: number }
   | { type: "farmer.equip"; headId: number }
+  /** Pin the head supplying bonuses; null hands the job back to the worn head. */
+  | { type: "farmer.bonus"; headId: number | null }
   | { type: "pet.buy"; petKey: string }
   | { type: "pet.equip"; petKey: string | null }
   | { type: "pet.pen"; petKeys: string[] }
@@ -157,7 +159,11 @@ export interface GameplayProjection {
   farmSize: number;
   climates: string[];
   farmerHeads: number[];
+  /** The head worn: appearance only, and the face friends see beside the name. */
   farmerHeadId: number;
+  /** The head whose bonus is pinned, or null to follow the worn one. Absent from a
+   *  Worker that predates the split — clients read that as null. */
+  farmerBonusHeadId?: number | null;
   ownedPets: string[];
   activePet: string | null;
   penPets: string[];

@@ -27,6 +27,9 @@ export interface Friend {
   /** Server-derived player level for online friends. Offline placeholder friends
    *  have no authoritative farm progression, so this is absent for them. */
   level?: number;
+  /** The Farmer head this friend is WEARING, shown as their face in the list.
+   *  Online only — a local entry has no account, and so no chosen appearance. */
+  headId?: number;
   /** Epoch ms this friend was added. */
   addedAt: number;
   /** Epoch ms of the last brain we gifted this friend. Absent = never gifted.

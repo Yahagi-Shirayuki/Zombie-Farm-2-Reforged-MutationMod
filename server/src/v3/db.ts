@@ -78,6 +78,7 @@ const coreFrom = (state: GameplayProjection) => ({
   climates: state.climates,
   farmerHeads: state.farmerHeads,
   farmerHeadId: state.farmerHeadId,
+  farmerBonusHeadId: state.farmerBonusHeadId ?? null,
   ownedPets: state.ownedPets,
   activePet: state.activePet,
   penPets: state.penPets,
@@ -180,6 +181,10 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
     climates: core.climates ?? ["grass"],
     farmerHeads: core.farmerHeads ?? base.farmerHeads,
     farmerHeadId: core.farmerHeadId ?? base.farmerHeadId,
+    // Absent in every core document written before the bonus slot existed, and null
+    // there means "the worn head supplies the bonus" — i.e. the behaviour those
+    // accounts already had, so no backfill migration is needed.
+    farmerBonusHeadId: core.farmerBonusHeadId ?? null,
     ownedPets: core.ownedPets ?? [],
     activePet: core.activePet ?? null,
     penPets: core.penPets ?? [],

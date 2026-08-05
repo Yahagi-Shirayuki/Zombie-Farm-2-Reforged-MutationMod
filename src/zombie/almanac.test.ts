@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  almanacEntries, backfillDiscovered, epicSource, isObtainable, obtainHint, sanitizeDiscovered,
+  almanacEntries, backfillDiscovered, isEpicZombie, isObtainable, obtainHint, sanitizeDiscovered,
 } from "./almanac";
 import { EPIC_QUEST_ZOMBIE_REWARDS } from "../epicBoss/rewards";
 import type { ZombieDef } from "../assets";
@@ -46,6 +46,27 @@ describe("almanacEntries", () => {
     ]);
   });
 
+  it("puts the epic group last, after Special, whatever its unlock levels say", () => {
+    // The epic entry is level 2 and the plain special level 5: group wins over level,
+    // or the panel's three headings would interleave.
+    expect(almanacEntries(zombies, { special: 1 }).map((z) => z.key)).toEqual([
+      "norm1", "norm2", "special", "ZombieActorDrZombie",
+    ]);
+  });
+
+  it("orders the epic group by event, keeping each boss's own prizes together", () => {
+    // Alphabetically this is Bandido, Dr., Omega Dr.; by event it is Dr. Groundhog's
+    // pair (1000/1011) and then Loco Locust's (2000).
+    const epics = [
+      def({ key: "ZombieActorOmegaDrZombie", name: "Omega Dr. Zombie", category: "special", rewardOnly: true }),
+      def({ key: "ZombieActorBandido", name: "Bandido Zombie", category: "special", rewardOnly: true }),
+      def({ key: "ZombieActorDrZombie", name: "Dr. Zombie", category: "special", rewardOnly: true }),
+    ];
+    expect(almanacEntries(epics, {}).map((z) => z.key)).toEqual([
+      "ZombieActorDrZombie", "ZombieActorOmegaDrZombie", "ZombieActorBandido",
+    ]);
+  });
+
   it("keeps an unobtainable species the player has already discovered", () => {
     expect(almanacEntries(zombies, { special: 1 }).map((z) => z.key)).toContain("special");
   });
@@ -84,34 +105,13 @@ describe("obtainHint", () => {
   });
 });
 
-describe("epicSource", () => {
-  it("tags an epic-reward zombie with its boss and ladder position", () => {
-    expect(epicSource(def({ key: "ZombieActorDrZombie", rewardOnly: true }), SOURCES))
-      .toEqual({ name: "Dr. Skunkarella", order: 1000 });
-  });
-
-  it("keeps an epic zombie in the tab even when its boss cannot be named", () => {
-    // Order still sorts it beside its own boss's other prize; only the heading is generic.
-    expect(epicSource(def({ key: "ZombieActorZomtar", rewardOnly: true }), SOURCES))
-      .toEqual({ name: "Epic Boss", order: 10011 });
-  });
-
-  it("leaves every non-epic species out of the epic tab", () => {
-    expect(epicSource(def({}), SOURCES)).toBeUndefined();
-    expect(epicSource(def({ key: OLD_MC_ZOMBIE_KEY, marketHidden: true }), SOURCES)).toBeUndefined();
-    expect(epicSource(def({ key: "ZombieActorLargeTier5", marketHidden: true }), SOURCES))
-      .toBeUndefined();
-  });
-
-  it("orders every reward so a boss's own prizes stay together, bosses in ladder order", () => {
-    const ordered = Object.entries(EPIC_QUEST_ZOMBIE_REWARDS)
-      .map(([questId, key]) => ({ questId, order: epicSource(def({ key }), SOURCES)?.order }))
-      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    // Grouped by the boss's thousands digit(s): 1000/1011, 2000/2011, … 10000/10011.
-    expect(ordered.map((entry) => entry.questId)).toEqual([
-      "1000", "1011", "2000", "2011", "3000", "3011", "4000", "4011", "5000", "5011",
-      "8000", "9000", "9011", "10000", "10011",
-    ]);
+describe("isEpicZombie", () => {
+  it("recognises every Epic Boss reward, and nothing else", () => {
+    for (const key of Object.values(EPIC_QUEST_ZOMBIE_REWARDS))
+      expect(isEpicZombie(def({ key })), key).toBe(true);
+    expect(isEpicZombie(def({}))).toBe(false); // market seed
+    expect(isEpicZombie(def({ key: OLD_MC_ZOMBIE_KEY, marketHidden: true }))).toBe(false); // raid
+    expect(isEpicZombie(def({ key: "ZombieActorLargeTier5", marketHidden: true }))).toBe(false); // pot
   });
 });
 

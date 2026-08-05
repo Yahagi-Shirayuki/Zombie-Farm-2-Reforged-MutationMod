@@ -193,21 +193,30 @@ export async function casWriteSave(
   return (res.meta.changes ?? 0) === 1 ? expectedRev + 1 : null;
 }
 
-/** My friends (both-directions storage means one indexed lookup). */
+/** My friends (both-directions storage means one indexed lookup).
+ *
+ *  `head_id` is the friend's WORN Farmer head, so their list entry can show the face
+ *  they chose instead of a generic row. It is pulled with json_extract rather than by
+ *  shipping the whole core document back: that blob also carries inventory, storage
+ *  and pot state, none of which a friend may see. NULL for an account that has never
+ *  materialized v3 state. */
 export async function listFriends(
   db: D1Database,
   accountId: string
-): Promise<Array<Account & { xp: number }>> {
+): Promise<Array<Account & { xp: number; head_id: number | null }>> {
   const res = await db
     .prepare(
-      `SELECT a.*, COALESCE(b.xp, 0) AS xp FROM accounts a
+      `SELECT a.*, COALESCE(b.xp, 0) AS xp,
+              json_extract(g.current_json, '$.farmerHeadId') AS head_id
+       FROM accounts a
        JOIN friendships f ON f.b_id = a.id
        LEFT JOIN balances b ON b.account_id = a.id
+       LEFT JOIN gameplay_documents_v3 g ON g.account_id = a.id
        WHERE f.a_id = ?
        ORDER BY a.username COLLATE NOCASE`
     )
     .bind(accountId)
-    .all<Account & { xp: number }>();
+    .all<Account & { xp: number; head_id: number | null }>();
   return res.results ?? [];
 }
 

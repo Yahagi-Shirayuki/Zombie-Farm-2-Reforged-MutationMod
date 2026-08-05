@@ -40,30 +40,23 @@ export function isObtainable(def: ZombieDef): boolean {
   );
 }
 
-/** Where an Epic Boss exclusive belongs in the Almanac's "Epic Zombies" tab: which
- *  boss awards it, and its place in the event ladder. */
-export interface EpicAlmanacSource {
-  name: string;
-  /** Sort key. Quest ids run 1000, 2000, … 10000 in the same order the boss catalog
-   *  lists its bosses, and each boss's ids ascend from its base prize to its omega
-   *  one — so sorting by the raw number groups a boss's prizes under it, in ladder
-   *  order, without the panel needing the boss catalog itself. */
-  order: number;
-}
+/** Is this species an Epic Boss exclusive? They are the Almanac's third group: a
+ *  timed-event source no other zombie shares, which read as noise while it was
+ *  scattered through Special among the Pot/raid/market specials. */
+export const isEpicZombie = (def: ZombieDef): boolean => def.key in EPIC_QUEST_BY_ZOMBIE;
 
-/** The Epic Boss that awards this species, or undefined for everything else. The
- *  Epic Zombies tab is exactly the entries that have one: they share a source no
- *  other zombie has (a timed event), and listing them among the Pot/raid/market
- *  specials made an event collection impossible to read as one. A boss whose name
- *  cannot be resolved still belongs in that tab, so it falls back to a generic
- *  heading rather than leaking back into the main collection. */
-export function epicSource(def: ZombieDef, sources: ObtainSources): EpicAlmanacSource | undefined {
-  const questId = EPIC_QUEST_BY_ZOMBIE[def.key];
-  if (questId === undefined) return undefined;
-  return { name: sources.epicBossNameByQuestId(questId) ?? "Epic Boss", order: Number(questId) };
-}
-
+// Group order down the Almanac: Normal, Special, then Epic. (Mutant base species are
+// filtered out entirely — see almanacEntries.)
 const CATEGORY_ORDER: Record<string, number> = { normal: 0, mutant: 1, special: 2 };
+const EPIC_ORDER = 3;
+const groupOrder = (def: ZombieDef): number =>
+  isEpicZombie(def) ? EPIC_ORDER : CATEGORY_ORDER[def.category] ?? 4;
+
+/** Sort key WITHIN the Epic group. Quest ids run 1000, 2000, … 10000 in the same
+ *  order the boss catalog lists its bosses, and each boss's ids ascend from its base
+ *  prize to its omega one — so the raw number keeps a boss's pair of zombies side by
+ *  side, in event order, instead of scattering them alphabetically. */
+const epicOrder = (def: ZombieDef): number => Number(EPIC_QUEST_BY_ZOMBIE[def.key] ?? 0);
 
 /** The almanac's entry list: every obtainable species, plus any species the
  *  player has already discovered even if it has no current source (a legacy or
@@ -71,7 +64,8 @@ const CATEGORY_ORDER: Record<string, number> = { normal: 0, mutant: 1, special: 
  *  excluded for now: players usually acquire mutations indirectly (mutation
  *  crops / Pot masks on other species), so a dex of mutant gravestones reads
  *  strangely — revisit alongside the future mutation almanac. Sorted for
- *  display: normal -> special, then by unlock level, then name. */
+ *  display into the panel's three groups: normal -> special -> epic, each by
+ *  unlock level then name (the epic group by its own event order instead). */
 export function almanacEntries(
   zombies: readonly ZombieDef[],
   discovered: DiscoveredMap
@@ -81,7 +75,8 @@ export function almanacEntries(
     .filter((def) => isObtainable(def) || (discovered[def.key] ?? 0) > 0)
     .sort(
       (a, b) =>
-        (CATEGORY_ORDER[a.category] ?? 3) - (CATEGORY_ORDER[b.category] ?? 3) ||
+        groupOrder(a) - groupOrder(b) ||
+        epicOrder(a) - epicOrder(b) ||
         a.level - b.level ||
         a.name.localeCompare(b.name)
     );

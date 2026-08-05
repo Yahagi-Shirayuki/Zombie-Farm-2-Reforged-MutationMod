@@ -84,7 +84,9 @@ export class EconomyClient {
   private ownershipCheckInFlight = false;
 
   onShopState: ((size: number, climates: string[]) => void) | null = null;
-  onFarmerState: ((headIds: number[], equippedHeadId: number) => void) | null = null;
+  onFarmerState:
+    ((headIds: number[], equippedHeadId: number, bonusHeadId: number | null | undefined) => void)
+    | null = null;
   onPetState: ((ownedPets: string[], activePet: string | null, penPets: string[]) => void) | null = null;
   onQuestState: ((state: api.QuestStateResult) => void) | null = null;
   onQuestChanges: ((changes: api.QuestChange[]) => void) | null = null;
@@ -575,15 +577,19 @@ export class EconomyClient {
     ) !== null;
   }
 
-  submitFarmerBuy(headId: number, currency: "gold" | "brains", cost: number): boolean {
+  submitFarmerBuy(headId: number, currency: "gold" | "brains", cost: number, xp: number): boolean {
     return this.enqueue(
       { type: "farmer.buy", headId },
-      currency === "gold" ? { gold: -cost } : { brains: -cost }
+      currency === "gold" ? { gold: -cost, xp } : { brains: -cost, xp }
     ) !== null;
   }
 
   submitFarmerEquip(headId: number): boolean {
     return this.enqueue({ type: "farmer.equip", headId }) !== null;
+  }
+
+  submitFarmerBonus(headId: number | null): boolean {
+    return this.enqueue({ type: "farmer.bonus", headId }) !== null;
   }
 
   submitPetBuy(petKey: string, cost: number, xp: number): boolean {
@@ -933,7 +939,7 @@ export class EconomyClient {
     }
     if (!deferStructural) {
       this.onShopState?.(gameplay.farmSize, gameplay.climates);
-      this.onFarmerState?.(gameplay.farmerHeads, gameplay.farmerHeadId);
+      this.onFarmerState?.(gameplay.farmerHeads, gameplay.farmerHeadId, gameplay.farmerBonusHeadId);
       this.onPetState?.(gameplay.ownedPets, gameplay.activePet, gameplay.penPets);
       this.onQuestState?.({
         completed: gameplay.quests.completed,

@@ -6,7 +6,7 @@ import { applyQuestEvents } from "./engine";
 import type { QuestProjection } from "../../../src/net/protocol";
 import type { RaidOutcome } from "../../../src/raid/types";
 import raidRows from "../../../public/assets/raids/raids.json";
-import { farmerCooldownMs } from "../../../src/farmer";
+import { activeBonusHeadId, farmerCooldownMs } from "../../../src/farmer";
 import { buildPinnedV3Raid, verifyRaid, RAID_RULESET_VERSION, type PinnedRaidConfig, type RaidReplayInput } from "../raidVerifier";
 import { rollBrainDrop, rollBrainDropWithPity, nextBrainDryStreak } from "../../../src/raid/brainDrops";
 import { rollRaidZombieDropWithPity, nextRaidZombieDryWins, hasRaidZombieDrop } from "../../../src/raid/zombieDrops";
@@ -22,6 +22,7 @@ interface CoreState {
   inventory: Record<string, number>;
   storage: { received: Record<string, number>; stored: Record<string, number> };
   farmerHeadId?: number;
+  farmerBonusHeadId?: number | null;
   zombieMax?: number;
   [key: string]: unknown;
 }
@@ -154,7 +155,7 @@ export async function startRaid(
   if (!raidUnlocked(econ, levelForXp(balance.xp))) return { status: 403, body: { ok: false, error: "locked", unlockLevel: econ.unlockLevel } };
   if ((roster.results ?? []).length !== requested.length) return { status: 409, body: { ok: false, error: "bad_roster" } };
   const core = parse<CoreState>(coreRow.current_json, { inventory: {}, storage: { received: {}, stored: {} } });
-  const activeCooldownMs = farmerCooldownMs(cooldownMs, core.farmerHeadId ?? 1);
+  const activeCooldownMs = farmerCooldownMs(cooldownMs, activeBonusHeadId(core.farmerHeadId ?? 1, core.farmerBonusHeadId));
   const remaining = Math.max(0, raidState.last_started_at + activeCooldownMs - now);
   const useVoucher = body.useVoucher === true;
   if (remaining && !useVoucher) return { status: 429, body: { ok: false, error: "cooldown", cooldownRemaining: remaining } };

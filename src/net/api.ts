@@ -323,6 +323,9 @@ export interface FriendView {
   name: string;
   friendCode: string;
   level?: number;
+  /** The Farmer head they're wearing, so their row can show their face. Absent from
+   *  an older Worker, and for an account with no materialized farm yet. */
+  headId?: number;
   giftOnCooldown?: boolean;
   /** Blocked specifically because they still hold an unopened gift from me (as
    *  opposed to simply having been gifted today). */
@@ -1020,6 +1023,7 @@ export function toFriend(f: FriendView): Friend {
     id: f.accountId,
     name: f.name,
     level: f.level,
+    headId: f.headId,
     addedAt: 0,
     giftsSent: 0,
     friendCode: f.friendCode,

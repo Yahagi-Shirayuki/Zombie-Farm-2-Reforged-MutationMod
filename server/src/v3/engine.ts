@@ -22,7 +22,9 @@ import { QUEST_DEFINITIONS, QUEST_REWARD } from "../questCatalog";
 import { isHeadlessZombie, legalMutation, zombieSell } from "../rosterCatalog";
 import { climateCost, nextSize, sizeTier } from "../shopCatalog";
 import { zombieCropEcon } from "../zombieCropCatalog";
-import { farmerGold, farmerZombieGrowMs } from "../../../src/farmer";
+import {
+  activeBonusHeadId, farmerGold, farmerHeadHasEffect, farmerHeadXp, farmerZombieGrowMs,
+} from "../../../src/farmer";
 import { dropsEpicBossToken } from "../../../src/epicBoss/tokens";
 import { combineMasks } from "../../../src/zombie/mutations";
 import { resolveCropMutations, touchingPlotOffsets } from "../../../src/zombie/cropMutations";
@@ -153,6 +155,9 @@ const baseMausoleumSlots = mausoleumTiers[0]?.slots ?? 0;
 const nextMausoleumTier = (slots: number) => mausoleumTiers.find((tier) => tier.slots > slots);
 
 const farmerHeads = new Map(farmerRows.heads.map((head) => [head.id, head]));
+/** The head supplying bonuses: the pinned one, else whichever is being worn. */
+const bonusHeadOf = (state: { farmerHeadId: number; farmerBonusHeadId?: number | null }) =>
+  activeBonusHeadId(state.farmerHeadId, state.farmerBonusHeadId);
 const freeFarmerHeads = farmerRows.heads.filter((head) => !head.cost).map((head) => head.id);
 const pets = new Map(petRows.pets.map((pet) => [pet.key, pet]));
 
@@ -337,7 +342,7 @@ function rewardHarvest(
     };
   }
   const harvestValue = plot.sell * (plot.fertilized ? 2 : 1);
-  state.balance.gold += farmerGold(harvestValue, state.farmerHeadId);
+  state.balance.gold += farmerGold(harvestValue, bonusHeadOf(state));
   state.balance.xp += harvestXp(plot.xp, hasPlowingMonolith(state));
   const run = state.epicBoss;
   if (run && !run.completedAt && run.expiresAt > now &&
@@ -495,7 +500,7 @@ function applyOne(
         growMs: zombie
           ? farmerZombieGrowMs(
               zombie.growMs * (hasMutationMonolith(state) && zombieDefaultMutation(command.cropKey) ? 0.5 : 1),
-              state.farmerHeadId
+              bonusHeadOf(state)
             )
           : veg?.growMs ?? 0,
         sell: veg?.sell ?? 0,
@@ -620,7 +625,7 @@ function applyOne(
           if (obj.status !== "placed") continue;
           const rule = objectRules.get(obj.catalogKey);
           if (!rule?.growMs || !rule.harvestValue || (obj.readyAt ?? 0) > options.now) continue;
-          state.balance.gold += farmerGold(rule.harvestValue, state.farmerHeadId);
+          state.balance.gold += farmerGold(rule.harvestValue, bonusHeadOf(state));
           obj.readyAt = options.now + rule.growMs;
           effects++;
           events.push({ type: "kCropHarvestedNotification", subject: rule.name });
@@ -775,7 +780,7 @@ function applyOne(
         const obj = state.objects.objects.find((o) => o.instanceId === id && o.status === "placed");
         const rule = obj ? objectRules.get(obj.catalogKey) : undefined;
         if (!obj || !rule?.growMs || !rule.harvestValue || (obj.readyAt ?? 0) > options.now) continue;
-        state.balance.gold += farmerGold(rule.harvestValue, state.farmerHeadId);
+        state.balance.gold += farmerGold(rule.harvestValue, bonusHeadOf(state));
         obj.readyAt = options.now + rule.growMs;
         harvested++;
         events.push({ type: "kCropHarvestedNotification", subject: rule.name });
@@ -925,12 +930,26 @@ function applyOne(
       const currency = head.brains ? "brains" : "gold";
       if (state.balance[currency] < head.cost) return reject(sequence, "insufficient");
       state.balance[currency] -= head.cost;
+      // XP for the purchase, derived here from the catalog price rather than taken
+      // from the client — the optimistic amount the client showed is only a preview.
+      state.balance.xp += farmerHeadXp(head);
       state.farmerHeads.push(head.id);
       return { sequence, status: "applied" };
     }
     case "farmer.equip": {
       if (!state.farmerHeads.includes(command.headId)) return reject(sequence, "not_owned");
       state.farmerHeadId = command.headId;
+      return { sequence, status: "applied" };
+    }
+    case "farmer.bonus": {
+      // null un-pins: the worn head goes back to supplying the bonus.
+      if (command.headId === null) {
+        state.farmerBonusHeadId = null;
+        return { sequence, status: "applied" };
+      }
+      if (!state.farmerHeads.includes(command.headId)) return reject(sequence, "not_owned");
+      if (!farmerHeadHasEffect(command.headId)) return reject(sequence, "bad_item");
+      state.farmerBonusHeadId = command.headId;
       return { sequence, status: "applied" };
     }
     case "pet.buy": {
@@ -1107,6 +1126,7 @@ export function freshGameplayState(): MutableGameplayState {
     climates: ["grass"],
     farmerHeads: [...freeFarmerHeads],
     farmerHeadId: 1,
+    farmerBonusHeadId: null,
     ownedPets: [],
     activePet: null,
     penPets: [],

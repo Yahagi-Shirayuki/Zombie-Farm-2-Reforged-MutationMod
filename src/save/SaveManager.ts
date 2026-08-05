@@ -183,6 +183,7 @@ export class SaveManager {
           ownedBodies: this.state.ownedFarmerBodies,
           headId: this.state.farmerHeadId,
           bodyId: this.state.farmerBodyId,
+          bonusHeadId: this.state.farmerBonusHeadId,
         },
         petCollection: { owned: this.state.ownedPets, active: this.state.activePet, pen: this.state.penPets },
       },
@@ -507,6 +508,10 @@ export class SaveManager {
           ...p.player?.farmerAppearance,
           ownedHeads: boot.gameplay.farmerHeads,
           headId: boot.gameplay.farmerHeadId,
+          // Both head slots are server-owned online, so the projection wins over
+          // whatever the presentation blob remembers. `?? null` also normalizes an
+          // older Worker's silence into "follow the worn head".
+          bonusHeadId: boot.gameplay.farmerBonusHeadId ?? null,
         },
         petCollection: { owned: boot.gameplay.ownedPets, active: boot.gameplay.activePet, pen: boot.gameplay.penPets },
       },
@@ -575,6 +580,7 @@ export class SaveManager {
     this.state.ownedFarmerBodies = player.farmerAppearance?.ownedBodies ?? [];
     this.state.farmerHeadId = player.farmerAppearance?.headId ?? 1;
     this.state.farmerBodyId = player.farmerAppearance?.bodyId ?? 0;
+    this.state.farmerBonusHeadId = player.farmerAppearance?.bonusHeadId ?? null;
     const legacyPets = data.storage?.pets ?? [];
     this.state.syncPetOwnership(
       player.petCollection?.owned ?? legacyPets,

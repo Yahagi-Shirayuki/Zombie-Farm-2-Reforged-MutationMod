@@ -5,7 +5,10 @@ import { Friend, canGiftBrain, nextFriendId } from "./social/friends";
 import { ABILITY_TIER, abilityTierOf } from "./zombie/traits";
 import { TutorialSave } from "./save/schema";
 import type { FarmerCatalog } from "./assets";
-import { farmerCooldownMs, farmerGold, farmerMultiplier, farmerZombieGrowMs } from "./farmer";
+import {
+  activeBonusHeadId, farmerCooldownMs, farmerGold, farmerHeadHasEffect, farmerMultiplier,
+  farmerZombieGrowMs,
+} from "./farmer";
 import type { EpicBossRun } from "./epicBoss/types";
 import { parseReceivedZombie } from "./zombie/receivedReward";
 
@@ -42,8 +45,14 @@ export class GameState {
   // ---- modular farmer appearance ----
   ownedFarmerHeads: number[] = [];
   ownedFarmerBodies: number[] = [];
+  /** The head the farmer WEARS. Purely how the player looks — on their own farm,
+   *  and as the face beside their name in a friend's list. */
   farmerHeadId = 1;
   farmerBodyId = 0;
+  /** The head whose BONUS is live, when the player has pinned one. `null` means
+   *  "whatever I'm wearing supplies it", which is how the single-slot version
+   *  behaved, so an untouched save keeps its bonus exactly as before. */
+  farmerBonusHeadId: number | null = null;
   // ---- cosmetic pets (server authoritative while signed in) ----
   ownedPets: string[] = [];
   activePet: string | null = null;
@@ -378,7 +387,12 @@ export class GameState {
   }
 
   /** Adopt authoritative online head ownership while retaining source-free parts. */
-  syncFarmerOwnership(headIds: number[], catalog: FarmerCatalog, equippedHeadId?: number) {
+  syncFarmerOwnership(
+    headIds: number[],
+    catalog: FarmerCatalog,
+    equippedHeadId?: number,
+    bonusHeadId?: number | null
+  ) {
     this.ownedFarmerHeads = [...new Set(headIds.filter(Number.isInteger))];
     this.ownedFarmerBodies = [];
     this.seedFarmerCatalog(catalog);
@@ -389,6 +403,13 @@ export class GameState {
     }
     if (equippedHeadId !== undefined && this.ownedFarmerHeads.includes(equippedHeadId)) {
       this.farmerHeadId = equippedHeadId;
+    }
+    // A Worker that predates the slot split sends no bonus field at all; leaving the
+    // local value alone there keeps "follow the worn head" rather than blanking a
+    // pin the player set on a newer one.
+    if (bonusHeadId !== undefined) {
+      this.farmerBonusHeadId =
+        bonusHeadId !== null && this.ownedFarmerHeads.includes(bonusHeadId) ? bonusHeadId : null;
     }
     this.emit();
   }
@@ -402,6 +423,16 @@ export class GameState {
   equipFarmerHead(id: number): boolean {
     if (!this.ownedFarmerHeads.includes(id)) return false;
     this.farmerHeadId = id;
+    this.emit();
+    return true;
+  }
+
+  /** Pin (or, with null, un-pin) the head supplying bonuses. Only an owned head
+   *  that actually HAS a bonus can be pinned — pinning a cosmetic would silently
+   *  mean "no bonus", which is what un-pinning already reads as. */
+  equipFarmerBonusHead(id: number | null): boolean {
+    if (id !== null && (!this.ownedFarmerHeads.includes(id) || !farmerHeadHasEffect(id))) return false;
+    this.farmerBonusHeadId = id;
     this.emit();
     return true;
   }
@@ -445,11 +476,16 @@ export class GameState {
     return true;
   }
 
-  farmerHarvestGold(value: number): number { return farmerGold(value, this.farmerHeadId); }
-  farmerZombieGrowMs(value: number): number { return farmerZombieGrowMs(value, this.farmerHeadId); }
-  farmerZombieStrengthMult(): number { return farmerMultiplier(this.farmerHeadId, "zombieStrength"); }
-  farmerZombieLifeMult(): number { return farmerMultiplier(this.farmerHeadId, "zombieLife"); }
-  farmerInvasionCooldownMs(value: number): number { return farmerCooldownMs(value, this.farmerHeadId); }
+  /** The head supplying bonuses right now — the pinned one, else the worn one. */
+  bonusHeadId(): number { return activeBonusHeadId(this.farmerHeadId, this.farmerBonusHeadId); }
+  /** Whether the player owns any head with a bonus at all. Until they do, the
+   *  function slot is meaningless and stays out of the Market entirely. */
+  hasBonusHead(): boolean { return this.ownedFarmerHeads.some(farmerHeadHasEffect); }
+  farmerHarvestGold(value: number): number { return farmerGold(value, this.bonusHeadId()); }
+  farmerZombieGrowMs(value: number): number { return farmerZombieGrowMs(value, this.bonusHeadId()); }
+  farmerZombieStrengthMult(): number { return farmerMultiplier(this.bonusHeadId(), "zombieStrength"); }
+  farmerZombieLifeMult(): number { return farmerMultiplier(this.bonusHeadId(), "zombieLife"); }
+  farmerInvasionCooldownMs(value: number): number { return farmerCooldownMs(value, this.bonusHeadId()); }
   syncObjectStorage(stored: Record<string, number>) {
     this.storedItems = Object.entries(stored).map(([key, count]) => ({ key, count }));
     this.emit();

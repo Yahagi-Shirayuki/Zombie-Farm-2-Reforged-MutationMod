@@ -418,13 +418,11 @@ export function buildRosterCard(hud: Hud, z: RosterEntry, onClick: () => void): 
   return card;
 }
 
-export type ZombiesPanelTab = "roster" | "almanac" | "epic";
+export type ZombiesPanelTab = "roster" | "almanac";
 
 // The "Zombies" tab (right bar): "My Zombies" lists every owned zombie as its
 // full inspect card (the same one shown when tapping a zombie); the "Zombie
-// Almanac" is the species collection, and "Epic Zombies" is the same collection
-// for the Epic Boss exclusives — they live in one tab of their own, under the boss
-// that awards them, instead of being scattered through the Special section.
+// Almanac" is the species collection, in three groups — Normal, Special, Epic.
 export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster") {
   // position:relative host (zl-panel) for card tooltips
   const { panel, close } = openModal({
@@ -447,7 +445,7 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
     body.innerHTML = "";
     body.scrollTop = 0;
     if (tab === "roster") renderRoster();
-    else renderAlmanac(tab === "epic");
+    else renderAlmanac();
   };
   const mkTab = (tab: ZombiesPanelTab, label: string) => {
     const b = document.createElement("button");
@@ -459,7 +457,6 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
   };
   mkTab("roster", "My Zombies");
   mkTab("almanac", "Zombie Almanac");
-  mkTab("epic", "Epic Zombies");
 
   let rosterSort: ZombieSort = getZombieSort();
 
@@ -525,20 +522,12 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
     }
   };
 
-  // Both collection tabs render the same grid of tiles; they differ in which half of
-  // the Almanac they take and how the tiles are sectioned. Each keeps its OWN
-  // discovered count — a species belongs to exactly one tab, so the two totals add up
-  // to the whole Almanac instead of double-counting the epic exclusives.
-  const renderAlmanac = (epicOnly: boolean) => {
-    const all = hud.getAlmanac ? hud.getAlmanac() : [];
-    const entries = epicOnly
-      ? all.filter((entry) => entry.epicBoss)
-          .sort((a, b) => (a.epicBoss?.order ?? 0) - (b.epicBoss?.order ?? 0))
-      : all.filter((entry) => !entry.epicBoss);
+  const renderAlmanac = () => {
+    const entries = hud.getAlmanac ? hud.getAlmanac() : [];
     const found = entries.filter((entry) => entry.obtained > 0).length;
     head.innerHTML = "";
     const title = document.createElement("h2");
-    title.textContent = epicOnly ? "Epic Zombies" : "Zombie Almanac";
+    title.textContent = "Zombie Almanac";
     const cnt = document.createElement("span");
     cnt.className = "zr-total";
     cnt.textContent = `${found} / ${entries.length} discovered`;
@@ -547,13 +536,13 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
     const grid = document.createElement("div");
     grid.className = "zr-grid alm-grid";
     body.appendChild(grid);
-    // Sections: the boss that awards them on the epic tab, the species category on the
-    // main one. Entries arrive pre-sorted by that key, so a change of value opens a
-    // new section.
+    // Epic Boss exclusives are their own group even though the catalog files them as
+    // "special", so the flag is checked before the category. Entries arrive already
+    // sorted into these groups, so a change of heading opens the next section.
     let lastSection = "";
     for (const entry of entries) {
-      const section = epicOnly
-        ? entry.epicBoss?.name ?? "Epic Boss"
+      const section = entry.epic
+        ? "Epic"
         : entry.category === "normal" ? "Normal" : entry.category === "mutant" ? "Mutant" : "Special";
       if (section !== lastSection) {
         lastSection = section;

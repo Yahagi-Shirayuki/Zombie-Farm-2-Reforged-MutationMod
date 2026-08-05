@@ -3,6 +3,7 @@
 // bottom-left button), menu buttons on the right, and a farming-tool bar at the
 // bottom-center. Resize-safe (fixed positioning).
 import { GameState } from "./GameState";
+import { farmerHeadHasEffect, farmerHeadXp } from "./farmer";
 import { CropConfig } from "./Field";
 import { harvestXp } from "./farmRewards";
 import { PlaceableDef, BoostDef, FarmSizeUpgrade, ClimateUpgrade, upgradeIcon, placeablePurchaseLimit } from "./assets";
@@ -1212,10 +1213,19 @@ export class Hud {
     this.boosts = boosts;
   }
   setFarmerCatalog(catalog: FarmerCatalog) { this.farmer = catalog; }
+  /** Catalog row for a head id reported by the server, for the friends list. Returns
+   *  null for an unknown or absent id — a head this build has no art for must draw
+   *  nothing rather than silently show a different player's face. */
+  private friendHeadPart(headId: number | undefined): FarmerHeadDef | null {
+    if (headId === undefined) return null;
+    return this.farmer.heads.find((head) => head.id === headId) ?? null;
+  }
   setPetCatalog(catalog: PetCatalog) { this.pets = catalog; }
   onBuyFarmerHead: ((head: FarmerHeadDef) => boolean) | null = null;
   onEquipFarmerHead: ((head: FarmerHeadDef) => void) | null = null;
   onEquipFarmerBody: ((body: FarmerBodyDef) => void) | null = null;
+  /** Pin the head supplying bonuses, or null to follow the worn one. */
+  onEquipFarmerBonusHead: ((headId: number | null) => void) | null = null;
   onBuyPet: ((pet: PetDef) => boolean) | null = null;
   onEquipPet: ((pet: PetDef | null) => void) | null = null;
   onSetPenPets: ((pets: PetDef[]) => void) | null = null;
@@ -1614,8 +1624,16 @@ export class Hud {
     const ITEM_CAT: Record<string, ObjCard["category"]> = {
       Functional: "functional", Decors: "decor", "Fruit Trees": "tree",
     };
+    // Farmer grows a third sub-tab only once the player owns a head that DOES
+    // something: with a wardrobe of pure cosmetics there is no bonus to assign, so
+    // the choice never appears. Computed per render, so buying the first one right
+    // here reveals it without reopening the Market.
+    const subsFor = (name: string): string[] =>
+      name === "Farmer" && this.state.hasBonusHead()
+        ? [...SUBTABS.Farmer, "Bonus"]
+        : SUBTABS[name];
     let tab = SUBTABS[initialTab] ? initialTab : "Crops";
-    let sub = SUBTABS[tab][0] ?? "";
+    let sub = subsFor(tab)[0] ?? "";
 
     const entriesFor = (): MktEntry[] => {
       if (tab === "Crops" && sub === "Plants")
@@ -1713,7 +1731,14 @@ export class Hud {
             cost: head.cost ?? 0,
             level: 1,
             brains: head.brains,
-            description: head.description,
+            // A head with a bonus can be WORN and USED separately, so its blurb says
+            // where the bonus comes from rather than implying wearing it is required.
+            description: head.description
+              ? `${head.description} (assign it under Bonus)`
+              : undefined,
+            // Unowned heads advertise the XP the purchase itself pays out, the same
+            // way a crop card advertises its harvest XP.
+            xp: owned ? undefined : farmerHeadXp(head) || undefined,
             owned,
             equipped: this.state.farmerHeadId === head.id,
             onPick: async () => {
@@ -1721,12 +1746,45 @@ export class Hud {
               else {
                 if (!await this.confirmPurchase(head.name, head.cost ?? 0, head.brains)) return;
                 if (!this.onBuyFarmerHead || !this.onBuyFarmerHead(head)) return;
+                // A first bonus-carrying head brings the Bonus sub-tab into being.
+                renderSubs();
               }
               refreshCur();
               renderGrid();
             },
           };
         });
+      }
+      if (tab === "Farmer" && sub === "Bonus") {
+        // The FUNCTION slot: which owned head's bonus is live, independent of the
+        // one being worn. Only heads that carry a bonus are listed — a cosmetic
+        // here would just be a differently-spelled "no bonus".
+        const worn = this.farmer.heads.find((head) => head.id === this.state.farmerHeadId);
+        const follow: MktEntry = {
+          name: "Worn Head",
+          portrait: `${BASE}assets/player/${worn?.part ?? "malehead1.png"}`,
+          cost: 0,
+          level: 1,
+          owned: true,
+          description: farmerHeadHasEffect(this.state.farmerHeadId)
+            ? `Use whichever head you are wearing. Right now: ${worn?.description ?? "no bonus"}.`
+            : "Use whichever head you are wearing. The one you have on has no bonus.",
+          equipped: this.state.farmerBonusHeadId === null,
+          onPick: () => { this.onEquipFarmerBonusHead?.(null); renderGrid(); },
+        };
+        const pinned = this.farmer.heads
+          .filter((head) => farmerHeadHasEffect(head.id) && this.state.ownedFarmerHeads.includes(head.id))
+          .map((head): MktEntry => ({
+            name: head.name,
+            portrait: `${BASE}assets/player/${head.part}`,
+            cost: 0,
+            level: 1,
+            owned: true,
+            description: head.description,
+            equipped: this.state.farmerBonusHeadId === head.id,
+            onPick: () => { this.onEquipFarmerBonusHead?.(head.id); renderGrid(); },
+          }));
+        return [follow, ...pinned];
       }
       if (tab === "Farmer" && sub === "Bodies") {
         return this.farmer.bodies.map((body) => ({
@@ -1905,7 +1963,7 @@ export class Hud {
 
     const renderSubs = () => {
       subsEl.innerHTML = "";
-      const list = SUBTABS[tab];
+      const list = subsFor(tab);
       subsEl.style.display = list.length ? "flex" : "none";
       for (const s of list) {
         const b = document.createElement("button");
@@ -1925,7 +1983,7 @@ export class Hud {
       b.onclick = () => {
         this.audio.play("menuClick");
         tab = name;
-        sub = SUBTABS[name][0] ?? "";
+        sub = subsFor(name)[0] ?? "";
         page = 0;
         // A new category starts a fresh search.
         search = "";
@@ -3847,6 +3905,22 @@ export class Hud {
         lvl.className = `fr-lvl ${levelTier(f.level)}`;
         lvl.textContent = f.level == null ? "–" : String(f.level);
         lvl.title = f.level == null ? "Level unavailable" : `Level ${f.level}`;
+        // The head they're wearing, beside their name — the list is how players
+        // recognise each other, and a chosen face does that faster than a name does.
+        // Absent for local entries and for anyone on an older Worker: the row simply
+        // renders without a face rather than falling back to someone else's.
+        const face = this.friendHeadPart(f.headId);
+        const facePic = document.createElement("img");
+        if (face) {
+          facePic.className = "fr-friend-face";
+          facePic.src = `${BASE}assets/player/${face.part}`;
+          facePic.alt = "";
+          // Eager, unlike the Market's portrait grid: the list is capped at 50 rows of
+          // head sprites already in the bundle, so deferring them saves nothing and
+          // only risks a row rendering face-less.
+          facePic.decoding = "async";
+          facePic.title = `Wearing: ${face.name}`;
+        }
         const nm = document.createElement("span");
         nm.className = "fr-friend-name-wrap";
         const nameText = document.createElement("span");
@@ -3963,7 +4037,7 @@ export class Hud {
           acts.appendChild(del);
         }
         menu.append(acts);
-        summary.append(lvl, nm);
+        summary.append(lvl, ...(face ? [facePic] : []), nm);
         const toggle = () => {
           const opening = !row.classList.contains("is-open");
           row.classList.toggle("is-open", opening);

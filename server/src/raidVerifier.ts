@@ -25,7 +25,7 @@ import type {
   GrabberConfig,
 } from "../../src/raid/types";
 import { levelForXp } from "./levels";
-import { farmerMultiplier } from "../../src/farmer";
+import { activeBonusHeadId, farmerMultiplier } from "../../src/farmer";
 
 export { RAID_RULESET_VERSION };
 export type { RaidReplayInput };
@@ -304,9 +304,15 @@ export async function buildPinnedV3Raid(
   const stage = fightStage(raid, level);
   if (!stage) return { ok: false, error: "bad_stage" };
   const core = (() => {
-    try { return JSON.parse(coreRow?.current_json ?? "{}") as { farmerHeadId?: number }; }
-    catch { return {}; }
+    try {
+      return JSON.parse(coreRow?.current_json ?? "{}") as
+        { farmerHeadId?: number; farmerBonusHeadId?: number | null };
+    } catch { return {}; }
   })();
+  // The head supplying bonuses is the pinned one, else whatever is being worn. The
+  // client's own BattleSim resolves it identically, and a mismatch here would make
+  // every replay of a bonus-carrying party diverge.
+  const bonusHead = activeBonusHeadId(Number(core.farmerHeadId ?? 1), core.farmerBonusHeadId);
   const party = ids.map((id) => {
     const row = byId.get(id)!;
     const def = zombieDefs.get(row.zombie_key);
@@ -333,8 +339,8 @@ export async function buildPinnedV3Raid(
         concentration,
         abilityUnlocked,
         playerLevel: level,
-        farmerStrengthMult: farmerMultiplier(Number(core.farmerHeadId ?? 1), "zombieStrength"),
-        farmerLifeMult: farmerMultiplier(Number(core.farmerHeadId ?? 1), "zombieLife"),
+        farmerStrengthMult: farmerMultiplier(bonusHead, "zombieStrength"),
+        farmerLifeMult: farmerMultiplier(bonusHead, "zombieLife"),
       }),
       enemyUnits,
       bossThrow: bossThrowOf(raid, stage, winsObject[String(raidId)] ?? 0),

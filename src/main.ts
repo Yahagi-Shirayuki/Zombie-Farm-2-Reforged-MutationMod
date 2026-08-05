@@ -14,7 +14,7 @@ import { WalkController } from "./WalkController";
 import { ZombieField } from "./zombie/ZombieField";
 import { makeOwned, type OwnedZombie } from "./zombie/types";
 import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
-import { almanacEntries, epicSource, obtainHint } from "./zombie/almanac";
+import { almanacEntries, isEpicZombie, obtainHint } from "./zombie/almanac";
 import { POT_DURATION_MS } from "./zombie/ZombiePot";
 import { GameState } from "./GameState";
 import { takeStoredObject } from "./storedObjectOwnership";
@@ -42,6 +42,7 @@ import { screenToGrid, tileCenter, TILE_H, TILE_W, HW, HH } from "./iso";
 import { setFootprint } from "./depthSort";
 import { NightLayer, makeLight } from "./lighting";
 import { buyXp, sellBack, zombieSellValue } from "./economy";
+import { farmerHeadXp } from "./farmer";
 import { purchaseXpFeedback } from "./purchaseFeedback";
 import { harvestXp, plowXp } from "./farmRewards";
 import {
@@ -1308,6 +1309,10 @@ async function main() {
     state.equipFarmerHead(head.id);
   };
   hud.onEquipFarmerBody = (body) => { state.equipFarmerBody(body.id); };
+  hud.onEquipFarmerBonusHead = (headId) => {
+    if (economy && !economy.submitFarmerBonus(headId)) return;
+    state.equipFarmerBonusHead(headId);
+  };
   hud.onBuyFarmerHead = (head) => {
     const cost = head.cost ?? 0;
     if (!cost) {
@@ -1317,17 +1322,25 @@ async function main() {
     }
     const currency = head.brains ? "brains" : "gold";
     if ((currency === "brains" ? state.brains : state.gold) < cost) return false;
+    // Buying a head pays out XP scaled off its price, exactly as buying a Market
+    // object or a pet does. Online the server recomputes it from the same catalog
+    // row; the optimistic amount here only decides what the bar shows meanwhile.
+    const xp = farmerHeadXp(head);
     if (economy) {
-      if (!economy.submitFarmerBuy(head.id, currency, cost)) return false;
+      if (!economy.submitFarmerBuy(head.id, currency, cost, xp)) return false;
     } else {
       const paid = currency === "brains"
         ? state.spendBrains(cost, "purchase")
         : state.spendGold(cost, "purchase");
       if (!paid) return false;
+      if (xp > 0) state.addXp(xp, "purchase");
     }
     state.unlockFarmerHead(head.id, head.bodyId);
     state.equipFarmerHead(head.id);
     economy?.submitFarmerEquip(head.id);
+    // Bought from inside the Market modal, so the world-space float would be
+    // hidden behind it — the toast is the visible half (see showPurchaseXp).
+    showPurchaseXp(xp);
     return true;
   };
   hud.onEquipPet = (pet) => {
@@ -1631,8 +1644,8 @@ async function main() {
       }
       state.ownedClimates = ["grass", ...climates.filter((t) => t !== "grass")];
     };
-    economy.onFarmerState = (headIds, equippedHeadId) =>
-      state.syncFarmerOwnership(headIds, assets.farmer, equippedHeadId);
+    economy.onFarmerState = (headIds, equippedHeadId, bonusHeadId) =>
+      state.syncFarmerOwnership(headIds, assets.farmer, equippedHeadId, bonusHeadId);
     economy.onPetState = (ownedPets, activePet, penPets) => state.syncPetOwnership(ownedPets, activePet, penPets);
     economy.onQuestState = (serverState) => quests.restoreAuthoritative(serverState);
     economy.onQuestChanges = (changes) => quests.applyAuthoritativeChanges(changes);
@@ -2261,8 +2274,8 @@ async function main() {
   };
   hud.getAlmanac = () =>
     almanacEntries(assets.zombies, state.zombieDiscovered).map((def) => {
-      // Epic Boss exclusives carry their boss; the panel files those under its own tab.
-      const epic = epicSource(def, almanacSources);
+      // Epic Boss exclusives are flagged here; the panel groups them under "Epic".
+      const epic = isEpicZombie(def);
       return {
         key: def.key,
         name: def.name,
@@ -2274,7 +2287,7 @@ async function main() {
         str: def.str, dex: def.dex, con: def.con, focus: def.focus,
         obtained: state.zombieDiscovered[def.key] ?? 0,
         hint: obtainHint(def, almanacSources),
-        ...(epic ? { epicBoss: epic } : {}),
+        ...(epic ? { epic } : {}),
       };
     });
   hud.zombiePortraitOf = (key) => zombiePortrait(key);

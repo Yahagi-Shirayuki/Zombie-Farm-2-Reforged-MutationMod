@@ -149,6 +149,63 @@ describe("protocol v3 command engine", () => {
     expect(duplicate.results[0]).toMatchObject({ status: "rejected", error: "already_owned" });
   });
 
+  it("pays XP for a bought head, priced off the head's own cost", () => {
+    const state = freshGameplayState();
+    state.balance.brains = 40;
+    // Paper Bag: 15 brains, carries a bonus, so the functional rate (cost * 80).
+    const functional = applyCommandBatch(state, commands({ type: "farmer.buy", headId: 12 }), { now: 1 });
+    expect(functional.state.balance.xp - state.balance.xp).toBe(1_200);
+    // Jester Mask: same 15 brains but purely cosmetic, so the decor rate (cost * 100).
+    const cosmetic = applyCommandBatch(functional.state, commands({ type: "farmer.buy", headId: 15 }), { now: 2 });
+    expect(cosmetic.state.balance.xp - functional.state.balance.xp).toBe(1_500);
+  });
+
+  it("refuses to pay for a head it rejects", () => {
+    const state = freshGameplayState();
+    state.balance.brains = 1; // can't afford the 15-brain head
+    const broke = applyCommandBatch(state, commands({ type: "farmer.buy", headId: 12 }), { now: 1 });
+    expect(broke.results[0]).toMatchObject({ status: "rejected", error: "insufficient" });
+    expect(broke.state.balance.xp).toBe(state.balance.xp);
+  });
+
+  it("pins a bonus head independently of the one being worn", () => {
+    const state = freshGameplayState();
+    state.farmerHeads.push(12, 15);
+    const pinned = applyCommandBatch(state, commands({ type: "farmer.bonus", headId: 12 }), { now: 1 });
+    expect(pinned.results[0]).toMatchObject({ status: "applied" });
+    expect(pinned.state.farmerBonusHeadId).toBe(12);
+
+    // Wearing the cosmetic must not disturb the pinned bonus.
+    const worn = applyCommandBatch(pinned.state, commands({ type: "farmer.equip", headId: 15 }), { now: 2 });
+    expect(worn.state.farmerHeadId).toBe(15);
+    expect(worn.state.farmerBonusHeadId).toBe(12);
+
+    const cleared = applyCommandBatch(worn.state, commands({ type: "farmer.bonus", headId: null }), { now: 3 });
+    expect(cleared.state.farmerBonusHeadId).toBeNull();
+  });
+
+  it("rejects pinning a head that is unowned or has no bonus", () => {
+    const state = freshGameplayState();
+    state.farmerHeads.push(15);
+    expect(applyCommandBatch(state, commands({ type: "farmer.bonus", headId: 12 }), { now: 1 }).results[0])
+      .toMatchObject({ status: "rejected", error: "not_owned" });
+    expect(applyCommandBatch(state, commands({ type: "farmer.bonus", headId: 15 }), { now: 1 }).results[0])
+      .toMatchObject({ status: "rejected", error: "bad_item" });
+  });
+
+  it("harvests with the PINNED head's bonus, not the worn one's", () => {
+    const state = freshGameplayState();
+    state.farmerHeads.push(12, 15);
+    state.farmerHeadId = 15; // wearing a cosmetic
+    state.farmerBonusHeadId = 12; // +10% harvest gold pinned
+    state.farm.plots["0:0"] = {
+      state: "planted", cropKey: "carrot", plantedAt: 0, growMs: 1,
+      sell: 100, xp: 1, fertilized: false, zombie: false,
+    };
+    const harvested = applyCommandBatch(state, commands({ type: "farm.harvest", oc: 0, or: 0 }), { now: 1_000 });
+    expect(harvested.state.balance.gold - state.balance.gold).toBe(110);
+  });
+
   it("applies equipped Farmer effects to authoritative harvests and zombie growth", () => {
     const harvestState = freshGameplayState();
     harvestState.farmerHeads.push(12);

@@ -12,7 +12,7 @@ import { replayRaid, type RaidReplayInput } from "../../../src/raid/replay";
 import type { CombatUnit } from "../../../src/raid/types";
 import { makeOwned } from "../../../src/zombie/types";
 import { ABILITY_TIER, abilityTierOf } from "../../../src/zombie/traits";
-import { farmerMultiplier } from "../../../src/farmer";
+import { activeBonusHeadId, farmerMultiplier } from "../../../src/farmer";
 import { levelForXp } from "../levels";
 import { epicBossCurrencyReward, epicLootWeight, epicQuestZombieReward, shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
 import objectRows from "../../../public/assets/placeables.json";
@@ -40,6 +40,8 @@ interface CoreState {
   storage: { received: Record<string, number>; stored: Record<string, number> };
   ownedPets: string[];
   zombieMax: number;
+  farmerHeadId?: number;
+  farmerBonusHeadId?: number | null;
   [key: string]: unknown;
 }
 
@@ -203,10 +205,12 @@ export async function start(
     const unit = byId.get(id)!;
     return makeOwned(id, zombies.get(unit.zombie_key)! as Parameters<typeof makeOwned>[1], 0, 0, unit.invasions, unit.mutation);
   });
+  // The head supplying bonuses is the pinned one, else whatever is being worn.
+  const bonusHead = activeBonusHeadId(Number(core.farmerHeadId ?? 1), core.farmerBonusHeadId);
   const playerUnits = buildPlayerUnits(party, {
     concentration: true, abilityUnlocked, playerLevel: levelForXp(balance.xp),
-    farmerStrengthMult: farmerMultiplier(Number(core.farmerHeadId ?? 1), "zombieStrength"),
-    farmerLifeMult: farmerMultiplier(Number(core.farmerHeadId ?? 1), "zombieLife"),
+    farmerStrengthMult: farmerMultiplier(bonusHead, "zombieStrength"),
+    farmerLifeMult: farmerMultiplier(bonusHead, "zombieLife"),
   });
   const boss: CombatUnit = {
     id:`epic:${row.run_id}:${row.level}`,sourceKey:`EpicBoss:${def.id}`,team:"enemy",name:def.name,

@@ -701,13 +701,22 @@ const metric = (route: string, accountId: string, started: number, detail: Recor
 const commandString = (value: unknown, max = 128): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= max;
 const commandInt = (value: unknown): value is number => Number.isSafeInteger(value);
-const validGameplayCommand = (value: unknown): value is GameplayCommand => {
+/** The door every gameplay command must pass before the engine sees it. A type
+ *  missing here is refused as `bad_command_batch`, which kills the WHOLE batch —
+ *  so an omission doesn't degrade one action, it pauses the player's farm for good
+ *  (the outbox persists, and the rebuilt batch carries the same command). Exported
+ *  so a test can hold it against the client's GameplayCommand union; engine tests
+ *  call the engine directly and cannot catch a gap here. */
+export const validGameplayCommand = (value: unknown): value is GameplayCommand => {
   if (!value || typeof value !== "object") return false;
   const command = value as Record<string, unknown>;
   switch (command.type) {
     case "writer.claim": return true;
     case "farm.plow": case "farm.harvest": case "farm.remove":
       return commandInt(command.oc) && commandInt(command.or);
+    case "farm.move":
+      return commandInt(command.oc) && commandInt(command.or) &&
+        commandInt(command.toOc) && commandInt(command.toOr);
     case "farm.plant":
       return commandInt(command.oc) && commandInt(command.or) && commandString(command.cropKey) &&
         (command.fertilized === undefined || typeof command.fertilized === "boolean");
@@ -746,6 +755,7 @@ const validGameplayCommand = (value: unknown): value is GameplayCommand => {
     case "shop.climate": return commandString(command.terrain);
     case "farmer.buy": return commandInt(command.headId);
     case "farmer.equip": return commandInt(command.headId);
+    case "farmer.bonus": return command.headId === null || commandInt(command.headId);
     case "pet.buy": return commandString(command.petKey);
     case "pet.equip": return command.petKey === null || commandString(command.petKey);
     case "pet.pen":
@@ -1304,6 +1314,9 @@ app.get("/friends", async (c) => {
       name: f.username ?? "Player", // chosen display name only (no PII)
       friendCode: f.friend_code,
       level: levelForXp(f.xp),
+      // The head they're WEARING, so the row can show their face. Cosmetic and
+      // self-chosen — never the bonus head, which is a gameplay choice of theirs.
+      headId: f.head_id ?? undefined,
       // "Can't gift them right now", for either reason. giftPending distinguishes the
       // two so the UI can explain which one is in the way.
       giftOnCooldown: gifted.has(f.id) || pending.has(f.id),

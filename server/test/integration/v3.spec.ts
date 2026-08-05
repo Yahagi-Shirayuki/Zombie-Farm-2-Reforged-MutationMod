@@ -229,6 +229,37 @@ describe("protocol v3 API", () => {
     expect((await call<any[]>("GET", "/friends", asker.token)).body).toHaveLength(1);
   });
 
+  // The friends list carries each friend's WORN head so their row can show their
+  // face. It is read with json_extract straight out of their core document, so this
+  // has to run against real D1 — a mock would prove nothing about that expression.
+  it("reports each friend's worn head, and follows it when they change it", async () => {
+    const viewer = await signIn(uniqueSub("friend-head-viewer"));
+    const friend = await signIn(uniqueSub("friend-head-owner"));
+    await befriend(viewer, friend);
+
+    const seen = () => call<any[]>("GET", "/friends", viewer.token)
+      .then((r) => r.body.find((f: any) => f.accountId === friend.accountId));
+    // A fresh account already wears the default head, so the face is never missing.
+    expect(await seen()).toMatchObject({ headId: 1 });
+
+    // Buy and wear the Paper Bag; the list must follow, and only the WORN slot —
+    // pinning a bonus head is a gameplay choice and is not disclosed to friends.
+    await grantBalance(friend, { brains: 20 });
+    const boot = await call<any>("POST", "/bootstrap", friend.token, {});
+    const bought = await call<any>("POST", "/commands", friend.token,
+      commandBody(boot.body, "friend-head-buy", 1, [
+        { type: "farmer.buy", headId: 12 },
+        { type: "farmer.equip", headId: 12 },
+        { type: "farmer.bonus", headId: 12 },
+      ]));
+    expect(bought.status, JSON.stringify(bought.body)).toBe(200);
+    expect(bought.body.results.map((r: any) => r.status)).toEqual(["applied", "applied", "applied"]);
+
+    const after = await seen();
+    expect(after).toMatchObject({ headId: 12 });
+    expect(after).not.toHaveProperty("farmerBonusHeadId");
+  });
+
   it("does not send, charge, or award XP when a paid gift lacks 100 gold", async () => {
     const sender = await signIn(uniqueSub("gift-cost-sender"));
     await grantBalance(sender, { gold: 99 });

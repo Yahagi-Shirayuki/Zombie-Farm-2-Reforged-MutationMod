@@ -100,10 +100,9 @@ export interface AlmanacEntryView {
   obtained: number;
   /** How to acquire this species — the only detail an undiscovered entry reveals. */
   hint: string;
-  /** Set only on Epic Boss exclusives: the boss that awards it plus its ladder order.
-   *  The Almanac splits on this — entries that have it live in the Epic Zombies tab,
-   *  grouped under the boss's name; everything else stays in the main collection. */
-  epicBoss?: { name: string; order: number };
+  /** True on Epic Boss exclusives. `category` alone cannot tell them apart (they are
+   *  all "special"), so this is what files them under the Almanac's Epic group. */
+  epic?: boolean;
 }
 
 // Object-tap action popup (Move / Store / Sell) for a placed farm object.

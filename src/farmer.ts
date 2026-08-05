@@ -1,3 +1,5 @@
+import { buyXp } from "./economy";
+
 export type FarmerEffectKey =
   | "harvestGold"
   | "zombieGrowTime"
@@ -22,6 +24,27 @@ export function farmerEffect(headId: number, key: FarmerEffectKey): number {
   const effect = HEAD_EFFECTS[headId];
   return effect?.key === key ? effect.amount : 0;
 }
+
+/** Whether this head carries a gameplay bonus at all. Heads without one are pure
+ *  cosmetics, so they never appear in the FUNCTION slot (see farmerBonusHeadId):
+ *  a player who owns none of these never has to think about that slot existing. */
+export const farmerHeadHasEffect = (headId: number): boolean => !!HEAD_EFFECTS[headId];
+
+/** Resolve the head whose bonus is actually live. `null` (the default, and every
+ *  save written before the slot split) means "follow the head being WORN" — which
+ *  is exactly the single-slot behaviour that shipped before, so nobody's bonus
+ *  changes until they deliberately pin one. */
+export const activeBonusHeadId = (
+  wornHeadId: number,
+  bonusHeadId: number | null | undefined
+): number => (bonusHeadId === null || bonusHeadId === undefined ? wornHeadId : bonusHeadId);
+
+/** XP granted for BUYING a Farmer head, derived from its price by the same
+ *  recovered `xpFromItem:` formula the Market uses for objects (see economy.ts):
+ *  brain-priced items grant cost*80 when they do something functional and cost*100
+ *  when they are cosmetic. A head with a bonus is the functional case. */
+export const farmerHeadXp = (head: { cost?: number; brains?: boolean; id: number }): number =>
+  buyXp(head.cost ?? 0, 0, !!head.brains, farmerHeadHasEffect(head.id) ? "functional" : "decor");
 
 export const farmerMultiplier = (headId: number, key: FarmerEffectKey): number =>
   1 + farmerEffect(headId, key);
