@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  almanacEntries, backfillDiscovered, isObtainable, obtainHint, sanitizeDiscovered,
+  almanacEntries, backfillDiscovered, epicSource, isObtainable, obtainHint, sanitizeDiscovered,
 } from "./almanac";
+import { EPIC_QUEST_ZOMBIE_REWARDS } from "../epicBoss/rewards";
 import type { ZombieDef } from "../assets";
 import { OLD_MC_ZOMBIE_KEY, OLD_MC_ZOMBIE_RAID_ID } from "../raid/zombieDrops";
 
@@ -80,6 +81,37 @@ describe("obtainHint", () => {
   it("falls back to a generic hint for a discovered-but-sourceless species", () => {
     expect(obtainHint(def({ key: "legacy", marketHidden: true }), SOURCES))
       .toBe("Obtained from special events.");
+  });
+});
+
+describe("epicSource", () => {
+  it("tags an epic-reward zombie with its boss and ladder position", () => {
+    expect(epicSource(def({ key: "ZombieActorDrZombie", rewardOnly: true }), SOURCES))
+      .toEqual({ name: "Dr. Skunkarella", order: 1000 });
+  });
+
+  it("keeps an epic zombie in the tab even when its boss cannot be named", () => {
+    // Order still sorts it beside its own boss's other prize; only the heading is generic.
+    expect(epicSource(def({ key: "ZombieActorZomtar", rewardOnly: true }), SOURCES))
+      .toEqual({ name: "Epic Boss", order: 10011 });
+  });
+
+  it("leaves every non-epic species out of the epic tab", () => {
+    expect(epicSource(def({}), SOURCES)).toBeUndefined();
+    expect(epicSource(def({ key: OLD_MC_ZOMBIE_KEY, marketHidden: true }), SOURCES)).toBeUndefined();
+    expect(epicSource(def({ key: "ZombieActorLargeTier5", marketHidden: true }), SOURCES))
+      .toBeUndefined();
+  });
+
+  it("orders every reward so a boss's own prizes stay together, bosses in ladder order", () => {
+    const ordered = Object.entries(EPIC_QUEST_ZOMBIE_REWARDS)
+      .map(([questId, key]) => ({ questId, order: epicSource(def({ key }), SOURCES)?.order }))
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    // Grouped by the boss's thousands digit(s): 1000/1011, 2000/2011, … 10000/10011.
+    expect(ordered.map((entry) => entry.questId)).toEqual([
+      "1000", "1011", "2000", "2011", "3000", "3011", "4000", "4011", "5000", "5011",
+      "8000", "9000", "9011", "10000", "10011",
+    ]);
   });
 });
 

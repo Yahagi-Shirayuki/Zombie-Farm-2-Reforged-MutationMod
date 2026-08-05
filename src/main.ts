@@ -14,7 +14,7 @@ import { WalkController } from "./WalkController";
 import { ZombieField } from "./zombie/ZombieField";
 import { makeOwned, type OwnedZombie } from "./zombie/types";
 import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
-import { almanacEntries, obtainHint } from "./zombie/almanac";
+import { almanacEntries, epicSource, obtainHint } from "./zombie/almanac";
 import { POT_DURATION_MS } from "./zombie/ZombiePot";
 import { GameState } from "./GameState";
 import { takeStoredObject } from "./storedObjectOwnership";
@@ -1641,9 +1641,15 @@ async function main() {
       state.setTutorial(reconcileTutorialCompletion(state.tutorial, true));
       tutorial?.completeFromAuthority();
     };
-    economy.onGameplayUnavailable = () => {
+    // The reason is the only thing that distinguishes "the network blipped" from a
+    // lease, protocol or envelope problem that will never clear on its own. It used
+    // to be dropped on the floor, so a paused farm looked identical whatever caused
+    // it and every player report read as "my internet is fine". Keep it in the toast
+    // and on the console so a screenshot names the branch.
+    economy.onGameplayUnavailable = (reason) => {
       hud.setPlayStatus("online", "reconnecting");
-      hud.showToast("Online gameplay paused — reconnecting to your farm.");
+      hud.showToast(`Online gameplay paused (${reason}) — reconnecting to your farm.`);
+      console.warn(`[zf] gameplay paused: ${reason} | ${economy?.unavailableReason}`);
     };
     const showWriterLock = () => {
       saveManager.setOnlineWritable(false);
@@ -2254,18 +2260,23 @@ async function main() {
       EPIC_BOSSES.find((boss) => boss.questIds.includes(questId))?.name,
   };
   hud.getAlmanac = () =>
-    almanacEntries(assets.zombies, state.zombieDiscovered).map((def) => ({
-      key: def.key,
-      name: def.name,
-      portrait: zombiePortrait(def.key),
-      group: def.group,
-      className: def.className,
-      classColor: def.classColor,
-      category: def.category,
-      str: def.str, dex: def.dex, con: def.con, focus: def.focus,
-      obtained: state.zombieDiscovered[def.key] ?? 0,
-      hint: obtainHint(def, almanacSources),
-    }));
+    almanacEntries(assets.zombies, state.zombieDiscovered).map((def) => {
+      // Epic Boss exclusives carry their boss; the panel files those under its own tab.
+      const epic = epicSource(def, almanacSources);
+      return {
+        key: def.key,
+        name: def.name,
+        portrait: zombiePortrait(def.key),
+        group: def.group,
+        className: def.className,
+        classColor: def.classColor,
+        category: def.category,
+        str: def.str, dex: def.dex, con: def.con, focus: def.focus,
+        obtained: state.zombieDiscovered[def.key] ?? 0,
+        hint: obtainHint(def, almanacSources),
+        ...(epic ? { epicBoss: epic } : {}),
+      };
+    });
   hud.zombiePortraitOf = (key) => zombiePortrait(key);
   hud.getMausoleumCap = () => zombies.mausoleumCap;
   // The Mausoleum upgrade ladder: each tier is an ordinary catalog placeable that
@@ -3944,7 +3955,14 @@ async function main() {
 
   app.stage.on("pointerdown", (e: FederatedPointerEvent) => {
     if (raidActive) return; // farm input is inert during a live raid
-    if (economy && !economy.available) { hud.showToast("Gameplay paused — reconnect to continue."); return; }
+    if (economy && !economy.available) {
+      // Name the cause. "reconnect to continue" on its own sends players chasing a
+      // network problem they don't have.
+      const why = economy.unavailableReason;
+      hud.showToast(`Gameplay paused (${why}) — reconnect to continue.`);
+      console.warn(`[zf] tap while paused: ${why}`);
+      return;
+    }
     if (touchPinch) return; // a pinch is in progress; ignore extra finger-downs
     if (isTouchPointer(e.pointerType) && !e.isPrimary) return;
     const touch = isTouchPointer(e.pointerType);

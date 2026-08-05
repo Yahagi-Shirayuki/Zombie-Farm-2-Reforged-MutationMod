@@ -22,40 +22,45 @@ const rate = ([g, v]: readonly [number, number]) => epicBossTokenRatePerPlotDay(
 const chance = ([g, v]: readonly [number, number]) => epicBossTokenChance(g, v);
 
 describe("Epic Boss crop tokens", () => {
-  it("peaks in the 2-4 hour band, measured per plot-day", () => {
-    // The quantity that matters is tokens per plot-day, because a plot is recycled:
-    // a 15-minute crop harvests 96 times a day and a 24-hour crop once. The old
-    // sqrt(time * value) rule was documented as favouring long crops but peaked at
-    // the SHORTEST one, which made spamming the cheapest quick crop optimal.
-    const peak = rate(CROP.sunGlower);
-    expect(peak).toBeGreaterThan(rate(CROP.corn));
-    expect(peak).toBeGreaterThan(rate(CROP.corpseFlower));
-    expect(peak).toBeGreaterThan(rate(CROP.bloodberry));
-    expect(peak).toBeGreaterThan(rate(CROP.eyebiscus));
-    expect(peak).toBeGreaterThan(rate(CROP.heartichoke));
+  it("gives every crop a live roll, so no harvest is ever a dead pull", () => {
+    // The bare grow-time curve puts a 15-minute crop near 0.4% per harvest, which
+    // reads as "never" to a player pulling carrots. The flat bonus is a floor on
+    // FEEL and every crop must clear it.
+    for (const crop of Object.values(CROP)) {
+      expect(chance(crop)).toBeGreaterThanOrEqual(0.03);
+    }
   });
 
-  it("leaves spam crops below the peak without making them pointless", () => {
-    const peak = rate(CROP.sunGlower);
-    // Anti-spam pressure, not a ban: a 15-minute crop earns clearly less per
-    // plot-day than the peak band while staying a real fraction of it.
-    expect(rate(CROP.meatFlower) / peak).toBeGreaterThan(0.3);
-    expect(rate(CROP.meatFlower) / peak).toBeLessThan(0.6);
-    // Half-hour through two-hour crops climb steadily toward the peak.
-    expect(rate(CROP.skellyberry)).toBeGreaterThan(rate(CROP.meatFlower));
-    expect(rate(CROP.bloodberry)).toBeGreaterThan(rate(CROP.skellyberry));
-    expect(rate(CROP.corn)).toBeGreaterThan(rate(CROP.bloodberry));
+  it("still raises per-harvest chance with grow time", () => {
+    // The hump survives in per-harvest terms even though it no longer decides which
+    // crop is the most efficient farm (see below).
+    expect(chance(CROP.corn)).toBeGreaterThan(chance(CROP.bloodberry));
+    expect(chance(CROP.sunGlower)).toBeGreaterThan(chance(CROP.corn));
+    expect(chance(CROP.corpseFlower)).toBeGreaterThan(chance(CROP.sunGlower));
+    expect(chance(CROP.heartichoke)).toBeGreaterThan(chance(CROP.corpseFlower));
   });
 
-  it("caps 24-hour crops so no crop is ever a guaranteed token", () => {
+  it("lets short crops lead on tokens per plot-day — a known cost of the flat bonus", () => {
+    // DELIBERATE, not a bug. Three flat points is worth +2.88 tokens/plot-day on a
+    // 15-minute crop (96 rolls) and +0.18 on a 4-hour one (6 rolls), so the flat
+    // bonus outweighs the hump and short crops are the efficient token farm. This
+    // is asserted so that shrinking FLAT_BONUS — which restores the 2-4h peak —
+    // shows up as a deliberate change rather than a silent one.
+    expect(rate(CROP.meatFlower)).toBeGreaterThan(rate(CROP.sunGlower));
+    expect(rate(CROP.meatFlower)).toBeGreaterThan(rate(CROP.skellyberry));
+    expect(rate(CROP.skellyberry)).toBeGreaterThan(rate(CROP.bloodberry));
+    // The long tail still falls away, so 24-hour crops stay the weakest farm.
+    expect(rate(CROP.heartichoke)).toBeLessThan(rate(CROP.corpseFlower));
+  });
+
+  it("caps at the recovered ceiling so no crop is ever a guaranteed token", () => {
     expect(chance(CROP.onion)).toBe(MAX_TOKEN_CHANCE);
     expect(chance(CROP.heartichoke)).toBe(MAX_TOKEN_CHANCE);
     for (const crop of Object.values(CROP)) {
       expect(chance(crop)).toBeLessThanOrEqual(MAX_TOKEN_CHANCE);
     }
-    // The cap must not reach down into the shorter bands, or harvest value would
-    // stop separating those crops at all.
-    expect(chance(CROP.eyebiscus)).toBeLessThan(MAX_TOKEN_CHANCE);
+    // The bonus pushes the ceiling down into the 12-hour band; it must not reach
+    // the 6-hour band, or harvest value would stop separating the mid crops too.
     expect(chance(CROP.corpseFlower)).toBeLessThan(MAX_TOKEN_CHANCE);
   });
 

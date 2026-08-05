@@ -618,6 +618,15 @@
 #hud .zabil.locked:hover { filter: grayscale(.6) brightness(.9) drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
 #hud .zabil .zlock { font-size: 18px; line-height: 1; filter: drop-shadow(0 1px 1px rgba(0,0,0,.6)); }
 #hud .zabil-none { font-size: 12px; font-style: italic; color: #d8c6a0; opacity: .8; padding: 8px 2px; }
+/* a mutation cell: ZF2's own mutation icon in the Mausoleum board's frame. Like the
+   stat and ability tiles it carries no label — tapping it names the mutation and the
+   bonus it grants THIS zombie. */
+#hud .zmuts { gap: 8px; }
+#hud .zmut { width: 40px; height: 44px; flex: 0 0 auto; padding: 0; border: none;
+  cursor: pointer; background: center/100% 100% no-repeat; display: flex;
+  align-items: center; justify-content: center; filter: drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
+#hud .zmut img { width: 30px; height: 30px; object-fit: contain; image-rendering: pixelated; }
+#hud .zmut:hover { filter: brightness(1.1) drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
 /* small tooltip popup for a stat/ability */
 #hud .ztip { position: fixed; transform: translate(-50%, -100%); z-index: 5;
   box-sizing: border-box; max-width: min(180px, calc(100vw - 16px)); min-width: 96px;
@@ -1625,6 +1634,9 @@
   #hud .zabil img { width: 22px; height: 22px; }
   #hud .zabil .zlock { font-size: 14px; }
   #hud .zabil-none { padding: 5px 2px; font-size: 10px; }
+  #hud .zmuts { gap: 5px; }
+  #hud .zmut { width: 30px; height: 33px; }
+  #hud .zmut img { width: 22px; height: 22px; }
 
   #hud .zl-panel { width: min(720px, 94vw); }
   #hud .zl-list { gap: 7px; max-height: 70vh; }
@@ -1838,7 +1850,10 @@
 .zf-mode-error { min-height: 20px; margin-top: 12px; text-align: center; color: #ffd0a8; font-size: 13px; }
 
 /* ---- Zombies menu tabs + Zombie Almanac (ui/panels/zombies.ts) ---- */
-#hud .zl-tabs { margin: 0 0 2px; }
+/* Three tabs (My Zombies / Zombie Almanac / Epic Zombies) do not fit one phone-width
+   row, so this strip — unlike the Market's two-screen one — wraps instead of
+   overflowing the panel. */
+#hud .zl-tabs { margin: 0 0 2px; flex-wrap: wrap; row-gap: 4px; }
 /* Roster ordering picker — matches the friends-list sort control. */
 #hud .zl-sort { display: flex; align-items: center; gap: 6px; margin-left: auto;
   font-size: 12px; color: #c9b98f; }

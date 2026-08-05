@@ -36,22 +36,38 @@ const FALL = (PEAK_HOURS * PEAK_HOURS) / RISE;
 const PEAK_RATE = 1.05;
 const VALUE_EXP = 0.2;
 
+// Flat bonus added to every crop's per-harvest chance, applied after the hump and
+// before the ceiling. This is a deliberate FLOOR ON FEEL, not a rate adjustment: the
+// bare hump gives a 15-minute crop about 0.4% per harvest, so a player pulling
+// carrots effectively never saw a token even though the plot earned a reasonable
+// amount per day.
+//
+// Be aware of what it costs, because the leverage is very uneven. Three points of
+// flat chance is worth +2.88 tokens per plot-day on a 15-minute crop (96 rolls) and
+// only +0.18 on a 4-hour one (6 rolls). It therefore ADDS BACK the short-crop
+// dominance the hump was shaped to remove: the per-plot-day ranking is now
+// 15m 3.3, 30m 2.1, 1h 1.5, 2h 1.2, 4h 1.15, 24h 0.35, and total supply roughly
+// doubles. The hump still controls the per-HARVEST curve and the shape of the
+// mid/long bands; it no longer decides which crop is the most efficient farm.
+// Anything that shrinks this bonus restores the 2-4 hour peak.
+const FLAT_BONUS = 0.03;
+
 const humpRaw = (hours: number) => (hours / (hours + RISE)) * (FALL / (hours + FALL));
 const HUMP_PEAK = humpRaw(PEAK_HOURS);
 
 /**
  * Chance that a ripe vegetable crop yields an active-event fight token.
  *
- * Peaks for crops in the 2-4 hour band, which earn roughly 0.9-1.0 tokens per
- * plot-day. Spam crops sit below that (a 15-minute crop is about 45% of the peak
- * rate, a 30-minute one about 65%), and 24-hour crops are held at the ceiling,
- * which works out to 0.35 tokens per plot-day.
+ * Rises with grow time and (weakly) with harvest value, plus a flat 3-point bonus so
+ * no crop is ever a dead roll, all clamped to the recovered 35% ceiling. Everything
+ * from 8 hours up sits at or near that ceiling; the 24-hour band is pinned to it, so
+ * harvest value stops separating those crops.
  */
 export function epicBossTokenChance(growMs: number, harvestValue: number): number {
   if (!Number.isFinite(growMs) || !Number.isFinite(harvestValue) || growMs <= 0 || harvestValue <= 0) return 0;
   const hours = growMs / 3_600_000;
   const ratePerDay = PEAK_RATE * Math.pow(harvestValue / 200, VALUE_EXP) * (humpRaw(hours) / HUMP_PEAK);
-  return Math.min(MAX_TOKEN_CHANCE, (ratePerDay * hours) / 24);
+  return Math.min(MAX_TOKEN_CHANCE, (ratePerDay * hours) / 24 + FLAT_BONUS);
 }
 
 /** Expected tokens per plot-day if the crop is replanted the instant it is harvested.

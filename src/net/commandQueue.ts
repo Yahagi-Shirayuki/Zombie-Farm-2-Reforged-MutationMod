@@ -45,6 +45,7 @@ export class CommandQueue {
   private writerGeneration = 0;
   private takeWriter = false;
   private paused = false;
+  private pausedReason = "";
   private writerLost = false;
   private readonly windowMs: number;
   private readonly random: () => number;
@@ -80,11 +81,25 @@ export class CommandQueue {
       value.writerDeviceId === null || value.writerDeviceId === api.deviceId();
     if (value.writer && mine && this.size > 0 && localGeneration !== value.writerGeneration) this.discardPending();
     this.takeWriter = value.writer ? false : value.writerDeviceId === null || (!mine && !this.writerLost && localGeneration === 0);
-    this.paused = !value.mutationsEnabled || value.minimumProtocolVersion > GAMEPLAY_PROTOCOL || !mine;
+    this.setPaused(this.bootstrapPauseReason(value, mine));
     if (value.writer && !mine) this.discardPending();
     if (mine) this.writerLost = false;
     this.persist();
     this.scheduleFromFirstCommand();
+  }
+
+  /** Why a bootstrap projection leaves the queue paused, or "" for playable. */
+  private bootstrapPauseReason(value: BootstrapResponse, mine: boolean): string {
+    if (!value.mutationsEnabled) return "mutations_disabled";
+    if (value.minimumProtocolVersion > GAMEPLAY_PROTOCOL) return "update_required";
+    return mine ? "" : "writer_elsewhere";
+  }
+
+  /** The single place `paused` is assigned, so no path can pause without saying why.
+   *  The reason is diagnostic only — nothing branches on it. */
+  private setPaused(reason: string): void {
+    this.paused = !!reason;
+    this.pausedReason = reason;
   }
 
   /** A 409 guarantees the submitted batch was not applied. After bootstrap has
@@ -99,8 +114,7 @@ export class CommandQueue {
     const mine = value.writer ? value.writer.status === "mine" :
       value.writerDeviceId === null || value.writerDeviceId === api.deviceId();
     this.takeWriter = value.writer ? false : value.writerDeviceId === null;
-    this.paused = !value.mutationsEnabled || value.minimumProtocolVersion > GAMEPLAY_PROTOCOL ||
-      !mine;
+    this.setPaused(this.bootstrapPauseReason(value, mine));
     if (!mine) {
       this.writerLost = true;
       this.discardPending();
@@ -111,6 +125,8 @@ export class CommandQueue {
   }
 
   get available(): boolean { return !this.paused; }
+  /** Why the queue is paused, or "" when it is running. Diagnostic only. */
+  get pauseReason(): string { return this.paused ? (this.pausedReason || "unknown") : ""; }
   get size(): number { return this.pending.length + (this.inFlight?.commands.length ?? 0); }
   get needsWriterClaim(): boolean { return this.takeWriter; }
 
@@ -125,7 +141,7 @@ export class CommandQueue {
 
   markWriterLost(): void {
     this.writerLost = true;
-    this.paused = true;
+    this.setPaused("writer_lost");
     this.discardPending();
     this.persist();
   }
@@ -164,7 +180,7 @@ export class CommandQueue {
 
   async retry(): Promise<void> {
     if (typeof navigator !== "undefined" && !navigator.onLine) return;
-    this.paused = false;
+    this.setPaused("");
     await this.flush();
   }
 
@@ -184,7 +200,7 @@ export class CommandQueue {
         const commands = this.pending.splice(0, COMMAND_SEND_LIMIT);
         this.inFlight = {
           protocolVersion: GAMEPLAY_PROTOCOL,
-          deviceId: api.writerClientId(),
+          deviceId: api.writerRequestClientId(),
           batchId: uuid(),
           firstSequence: commands[0].sequence,
           expectedAccountVersion: this.accountVersion,
@@ -220,23 +236,29 @@ export class CommandQueue {
     const delays = [1_000, 2_000, 4_000, 8_000, 16_000];
     for (let attempt = 0; attempt <= delays.length; attempt++) {
       try {
+        // "Identical" is about the batchId that gives the send its idempotency, not
+        // about the writer identity: re-stamp that on every attempt so a lease
+        // acquired or rotated since the envelope was built is the one presented.
+        // A restored envelope may carry an id this document can no longer
+        // authenticate with, and the server fences the body against the header.
+        batch.deviceId = api.writerRequestClientId();
         return await api.sendCommandBatch(batch);
       } catch (error) {
         if (!(error instanceof api.ApiError)) return this.pause("unexpected_error");
         if (error.status === 409) {
-          this.paused = true;
+          this.setPaused("state_conflict");
           this.onStateConflict?.();
           return null;
         }
         if (error.status === 423 || error.code === "writer_replaced") {
-          this.paused = true;
+          this.setPaused("writer_replaced");
           this.writerLost = true;
           this.persist();
           this.onWriterReplaced?.();
           return null;
         }
         const transient = error.status === 0 || error.status === 429 || [500, 502, 503, 504].includes(error.status);
-        if (!transient) return this.pause(error.code);
+        if (!transient) return this.dissolveAndPause(error.code);
         if (attempt === delays.length) return this.pause(error.code);
         const retryAfter = Number((error.body as { retryAfterMs?: unknown } | undefined)?.retryAfterMs);
         const base = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : delays[attempt];
@@ -247,9 +269,33 @@ export class CommandQueue {
   }
 
   private pause(reason: string): null {
-    this.paused = true;
+    this.setPaused(reason || "unknown");
     this.onUnavailable?.(reason);
     return null;
+  }
+
+  /** Pause, but return the batch's commands to `pending` first so the next flush
+   *  builds a FRESH envelope instead of replaying this one.
+   *
+   *  Only for statuses the server raises before `applyBatch` runs — a malformed or
+   *  mis-fenced envelope (400), a rejected session (401), a retired route (410), a
+   *  protocol floor (426). Those guarantee nothing was applied, so rebuilding cannot
+   *  double-apply. A transient failure is deliberately NOT routed here: it may have
+   *  committed with the response lost, and only replaying the same batchId collects
+   *  the server's cached result.
+   *
+   *  Without this the envelope is frozen in localStorage and `flushLoop` re-sends it
+   *  verbatim on every recovery tick, so one permanently-rejected batch pauses
+   *  gameplay for good — across reloads, on a healthy connection, with the only
+   *  symptom being "Gameplay paused — reconnect to continue" on every tap. */
+  private dissolveAndPause(reason: string): null {
+    if (this.inFlight) {
+      this.pending = [...this.inFlight.commands, ...this.pending];
+      this.inFlight = null;
+      this.queuedAt = this.pending.length ? this.now() - this.windowMs : 0;
+      this.persist();
+    }
+    return this.pause(reason);
   }
 
   private discardPending(): void {

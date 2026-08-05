@@ -980,4 +980,62 @@ describe("v3 raid dependency ids", () => {
     expect(state.brains).toBe(14);
     expect(api.raidRevive).toHaveBeenCalledWith("raid-session", ["z-dead"]);
   });
+
+  // This string is the whole diagnostic — it's what a player screenshots and what
+  // finally distinguishes the branches that all render as "reconnect to continue".
+  // If it composes to something empty or shapeless the report is worthless again.
+  describe("unavailableReason", () => {
+    const signedIn = () => {
+      vi.spyOn(api, "getSession").mockReturnValue({
+        token: "t", accountId: "diag", username: "DoctorNerd", friendCode: "CODE",
+      });
+    };
+
+    it("is empty while gameplay is available", () => {
+      const economy = new EconomyClient(new GameState(), "diag");
+      (economy as any).ready = true;
+      expect(economy.available).toBe(true);
+      expect(economy.unavailableReason).toBe("");
+    });
+
+    it("names the queue's cause, the backlog and the credential state", () => {
+      signedIn();
+      vi.spyOn(api, "hasLocalWriterLock").mockReturnValue(true);
+      vi.spyOn(api, "hasWriterCredential").mockReturnValue(true);
+      const economy = new EconomyClient(new GameState(), "diag");
+      (economy as any).ready = true;
+      (economy as any).queue.adoptBootstrap({
+        accountVersion: 0, writerGeneration: 0, writerDeviceId: null,
+        mutationsEnabled: true, minimumProtocolVersion: 3,
+        writer: { status: "other", generation: 1, lastActivityAt: 1 },
+      } as any);
+      expect(economy.unavailableReason).toBe("writer_elsewhere");
+    });
+
+    it("reports a failed bootstrap as not_ready, with the credential gap", () => {
+      signedIn();
+      vi.spyOn(api, "hasLocalWriterLock").mockReturnValue(false);
+      const economy = new EconomyClient(new GameState(), "diag");
+      (economy as any).ready = false;
+      (economy as any).queue.disable("bootstrap_failed");
+      expect(economy.unavailableReason).toBe("not_ready/bootstrap_failed/nolock");
+    });
+
+    it("counts queued work so a stalled outbox is visible", () => {
+      signedIn();
+      vi.spyOn(api, "hasLocalWriterLock").mockReturnValue(true);
+      vi.spyOn(api, "hasWriterCredential").mockReturnValue(false);
+      const economy = new EconomyClient(new GameState(), "diag");
+      (economy as any).ready = true;
+      const queue = (economy as any).queue;
+      queue.adoptBootstrap({
+        accountVersion: 0, writerGeneration: 0, writerDeviceId: null,
+        mutationsEnabled: true, minimumProtocolVersion: 3,
+      } as any);
+      queue.enqueue({ type: "farm.plow", oc: 0, or: 0 });
+      queue.enqueue({ type: "farm.plow", oc: 4, or: 0 });
+      queue.disable("offline");
+      expect(economy.unavailableReason).toBe("offline/q2/nocred");
+    });
+  });
 });

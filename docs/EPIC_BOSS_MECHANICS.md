@@ -26,16 +26,24 @@ an event is active, harvesting a vegetable crop can yield a Boss Token. The chan
 the recovered 35% starter-loot rate as a per-harvest ceiling, so no crop is ever a
 guaranteed token.
 
-Supply is tuned in tokens per **plot-day** rather than per harvest, because a plot is
-recycled — a 15-minute crop harvests 96 times a day and a 24-hour crop once. The rate
-is a hump in grow time that peaks in the **2-4 hour** band at roughly 0.9-1.0 tokens
-per plot-day; a 15-minute crop earns about 45% of that and a 30-minute one about 65%,
-and the 24-hour band is held at the ceiling, which works out to 0.35 per plot-day.
-Harvest value still separates crops of equal grow time, but weakly (about 1.4x across
-the 4-hour crops) so the time band dominates the choice. (Before this tuning the rule
-was `0.35 * sqrt(time * value)`, which was *documented* as favouring long crops but per
-plot-hour did the opposite — a 15-minute Meat Flower out-earned a 24-hour Heartichoke
-4.3 to 1, making spam the optimal play.)
+Per-harvest chance is a hump in grow time (peaking around 2-4 hours before the ceiling
+takes over) times a weak harvest-value term, **plus a flat 3-point bonus** so no crop
+is ever a dead roll — the bare curve left a 15-minute crop near 0.4%, which reads as
+"never" to a player pulling carrots. Everything from 8 hours up sits at or near the
+ceiling, and the 24-hour band is pinned to it, so harvest value stops separating those
+crops.
+
+Read supply in tokens per **plot-day**, not per harvest, because a plot is recycled: a
+15-minute crop harvests 96 times a day and a 24-hour crop once. That makes the flat
+bonus very unevenly levered — three points is worth +2.88 tokens per plot-day on a
+15-minute crop and +0.18 on a 4-hour one. **Short crops are therefore the most
+efficient token farm**, roughly: 15m 3.3, 30m 2.1, 1h 1.5, 2h 1.2, 4h 1.15, 6h 1.07,
+12h 0.70, 24h 0.35 per plot-day. This is a deliberate trade — the flat bonus buys
+per-harvest feel at the cost of the grow-time ladder, and shrinking `FLAT_BONUS` in
+`src/epicBoss/tokens.ts` restores a 2-4 hour peak.
+
+(The original rule was `0.35 * sqrt(time * value)`, which was *documented* as favouring
+long crops but per plot-hour did the opposite, at a much lower overall supply.)
 
 Tokens can be
 hoarded during the run, but expire when that boss event ends. Damage survives an escape.

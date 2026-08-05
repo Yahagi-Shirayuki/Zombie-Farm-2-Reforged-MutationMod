@@ -20,6 +20,9 @@ export const STAT_TILE = `${ZD}stat_tile.png`; // purple rounded tile behind a g
 export const VALUE_FILL = `${ZD}value_fill.png`; // black value-box body (repeat-x)
 export const VALUE_END = `${ZD}value_end.png`; // black value-box right cap
 export const ABILITY_FRAME = `${ZD}ability_frame.png`; // brown ability tile frame
+// The Mausoleum's mutation board framed each mutation icon in this; the card's
+// Mutations row reuses it (tools/prep_mutation_icons.py).
+export const MUTATION_FRAME = `${ZD}mutation_frame.png`;
 export const ABILITY_UNKNOWN = `${ZD}ability_unknown.png`; // the "?" placeholder glyph
 
 export interface StatMeta {

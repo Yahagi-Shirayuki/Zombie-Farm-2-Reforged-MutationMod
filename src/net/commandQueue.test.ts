@@ -35,8 +35,13 @@ const responseFor = (batch: any) => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
+
+/** `retry()` refuses to send while the browser reports itself offline. The node test
+ *  environment has no `navigator.onLine`, which reads as offline. */
+const stubOnline = () => vi.stubGlobal("navigator", { userAgent: "node", onLine: true });
 
 describe("protocol v3 command queue", () => {
   it("abandons stale outbox work when another client takes ownership", () => {
@@ -195,5 +200,159 @@ describe("protocol v3 command queue", () => {
     expect(seen[1].batchId).not.toBe(seen[0].batchId);
     expect(seen[1].expectedAccountVersion).toBe(5);
     expect(seen[1].commands).toEqual(seen[0].commands);
+  });
+
+  // The server fences a batch body's deviceId against the X-Writer-Client header AND
+  // against the stored writer_device_id. An envelope restored from the outbox may
+  // predate the current lease — built by an older client, or with the browser-local
+  // client key rebuilt underneath it — so its baked-in id no longer authenticates.
+  it("stamps the current writer identity on a restored envelope", async () => {
+    vi.spyOn(api, "writerRequestClientId").mockReturnValue("leased-client-id");
+    const sent: any[] = [];
+    vi.spyOn(api, "sendCommandBatch").mockImplementation(async (batch) => {
+      sent.push({ ...batch });
+      return responseFor(batch);
+    });
+    const queue = new CommandQueue("stale-envelope-test");
+    queue.adoptBootstrap(bootstrap);
+    (queue as any).inFlight = {
+      protocolVersion: 3,
+      deviceId: "id-from-a-previous-client",
+      batchId: "restored-batch-id",
+      firstSequence: 1,
+      expectedAccountVersion: 0,
+      writerGeneration: 0,
+      commands: [{ sequence: 1, command: { type: "farm.plow", oc: 0, or: 0 } }],
+    };
+    await queue.flush();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].deviceId).toBe("leased-client-id");
+    // The batchId is what carries idempotency, so re-stamping identity must not
+    // disturb it: this batch may already have been applied under that id.
+    expect(sent[0].batchId).toBe("restored-batch-id");
+  });
+
+  // A batch the server refuses outright was never applied, so it must be rebuilt
+  // rather than replayed. Replaying it verbatim is what froze gameplay for good:
+  // the envelope persists to localStorage, every recovery tick re-sent the same
+  // rejected bytes, and each tap answered "Gameplay paused — reconnect to continue".
+  it("rebuilds a refused batch instead of replaying it forever", async () => {
+    const seen: any[] = [];
+    vi.spyOn(api, "sendCommandBatch")
+      .mockImplementationOnce(async (batch) => {
+        seen.push({ ...batch });
+        throw new api.ApiError(400, "bad_writer_command");
+      })
+      .mockImplementation(async (batch) => {
+        seen.push({ ...batch });
+        return responseFor(batch);
+      });
+    stubOnline();
+    const reasons: string[] = [];
+    const queue = new CommandQueue("refused-batch-test");
+    queue.onUnavailable = (reason) => reasons.push(reason);
+    queue.adoptBootstrap(bootstrap);
+    queue.enqueue({ type: "farm.plow", oc: 0, or: 0 });
+    await queue.flush();
+    expect(reasons).toEqual(["bad_writer_command"]);
+    expect(queue.available).toBe(false);
+    // The player's action survives the rejection rather than being dropped.
+    expect(queue.size).toBe(1);
+
+    await queue.retry();
+    expect(seen).toHaveLength(2);
+    expect(seen[1].batchId).not.toBe(seen[0].batchId);
+    expect(seen[1].commands).toEqual(seen[0].commands);
+    expect(queue.available).toBe(true);
+    expect(queue.size).toBe(0);
+  });
+
+  // The whole point of the reason is to identify the branch from a player screenshot,
+  // so a path that pauses without naming itself is worse than useless — it reads as
+  // "no reason given" exactly when the report matters.
+  it("names the cause on every path that pauses the queue", async () => {
+    const writerless = { ...bootstrap, writer: { status: "other", generation: 2, lastActivityAt: 1 } };
+    const cases: Array<[string, () => CommandQueue | Promise<CommandQueue>]> = [
+      ["writer_elsewhere", () => {
+        const q = new CommandQueue("reason-writer");
+        q.adoptBootstrap(writerless as any);
+        return q;
+      }],
+      ["mutations_disabled", () => {
+        const q = new CommandQueue("reason-mutations");
+        q.adoptBootstrap({ ...bootstrap, mutationsEnabled: false });
+        return q;
+      }],
+      ["update_required", () => {
+        const q = new CommandQueue("reason-protocol");
+        q.adoptBootstrap({ ...bootstrap, minimumProtocolVersion: 99 });
+        return q;
+      }],
+      ["writer_lost", () => {
+        const q = new CommandQueue("reason-lost");
+        q.adoptBootstrap(bootstrap);
+        q.markWriterLost();
+        return q;
+      }],
+      ["state_conflict", async () => {
+        vi.spyOn(api, "sendCommandBatch").mockRejectedValue(new api.ApiError(409, "conflict"));
+        const q = new CommandQueue("reason-conflict");
+        q.adoptBootstrap(bootstrap);
+        q.enqueue({ type: "farm.plow", oc: 0, or: 0 });
+        await q.flush();
+        return q;
+      }],
+      ["writer_replaced", async () => {
+        vi.spyOn(api, "sendCommandBatch").mockRejectedValue(new api.ApiError(423, "writer_replaced"));
+        const q = new CommandQueue("reason-replaced");
+        q.adoptBootstrap(bootstrap);
+        q.enqueue({ type: "farm.plow", oc: 0, or: 0 });
+        await q.flush();
+        return q;
+      }],
+      ["bad_writer_command", async () => {
+        vi.spyOn(api, "sendCommandBatch").mockRejectedValue(new api.ApiError(400, "bad_writer_command"));
+        const q = new CommandQueue("reason-fence");
+        q.adoptBootstrap(bootstrap);
+        q.enqueue({ type: "farm.plow", oc: 0, or: 0 });
+        await q.flush();
+        return q;
+      }],
+    ];
+    for (const [expected, build] of cases) {
+      const queue = await build();
+      expect(queue.available, `${expected} should pause`).toBe(false);
+      expect(queue.pauseReason, `${expected} should name itself`).toBe(expected);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("reports no reason while the queue is running", () => {
+    const queue = new CommandQueue("reason-running");
+    queue.adoptBootstrap(bootstrap);
+    expect(queue.available).toBe(true);
+    expect(queue.pauseReason).toBe("");
+  });
+
+  // A transient failure may have committed with the response lost. Only replaying the
+  // SAME batchId collects the server's cached result, so exhausted retries must keep
+  // the envelope intact — the opposite of the refused-batch case above.
+  it("keeps the envelope intact when transient retries are exhausted", async () => {
+    vi.useFakeTimers();
+    const seen: any[] = [];
+    vi.spyOn(api, "sendCommandBatch").mockImplementation(async (batch) => {
+      seen.push({ ...batch });
+      throw new api.ApiError(503, "unavailable");
+    });
+    const queue = new CommandQueue("transient-exhausted-test", { random: () => 0.5 });
+    queue.adoptBootstrap(bootstrap);
+    queue.enqueue({ type: "farm.plow", oc: 0, or: 0 });
+    const flushing = queue.flush();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushing;
+    expect(queue.available).toBe(false);
+    expect(seen.length).toBeGreaterThan(1);
+    expect(new Set(seen.map((batch) => batch.batchId)).size).toBe(1);
+    expect((queue as any).inFlight?.batchId).toBe(seen[0].batchId);
   });
 });

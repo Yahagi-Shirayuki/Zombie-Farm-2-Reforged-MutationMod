@@ -185,6 +185,26 @@ export class EconomyClient {
 
   get available(): boolean { return this.ready && this.queue.available; }
 
+  /** A compact description of WHY gameplay is unavailable, read live at the moment
+   *  it's shown rather than remembered from a callback — several paths pause the
+   *  queue without emitting one (a 409 rebase, a lost writer, a bootstrap projection
+   *  that says mutations are off). Diagnostic only; nothing branches on it.
+   *  Shape: `reason` or `reason+detail`, e.g. `bootstrap_failed`,
+   *  `state_conflict/q3`, `writer_elsewhere/nocred`. */
+  get unavailableReason(): string {
+    if (this.available) return "";
+    const parts: string[] = [];
+    if (!this.ready) parts.push("not_ready");
+    if (!this.queue.available) parts.push(this.queue.pauseReason);
+    if (this.queue.size) parts.push(`q${this.queue.size}`);
+    // Distinguishes "the lease moved" from "this document never had a credential",
+    // which look identical from the outside but have different fixes.
+    if (!api.getSession()) parts.push("nosession");
+    else if (!api.hasLocalWriterLock()) parts.push("nolock");
+    else if (!api.hasWriterCredential()) parts.push("nocred");
+    return parts.filter(Boolean).join("/");
+  }
+
   async takeOver(): Promise<boolean> {
     try {
       const current = await api.bootstrap(true);

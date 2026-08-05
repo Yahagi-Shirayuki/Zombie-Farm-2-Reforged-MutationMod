@@ -13,9 +13,10 @@ import { zombieSellValue } from "../../economy";
 import { MAX_ZOMBIE_NAME_LENGTH, RosterEntry } from "../../zombie/types";
 import { mutationBonus } from "../../zombie/mutations";
 import {
-  STATS, veterancy, STAT_TILE, VALUE_FILL, VALUE_END, ABILITY_FRAME,
+  STATS, veterancy, STAT_TILE, VALUE_FILL, VALUE_END, ABILITY_FRAME, MUTATION_FRAME,
   ABILITY_POOL, unitAbilityAt, TIER_BOSS, MAX_ABILITY_TIER,
 } from "../../zombie/traits";
+import { mutationEntries, mutationTipText } from "../../zombie/mutationDisplay";
 import { statBreakdown } from "../../zombie/statDisplay";
 import { classTierRank } from "../../zombie/taxonomy";
 import { ZOMBIE_SORTS, isZombieSort, sortZombies, type ZombieSort } from "../../zombie/rosterSort";
@@ -185,6 +186,29 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
     statsRow.appendChild(cell);
   }
 
+  // ---- mutations: one framed icon per mutation this zombie carries ----
+  // Only the boosted (green) stat tiles used to hint at these, which never said WHICH
+  // mutations they were — the thing you need before pairing the zombie in the Pot.
+  // Unmutated zombies (most of them) show no section at all rather than an empty row.
+  const mutations = mutationEntries(info);
+  const mutHdr = document.createElement("div");
+  mutHdr.className = "zsec-h";
+  mutHdr.textContent = mutations.length > 1 ? `Mutations (${mutations.length}/5)` : "Mutation";
+  const mutRow = document.createElement("div");
+  mutRow.className = "zrow zmuts";
+  for (const mutation of mutations) {
+    const cell = document.createElement("button");
+    cell.className = "zmut";
+    cell.style.backgroundImage = `url(${MUTATION_FRAME})`;
+    cell.title = mutation.name; // the name is a tap away, like the stat/ability tiles
+    cell.innerHTML = `<img src="${mutation.icon}" alt="${mutation.name}">`;
+    cell.onclick = (e) => {
+      e.stopPropagation();
+      showTip(cell, mutation.name, mutationTipText(mutation));
+    };
+    mutRow.appendChild(cell);
+  }
+
   const abilHdr = document.createElement("div");
   abilHdr.className = "zsec-h";
   abilHdr.textContent = "Abilities";
@@ -232,7 +256,9 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
     abilRow.appendChild(none);
   }
 
-  right.append(statsHdr, statsRow, abilHdr, abilRow);
+  right.append(statsHdr, statsRow);
+  if (mutations.length) right.append(mutHdr, mutRow);
+  right.append(abilHdr, abilRow);
   wrap.append(card, right);
   return wrap;
 }
@@ -392,11 +418,13 @@ export function buildRosterCard(hud: Hud, z: RosterEntry, onClick: () => void): 
   return card;
 }
 
-export type ZombiesPanelTab = "roster" | "almanac";
+export type ZombiesPanelTab = "roster" | "almanac" | "epic";
 
 // The "Zombies" tab (right bar): "My Zombies" lists every owned zombie as its
 // full inspect card (the same one shown when tapping a zombie); the "Zombie
-// Almanac" is the species collection.
+// Almanac" is the species collection, and "Epic Zombies" is the same collection
+// for the Epic Boss exclusives — they live in one tab of their own, under the boss
+// that awards them, instead of being scattered through the Special section.
 export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster") {
   // position:relative host (zl-panel) for card tooltips
   const { panel, close } = openModal({
@@ -419,7 +447,7 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
     body.innerHTML = "";
     body.scrollTop = 0;
     if (tab === "roster") renderRoster();
-    else renderAlmanac();
+    else renderAlmanac(tab === "epic");
   };
   const mkTab = (tab: ZombiesPanelTab, label: string) => {
     const b = document.createElement("button");
@@ -431,6 +459,7 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
   };
   mkTab("roster", "My Zombies");
   mkTab("almanac", "Zombie Almanac");
+  mkTab("epic", "Epic Zombies");
 
   let rosterSort: ZombieSort = getZombieSort();
 
@@ -496,12 +525,20 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
     }
   };
 
-  const renderAlmanac = () => {
-    const entries = hud.getAlmanac ? hud.getAlmanac() : [];
+  // Both collection tabs render the same grid of tiles; they differ in which half of
+  // the Almanac they take and how the tiles are sectioned. Each keeps its OWN
+  // discovered count — a species belongs to exactly one tab, so the two totals add up
+  // to the whole Almanac instead of double-counting the epic exclusives.
+  const renderAlmanac = (epicOnly: boolean) => {
+    const all = hud.getAlmanac ? hud.getAlmanac() : [];
+    const entries = epicOnly
+      ? all.filter((entry) => entry.epicBoss)
+          .sort((a, b) => (a.epicBoss?.order ?? 0) - (b.epicBoss?.order ?? 0))
+      : all.filter((entry) => !entry.epicBoss);
     const found = entries.filter((entry) => entry.obtained > 0).length;
     head.innerHTML = "";
     const title = document.createElement("h2");
-    title.textContent = "Zombie Almanac";
+    title.textContent = epicOnly ? "Epic Zombies" : "Zombie Almanac";
     const cnt = document.createElement("span");
     cnt.className = "zr-total";
     cnt.textContent = `${found} / ${entries.length} discovered`;
@@ -510,14 +547,19 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
     const grid = document.createElement("div");
     grid.className = "zr-grid alm-grid";
     body.appendChild(grid);
-    let lastCategory = "";
+    // Sections: the boss that awards them on the epic tab, the species category on the
+    // main one. Entries arrive pre-sorted by that key, so a change of value opens a
+    // new section.
+    let lastSection = "";
     for (const entry of entries) {
-      if (entry.category !== lastCategory) {
-        lastCategory = entry.category;
+      const section = epicOnly
+        ? entry.epicBoss?.name ?? "Epic Boss"
+        : entry.category === "normal" ? "Normal" : entry.category === "mutant" ? "Mutant" : "Special";
+      if (section !== lastSection) {
+        lastSection = section;
         const header = document.createElement("div");
         header.className = "alm-section";
-        header.textContent =
-          entry.category === "normal" ? "Normal" : entry.category === "mutant" ? "Mutant" : "Special";
+        header.textContent = section;
         grid.appendChild(header);
       }
       grid.appendChild(buildAlmanacCard(hud, entry));

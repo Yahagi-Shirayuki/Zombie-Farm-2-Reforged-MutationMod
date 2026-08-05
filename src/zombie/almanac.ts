@@ -40,6 +40,29 @@ export function isObtainable(def: ZombieDef): boolean {
   );
 }
 
+/** Where an Epic Boss exclusive belongs in the Almanac's "Epic Zombies" tab: which
+ *  boss awards it, and its place in the event ladder. */
+export interface EpicAlmanacSource {
+  name: string;
+  /** Sort key. Quest ids run 1000, 2000, … 10000 in the same order the boss catalog
+   *  lists its bosses, and each boss's ids ascend from its base prize to its omega
+   *  one — so sorting by the raw number groups a boss's prizes under it, in ladder
+   *  order, without the panel needing the boss catalog itself. */
+  order: number;
+}
+
+/** The Epic Boss that awards this species, or undefined for everything else. The
+ *  Epic Zombies tab is exactly the entries that have one: they share a source no
+ *  other zombie has (a timed event), and listing them among the Pot/raid/market
+ *  specials made an event collection impossible to read as one. A boss whose name
+ *  cannot be resolved still belongs in that tab, so it falls back to a generic
+ *  heading rather than leaking back into the main collection. */
+export function epicSource(def: ZombieDef, sources: ObtainSources): EpicAlmanacSource | undefined {
+  const questId = EPIC_QUEST_BY_ZOMBIE[def.key];
+  if (questId === undefined) return undefined;
+  return { name: sources.epicBossNameByQuestId(questId) ?? "Epic Boss", order: Number(questId) };
+}
+
 const CATEGORY_ORDER: Record<string, number> = { normal: 0, mutant: 1, special: 2 };
 
 /** The almanac's entry list: every obtainable species, plus any species the

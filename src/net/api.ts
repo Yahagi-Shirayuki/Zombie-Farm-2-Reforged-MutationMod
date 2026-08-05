@@ -154,6 +154,23 @@ export async function prepareWriterAccess(waitMs = 1_500): Promise<boolean> {
   return acquired;
 }
 
+/** The clientId the server fences this document's writes against. A command batch
+ *  MUST stamp this rather than re-reading `writerClientId()`: `POST /commands` answers
+ *  400 `bad_writer_command` when the body's deviceId disagrees with the X-Writer-Client
+ *  header, and the batch CAS additionally requires it to equal the stored
+ *  `writer_device_id`. The two drift apart whenever the localStorage client key is
+ *  rebuilt while the sessionStorage credential survives — an evicted key on iOS, a
+ *  site-data clear with the tab still open, or an envelope persisted by a client
+ *  released before the v4 writer id. Because a rejected batch is retried verbatim
+ *  forever, that drift is what strands a player on "Gameplay paused — reconnect to
+ *  continue" with a perfectly good connection. */
+export const writerRequestClientId = (): string =>
+  // Mirrors the condition req() attaches X-Writer-Client under, so body and header
+  // are always drawn from the same credential or neither is.
+  writerCredential && writerCredential.accountId === session?.accountId
+    ? writerCredential.clientId
+    : writerClientId();
+
 export const hasLocalWriterLock = (): boolean => localWriterLockHeld;
 export const hasWriterCredential = (): boolean => localWriterLockHeld &&
   !!writerCredential && writerCredential.accountId === session?.accountId;
