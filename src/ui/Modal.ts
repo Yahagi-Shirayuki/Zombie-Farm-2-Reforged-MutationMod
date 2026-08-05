@@ -79,9 +79,30 @@ export interface ModalOpts {
   replaceSelector?: string;
 }
 
+/** Each open backdrop's own `close`, so a replacement can retire it properly. */
+const closers = new WeakMap<Element, () => void>();
+
 export function openModal(opts: ModalOpts): ModalHandle {
   const { host } = opts;
-  if (opts.replaceSelector) host.querySelector(opts.replaceSelector)?.remove();
+  if (opts.replaceSelector) {
+    // Retire the outgoing modal through ITS handle, not a bare remove(): dropping
+    // the element alone skips its onClose, stranding whatever that callback owns.
+    // confirmInGame resolves its promise there, so a bare remove left the caller's
+    // `await` pending forever — the dedupe silently wedged the flow it replaced.
+    const stale = host.querySelector(opts.replaceSelector);
+    if (stale) {
+      const retire = closers.get(stale);
+      closers.delete(stale);
+      retire?.();
+      stale.remove(); // no-op once close() detached it; covers handle-less elements
+    }
+    // An onClose may synchronously open its own successor (the quest-completion
+    // chain does). Keep the class a singleton so this open cannot stack on it.
+    for (const leftover of host.querySelectorAll(opts.replaceSelector)) {
+      closers.delete(leftover);
+      leftover.remove();
+    }
+  }
 
   const bg = document.createElement("div");
   bg.className = opts.bgClass ? `panelbg ${opts.bgClass}` : "panelbg";
@@ -92,6 +113,7 @@ export function openModal(opts: ModalOpts): ModalHandle {
   const close = () => {
     if (closed) return;
     closed = true;
+    closers.delete(bg);
     bg.remove();
     opts.onClose?.();
   };
@@ -115,5 +137,6 @@ export function openModal(opts: ModalOpts): ModalHandle {
   bg.appendChild(panel);
   if (opts.backdropClose !== false) bindBackdropDismiss(bg, close);
   host.appendChild(bg);
+  closers.set(bg, close);
   return { bg, panel, close };
 }

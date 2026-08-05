@@ -53,6 +53,7 @@ import {
   bindBackdropDismiss, MENU_ACTIVATION_DELAY_MS, openModal, shouldBlockFreshMenuActivation,
 } from "./ui/Modal";
 import type { ModalHandle } from "./ui/Modal";
+import { onFirstVisible } from "./ui/onFirstVisible";
 import { renderLevelUp, renderQuestComplete, renderObjectActions, renderInfoPanel } from "./ui/panels/dialogs";
 import {
   openSettings as openSettingsPanel, openDevMenu as openDevMenuPanel,
@@ -88,6 +89,7 @@ interface MktEntry {
   sell?: number; // harvest value (plants and fruit trees)
   xp?: number; // experience granted per harvest (crops)
   timeLabel?: string; // catalog grow/regrowth time
+  qty?: number; // how many units the listed price buys (boost packs)
   graveNeeded?: "Blue" | "Red" | "Silver"; // locked until this colored grave is owned
   ownedLimit?: boolean; // "1 per farm" limit reached (gift vouchers) — can't buy
   owned?: boolean;
@@ -1357,6 +1359,12 @@ export class Hud {
   canCombineZombie: ((key: string, slot?: "A" | "B") => boolean) | null = null;
   /** Collect a finished combine; returns the new zombie's name (or null). */
   onCollectCombine: (() => string | null | Promise<string | null>) | null = null;
+  /** Tears down the open combiner's countdown ticker. Held on the instance because
+   *  openCombiner can replace a panel it did not build, and dropping that panel's
+   *  DOM does not stop the interval its closure owns. */
+  private combinerStop: (() => void) | null = null;
+  /** Same contract as combinerStop, for the raid-select panel's cooldown ticker. */
+  private raidSelectStop: (() => void) | null = null;
 
   // ---- raid hooks (set by main) ----
   /** All invasions as cards (unlock/lock state resolved against player level). */
@@ -1704,14 +1712,17 @@ export class Hud {
         });
       }
       if (tab === "Boosts") {
-        // Buying stays in the panel (buy several); the count owned shows in the name.
+        // Buying stays in the panel (buy several). The card advertises the PACK SIZE
+        // — how many uses the listed price buys — not how many you already own; the
+        // owned count lives in Storage's Boosts tab, and appending it to the name
+        // only put it under the magnifier button.
         return this.boosts.filter((b) => !tutorialBoostMarket || b.key === "insta_grow").map((b) => {
-          const owned = this.state.boostCount(b.key);
           // Gift vouchers are "1 per farm": lock once you own that zombie or hold
           // the voucher (main supplies the predicate; it spans both Cupid vouchers).
           const ownedLimit = b.effect === "gift" && !!this.giftLimitReached?.(b.key);
           return {
-            name: owned ? `${b.name} (x${owned})` : b.name,
+            name: b.name,
+            qty: b.perPurchase,
             portrait: `${BASE}assets/boosts/${b.icon}`, cost: b.cost, level: b.level, brains: b.brainsNeeded,
             description: [b.info, b.flavorText].filter(Boolean).join(" ") || undefined,
             ownedLimit,
@@ -2126,9 +2137,11 @@ export class Hud {
       const portrait = document.createElement("div"); portrait.className = "army-por";
       if (z.portrait) portrait.style.backgroundImage = `url(${z.portrait})`;
       if (this.zombieMutationPortraitOf) {
-        void this.zombieMutationPortraitOf(z.key, z.mutation, z.color)
-          .then((image) => { if (portrait.isConnected) portrait.style.backgroundImage = `url(${image})`; })
-          .catch(() => { /* retain the static species portrait */ });
+        onFirstVisible(portrait, () => {
+          void this.zombieMutationPortraitOf?.(z.key, z.mutation, z.color)
+            .then((image) => { if (portrait.isConnected) portrait.style.backgroundImage = `url(${image})`; })
+            .catch(() => { /* retain the static species portrait */ });
+        });
       }
       const name = document.createElement("div"); name.className = "army-nm"; name.textContent = z.name;
       const type = document.createElement("div"); type.className = "army-ty"; type.textContent = z.typeName;
@@ -2206,6 +2219,14 @@ export class Hud {
       x.className = "mkt-xp";
       x.innerHTML = `<img src="${UI("topbar_exp_icon.png")}">+${en.xp}`;
       body.appendChild(x);
+    }
+    // Pack size: how many uses the price below buys (Insta-Grow sells 20 at a time).
+    if (en.qty !== undefined) {
+      const q = document.createElement("div");
+      q.className = "mkt-qty";
+      q.textContent = `x${en.qty}`;
+      q.title = `${en.qty} per purchase`;
+      body.appendChild(q);
     }
     if (en.timeLabel) {
       const t = document.createElement("div");
@@ -3022,9 +3043,11 @@ export class Hud {
         // mutated portrait. Trades too old to have recorded it keep the neutral
         // species portrait and say nothing about mutations.
         if (entry.mutation !== undefined && this.zombieMutationPortraitOf) {
-          void this.zombieMutationPortraitOf(entry.zombieKey, entry.mutation)
-            .then((source) => { if (card.isConnected) portrait.src = source; })
-            .catch(() => { /* retain the static species portrait */ });
+          onFirstVisible(portrait, () => {
+            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!)
+              .then((source) => { if (card.isConnected) portrait.src = source; })
+              .catch(() => { /* retain the static species portrait */ });
+          });
         }
         const body = document.createElement("div");
         const name = document.createElement("div");
@@ -3120,9 +3143,11 @@ export class Hud {
         const portrait = document.createElement("img");
         portrait.src = this.zombiePortraitOf?.(entry.zombieKey) ?? cardFor(entry.zombieKey)?.portrait ?? "";
         if (entry.mutation && this.zombieMutationPortraitOf) {
-          void this.zombieMutationPortraitOf(entry.zombieKey, entry.mutation)
-            .then((source) => { if (row.isConnected) portrait.src = source; })
-            .catch(() => { /* retain the static species portrait */ });
+          onFirstVisible(portrait, () => {
+            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!)
+              .then((source) => { if (row.isConnected) portrait.src = source; })
+              .catch(() => { /* retain the static species portrait */ });
+          });
         }
         const body = document.createElement("div");
         body.className = "bm-meta";
@@ -3183,11 +3208,13 @@ export class Hud {
           // immediate/failure fallback; wanted orders can describe alternatives and
           // therefore deliberately retain the neutral species portrait.
           if (order.kind === "SELL_ZOMBIE" && this.zombieMutationPortraitOf) {
-            void this.zombieMutationPortraitOf(order.zombieKey, order.mutation ?? 0)
-              .then((source) => {
-                if (generation === renderGeneration && marketCard.isConnected) portrait.src = source;
-              })
-              .catch(() => { /* retain the static species portrait */ });
+            onFirstVisible(portrait, () => {
+              void this.zombieMutationPortraitOf?.(order.zombieKey, order.mutation ?? 0)
+                .then((source) => {
+                  if (generation === renderGeneration && marketCard.isConnected) portrait.src = source;
+                })
+                .catch(() => { /* retain the static species portrait */ });
+            });
           }
           const body = document.createElement("div");
           const name = document.createElement("div"); name.className = "bm-name";
@@ -4326,6 +4353,10 @@ export class Hud {
 
   // ---- Zombie Pot: combine two zombies (tap the placed Zombie Pot) ----
   openCombiner() {
+    // Stop the outgoing panel's ticker before its DOM goes: removing the element
+    // leaves its 250ms interval alive on a detached tree for the rest of the session,
+    // and each reopen used to add another.
+    this.combinerStop?.();
     document.querySelector("#hud .cmb-bg")?.remove();
     const bg = document.createElement("div");
     bg.className = "panelbg cmb-bg";
@@ -4354,11 +4385,15 @@ export class Hud {
       const fallback = portraitOf(key) || portraitOf("ZombieActorRegularTier1");
       if (fallback) el.style.backgroundImage = `url(${fallback})`;
       if (!this.zombieMutationPortraitOf) return;
-      void this.zombieMutationPortraitOf(key, mutation, color)
-        .then((portrait) => {
-          if (el.isConnected) el.style.backgroundImage = `url(${portrait})`;
-        })
-        .catch(() => { /* retain the static species portrait */ });
+      // Only the tiles the player scrolls to pay for a portrait: the picker lists the
+      // whole roster (farm + Mausoleum) but shows about a fifth of it at a time.
+      onFirstVisible(el, () => {
+        void this.zombieMutationPortraitOf?.(key, mutation, color)
+          .then((portrait) => {
+            if (el.isConnected) el.style.backgroundImage = `url(${portrait})`;
+          })
+          .catch(() => { /* retain the static species portrait */ });
+      });
     };
     const fmt = (ms: number) => {
       const s = Math.ceil(ms / 1000);
@@ -4372,6 +4407,11 @@ export class Hud {
     let pickB: string | null = null;
     let timer: number | undefined;
     const stop = () => { if (timer !== undefined) { clearInterval(timer); timer = undefined; } };
+    // Registered once for the panel's lifetime, NOT cleared inside stop(): the views
+    // call stop() themselves before installing a fresh interval, so clearing the
+    // handle there would leave the newest ticker unreachable — which is the leak this
+    // is here to prevent. A stale handle is harmless; stop() is idempotent.
+    this.combinerStop = stop;
 
     // --- BUSY view: the two parents + a progress bar while the combine runs,
     //     then the finished zombie on its own once it is ready to collect. ---
@@ -4633,6 +4673,9 @@ export class Hud {
   // Only playable + level-met raids can be invaded; the rest show as locked cards
   // so the ladder reads as a real (mostly future) catalog.
   openRaids() {
+    // Stop the outgoing panel's cooldown ticker before its DOM goes — reopening
+    // (the "i" hotkey, the Invade shortcut) otherwise leaves it running detached.
+    this.raidSelectStop?.();
     document.querySelector("#hud .raid-bg")?.remove();
     const tutorialRaid = this.el.classList.contains("tutorial") && this.tutorialMenuTarget === "Invade";
     const allCards = this.getRaidCards ? this.getRaidCards() : [];
@@ -4652,6 +4695,7 @@ export class Hud {
     // A 1s ticker refreshes the live cooldown countdown while the panel is open.
     let tick = 0;
     const stop = () => { if (tick) { clearInterval(tick); tick = 0; } };
+    this.raidSelectStop = stop;
     const close = () => { stop(); bg.remove(); };
     x.onclick = close;
     if (tutorialRaid) x.style.display = "none";
@@ -4906,9 +4950,11 @@ export class Hud {
       por.className = "army-por";
       if (z.portrait) por.style.backgroundImage = `url(${z.portrait})`;
       if (this.zombieMutationPortraitOf) {
-        void this.zombieMutationPortraitOf(z.key, z.mutation, z.color)
-          .then((image) => { if (por.isConnected) por.style.backgroundImage = `url(${image})`; })
-          .catch(() => { /* retain the static species portrait */ });
+        onFirstVisible(por, () => {
+          void this.zombieMutationPortraitOf?.(z.key, z.mutation, z.color)
+            .then((image) => { if (por.isConnected) por.style.backgroundImage = `url(${image})`; })
+            .catch(() => { /* retain the static species portrait */ });
+        });
       }
       const nm = document.createElement("div");
       nm.className = "army-nm";
@@ -5107,9 +5153,11 @@ export class Hud {
       portrait.src = zombie.portrait;
       portrait.alt = "";
       if (this.zombieMutationPortraitOf) {
-        void this.zombieMutationPortraitOf(zombie.key, zombie.mutation, zombie.color)
-          .then((image) => { if (portrait.isConnected) portrait.src = image; })
-          .catch(() => { /* retain the static species portrait */ });
+        onFirstVisible(portrait, () => {
+          void this.zombieMutationPortraitOf?.(zombie.key, zombie.mutation, zombie.color)
+            .then((image) => { if (portrait.isConnected) portrait.src = image; })
+            .catch(() => { /* retain the static species portrait */ });
+        });
       }
       const label = document.createElement("div");
       const name = document.createElement("div");

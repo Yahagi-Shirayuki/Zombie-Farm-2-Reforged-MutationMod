@@ -70,7 +70,6 @@ import {
 } from "./quest/mutantSubjects";
 import { resolveCropMutations } from "./zombie/cropMutations";
 import { MutationPortraits } from "./zombie/mutationPortrait";
-import { mutationLabel } from "./zombie/mutations";
 import {
   DR_GROUNDHOG,
   EPIC_BOSSES,
@@ -2411,14 +2410,8 @@ async function main() {
       questBus.post(QuestEvent.CombinerHarvested, z.typeName, 1, unitSubjectAliasesOf(z));
       const c = tileCenter(z.col, z.row);
       floatText(c.x, c.y, z.mutation ? `${z.name}!` : z.name);
-      // Slot 1 sets the species, so most combines give back slot 1's own type (a matched
-      // pair below level 25 included): two zombies go in, one identical-looking one comes
-      // out. Without naming the result that reads as "both of mine disappeared" — say what
-      // was made and what it inherited, since the mutations are the only visible difference.
-      const inherited = mutationLabel(z.mutation);
-      hud.showToast(inherited
-        ? `${z.name} the ${z.typeName} came out of the Zombie Pot with ${inherited}.`
-        : `${z.name} the ${z.typeName} came out of the Zombie Pot.`);
+      // No toast naming the result: the Pot's ready view already shows the finished
+      // zombie — portrait, name and inherited mutations — before it is collected.
       try { await economy?.settleBeforeDependency(); }
       catch { hud.showToast("The combine result is waiting for the server to reconnect."); }
       zombies.confirmCombineCollection(targetPotId);

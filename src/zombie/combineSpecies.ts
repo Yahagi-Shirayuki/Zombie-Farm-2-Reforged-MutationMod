@@ -3,8 +3,10 @@
  * tier-5 special. */
 export const COMBINE_SPECIAL_LEVEL = 25;
 
-/** Chance that an eligible non-special pair promotes to its type's special. */
-export const COMBINE_SPECIAL_CHANCE = 0.10;
+/** Chance that an eligible non-special pair promotes to its type's special. The
+ *  server imports this same constant (server/src/v3/engine.ts), so the authoritative
+ *  result can never disagree with the one the client previewed. */
+export const COMBINE_SPECIAL_CHANCE = 0.25;
 
 /** The combining-only tier-5 representative for each zombie body type. */
 export const COMBINE_SPECIAL_BY_GROUP: Readonly<Record<string, string>> = {

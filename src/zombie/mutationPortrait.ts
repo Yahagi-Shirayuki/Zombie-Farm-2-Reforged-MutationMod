@@ -114,9 +114,32 @@ export function buildZombiePortraitRig(
   return root;
 }
 
+/** How many times one key/mask/color may fail before it stops being retried. A
+ *  failing extraction costs as much as a successful one (~30ms of blocked main
+ *  thread), and the panels that request portraits rebuild their whole list on every
+ *  tap — so without a ceiling a single zombie whose textures never loaded re-pays
+ *  that cost on every interaction, forever. */
+export const MAX_PORTRAIT_ATTEMPTS = 2;
+
+/** Hand the main thread back between extractions. Each one blocks on a GPU→CPU
+ *  readback, so a panel that asks for fifty at once used to run them as a single
+ *  uninterruptible task (~1.5s frozen on a full roster). Spacing them across frames
+ *  keeps input and rendering alive while the portraits fill in. */
+function yieldToNextFrame(): Promise<void> {
+  if (typeof requestAnimationFrame !== "function") {
+    // Headless (tests/SSR): still yield, just without a frame to hang it on.
+    return new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
 /** Cache the GPU extraction for each immutable key/mask/color combination. */
 export class MutationPortraits {
   private cache = new Map<string, Promise<string>>();
+  /** Consecutive failures per cache key, capped by MAX_PORTRAIT_ATTEMPTS. */
+  private failures = new Map<string, number>();
+  /** Tail of the extraction chain — see enqueue(). */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private renderer: Renderer, private assets: GameAssets) {}
 
@@ -124,12 +147,25 @@ export class MutationPortraits {
     const cacheKey = `${key}|${mutation}|${color?.join(",") ?? "default"}`;
     const existing = this.cache.get(cacheKey);
     if (existing) return existing;
-    const pending = this.extract(key, mutation, color).catch((error) => {
+    if ((this.failures.get(cacheKey) ?? 0) >= MAX_PORTRAIT_ATTEMPTS) {
+      return Promise.reject(new Error(`portrait extraction gave up for ${cacheKey}`));
+    }
+    const pending = this.enqueue(() => this.extract(key, mutation, color)).catch((error) => {
       this.cache.delete(cacheKey);
+      this.failures.set(cacheKey, (this.failures.get(cacheKey) ?? 0) + 1);
       throw error;
     });
     this.cache.set(cacheKey, pending);
     return pending;
+  }
+
+  /** Run extractions one at a time, each starting on a fresh frame, so a burst of
+   *  requests becomes a series of short tasks instead of one long one. The chain's
+   *  tail absorbs rejections; callers still see them through their own promise. */
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(yieldToNextFrame).then(task);
+    this.queue = run.catch(() => undefined);
+    return run;
   }
 
   private async extract(key: string, mutation: number, color?: [number, number, number]): Promise<string> {

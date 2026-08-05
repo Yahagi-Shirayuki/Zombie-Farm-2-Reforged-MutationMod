@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   COMBINE_SILVER_BY_GROUP,
   COMBINE_SPECIAL_BY_GROUP,
+  COMBINE_SPECIAL_CHANCE,
   createCombineRandom,
   selectCombineSpecies,
   type CombineSpeciesParent,
@@ -11,6 +12,13 @@ const parent = (
   key: string,
   extra: Partial<CombineSpeciesParent> = {}
 ): CombineSpeciesParent => ({ key, tier: 1, group: "Regular", ...extra });
+
+// Derived from the tunable chance rather than hardcoded, so retuning the promotion
+// rate cannot quietly turn a "does not promote" case into a promoting one.
+/** A roll that clears the tier-5 promotion. */
+const promotes = () => COMBINE_SPECIAL_CHANCE / 2;
+/** A roll that misses it — the comparison is `<`, so the boundary itself fails. */
+const missesPromotion = () => COMBINE_SPECIAL_CHANCE;
 
 describe("Zombie Pot species selection", () => {
   it("uses the same stable roll regardless of parent id order", () => {
@@ -22,8 +30,8 @@ describe("Zombie Pot species selection", () => {
   it("uses slot 1 as the output species", () => {
     const garden = parent("garden", { group: "Garden" });
     const large = parent("large", { group: "Large" });
-    expect(selectCombineSpecies(garden, large, 24, () => 0.99)).toBe("garden");
-    expect(selectCombineSpecies(large, garden, 24, () => 0.99)).toBe("large");
+    expect(selectCombineSpecies(garden, large, 24, missesPromotion)).toBe("garden");
+    expect(selectCombineSpecies(large, garden, 24, missesPromotion)).toBe("large");
   });
 
   it("rejects two specials", () => {
@@ -50,7 +58,7 @@ describe("Zombie Pot species selection", () => {
       parent("ordinary"),
       parent("ZombieActorBombie", { isSpecial: true, group: "Headless" }),
       45,
-      () => 0.99
+      missesPromotion
     )).toBe("ZombieActorBombie");
   });
 
@@ -65,7 +73,7 @@ describe("Zombie Pot species selection", () => {
       parent("ZombieActorHeadlessTier3", { group: "Headless", tier: 3 }),
       parent("ordinary", { group: "Regular" }),
       25,
-      () => 0.099
+      promotes
     )).toBe("ZombieActorHeadlessTier5");
   });
 
@@ -74,7 +82,7 @@ describe("Zombie Pot species selection", () => {
       parent("low", { tier: 1 }),
       parent("high", { tier: 4 }),
       24,
-      () => 0.05
+      promotes
     )).toBe("low");
   });
 
@@ -84,7 +92,7 @@ describe("Zombie Pot species selection", () => {
         parent(`${group}-a`, { group }),
         parent(`${group}-b`, { group }),
         25,
-        () => 0.099
+        promotes
       )).toBe(specialKey);
     }
   });
@@ -92,26 +100,26 @@ describe("Zombie Pot species selection", () => {
   it("promotes the slot-1 type after a successful mixed-type roll", () => {
     const garden = parent("garden", { group: "Garden" });
     const large = parent("large", { group: "Large" });
-    expect(selectCombineSpecies(garden, large, 25, () => 0.05))
+    expect(selectCombineSpecies(garden, large, 25, promotes))
       .toBe(COMBINE_SPECIAL_BY_GROUP.Garden);
-    expect(selectCombineSpecies(large, garden, 25, () => 0.05))
+    expect(selectCombineSpecies(large, garden, 25, promotes))
       .toBe(COMBINE_SPECIAL_BY_GROUP.Large);
   });
 
   it("breeds a matched pair up to its body type's silver", () => {
     for (const [group, silverKey] of Object.entries(COMBINE_SILVER_BY_GROUP)) {
       const same = parent(`${group}-same`, { group });
-      expect(selectCombineSpecies(same, { ...same }, 25, () => 0.99)).toBe(silverKey);
+      expect(selectCombineSpecies(same, { ...same }, 25, missesPromotion)).toBe(silverKey);
     }
     // Two Flameheads -> Party Zombie, the Headless silver.
     const flamehead = parent("ZombieActorHeadlessTier3", { group: "Headless", tier: 3 });
-    expect(selectCombineSpecies(flamehead, { ...flamehead }, 45, () => 0.99))
+    expect(selectCombineSpecies(flamehead, { ...flamehead }, 45, missesPromotion))
       .toBe("ZombieActorHeadlessTier4");
   });
 
   it("does not breed a matched pair up before level 25", () => {
     const brute = parent("ZombieActorLargeTier3", { group: "Large", tier: 3 });
-    expect(selectCombineSpecies(brute, { ...brute }, 24, () => 0.99))
+    expect(selectCombineSpecies(brute, { ...brute }, 24, missesPromotion))
       .toBe("ZombieActorLargeTier3");
   });
 
@@ -119,28 +127,28 @@ describe("Zombie Pot species selection", () => {
     // Two Flameheads at level 25+ normally give a Party Zombie; the rare roll
     // upgrades that to Skull Head.
     const flamehead = parent("ZombieActorHeadlessTier3", { group: "Headless", tier: 3 });
-    expect(selectCombineSpecies(flamehead, { ...flamehead }, 25, () => 0.099))
+    expect(selectCombineSpecies(flamehead, { ...flamehead }, 25, promotes))
       .toBe(COMBINE_SPECIAL_BY_GROUP.Headless);
   });
 
   it("keeps a matched pair that is already silver", () => {
     // Mutant silvers must not flatten to the plain silver for their group.
     const eyebiscus = parent("ZombieActorRegularTier4Eyebiscus", { group: "Regular", tier: 4 });
-    expect(selectCombineSpecies(eyebiscus, { ...eyebiscus }, 45, () => 0.99))
+    expect(selectCombineSpecies(eyebiscus, { ...eyebiscus }, 45, missesPromotion))
       .toBe("ZombieActorRegularTier4Eyebiscus");
   });
 
   it("keeps a matched special pair prohibited", () => {
     const bombie = parent("ZombieActorBombie", { group: "Headless", isSpecial: true });
-    expect(selectCombineSpecies(bombie, { ...bombie }, 45, () => 0.99)).toBeNull();
+    expect(selectCombineSpecies(bombie, { ...bombie }, 45, missesPromotion)).toBeNull();
   });
 
-  it("uses the ordinary rules when the 10% roll fails", () => {
+  it("uses the ordinary rules when the promotion roll fails", () => {
     expect(selectCombineSpecies(
       parent("mutant", { isMutant: true, tier: 5 }),
       parent("ordinary", { tier: 1 }),
       25,
-      () => 0.10
+      missesPromotion
     )).toBe("mutant");
   });
 });

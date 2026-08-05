@@ -1,7 +1,9 @@
-import { Texture } from "pixi.js";
+import { Renderer, Texture } from "pixi.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GameAssets, ZombieModel } from "../assets";
-import { buildZombiePortraitRig, validatePortraitDataUrl } from "./mutationPortrait";
+import {
+  buildZombiePortraitRig, validatePortraitDataUrl, MutationPortraits, MAX_PORTRAIT_ATTEMPTS,
+} from "./mutationPortrait";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -83,5 +85,74 @@ describe("mutation-aware zombie portraits", () => {
       expect(child?.visible).toBe(true);
       expect(child?.zIndex).toBeGreaterThan(mutationZ);
     }
+  });
+});
+
+// Each extraction blocks the main thread on a GPU readback (~30ms), and the panels
+// that ask for them build one tile per owned zombie, so how the cache batches and
+// gives up matters as much as what it renders.
+describe("portrait extraction scheduling", () => {
+  /** Pass validatePortraitDataUrl: one opaque pixel. */
+  const stubOpaqueDecode = () => {
+    vi.stubGlobal("Image", class {
+      src = ""; naturalWidth = 1; naturalHeight = 1;
+      decode = vi.fn().mockResolvedValue(undefined);
+    });
+    vi.stubGlobal("document", {
+      createElement: () => ({
+        width: 0, height: 0,
+        getContext: () => ({
+          drawImage: vi.fn(),
+          getImageData: () => ({ data: new Uint8ClampedArray([0, 0, 0, 255]) }),
+        }),
+      }),
+    });
+  };
+
+  const fakeRenderer = (base64: () => Promise<string>) =>
+    ({ extract: { base64: vi.fn(base64) } } as unknown as Renderer);
+
+  it("extracts each key/mask/color once and reuses the cached result", async () => {
+    stubOpaqueDecode();
+    const renderer = fakeRenderer(async () => "data:image/png;base64,ok");
+    const portraits = new MutationPortraits(renderer, assets);
+
+    const [a, b] = await Promise.all([portraits.get("test", 1), portraits.get("test", 1)]);
+
+    expect(a).toBe("data:image/png;base64,ok");
+    expect(b).toBe(a);
+    expect(renderer.extract.base64).toHaveBeenCalledTimes(1);
+  });
+
+  it("never runs two extractions at once, so a burst cannot form one long task", async () => {
+    stubOpaqueDecode();
+    let live = 0;
+    let overlapped = false;
+    const renderer = fakeRenderer(async () => {
+      live += 1;
+      if (live > 1) overlapped = true;
+      await Promise.resolve();
+      live -= 1;
+      return "data:image/png;base64,ok";
+    });
+    const portraits = new MutationPortraits(renderer, assets);
+
+    await Promise.all([0, 1, 8, 1024].map((mask) => portraits.get("test", mask)));
+
+    expect(overlapped).toBe(false);
+    expect(renderer.extract.base64).toHaveBeenCalledTimes(4);
+  });
+
+  it("gives up on a portrait that keeps failing instead of retrying it forever", async () => {
+    stubOpaqueDecode();
+    const renderer = fakeRenderer(async () => { throw new Error("extraction failed"); });
+    const portraits = new MutationPortraits(renderer, assets);
+
+    // One request per rebuild of a panel that lists this zombie.
+    for (let attempt = 0; attempt < MAX_PORTRAIT_ATTEMPTS + 3; attempt++) {
+      await expect(portraits.get("test", 1)).rejects.toThrow();
+    }
+
+    expect(renderer.extract.base64).toHaveBeenCalledTimes(MAX_PORTRAIT_ATTEMPTS);
   });
 });

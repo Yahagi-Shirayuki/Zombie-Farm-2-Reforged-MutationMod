@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SequencedCommand } from "../../src/net/protocol";
 import { EPIC_BOSSES } from "../../src/epicBoss/catalog";
-import { createCombineRandom } from "../../src/zombie/combineSpecies";
+import { COMBINE_SPECIAL_CHANCE, createCombineRandom } from "../../src/zombie/combineSpecies";
 import { encodeReceivedZombie } from "../../src/zombie/receivedReward";
 import plantRows from "../../public/assets/plants.json";
 import {
@@ -19,17 +19,18 @@ const commands = (...values: SequencedCommand["command"][]): SequencedCommand[] 
 const rareCombinePairIds = (): [string, string] => {
   for (let index = 0; index < 10_000; index++) {
     const ids: [string, string] = [`rare-a-${index}`, `rare-b-${index}`];
-    if (createCombineRandom(...ids)() < 0.10) return ids;
+    if (createCombineRandom(...ids)() < COMBINE_SPECIAL_CHANCE) return ids;
   }
   throw new Error("could not find deterministic rare-combine test pair");
 };
 
-/** The inverse: a pair whose stable roll misses the 10% tier-5 promotion, so the
- *  ordinary rules (slot 1 / matched-pair silver) decide the species. */
+/** The inverse: a pair whose stable roll misses the tier-5 promotion, so the
+ *  ordinary rules (slot 1 / matched-pair silver) decide the species. Both helpers
+ *  read the live chance — hardcoding it let a retune silently reclassify a pair. */
 const commonCombinePairIds = (): [string, string] => {
   for (let index = 0; index < 10_000; index++) {
     const ids: [string, string] = [`common-a-${index}`, `common-b-${index}`];
-    if (createCombineRandom(...ids)() >= 0.10) return ids;
+    if (createCombineRandom(...ids)() >= COMBINE_SPECIAL_CHANCE) return ids;
   }
   throw new Error("could not find deterministic common-combine test pair");
 };

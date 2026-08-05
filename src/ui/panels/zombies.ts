@@ -8,6 +8,7 @@
 // Market listing views, which stay in hud.ts and import them from here.
 import type { Hud } from "../../hud";
 import { openModal } from "../Modal";
+import { onFirstVisible } from "../onFirstVisible";
 import type { AlmanacEntryView, ZombieInfo } from "../hudTypes";
 import { zombieSellValue } from "../../economy";
 import { MAX_ZOMBIE_NAME_LENGTH, RosterEntry } from "../../zombie/types";
@@ -129,12 +130,15 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   port.style.backgroundImage = `url(${info.portrait})`;
   // Use the static catalog portrait immediately, then replace it with the cached
   // individual rig once its mutation-aware render is available.
+  // Deferred until on screen — "My Zombies" stacks one of these cards per owned unit.
   if (hud.zombieMutationPortraitOf) {
-    void hud.zombieMutationPortraitOf(info.key, info.mutation, info.color)
-      .then((portrait) => {
-        if (port.isConnected) port.style.backgroundImage = `url(${portrait})`;
-      })
-      .catch(() => { /* retain the static species portrait if extraction fails */ });
+    onFirstVisible(port, () => {
+      void hud.zombieMutationPortraitOf?.(info.key, info.mutation, info.color)
+        .then((portrait) => {
+          if (port.isConnected) port.style.backgroundImage = `url(${portrait})`;
+        })
+        .catch(() => { /* retain the static species portrait if extraction fails */ });
+    });
   }
   const meta = document.createElement("div");
   meta.className = "zcard-meta";
@@ -401,10 +405,14 @@ export function buildRosterCard(hud: Hud, z: RosterEntry, onClick: () => void): 
   // Show the SAME rig the inspect card shows: the static species portrait first,
   // replaced by this individual's mutation-aware render once it is available. The
   // Mausoleum grid used to keep the species art, so a stored mutant looked plain.
+  // Deferred until the tile scrolls in: a full Mausoleum builds dozens of these at
+  // once, and each render is a blocking GPU readback.
   if (hud.zombieMutationPortraitOf) {
-    void hud.zombieMutationPortraitOf(z.key, z.mutation, z.color)
-      .then((mutated) => { if (pim.isConnected) pim.src = mutated; })
-      .catch(() => { /* retain the static species portrait */ });
+    onFirstVisible(pim, () => {
+      void hud.zombieMutationPortraitOf?.(z.key, z.mutation, z.color)
+        .then((mutated) => { if (pim.isConnected) pim.src = mutated; })
+        .catch(() => { /* retain the static species portrait */ });
+    });
   }
   const name = document.createElement("div");
   name.className = "zr-name";

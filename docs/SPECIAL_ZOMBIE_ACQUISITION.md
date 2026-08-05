@@ -100,7 +100,7 @@ Combat tier and mutant/veggie status no longer affect the result, and the promot
 roll below is the only randomness left in species selection.
 
 At player level 25 and above, two **non-special** zombies whose body types both map to
-a combining-only special have a 10% chance to promote the output to **slot 1's** tier-5
+a combining-only special have a 25% chance to promote the output to **slot 1's** tier-5
 special: Garden produces Zombutterfly, Large produces Zomviking, Small produces
 Zombricaun, Female produces Zombelly Dancer, Regular produces Zombotron, and Headless
 produces Skull Head. A failed roll falls through to the ordinary rules below.
