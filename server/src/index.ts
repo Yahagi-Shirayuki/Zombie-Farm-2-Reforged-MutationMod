@@ -13,7 +13,7 @@
 //   • consent friendships with accept / remove / block, non-oracle add, long codes;
 //   • atomic gift send + idempotent, grant-backed claim;
 //   • server-revocable sessions with logout / logout-all.
-import { Hono, type MiddlewareHandler } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import type { Bindings, Vars, SaveGame, RateLimiter } from "./env";
@@ -24,6 +24,12 @@ import {
   type GoogleIdentity,
 } from "./auth";
 import * as db from "./db";
+import {
+  mutationsAllowed,
+  readServiceState,
+  signInAllowed,
+  signupsAllowed,
+} from "./serviceState";
 import {
   dayBucket,
   deviceLabel,
@@ -240,12 +246,21 @@ app.use("*", (c, next) =>
 // Unauthenticated health probe. `raidRulesetVersion` is published here so the client
 // deploy can refuse to publish a bundle whose raid ruleset the live Worker doesn't serve
 // yet — see the preflight step in .github/workflows/deploy.yml.
-app.get("/", (c) => c.json({
-  ok: true,
-  service: "zombiefarm",
-  protocolVersion: GAMEPLAY_PROTOCOL,
-  raidRulesetVersion: RAID_RULESET_VERSION,
-}));
+// Unauthenticated health probe, and the one status surface the game's START SCREEN
+// can read before anyone signs in — that is what lets it say "Online Farm is closed"
+// instead of failing at the Google button. `service` keeps its literal string value:
+// the admin console's uptime probe matches on it.
+app.get("/", async (c) => {
+  const state = await readServiceState(c.env.DB);
+  return c.json({
+    ok: true,
+    service: "zombiefarm",
+    protocolVersion: GAMEPLAY_PROTOCOL,
+    raidRulesetVersion: RAID_RULESET_VERSION,
+    serviceMode: state.mode,
+    serviceNotice: state.notice,
+  });
+});
 
 // Hard body ceiling on EVERY route, applied before any handler parses. Just above
 // the 512 KiB save cap so saves pass (PUT /save then applies the precise limit);
@@ -335,13 +350,26 @@ app.post("/auth", rateLimit("RL_AUTH", "auth", 60, 60_000), async (c) => {
   }
 
   const now = Date.now();
-  const acct = await db.upsertAccount(c.env.DB, who, now);
+  // Closedown gate. `closed` shuts the door on everyone; the two middle modes keep it
+  // open for the existing player base (they still need to read their farm to move it
+  // to Local Farm) while refusing to register anyone new.
+  const service = await readServiceState(c.env.DB, now);
+  if (!signInAllowed(service)) {
+    return c.json({ error: "service_closed", notice: service.notice }, 503);
+  }
+  const acct = await db.upsertAccount(c.env.DB, who, now, signupsAllowed(service));
+  if (!acct) {
+    slog("signup_refused", { mode: service.mode }, "info");
+    return c.json({ error: "signups_closed", notice: service.notice }, 403);
+  }
   const label = deviceLabel(c.req.header("User-Agent"));
   const sessionId = await db.createSession(c.env.DB, acct.id, now, label);
   const token = await mintSession(acct.id, sessionId, c.env.SESSION_SECRET);
   return c.json({
     token,
     accountId: acct.id,
+    serviceMode: service.mode,
+    serviceNotice: service.notice,
     // `username` is null until the player picks one (client shows the picker then).
     // No name/email is ever returned — the system stores no personal data.
     username: acct.username,
@@ -779,6 +807,41 @@ const validCommandBatch = (body: unknown): body is CommandBatchRequest => {
   );
 };
 
+// The single "is the economy accepting writes?" question, asked by every mutation
+// route. Two independent levers, either of which halts writes: MUTATIONS_DISABLED (a
+// Worker var — the incident lever, needs a deploy) and the D1 service mode (the
+// planned-closedown lever the admin console flips). Reads are deliberately unaffected:
+// in `export_only` a player must still be able to load their farm to move it to Local
+// Farm. The service read is memoised per isolate, so this is not a D1 hit per request.
+const mutationsHalted = async (
+  c: Context<{ Bindings: Bindings; Variables: Vars }>
+): Promise<boolean> =>
+  c.env.MUTATIONS_DISABLED === "1" || !mutationsAllowed(await readServiceState(c.env.DB));
+
+// The friend graph and gifts are account state too, and a gift claimed after a player
+// exported their farm would silently make their exported copy wrong. Freeze them on the
+// same gate as gameplay. Registered as middleware because these handlers are far below
+// and reads on the same prefixes (GET /friends, GET /gifts/inbox) must stay open.
+const haltSocialMutations: MiddlewareHandler<{ Bindings: Bindings; Variables: Vars }> = async (
+  c,
+  next
+) => {
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
+  await next();
+};
+for (const path of [
+  "/friends/add",
+  "/friends/accept",
+  "/friends/reject",
+  "/friends/remove",
+  "/friends/block",
+  "/friends/code/rotate",
+  "/gifts",
+  "/gifts/claim",
+]) {
+  app.post(path, haltSocialMutations);
+}
+
 // One read after authentication initializes and returns every projection needed by
 // gameplay. It never takes writer ownership.
 app.post("/bootstrap", async (c) => {
@@ -797,7 +860,7 @@ app.post("/bootstrap", async (c) => {
     c.env.DB,
     accountId,
     now,
-    c.env.MUTATIONS_DISABLED !== "1",
+    !(await mutationsHalted(c)),
     minProtocolVersion(c.env),
     writerState
   );
@@ -808,7 +871,7 @@ app.post("/bootstrap", async (c) => {
 app.post("/commands", async (c) => {
   const started = performance.now();
   const accountId = c.get("accountId");
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body = await c.req.json<unknown>().catch(() => null);
   if (!validCommandBatch(body)) return c.json({ error: "bad_command_batch" }, 400);
   const credential = writerCredential(c);
@@ -845,7 +908,7 @@ app.post("/commands", async (c) => {
 app.put("/presentation", async (c) => {
   const started = performance.now();
   const accountId = c.get("accountId");
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body = await c.req.json<PresentationRequest>().catch(() => null);
   if (!body || body.protocolVersion !== GAMEPLAY_PROTOCOL || !Number.isSafeInteger(body.expectedVersion) ||
       !body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
@@ -937,7 +1000,7 @@ app.get("/black-market/history", async (c) => {
 // delivery of a traded zombie, which mints a roster row — hence the mutation gate.
 app.post("/black-market/orders/:id/collect", async (c) => {
   if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const result = await blackMarket.collect(c.env.DB, c.get("accountId"), c.req.param("id"), Date.now());
   if (!("ok" in result)) return c.json({ error: result.error }, result.status);
   return c.json(result);
@@ -945,7 +1008,7 @@ app.post("/black-market/orders/:id/collect", async (c) => {
 
 app.post("/black-market/orders", async (c) => {
   if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const started = performance.now();
   const result = await blackMarket.create(c.env.DB, c.get("accountId"),
     await c.req.json<Record<string, unknown>>().catch(() => ({})), Date.now());
@@ -956,7 +1019,7 @@ app.post("/black-market/orders", async (c) => {
 
 app.post("/black-market/orders/:id/cancel", async (c) => {
   if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const started = performance.now();
   const result = await blackMarket.cancel(c.env.DB, c.get("accountId"), c.req.param("id"),
     await c.req.json<Record<string, unknown>>().catch(() => ({})), Date.now());
@@ -967,7 +1030,7 @@ app.post("/black-market/orders/:id/cancel", async (c) => {
 
 app.post("/black-market/orders/:id/fulfill", async (c) => {
   if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const started = performance.now();
   const result = await blackMarket.fulfill(c.env.DB, c.get("accountId"), c.req.param("id"),
     await c.req.json<Record<string, unknown>>().catch(() => ({})), Date.now());
@@ -977,7 +1040,7 @@ app.post("/black-market/orders/:id/fulfill", async (c) => {
 });
 
 app.post("/raid/start", async (c) => {
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
   await v3EpicBoss.expireLiveEpicBoss(c.env.DB, c.get("accountId"), Date.now());
   const configured = Number(c.env.RAID_COOLDOWN_MS);
@@ -997,7 +1060,7 @@ app.post("/raid/start", async (c) => {
 });
 
 app.post("/raid/finish", async (c) => {
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
   const result = await v3Raid.finishRaid(c.env.DB, c.get("accountId"), body, Date.now());
   if (result.status === 200) return c.json(result.body);
@@ -1013,7 +1076,7 @@ app.post("/raid/finish", async (c) => {
 });
 
 app.post("/raid/revive", async (c) => {
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
   const result = await v3Raid.resolveRevival(c.env.DB, c.get("accountId"), body, Date.now());
   if (result.status === 200) return c.json(result.body);
@@ -1023,7 +1086,7 @@ app.post("/raid/revive", async (c) => {
 });
 
 app.post("/epic-boss/activate", async (c) => {
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body: { activationId?: unknown; bossId?: unknown } =
     await c.req.json<{ activationId?: unknown; bossId?: unknown }>().catch(() => ({}));
   const activationId = typeof body.activationId === "string" && body.activationId ? body.activationId : crypto.randomUUID();
@@ -1037,7 +1100,7 @@ app.post("/epic-boss/activate", async (c) => {
 });
 
 app.post("/epic-boss/end", async (c) => {
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body: { runId?: unknown } = await c.req.json<{ runId?: unknown }>().catch(() => ({}));
   const now = Date.now();
   const result = await v3EpicBoss.end(c.env.DB, c.get("accountId"), body.runId, now);
@@ -1047,7 +1110,7 @@ app.post("/epic-boss/end", async (c) => {
 });
 
 app.post("/epic-boss/start", async (c) => {
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body: { orderedUnitIds?: unknown; payment?: unknown } =
     await c.req.json<{ orderedUnitIds?: unknown; payment?: unknown }>().catch(() => ({}));
   const now = Date.now();
@@ -1060,7 +1123,7 @@ app.post("/epic-boss/start", async (c) => {
 });
 
 app.post("/epic-boss/finish", async (c) => {
-  if (c.env.MUTATIONS_DISABLED === "1") return c.json({ error: "mutations_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
   const result = await v3EpicBoss.finish(c.env.DB, c.get("accountId"), body, Date.now());
   if (result.status === 200) return c.json(result.body);

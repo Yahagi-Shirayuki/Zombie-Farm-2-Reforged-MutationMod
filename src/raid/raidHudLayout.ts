@@ -11,7 +11,8 @@ export interface RaidHudLayout {
   rightFaceX: number;
   retreatRightMargin: number;
   retreatBottomMargin: number;
-  abilityX: number;
+  /** Left edge both ability strips align to (they share the health bar's margin). */
+  abilityLeft: number;
   hidePortraits: boolean;
 }
 
@@ -43,7 +44,7 @@ export function computeRaidHudLayout(
     rightFaceX: Math.min(width - safe.right - 25, width - rightMargin + 27),
     retreatRightMargin: rightMargin,
     retreatBottomMargin: safe.bottom + 18,
-    abilityX: leftMargin + 24,
+    abilityLeft: leftMargin,
     hidePortraits: mobile && height > width,
   };
 }

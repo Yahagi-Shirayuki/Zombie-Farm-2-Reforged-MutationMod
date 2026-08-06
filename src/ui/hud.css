@@ -401,6 +401,32 @@
 #hud .tool .lbl { position: absolute; bottom: -12px; left: 0; right: 0; text-align: center;
   font-size: 10px; color: #fff; font-weight: 700; text-shadow: 0 1px 2px #000; }
 
+/* right-click tool menu: scroll the highlight, Enter equips (src/ui/toolWheel.ts).
+   Sits above the farm chrome but below every panel (.panelbg is z-index 20+), so a
+   dialog can never end up underneath it. */
+#hud .tw-bg { position: fixed; inset: 0; z-index: 19; pointer-events: auto; }
+#hud .tw { position: fixed; min-width: 186px; max-height: 78vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  background: linear-gradient(#6e4425, #492b16); border: 2px solid #2f1d0d;
+  border-radius: 14px; box-shadow: 0 6px 16px rgba(0,0,0,.55); outline: none; }
+#hud .tw-title { color: #ffe9b0; font: 800 11px system-ui,sans-serif; letter-spacing: .08em;
+  text-transform: uppercase; text-shadow: 0 1px 1px #000; padding: 2px 6px 4px; }
+#hud .tw-item { display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 5px 8px; border: 2px solid transparent; border-radius: 10px;
+  background: rgba(0,0,0,.18); color: #fff; cursor: pointer; text-align: left;
+  font: 700 14px system-ui,sans-serif; text-shadow: 0 1px 2px #000; }
+#hud .tw-item img { width: 30px; height: 30px; object-fit: contain; flex: 0 0 auto;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
+#hud .tw-item .tw-lbl { flex: 1 1 auto; }
+#hud .tw-item .tw-key { flex: 0 0 auto; min-width: 18px; padding: 1px 5px; border-radius: 6px;
+  background: rgba(0,0,0,.4); border: 1px solid #2f1d0d; color: #ffe9b0;
+  font: 800 11px system-ui,sans-serif; text-align: center; }
+#hud .tw-item .tw-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
+  background: #b6f36a; box-shadow: 0 0 4px #7fd23a; }
+#hud .tw-item.sel { border-color: #ffe066; background: rgba(255,224,102,.22); }
+#hud .tw-legend { color: #e8d3a8; font: 600 10px system-ui,sans-serif; opacity: .85;
+  padding: 4px 6px 1px; text-align: center; }
+
 /* bottom-left: always-reachable invasion shortcut with live cooldown */
 #hud .invade-shortcut { position: fixed; left: 10px; bottom: 10px; width: 72px;
   pointer-events: auto; border: none; background: none; cursor: pointer; padding: 0;
@@ -455,6 +481,9 @@
 /* Black Market zombie inspection and fulfillment pickers are opened while the
    market remains mounted at z-index 21, so their cards must form a higher layer. */
 #hud .bm-zombie-bg, #hud .bm-pick-bg { z-index: 27; }
+/* Pre-purchase zombie card: opened from the Market (21) or the plant picker (19),
+   so it shares the layer the item-description parchment uses. */
+#hud .zpreview-bg { z-index: 24; }
 #hud .writer-lock-bg { z-index: 60; }
 #hud .fullscreen-prompt-bg { z-index: 10001; }
 #hud .writer-lock-panel { max-width: 420px; text-align: center; }
@@ -1426,6 +1455,9 @@
 #hud .pm-card.locked .pm-cost { background: linear-gradient(#6a6a6a, #4a4a4a); }
 #hud .pm-lock { display: flex; align-items: center; gap: 4px; }
 #hud .pm-name { grid-area: name; font-weight: 700; font-size: 14px; color: #452c0c; }
+/* The card-inspect magnifier on a zombie row. Same parchment button as the Market's,
+   but inline after the name — this card's corners already carry cost and time. */
+#hud .pm-info { position: static; display: inline-flex; margin-left: 6px; vertical-align: -4px; }
 #hud .pm-port { grid-area: port; display: flex; align-items: center; }
 #hud .pm-port img { height: 46px; max-width: 76px; width: auto; object-fit: contain;
   image-rendering: auto; }

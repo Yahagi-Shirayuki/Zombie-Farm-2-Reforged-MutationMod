@@ -88,10 +88,13 @@ import { epicBossCurrencyReward } from "./epicBoss/rewards";
 import { epicZombieRewardNotes, visibleEpicBosses } from "./epicBoss/market";
 import { dropsEpicBossToken, EPIC_BOSS_FIGHT_BRAIN_COST } from "./epicBoss/tokens";
 import { offerFullscreenPrompt } from "./ui/panels/fullscreenPrompt";
+import { openToolWheel, type ToolWheelHandle, type ToolWheelItem } from "./ui/toolWheel";
 import {
-  choosePlayMode, setPreferredPlayMode, showOnlineUnavailable,
+  choosePlayMode, getPreferredPlayMode, setPreferredPlayMode, showOnlineUnavailable,
   showLocalUnavailable, usesOnlineGameplay, type PlayMode,
 } from "./playMode";
+import { fetchServiceStatus, isExportOnly, OPEN_STATUS } from "./net/serviceStatus";
+import { showExportOnly } from "./exportOnly";
 
 // The boot / start screen lives in index.html and paints on the first frame (no
 // empty-farm flash). We report load milestones to it and, once the game is fully
@@ -100,9 +103,23 @@ const boot = (window as unknown as {
   __ZFBoot?: {
     progress(p: number): void;
     ready(onDismiss?: () => void): void;
+    /** Retire the overlay because a full-screen flow other than the game takes over. */
+    close(): void;
     fail(): void;
   };
 }).__ZFBoot;
+
+// Export writes the same kind of file from either farm — a plain SaveGame — and only
+// Local Farm's Import reads one, so an export never travels back online. Module scope
+// because the closedown export screen runs long before the Settings wiring exists.
+function downloadSaveFile(raw: string, name: string): void {
+  const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `zombie-farm-${name}-${new Date().toISOString().slice(0, 10)}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 async function main() {
   // Capture crashes before anything else runs, so a failure during boot (asset load,
@@ -114,8 +131,22 @@ async function main() {
   // Local Farm and Online Farm are deliberately independent save domains. Choose
   // before touching auth so Local Farm never makes account/gameplay server calls,
   // even when this browser still has a valid Online Farm session.
-  const playMode: PlayMode = await choosePlayMode(auth.isOnlineAvailable());
+  //
+  // Ask the server what it currently permits BEFORE offering the choice. During the
+  // beta→release closedown this is what lets the chooser say "Online Farm is closed,
+  // export it" instead of sending the player through a sign-in that ends in an error.
+  // It fails open, so a flaky connection never fakes a closure.
+  //
+  // Skipped outright for a player who has already chosen Local Farm: no service mode
+  // can change anything for them, and making them wait on a network round trip — or
+  // on its timeout, offline — before their own device's farm opens would be a
+  // regression for the one group the closedown is meant not to touch.
+  const service = getPreferredPlayMode() === "local" ? OPEN_STATUS : await fetchServiceStatus();
+  const playMode: PlayMode = await choosePlayMode(auth.isOnlineAvailable(), service);
   const onlineFarm = usesOnlineGameplay(playMode);
+  // Online Farm chosen while the service is read-only: sign in and load the farm, then
+  // hand it over instead of entering the game (see the export handoff below).
+  const exportOnlyFarm = onlineFarm && isExportOnly(service);
   initPwa(playMode);
   if (onlineFarm) {
     await auth.refreshIfSignedIn();
@@ -126,7 +157,10 @@ async function main() {
   auth.onAuthChange(() => {
     if (onlineFarm && !auth.isSignedIn()) location.reload();
   });
-  if (onlineFarm) await api.prepareWriterAccess();
+  // Read-only visit: don't claim the exclusive writer lease. Nothing will be written,
+  // and taking it would show the player's other device a spurious "Farm active
+  // elsewhere" takeover prompt for a session that is only here to export.
+  if (onlineFarm && !exportOnlyFarm) await api.prepareWriterAccess();
   boot?.progress(0.35); // signed in — start filling the plate bar
   const app = new Application();
   await app.init({
@@ -1243,7 +1277,12 @@ async function main() {
   // visit cannot read, write, or corrupt it. On any fetch failure we clear the
   // target and fall through to a normal load, so the player always lands on their
   // own farm.
-  const visitTarget = onlineFarm ? getVisitTarget() : null;
+  // A visit target stashed before the closedown began would otherwise send this load
+  // into a friend's read-only farm instead of the export handoff — the player would
+  // have to work out that "leave farm" is the way to reach their own export. Visiting
+  // is meaningless during a closedown, so drop the target and go collect their farm.
+  if (exportOnlyFarm) clearVisitTarget();
+  const visitTarget = onlineFarm && !exportOnlyFarm ? getVisitTarget() : null;
   let visiting = false;
   let visitError = "";
   let restored = false;
@@ -1316,6 +1355,36 @@ async function main() {
     state.seedFarmerCatalog(assets.farmer);
     applyFarmerAppearance();
     if (!restored) quests.restore(); // fresh farm: activate the opening quests
+    // Closedown handoff. The farm is now hydrated from the server — which is the only
+    // way to serialise an Online Farm, since one keeps no full blob on the device — so
+    // this is the earliest point the export can be produced, and the latest point that
+    // is still before autosave, the economy client, and the game loop start. The screen
+    // never resolves: every button downloads or reloads.
+    if (exportOnlyFarm) {
+      boot?.close();
+      await showExportOnly({
+        notice: service.notice,
+        // `/bootstrap` failed and the load fell back to this device's cached snapshot.
+        // Exporting that is still better than nothing, but it may be missing recent
+        // progress, and a player must not find that out afterwards.
+        cachedFrom: loadResult.kind === "online-cached" ? loadResult.savedAt : null,
+        retryAuthoritative: async () => {
+          const retry = await saveManager.load();
+          return retry.kind === "online-authoritative";
+        },
+        exportRaw: async () => {
+          saveManager.flushCritical();
+          return saveManager.exportOnline();
+        },
+        // Byte-for-byte the file Settings' Export writes, and the only thing Local
+        // Farm's Import accepts — one export format, one import path.
+        download: (raw) => downloadSaveFile(raw, "online"),
+        openLocal: () => {
+          setPreferredPlayMode("local");
+          location.reload();
+        },
+      });
+    }
     saveManager.enableAutosave();
     // Backfill newly-added presentation fields (such as woodland density) even
     // when an existing player does not immediately change another farm value.
@@ -2695,16 +2764,6 @@ async function main() {
     setPreferredPlayMode(destination);
     location.reload();
   };
-  // Export writes the same kind of file from either farm — a plain SaveGame — and
-  // only Local Farm's Import reads one, so an export never travels back online.
-  const downloadSave = (raw: string, name: string) => {
-    const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `zombie-farm-${name}-${new Date().toISOString().slice(0, 10)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
   // Online has no full blob on this device (only presentation), so the file is
   // serialised from the live server-hydrated game. Settle the outbox first, or a
   // just-spent balance / just-harvested zombie would be missing from the copy.
@@ -2716,7 +2775,7 @@ async function main() {
       hud.showToast("Online Farm could not be exported.");
       return;
     }
-    downloadSave(raw, "online");
+    downloadSaveFile(raw, "online");
     hud.showToast("Online Farm exported. Load it with Local Farm's Import.");
   };
   hud.onExportSave = playMode === "local" ? () => {
@@ -2726,7 +2785,7 @@ async function main() {
       hud.showToast("Local Farm could not be exported.");
       return;
     }
-    downloadSave(raw, "local");
+    downloadSaveFile(raw, "local");
     hud.showToast("Local Farm backup exported.");
   } : () => { void exportOnlineFarm(); };
   hud.onImportLocal = playMode === "local" ? (raw) => {
@@ -4090,10 +4149,10 @@ async function main() {
       }
       return;
     }
-    if (e.button === 2) { // right-click -> back to the select tool
-      if (tutorial.active) return;
-      cancelCarry();
-      hud.setMode("walk");
+    if (e.button === 2) {
+      // Right-click opens the tool menu (see the contextmenu handler below, which
+      // fires after this one and knows the client coordinates). Here it only has
+      // to make sure the press never starts a pan or a tool stroke.
       dragging = false;
       return;
     }
@@ -4535,11 +4594,41 @@ async function main() {
     }
   });
 
-  // Right-click anywhere returns to the select tool (and suppress the browser menu).
+  // Right-click anywhere on the farm opens the tool menu (and suppresses the
+  // browser menu). It opens on Select, so the old right-click-to-cancel reflex is
+  // still one Enter away; the wheel scrolls to anything else.
+  let toolWheel: ToolWheelHandle | null = null;
+  const closeToolWheel = () => { toolWheel?.close(); toolWheel = null; };
+  // Equip a tool without the toolbar's toggle behaviour: choosing the tool you are
+  // already holding, from a menu, must keep it — not silently unequip it.
+  const equipTool = (m: Mode) => { if (hud.mode !== m) hud.setMode(m); };
+  const toolWheelItems = (): ToolWheelItem[] => [
+    { id: "walk", label: "Select", icon: "button_multitool.png", hint: "1",
+      active: hud.mode === "walk", onPick: () => equipTool("walk") },
+    { id: "move", label: "Move", icon: "button_move.png", hint: "2",
+      active: hud.mode === "move", onPick: () => equipTool("move") },
+    { id: "rotate", label: "Rotate", icon: "button_rotate.png", hint: "3",
+      active: hud.mode === "rotate", onPick: () => rotateCurrent() },
+    { id: "till", label: "Plow", icon: "button_plow.png", hint: "4",
+      active: hud.mode === "till", onPick: () => equipTool("till") },
+    { id: "remove", label: "Remove", icon: "button_sell.png", hint: "5",
+      active: hud.mode === "remove", onPick: () => equipTool("remove") },
+    { id: "plant", label: "Plant…", icon: "button_plant.png", hint: "P",
+      active: hud.mode === "plant",
+      onPick: () => hud.openPlantMenu((cfg) => hud.setPlanting(cfg)) },
+  ];
   app.canvas.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    if (tutorial.active) return;
-    hud.setMode("walk");
+    if (tutorial.active || visiting || raidActive) return;
+    // Touch long-press already means "inspect"; a phone gets the × cancel button
+    // instead, so never let a synthesized contextmenu open the menu there.
+    if (isTouchPointer(pressPointerType)) return;
+    if (toolWheel) { closeToolWheel(); return; }
+    toolWheel = openToolWheel(hud.el, {
+      x: e.clientX, y: e.clientY, items: toolWheelItems(),
+      onSound: () => audio.play("menuClick"),
+      onClose: () => { toolWheel = null; },
+    });
   });
 
   // Hide the tool cursor when switching tools (and drop any carried object);

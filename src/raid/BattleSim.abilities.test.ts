@@ -43,7 +43,9 @@ describe("Mini Buddy", () => {
     const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
     const sim = new BattleSim([dapper, imp], [enemy], null, true);
 
-    expect(sim.activatedStatus()).toContainEqual({ key: "attachMini", ready: 1 });
+    expect(sim.activatedStatus()).toContainEqual(
+      expect.objectContaining({ key: "attachMini", ready: 1 }),
+    );
     expect(sim.activate("attachMini")).toBe(true);
     expect(sim.units.find((candidate) => candidate.id === "dapper")?.buddyId).toBe("imp");
   });
@@ -57,7 +59,9 @@ describe("Mini Buddy", () => {
     const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 300 });
     const sim = new BattleSim([brute, mini], [enemy], null, true);
 
-    expect(sim.activatedStatus()).toContainEqual({ key: "attachMini", ready: 1 });
+    expect(sim.activatedStatus()).toContainEqual(
+      expect.objectContaining({ key: "attachMini", ready: 1 }),
+    );
     expect(sim.activate("attachMini")).toBe(true);
     const b = sim.units.find((u) => u.id === "brute")!;
     const m = sim.units.find((u) => u.id === "mini")!;
@@ -71,6 +75,75 @@ describe("Mini Buddy", () => {
     expect(m.buddyCarrierId).toBeNull();
     expect(["advance", "fight"]).toContain(m.state);
     expect(e.stunMs).toBeGreaterThan(0);
+  });
+});
+
+// `present` drives whether the battle strip shows a move's button at all. It is a
+// deliberately WIDER and steadier window than `ready` (which is a tap's success),
+// because a button that blinks out between swings can't be aimed at or timed into.
+describe("activated ability display window", () => {
+  const presence = (sim: BattleSim, key: string) =>
+    sim.activatedStatus().find((s) => s.key === key)?.present ?? false;
+
+  it("shows Mini Buddy only while a Large holds the charge slot", () => {
+    const brute = unit({
+      id: "brute", sourceKey: "ZombieActorLargeTier2", team: "player",
+      abilities: ["attachMini"],
+    });
+    const mini = unit({ id: "mini", sourceKey: "ZombieActorSmallTier1", team: "player" });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 300 });
+    const sim = new BattleSim([brute, mini], [enemy], null, true);
+    const b = sim.units.find((u) => u.id === "brute")!;
+
+    // Queued at the back: the move is already "ready", but nothing to point at yet.
+    expect(b.state).toBe("waiting");
+    expect(presence(sim, "attachMini")).toBe(false);
+
+    // Stepped out to think it over — this is the whole window.
+    sim.step(50);
+    expect(b.state).toBe("charging");
+    expect(presence(sim, "attachMini")).toBe(true);
+
+    // Sent forward: too late to mount anyone.
+    expect(sim.activate("attachMini")).toBe(true);
+    for (let i = 0; i < 5000 && b.buddyId; i++) sim.step(50);
+    expect(b.buddyId).toBeNull();
+    expect(presence(sim, "attachMini")).toBe(false);
+  });
+
+  it("keeps Bash on screen across its wind-up and recharge", () => {
+    const brute = unit({
+      id: "brute", sourceKey: "ZombieActorLargeTier3", team: "player", abilities: ["bash"],
+    });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 4000 });
+    const sim = new BattleSim([brute], [enemy], null, true);
+    const b = sim.units.find((u) => u.id === "brute")!;
+
+    for (let i = 0; i < 5000 && !sim.activatedStatus()[0].ready; i++) sim.step(50);
+    expect(presence(sim, "bash")).toBe(true);
+    expect(sim.activate("bash")).toBe(true);
+
+    // Through the wind-up and the full 10s cooldown the button never leaves, even
+    // as `state` toggles between "fight" and "advance" behind the scenes.
+    for (let i = 0; i < 400 && b.alive && !sim.finished; i++) {
+      sim.step(50);
+      expect(presence(sim, "bash")).toBe(true);
+    }
+  });
+
+  it("retires Explode once its zombie has spent it", () => {
+    const imp = unit({
+      id: "imp", sourceKey: "ZombieActorSmallTier3", team: "player", abilities: ["explode"],
+    });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 4000 });
+    const sim = new BattleSim([imp], [enemy], null, true);
+
+    for (let i = 0; i < 5000 && !sim.activatedStatus()[0].ready; i++) sim.step(50);
+    expect(presence(sim, "explode")).toBe(true);
+    expect(sim.activate("explode")).toBe(true);
+
+    for (let i = 0; i < 200 && presence(sim, "explode") && !sim.finished; i++) sim.step(50);
+    expect(presence(sim, "explode")).toBe(false);
   });
 });
 

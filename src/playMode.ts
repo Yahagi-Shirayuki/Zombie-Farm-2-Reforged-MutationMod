@@ -1,3 +1,7 @@
+import {
+  canPlayOnline, canSignIn, isExportOnly, OPEN_STATUS, type ServiceStatus,
+} from "./net/serviceStatus";
+
 export type PlayMode = "local" | "online";
 
 const MODE_KEY = "zf2r.play-mode.v1";
@@ -32,14 +36,89 @@ export function clearPreferredPlayMode(): void {
   try { localStorage.removeItem(MODE_KEY); } catch { /* preference is optional */ }
 }
 
-export function choosePlayMode(onlineAvailable = true): Promise<PlayMode> {
+/** Copy for the Online Farm tile, which changes shape while the service is closed
+ *  down between the beta and the full release. Split out so it can be unit tested
+ *  without a DOM. */
+export function onlineFarmTile(status: ServiceStatus): {
+  title: string; body: string; note: string; disabled: boolean;
+} {
+  if (!canSignIn(status)) {
+    return {
+      title: "Online Farm — Closed",
+      body: status.notice
+        ?? "Online Farm is closed while we get ready for the full release. Local Farm is unaffected.",
+      note: "Sign-in unavailable · Your online progress is kept",
+      disabled: true,
+    };
+  }
+  if (isExportOnly(status)) {
+    return {
+      title: "Export My Online Farm",
+      body: status.notice
+        ?? "The beta is over and Online Farm is closed for now. Sign in once to download a copy of your farm, then play it in Local Farm.",
+      note: "Sign in to export · No online play until the full release",
+      disabled: false,
+    };
+  }
+  if (!canPlayOnline(status)) {
+    // Not currently reachable: every mode that forbids play also forbids sign-in or is
+    // export_only. Kept so a future mode cannot silently present itself as playable.
+    return {
+      title: "Online Farm — Limited",
+      body: status.notice ?? "Online Farm is not accepting gameplay right now.",
+      note: "Read-only",
+      disabled: false,
+    };
+  }
+  return {
+    title: "Play Online",
+    body: "Sign in to save across devices and use online features.",
+    note: status.mode === "signups_closed"
+      ? "Cloud saved · New accounts are paused — existing players can sign in"
+      : "Cloud saved · Internet required for gameplay",
+    disabled: false,
+  };
+}
+
+const escape = (text: string): string =>
+  text.replace(/[&<>"]/g, (ch) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch] as string);
+
+/**
+ * Which farm to open without prompting, or null to show the chooser.
+ *
+ * The case that matters: a returning beta player whose browser remembers "online".
+ * Honouring that against a closed service would drop them into a sign-in they cannot
+ * use and never tell them their farm is waiting to be collected — so a restricted
+ * service always re-shows the chooser. A stored "local" is never second-guessed.
+ */
+export function resolveStoredPlayMode(
+  preferred: PlayMode | null,
+  status: ServiceStatus,
+): PlayMode | null {
+  if (!preferred) return null;
+  if (preferred === "local") return "local";
+  return canPlayOnline(status) ? "online" : null;
+}
+
+/** Whether picking `mode` should be remembered for next launch. An export trip is a
+ *  one-off errand, not a declaration that this browser plays online. */
+export function shouldPersistChoice(mode: PlayMode, status: ServiceStatus): boolean {
+  return mode === "local" || canPlayOnline(status);
+}
+
+export function choosePlayMode(
+  onlineAvailable = true,
+  status: ServiceStatus = OPEN_STATUS,
+): Promise<PlayMode> {
   if (!onlineAvailable) {
     setPreferredPlayMode("local");
     return Promise.resolve("local");
   }
-  const preferred = getPreferredPlayMode();
-  if (preferred) return Promise.resolve(preferred);
+  const resolved = resolveStoredPlayMode(getPreferredPlayMode(), status);
+  if (resolved) return Promise.resolve(resolved);
 
+  const online = onlineFarmTile(status);
   const root = document.createElement("div");
   root.className = "zf-mode-gate";
   root.innerHTML = `
@@ -51,10 +130,10 @@ export function choosePlayMode(onlineAvailable = true): Promise<PlayMode> {
         <span>Play entirely on this device. No account or internet required.</span>
         <small>Saved in this browser · Single-player features</small>
       </button>
-      <button class="zf-mode-choice" data-mode="online">
-        <strong>Play Online</strong>
-        <span>Sign in to save across devices and use online features.</span>
-        <small>Cloud saved · Internet required for gameplay</small>
+      <button class="zf-mode-choice" data-mode="online"${online.disabled ? " disabled" : ""}>
+        <strong>${escape(online.title)}</strong>
+        <span>${escape(online.body)}</span>
+        <small>${escape(online.note)}</small>
       </button>
     </main>`;
   document.body.appendChild(root);
@@ -62,8 +141,9 @@ export function choosePlayMode(onlineAvailable = true): Promise<PlayMode> {
   return new Promise((resolve) => {
     root.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach((button) => {
       button.onclick = () => {
+        if (button.disabled) return;
         const mode = button.dataset.mode as PlayMode;
-        setPreferredPlayMode(mode);
+        if (shouldPersistChoice(mode, status)) setPreferredPlayMode(mode);
         root.remove();
         resolve(mode);
       };

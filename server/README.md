@@ -67,12 +67,60 @@ concession field.
   writer lease's `X-Integrity-Version` / `WRITER_LEASE_MODE` check. Use `MUTATIONS_DISABLED=1`
   to stop commands, presentation writes, and the raid, Epic Boss, and Black Market mutation
   routes during an incident.
+- A **planned** closedown uses the `service_state` row instead (migration `0042`, read by
+  `src/serviceState.ts`). See "Service closedown" below.
 - Player-to-player trading now ships as the Black Market, which makes value transferable
   between accounts. Keep it behind `BLACK_MARKET_ENABLED` in any environment where the
   release gates in `../SECURITY.md` have not been confirmed.
 - Paid currency, competitive rankings, and PvP must remain disabled until those gates pass.
 - A raid and an Epic Boss fight are mutually exclusive: `/raid/start` rejects with
   `409 raid_in_progress` while an Epic Boss session is live, and vice versa.
+
+## Service closedown (beta → full release)
+
+`service_state` (one row, migration `0042_service_state.sql`) holds a planned-closedown
+switch that the local admin console flips over D1 — **no Worker deploy**, which matters
+because that console's Cloudflare token is scoped to D1 read/write only. `MUTATIONS_DISABLED`
+remains the incident lever and still wins over anything here.
+
+| `mode` | `/auth` new account | `/auth` existing | Reads (`/bootstrap`, `GET /friends`, …) | Gameplay + social writes |
+|---|---|---|---|---|
+| `open` | yes | yes | yes | yes |
+| `signups_closed` | **403 `signups_closed`** | yes | yes | yes |
+| `export_only` | 403 | yes | **yes** | **503 `mutations_disabled`** |
+| `closed` | **503 `service_closed`** | **503** | n/a (no session) | n/a |
+
+`export_only` is the beta→release window. Reads deliberately stay up: an Online Farm keeps
+no full save blob on the device, so the client can only serialise a farm it has hydrated
+from `/bootstrap`. The client reads the mode from the unauthenticated `GET /` probe
+**before** the farm chooser, shows "Export My Online Farm", and — after sign-in and a
+read-only load — hands the player a screen that downloads their farm (`src/exportOnly.ts`).
+That file is byte-for-byte what Settings' Export already writes, so Local Farm's existing
+Settings → Import is the only thing needed to load it; nothing new can ingest it and an
+export can never travel back online. Local Farm is untouched in every mode and keeps
+receiving app updates through the service worker.
+
+Writes halted in `export_only`/`closed`: `/commands`, `PUT /presentation`, `/raid/*`,
+`/epic-boss/*`, `/black-market/*`, `/gifts`, `/gifts/claim`, and the `/friends/*` mutations.
+Gifts and friend changes are included on purpose — a gift claimed after a player exported
+would silently make their exported copy wrong.
+
+Operational notes:
+
+- The Worker memoises the row for **~30 s per isolate**, so a flip reaches players within
+  about half a minute. It is not instant and does not need to be.
+- Reads **fail open**: a missing table (Worker deployed ahead of the migration) or a D1
+  blip serves `open`. Locking the whole player base out of a running service is the worse
+  mistake of the two.
+- `GET /` publishes `serviceMode` and `serviceNotice`. `service` keeps its literal
+  `"zombiefarm"` value — the admin console's uptime probe matches on it.
+- `notice` (≤ 240 chars) replaces the client's built-in copy on the start screen.
+
+Flip it by hand with:
+
+```sh
+wrangler d1 execute zombiefarm --remote   --command "UPDATE service_state SET mode='export_only', notice='Back for the full release!', updated_at=$(date +%s000) WHERE id=1"
+```
 
 ## Local development
 

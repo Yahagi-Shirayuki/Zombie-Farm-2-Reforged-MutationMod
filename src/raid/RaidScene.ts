@@ -109,6 +109,45 @@ const HEAL_POSE_S = 0.7; // Garden healer raises, holds, then lowers both arms
 const PLAYER_COLOR = 0x8bc34a;
 const ENEMY_COLOR = 0xef5350;
 const BOSS_COLOR = 0xffc107;
+
+// Ability chrome. Activated moves are buttons, so they get the bigger cell and the
+// wooden face; team passives are read-only status, so they get the small flat one.
+const ABILITY_ACTIVE_R = 27; // half-size of a tappable wooden ability button
+const ABILITY_PASSIVE_R = 15; // half-size of an informational team-passive icon
+const ABILITY_ACTIVE_STEP = 2 * ABILITY_ACTIVE_R + 10; // vertical pitch of the button column
+const ABILITY_PASSIVE_STEP = 2 * ABILITY_PASSIVE_R + 6; // horizontal pitch of the passive row
+/** Gap between the top HUD's lower edge and the passive row beneath the health bar. */
+const ABILITY_PASSIVE_GAP = 7;
+/** Gap between the top HUD and the button column when there is no passive row. */
+const ABILITY_ACTIVE_GAP = 14;
+/** A visible-but-recharging button: still there to aim at, still tappable, but
+ *  plainly not armed yet. */
+const ABILITY_RECHARGING_ALPHA = 0.45;
+
+/** The face of a tappable ability button: the HUD's plank browns, a lit top bevel,
+ *  a warm inner rule, and a dark rim — the same read as the farm's wooden buttons. */
+function woodenButtonFace(R: number): Graphics {
+  const D = 2 * R;
+  const g = new Graphics()
+    .roundRect(-R, -R, D, D, 9).fill({ color: 0x5c3819 })
+    .roundRect(-R + 2, -R + 2, D - 4, (D - 4) * 0.52, 7).fill({ color: 0x7d5227 });
+  // Plank grain: a few darker strokes so the face isn't a flat brown square.
+  for (let i = 1; i <= 3; i++) {
+    const y = -R + (D * i) / 4;
+    g.moveTo(-R + 5, y).lineTo(R - 5, y).stroke({ width: 1, color: 0x3f2711, alpha: 0.35 });
+  }
+  return g
+    .roundRect(-R + 3, -R + 3, D - 6, D - 6, 6).stroke({ width: 1, color: 0xc7a05a, alpha: 0.45 })
+    .roundRect(-R, -R, D, D, 9).stroke({ width: 3, color: 0x2f1d0d });
+}
+
+/** The face of a passive (informational) ability icon: the flat dark slot frame. */
+function passiveIconFrame(R: number): Graphics {
+  return new Graphics()
+    .roundRect(-R, -R, 2 * R, 2 * R, 6)
+    .fill({ color: 0x14140f, alpha: 0.82 })
+    .stroke({ width: 2, color: 0x6f9a52 });
+}
 // On-screen heights (px) the unit sprites are scaled to. Enemies + boss read bigger
 // than the zombies in the real game (a lumberjack towers over a grunt, McDonnell is
 // huge on the silo), so they carry a larger target height.
@@ -441,9 +480,18 @@ export class RaidScene {
     return this.inputSeq < RAID_MAX_INPUTS - 64;
   }
 
-  // Top-left ability strip: tappable activated moves (Bash/Smash/Explode/Mini) with
-  // ready-count badges, plus static team-passive icons (Heal/Protect/Chivalry/…).
-  private abilityStrip = new Container();
+  // Abilities read as two separate things, because they ARE two separate things.
+  //
+  //  • activeAbilityStrip — the tappable moves (Bash/Smash/Explode/Mini Buddy). Big
+  //    wooden buttons in a vertical column, and each one is on screen ONLY while a
+  //    zombie can actually perform it (Mini Buddy while a Large is still thinking,
+  //    Bash/Smash/Explode once its zombie has reached the fighting line). A button
+  //    the player can see is a button the player can press.
+  //  • passiveAbilityStrip — small informational icons for the automatic team
+  //    effects (Heal/Protect/Chivalry/…), laid out horizontally under the player's
+  //    health bar. Nothing to tap, so nothing that looks tappable.
+  private activeAbilityStrip = new Container();
+  private passiveAbilityStrip = new Container();
   private abilityCells: {
     key: string;
     cell: Container;
@@ -451,6 +499,9 @@ export class RaidScene {
     badgeDot?: Graphics;
     activated: boolean;
   }[] = [];
+  /** Whether the army carries any team passive at all — decides how far down the
+   *  active column starts. Static for the whole fight, so the buttons never move. */
+  private hasPassiveAbilities = false;
 
   // Focus bubble hovering over the charging zombie: the source game's own thought-
   // bubble art — a butterfly while distracted (tap to refocus), a brain when the
@@ -711,9 +762,10 @@ export class RaidScene {
     this.bubble.cursor = on ? "pointer" : "default";
   }
 
-  /** Build the top-left ability strip from the army's abilities: one tappable cell
-   *  per distinct ACTIVATED move (badge = zombies ready to perform it) and one
-   *  static cell per TEAM-passive ability in play. Self-buffs aren't shown. */
+  /** Build both ability strips from the army's abilities: one tappable wooden
+   *  button per distinct ACTIVATED move (badge = how many zombies are ready) and
+   *  one small static icon per TEAM-passive ability in play. Self-buffs aren't
+   *  shown at all — the player has no decision to make about them. */
   private async buildAbilityStrip() {
     const keys = [
       ...this.sim.activatedKeys.map((key) => ({ key, activated: true })),
@@ -728,54 +780,56 @@ export class RaidScene {
     );
     for (const { key, activated } of keys) {
       const cell = this.makeAbilityCell(key, icons.get(key) ?? null, activated);
-      this.abilityStrip.addChild(cell.cell);
+      (activated ? this.activeAbilityStrip : this.passiveAbilityStrip).addChild(cell.cell);
       this.abilityCells.push({ key, ...cell, activated });
+      if (!activated) this.hasPassiveAbilities = true;
     }
-    this.container.addChild(this.abilityStrip);
+    this.container.addChild(this.passiveAbilityStrip, this.activeAbilityStrip);
   }
 
-  /** One ability cell: a framed icon. Activated cells are tappable (fire the move
-   *  on one ready zombie); every cell can carry a deployed/ready count badge. */
+  /** One ability cell.
+   *
+   *  ACTIVATED cells are wooden buttons — the farm HUD's own plank palette, a lit
+   *  bevel across the top and a dark rim — sized ABILITY_ACTIVE_R so they read as
+   *  the thing you press. PASSIVE cells are half that size and keep the flat dark
+   *  slot frame, so a glance separates "press me" from "you already have this". */
   private makeAbilityCell(key: string, tex: Texture | null, activated: boolean) {
-    const R = 22;
+    const R = activated ? ABILITY_ACTIVE_R : ABILITY_PASSIVE_R;
     const cell = new Container();
-    const frame = new Graphics()
-      .roundRect(-R, -R, 2 * R, 2 * R, 7)
-      .fill({ color: 0x14140f, alpha: 0.82 })
-      .stroke({ width: 2, color: activated ? 0xe6b23a : 0x6f9a52 });
-    cell.addChild(frame);
+    cell.addChild(activated ? woodenButtonFace(R) : passiveIconFrame(R));
     if (tex) {
       const sp = new Sprite(tex);
       sp.anchor.set(0.5);
-      sp.scale.set((2 * R * 0.78) / Math.max(tex.width, tex.height, 1));
+      sp.scale.set((2 * R * (activated ? 0.68 : 0.8)) / Math.max(tex.width, tex.height, 1));
       cell.addChild(sp);
     }
-    let badge: Text | undefined;
-    let badgeDot: Graphics | undefined;
-    {
-      const dot = new Graphics().circle(R - 4, -R + 4, 9).fill(0xc0392b);
-      badgeDot = dot;
-      badge = new Text({
-        text: "0",
-        style: { fontFamily: "sans-serif", fontSize: 12, fontWeight: "800", fill: 0xffffff },
+    // Count badge: ready-to-act zombies on a button, deployed carriers on a passive
+    // icon. Either way it only earns its pixels past one, so layout() hides it at
+    // exactly 1 — a badge on every icon is just noise.
+    const dotR = activated ? 10 : 8;
+    const badgeDot = new Graphics().circle(R - 4, -R + 4, dotR).fill(0xc0392b);
+    const badge = new Text({
+      text: "0",
+      style: {
+        fontFamily: "sans-serif", fontSize: activated ? 13 : 11,
+        fontWeight: "800", fill: 0xffffff,
+      },
+    });
+    badge.anchor.set(0.5);
+    badge.position.set(R - 4, -R + 4);
+    badgeDot.visible = false;
+    badge.visible = false;
+    cell.addChild(badgeDot, badge);
+    if (activated) {
+      cell.eventMode = "static";
+      cell.cursor = "pointer";
+      cell.on("pointertap", () => {
+        if (this.sim.finished) return;
+        if (this.sim.activate(key)) {
+          this.recordInput({ type: "ability", abilityKey: key });
+          cell.scale.set(0.86); // tap feedback (eased back in layout)
+        }
       });
-      badge.anchor.set(0.5);
-      badge.position.set(R - 4, -R + 4);
-      cell.addChild(dot, badge);
-      if (!activated) {
-        dot.visible = false;
-        badge.visible = false;
-      } else {
-        cell.eventMode = "static";
-        cell.cursor = "pointer";
-        cell.on("pointertap", () => {
-          if (this.sim.finished) return;
-          if (this.sim.activate(key)) {
-            this.recordInput({ type: "ability", abilityKey: key });
-            cell.scale.set(0.86); // tap feedback (eased back in layout)
-          }
-        });
-      }
     }
     return { cell, badge, badgeDot };
   }
@@ -1719,7 +1773,18 @@ export class RaidScene {
         W - hudLayout.retreatRightMargin - this.retreatBtn.width,
         H - this.retreatBtn.height - hudLayout.retreatBottomMargin,
       );
-      this.abilityStrip.position.set(hudLayout.abilityX, topHudH + 30);
+      // Passive icons sit directly under the player's health bar; the button column
+      // hangs below them (or takes their place when the army carries no passives).
+      this.passiveAbilityStrip.position.set(
+        hudLayout.abilityLeft + ABILITY_PASSIVE_R,
+        topHudH + ABILITY_PASSIVE_GAP + ABILITY_PASSIVE_R,
+      );
+      this.activeAbilityStrip.position.set(
+        hudLayout.abilityLeft + ABILITY_ACTIVE_R,
+        topHudH + ABILITY_ACTIVE_R + (this.hasPassiveAbilities
+          ? ABILITY_PASSIVE_GAP + 2 * ABILITY_PASSIVE_R + 10
+          : ABILITY_ACTIVE_GAP),
+      );
     }
     // Both team bars read green when full (drain as the team loses HP).
     this.drawTeamBar(this.pBar, this.pFill, barW, barH, pHp / this.maxPlayerHp, PLAYER_COLOR, this.pBarState);
@@ -1746,35 +1811,40 @@ export class RaidScene {
     this.retreatBtn.visible = (this.phase === "intro" || this.phase === "fight")
       && !this.sim.finished && !this.retreatRequested;
 
-    // Ability strip remains below the top-left health bar. Activated badges show how
-    // many zombies are ready right now; dim a move when none can perform it.
-    // The strip's contents change on sim events (deploys, readiness), not per render
-    // frame, so the Map/Set/filter recompute is throttled; only the tap-press scale
-    // easing runs every frame.
-    const CELL = 52;
+    // A button is on screen for as long as the move is POSSIBLE — its zombie is
+    // standing at the line (or, for Mini Buddy, waiting in the charge slot) —
+    // rather than only in the instants it is off cooldown. `present` is the wider,
+    // stable window; `ready` is whether a tap would land right now. Splitting them
+    // is what stops the column strobing between swings and gives the player a fixed
+    // target to time a wind-up into. A recharging button dims but stays tappable.
+    // Passive icons appear once a carrier has advanced onto the battlefield.
+    // All of it is throttled: this changes on sim events, not per render frame.
     this.abilityRefreshMs -= dtSec * 1000;
     if (this.abilityRefreshMs <= 0 || resized) {
       this.abilityRefreshMs = 150;
-      const status = new Map(this.sim.activatedStatus().map((s) => [s.key, s.ready]));
+      const status = new Map(this.sim.activatedStatus().map((s) => [s.key, s]));
       const teamStatus = new Map(this.sim.teamAbilityStatus().map((s) => [s.key, s.count]));
-      let visibleAbilityIndex = 0;
+      let activeSlot = 0;
+      let passiveSlot = 0;
       this.abilityCells.forEach((c) => {
-        // Activated moves retain their authored timing (Mini Buddy is chosen during
-        // deployment). Passive team effects such as Chivalry and Grace appear only
-        // once a carrier has actually advanced onto the battlefield.
-        const deployedCount = teamStatus.get(c.key) ?? 0;
-        c.cell.visible = c.activated || deployedCount > 0;
-        if (c.cell.visible) c.cell.y = visibleAbilityIndex++ * CELL;
+        const st = c.activated ? status.get(c.key) : null;
+        const deployed = c.activated ? 0 : (teamStatus.get(c.key) ?? 0);
+        c.cell.visible = c.activated ? !!st?.present : deployed > 0;
+        if (!c.cell.visible) return;
         if (c.activated) {
-          const ready = status.get(c.key) ?? 0;
-          if (c.badge) c.badge.text = String(ready);
-          c.cell.alpha = ready > 0 ? 1 : 0.5;
-        } else if (c.badge) {
-          c.badge.text = String(deployedCount);
-          c.badge.visible = deployedCount > 1;
-          if (c.badgeDot) c.badgeDot.visible = deployedCount > 1;
-          c.cell.alpha = 1;
+          c.cell.y = activeSlot++ * ABILITY_ACTIVE_STEP;
+          c.cell.alpha = st!.ready > 0 ? 1 : ABILITY_RECHARGING_ALPHA;
+        } else {
+          c.cell.x = passiveSlot++ * ABILITY_PASSIVE_STEP;
         }
+        // One is the common case and needs no number; the badge is there to say
+        // "more than one of these is available right now".
+        const count = c.activated ? st!.ready : deployed;
+        if (c.badge) {
+          c.badge.text = String(count);
+          c.badge.visible = count > 1;
+        }
+        if (c.badgeDot) c.badgeDot.visible = count > 1;
       });
     }
     this.abilityCells.forEach((c) => {
@@ -2150,7 +2220,7 @@ export class RaidScene {
       this.retreated = true;
       this.retreatRequested = false;
       this.retreatBtn.visible = false;
-      this.abilityStrip.interactiveChildren = false;
+      this.activeAbilityStrip.interactiveChildren = false;
       this.bubble.visible = false;
       this.prepareArmyExit();
       this.setPhase("retreat");
@@ -2240,7 +2310,7 @@ export class RaidScene {
           // Freeze outcome-relevant controls on the decisive tick, not after the
           // cinematic pause. Otherwise a last tap can enter the transcript at a tick
           // the verifier has already finished.
-          this.abilityStrip.interactiveChildren = false;
+          this.activeAbilityStrip.interactiveChildren = false;
           this.bubble.visible = false;
           this.retreatBtn.visible = false;
           if (this.sim.playerWon) {

@@ -50,7 +50,8 @@ import {
 // and hot-reload. Vite injects it at module load — no manual <style> element.
 import "./ui/hud.css";
 import {
-  bindBackdropDismiss, MENU_ACTIVATION_DELAY_MS, openModal, shouldBlockFreshMenuActivation,
+  bindBackdropDismiss, markPrimary, MENU_ACTIVATION_DELAY_MS, openModal,
+  shouldBlockFreshMenuActivation,
 } from "./ui/Modal";
 import type { ModalHandle } from "./ui/Modal";
 import { onFirstVisible } from "./ui/onFirstVisible";
@@ -61,7 +62,8 @@ import {
 } from "./ui/panels/settings";
 import { openStorage as openStoragePanel } from "./ui/panels/storage";
 import {
-  buildZombieCard, buildRosterCard, openZombieInfo as openZombieInfoPanel,
+  buildZombieCard, buildRosterCard, catalogZombieNotes, openCatalogZombieCard,
+  openZombieInfo as openZombieInfoPanel,
   openZombiesPanel, rosterInfo, type ZombiesPanelTab,
 } from "./ui/panels/zombies";
 import { openFarmersGuide } from "./ui/panels/farmersGuide";
@@ -95,9 +97,29 @@ interface MktEntry {
   owned?: boolean;
   equipped?: boolean;
   description?: string; // "what does it do" blurb shown by the card's magnifier
+  /** Zombies: the magnifier opens the species' full inspect card instead of the
+   *  description parchment — stats and abilities are the thing worth reading before
+   *  buying, and the blurb rides along under the card. */
+  inspect?: () => void;
   tint?: [number, number, number]; // multiplicative object tint from Market data
   theme?: string; // seasonal badge ("Christmas"); "" or absent for evergreen
   onPick: () => void;
+}
+
+/** The little parchment magnifier a card carries in its corner (Market) or beside
+ *  its name (plant menu). Clicking it never picks the card underneath. */
+function magnifierButton(ariaLabel: string, title: string, onClick: () => void): HTMLButtonElement {
+  const info = document.createElement("button");
+  info.className = "mkt-info";
+  info.type = "button";
+  info.title = title;
+  info.setAttribute("aria-label", ariaLabel);
+  info.innerHTML =
+    `<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" ` +
+    `stroke-width="2" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="4.3"/>` +
+    `<line x1="9.7" y1="9.7" x2="14" y2="14"/></svg>`;
+  info.onclick = (e) => { e.stopPropagation(); onClick(); };
+  return info;
 }
 
 /** Apply cocos2d/Pixi-style multiplicative RGB tinting to a DOM image. */
@@ -914,6 +936,7 @@ export class Hud {
       const accept = document.createElement("button");
       accept.className = "zbtn sell";
       accept.textContent = confirmLabel;
+      markPrimary(accept); // Enter confirms
       accept.onclick = () => { finish(true); close(); };
       buttons.append(cancel, accept);
       panel.append(copy, buttons);
@@ -1663,6 +1686,7 @@ export class Hud {
           timeLabel: c.timeLabel,
           graveNeeded: c.cfg.unlockGrave,
           description: c.description,
+          inspect: () => this.openCatalogZombie(c),
           onPick: () => { this.setPlanting(c.cfg); bg.remove(); },
         }));
       if (tab === "Items") {
@@ -2258,23 +2282,27 @@ export class Hud {
     body.appendChild(cost);
 
     card.append(hd, body);
-    // Magnifier: a small "what does it do?" button that pops the item's description.
-    // Present even on locked cards so players can learn about items before they unlock.
-    if (en.description) {
-      const info = document.createElement("button");
-      info.className = "mkt-info";
-      info.type = "button";
-      info.title = "What does this do?";
-      info.setAttribute("aria-label", `What does ${en.name} do?`);
-      info.innerHTML =
-        `<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" ` +
-        `stroke-width="2" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="4.3"/>` +
-        `<line x1="9.7" y1="9.7" x2="14" y2="14"/></svg>`;
-      info.onclick = (e) => { e.stopPropagation(); this.showItemInfo(en); };
-      card.appendChild(info);
+    // Magnifier: a small "what is this?" button. Zombies open their inspect card;
+    // everything else pops the description parchment. Present even on locked cards so
+    // players can study an item — or a zombie's stats — before they unlock it.
+    if (en.inspect) {
+      card.appendChild(magnifierButton(
+        `See ${en.name}'s card`, "See this zombie's card", en.inspect));
+    } else if (en.description) {
+      card.appendChild(magnifierButton(
+        `What does ${en.name} do?`, "What does this do?", () => this.showItemInfo(en)));
     }
     if (!en.equipped && !locked && !poor && !graveLock && !limitLock) card.onclick = en.onPick;
     return card;
+  }
+
+  /** Show the inspect card for a zombie the player is thinking about buying, from
+   *  either shop surface (Market gravestone or the plot's plant picker). */
+  private openCatalogZombie(c: MenuCard) {
+    // No grave predicate wired (Local Farm boot) means no grave gate, exactly as the
+    // shop cards themselves read it.
+    const owns = this.hasGrave ?? (() => true);
+    openCatalogZombieCard(this, c, catalogZombieNotes(c, this.state.level, owns));
   }
 
   // Small parchment popup describing a Market item, opened from a card's magnifier.
@@ -2588,6 +2616,15 @@ export class Hud {
     const name = document.createElement("div");
     name.className = "pm-name";
     name.textContent = c.name;
+    // Zombies carry the same magnifier as their Market cards, so the picker opened
+    // from a plot can show what a gravestone grows into before it is planted. It sits
+    // beside the name here: this card's corners already hold the time/cost readouts.
+    if (c.cfg.isZombie && c.zombie) {
+      const info = magnifierButton(`See ${c.name}'s card`, "See this zombie's card",
+        () => this.openCatalogZombie(c));
+      info.classList.add("pm-info");
+      name.appendChild(info);
+    }
 
     const port = document.createElement("div");
     port.className = "pm-port";
@@ -2710,6 +2747,7 @@ export class Hud {
     const confirm = document.createElement("button");
     confirm.className = "zbtn sell";
     confirm.textContent = opts.confirmLabel;
+    markPrimary(confirm); // Enter confirms
     confirm.onclick = async () => {
       confirm.disabled = true;
       cancel.disabled = true;
@@ -2756,6 +2794,7 @@ export class Hud {
     const confirm = document.createElement("button");
     confirm.className = "zbtn sell";
     confirm.textContent = action === "block" ? "Block" : "Remove";
+    markPrimary(confirm); // Enter confirms
     confirm.onclick = async () => {
       confirm.disabled = true;
       cancel.disabled = true;
@@ -4703,6 +4742,7 @@ export class Hud {
     const buy = document.createElement("button");
     buy.className = "zbtn sell";
     buy.textContent = `Buy Ticket · ${voucher.cost.toLocaleString()} Gold`;
+    markPrimary(buy); // Enter buys
     buy.onclick = () => {
       if (!this.onBuyBoost?.(voucher)) {
         this.showToast(`You need ${voucher.cost.toLocaleString()} gold for an Invasion Voucher.`);

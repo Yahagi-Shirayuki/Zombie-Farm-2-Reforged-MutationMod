@@ -212,6 +212,13 @@ export function isConfigured(): boolean {
   return !!API;
 }
 
+/** The configured Worker origin, or null in an offline build. Exposed so the
+ *  pre-sign-in service probe (serviceStatus.ts) can reach `GET /` without going
+ *  through the authenticated request helper. */
+export function baseUrl(): string | null {
+  return API || null;
+}
+
 // ---- session persistence ------------------------------------------------
 let session: Session | null = readSession();
 

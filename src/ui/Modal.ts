@@ -48,6 +48,80 @@ export function bindBackdropDismiss(bg: BackdropElement, close: () => void): voi
   });
 }
 
+/**
+ * Mark `btn` as the dialog's accept action, so pressing Enter while that dialog
+ * is the top-most one activates it. Only ever tag an affirmative, expected
+ * default (Buy / Confirm / Continue) — never a destructive choice that shares a
+ * sheet with harmless ones, or Enter becomes a way to sell something by reflex.
+ */
+export function markPrimary<T extends HTMLElement>(btn: T): T {
+  btn.dataset.primary = "";
+  return btn;
+}
+
+/** The focus/keyboard facts `shouldAcceptOnEnter` judges, without a DOM. */
+export interface EnterAcceptEnv {
+  key: string;
+  repeat: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+  /** Lower-case tag name of the focused element ("" when nothing has focus). */
+  focusTag: string;
+  focusEditable: boolean;
+  /** True when the focused element lives inside the dialog Enter would accept. */
+  focusInsideDialog: boolean;
+}
+
+/** Whether this key event should activate the top dialog's primary button. */
+export function shouldAcceptOnEnter(env: EnterAcceptEnv): boolean {
+  if (env.key !== "Enter" || env.repeat) return false;
+  if (env.ctrlKey || env.metaKey || env.altKey) return false;
+  // Multi-line and option fields own Enter themselves (newline / list choice).
+  if (env.focusEditable || env.focusTag === "textarea" || env.focusTag === "select")
+    return false;
+  // A focused button in the same dialog is already activated by Enter natively;
+  // accepting as well would fire two different actions from one keypress.
+  if (env.focusInsideDialog && (env.focusTag === "button" || env.focusTag === "a"))
+    return false;
+  return true;
+}
+
+/** Backdrops of the currently open modals, oldest first. */
+const openDialogs: HTMLElement[] = [];
+let enterWired = false;
+
+/** The top-most open dialog and its accept button (null when it has none — Enter
+ *  must never reach past a dialog to act on one buried underneath it). */
+function topDialogPrimary(): { bg: HTMLElement; btn: HTMLElement } | null {
+  for (let i = openDialogs.length - 1; i >= 0; i--) {
+    const bg = openDialogs[i];
+    if (!bg.isConnected) continue;
+    const btn = bg.querySelector<HTMLElement>("[data-primary]:not(:disabled)");
+    return btn ? { bg, btn } : null;
+  }
+  return null;
+}
+
+function wireEnterAccept() {
+  if (enterWired || typeof window === "undefined") return;
+  enterWired = true;
+  window.addEventListener("keydown", (e) => {
+    const top = topDialogPrimary();
+    if (!top) return;
+    const active = document.activeElement as HTMLElement | null;
+    if (!shouldAcceptOnEnter({
+      key: e.key, repeat: e.repeat,
+      ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey,
+      focusTag: active?.tagName.toLowerCase() ?? "",
+      focusEditable: !!active?.isContentEditable,
+      focusInsideDialog: !!active && top.bg.contains(active),
+    })) return;
+    e.preventDefault();
+    top.btn.click();
+  });
+}
+
 export interface ModalHandle {
   /** The `.panelbg` backdrop element (already appended to the host). */
   bg: HTMLElement;
@@ -114,6 +188,8 @@ export function openModal(opts: ModalOpts): ModalHandle {
     if (closed) return;
     closed = true;
     closers.delete(bg);
+    const open = openDialogs.indexOf(bg);
+    if (open >= 0) openDialogs.splice(open, 1);
     bg.remove();
     opts.onClose?.();
   };
@@ -138,5 +214,11 @@ export function openModal(opts: ModalOpts): ModalHandle {
   if (opts.backdropClose !== false) bindBackdropDismiss(bg, close);
   host.appendChild(bg);
   closers.set(bg, close);
+  // Modals dropped by a bare remove() (the replaceSelector sweep above) never ran
+  // their close(), so retire their stack entries here rather than growing forever.
+  for (let i = openDialogs.length - 1; i >= 0; i--)
+    if (!openDialogs[i].isConnected) openDialogs.splice(i, 1);
+  openDialogs.push(bg);
+  wireEnterAccept();
   return { bg, panel, close };
 }

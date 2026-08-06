@@ -56,6 +56,13 @@
   }
   boot.addEventListener("click", dismiss);
 
+  function teardown() {
+    phase = "done";
+    clearInterval(cycle);
+    clearInterval(creep);
+    if (boot.parentNode) boot.parentNode.removeChild(boot);
+  }
+
   window.__ZFBoot = {
     // Report a real load milestone (0..1); stops the auto-creep.
     progress: function (p) { auto = false; clearInterval(creep); if (p > tgt) tgt = p; },
@@ -63,8 +70,11 @@
     ready: function (callback) { onDismiss = typeof callback === "function" ? callback : null;
       auto = false; clearInterval(creep); tgt = 1;
       if (phase === "load") phase = "readywait"; },
+    // Boot ended somewhere OTHER than the game: a full-screen flow takes over from
+    // here (the closedown export screen), so retire the overlay and its timers
+    // instead of leaving "Zombies Marching…" cycling behind it forever.
+    close: teardown,
     // Bail out (fatal error): tear the overlay down so the error is visible.
-    fail: function () { clearInterval(cycle); clearInterval(creep);
-      if (boot.parentNode) boot.parentNode.removeChild(boot); }
+    fail: teardown
   };
 })();

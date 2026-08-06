@@ -7,9 +7,9 @@
 // The inspect-card builders are also used by the Mausoleum grid and the Black
 // Market listing views, which stay in hud.ts and import them from here.
 import type { Hud } from "../../hud";
-import { openModal } from "../Modal";
+import { markPrimary, openModal } from "../Modal";
 import { onFirstVisible } from "../onFirstVisible";
-import type { AlmanacEntryView, ZombieInfo } from "../hudTypes";
+import type { AlmanacEntryView, MenuCard, ZombieInfo } from "../hudTypes";
 import { zombieSellValue } from "../../economy";
 import { MAX_ZOMBIE_NAME_LENGTH, RosterEntry } from "../../zombie/types";
 import { mutationBonus } from "../../zombie/mutations";
@@ -365,6 +365,7 @@ function confirmSellZombie(hud: Hud, info: ZombieInfo, value: number, refresh?: 
   const confirm = document.createElement("button");
   confirm.className = "zbtn sell";
   confirm.textContent = `Sell +${value}g`;
+  markPrimary(confirm); // Enter confirms this already-explicit sale
   confirm.onclick = async () => {
     confirm.disabled = true;
     close();
@@ -374,6 +375,63 @@ function confirmSellZombie(hud: Hud, info: ZombieInfo, value: number, refresh?: 
   btns.append(cancel, confirm);
 
   panel.append(por, msg, btns);
+}
+
+/** The lines printed under a pre-purchase zombie card: what the gravestone costs and
+ *  how long it takes, whatever still gates it, and the guaranteed-mutation blurb the
+ *  description parchment used to carry. The gates are reported in the same order the
+ *  shop cards apply them — a level lock hides a grave lock, because reaching the level
+ *  is the first thing that has to happen. */
+export function catalogZombieNotes(
+  card: {
+    cost: number; brains?: boolean; timeLabel: string; level: number; description?: string;
+    cfg: { unlockGrave?: "Blue" | "Red" | "Silver" };
+  },
+  playerLevel: number,
+  hasGrave: (grave: "Blue" | "Red" | "Silver") => boolean,
+): string[] {
+  const grave = card.cfg.unlockGrave;
+  const gate = playerLevel < card.level
+    ? `Unlocks at level ${card.level}.`
+    : grave && !hasGrave(grave) ? `Needs the ${grave} Grave on your farm.` : "";
+  return [
+    `${card.cost} ${card.brains ? "brains" : "gold"} · grows in ${card.timeLabel}`,
+    gate,
+    card.description ?? "",
+  ].filter(Boolean);
+}
+
+/** Preview the inspect card for a catalog species the player does not own yet —
+ *  opened by the magnifier on a Market or plant-menu gravestone so its stats and
+ *  abilities can be read BEFORE buying. Same card the roster and Black Market
+ *  listings use, built from catalog data: no veterancy (nothing has fought yet),
+ *  and any guaranteed catalog mutation folded in exactly as the unit dug up will
+ *  carry it. Stats include the player's own farmer bonuses, matching the Black
+ *  Market's inspect — the numbers are what THIS farm would field. `meta` lines
+ *  (price, unlock requirement, mutation blurb) sit under the card. */
+export function openCatalogZombieCard(hud: Hud, card: MenuCard, meta: string[]) {
+  const zombie = card.zombie;
+  if (!zombie) return;
+  const bonus = mutationBonus(zombie.mutation);
+  const info: ZombieInfo = {
+    name: card.name, typeName: card.name, key: card.cfg.key,
+    group: zombie.group, className: zombie.className, classColor: zombie.classColor,
+    str: (zombie.str + bonus.str) * hud.state.farmerZombieStrengthMult(),
+    dex: zombie.dex + bonus.dex,
+    con: (zombie.con + bonus.con) * hud.state.farmerZombieLifeMult(),
+    focus: zombie.focus, mutation: zombie.mutation, invasions: 0,
+    portrait: card.portrait,
+  };
+  const { panel } = openModal({
+    host: hud.el, bgClass: "zpreview-bg", panelClass: "zpanel", replaceSelector: ".zpreview-bg",
+  });
+  panel.appendChild(buildZombieCard(hud, info, panel));
+  for (const line of meta) {
+    const note = document.createElement("p");
+    note.className = "alm-hint";
+    note.textContent = line;
+    panel.appendChild(note);
+  }
 }
 
 /** Convert a roster entry into the inspectable ZombieInfo shape. */

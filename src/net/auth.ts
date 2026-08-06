@@ -30,6 +30,11 @@ declare global {
   }
 }
 
+/** Why the last sign-in attempt was refused, for the gate to render. Cleared when a
+ *  fresh attempt starts. */
+let signInError: string | null = null;
+export const lastSignInError = (): string | null => signInError;
+
 type Listener = () => void;
 const listeners: Listener[] = [];
 export function onAuthChange(fn: Listener) {
@@ -82,10 +87,16 @@ function ensureGisInitialized(g: GoogleId) {
     client_id: CLIENT_ID!,
     callback: async (resp) => {
       try {
+        signInError = null;
         await api.authenticate({ idToken: resp.credential });
         emit();
       } catch (e) {
+        // A refusal the player needs to READ — during the closedown the server
+        // answers `signups_closed`/`service_closed`, and silently doing nothing
+        // after the Google popup looks like a broken button.
         console.warn("[auth] sign-in failed", e);
+        signInError = e instanceof api.ApiError ? e.code : "error";
+        emit();
       }
     },
   });

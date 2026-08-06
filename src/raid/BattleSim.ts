@@ -840,11 +840,52 @@ export class BattleSim {
     );
   }
 
-  /** Ready-count per activated move, for the strip's badges. */
-  activatedStatus(): { key: string; ready: number }[] {
+  /** A deployed zombie that has reached striking range — IN POSITION to attack,
+   *  whether or not an enemy happens to be standing in front of it this instant.
+   *
+   *  This is the sim's own attack gate (see the advance step: `inCombatZone ||
+   *  atBlockingWall`) with the enemy-arrived clause dropped. That clause is what
+   *  flips `state` back to "advance" in every gap between one enemy dying and the
+   *  next walking on, so a button driven off `state === "fight"` strobed on and off
+   *  and left the player nothing steady to time a wind-up into. Position alone only
+   *  moves forward, so it holds still. */
+  private inAttackPosition(p: SimUnit): boolean {
+    if (!p.alive || p.team !== "player") return false;
+    if (p.state !== "advance" && p.state !== "fight") return false;
+    const wall = this.wallInWay(p);
+    if (wall) return Math.abs(wall.x - p.x) <= WALL_MELEE_GAP + 2;
+    return p.x >= this.frontX - MAX_ROWS * COL_GAP - 12;
+  }
+
+  /** Whether a move has any carrier inside its DISPLAY window — the span over which
+   *  the battle strip keeps its button on screen. Wider than `readyToActivate`
+   *  (which also demands off-cooldown and not-already-winding-up) precisely so the
+   *  button stays put while its zombie charges and recharges.
+   *
+   *  Mini Buddy's window is the narrowest of all: exactly while a Large stands in
+   *  the charge slot deciding whether to go — before that it is queued at the back,
+   *  after it there is nothing left to mount. */
+  private abilityPresent(key: string): boolean {
+    if (key === "attachMini") {
+      return !!this.availableMini() && this.players.some(
+        (p) => p.alive && this.isLarge(p) && p.abilities.includes(key) &&
+          !p.buddyId && !p.usedAbilities.includes(key) && p.state === "charging"
+      );
+    }
+    return this.players.some(
+      (p) => this.inAttackPosition(p) &&
+        p.abilities.includes(key) && !p.usedAbilities.includes(key)
+    );
+  }
+
+  /** Per activated move: how many zombies could perform it this instant (`ready`,
+   *  the badge count) and whether the strip should be showing it at all
+   *  (`present`). A present move with nothing ready is a button on cooldown. */
+  activatedStatus(): { key: string; ready: number; present: boolean }[] {
     return this.activatedKeys.map((key) => ({
       key,
       ready: this.players.filter((p) => this.readyToActivate(p, key)).length,
+      present: this.abilityPresent(key),
     }));
   }
 

@@ -96,14 +96,20 @@ export async function accountByFriendCode(
 }
 
 /** Get the account for this Google identity, creating it (with a unique friend
- *  code) on first sign-in. Retries code generation on the rare collision. */
+ *  code) on first sign-in. Retries code generation on the rare collision.
+ *
+ *  With `allowCreate` false (service closedown — see serviceState.ts) an unknown
+ *  identity resolves to null instead of registering: sign-in stays open to the
+ *  existing player base while the door is shut to new ones. */
 export async function upsertAccount(
   db: D1Database,
   who: GoogleIdentity,
-  now: number
-): Promise<Account> {
+  now: number,
+  allowCreate = true
+): Promise<Account | null> {
   const existing = await accountByGoogleSub(db, who.sub);
   if (existing) return existing;
+  if (!allowCreate) return null;
   const id = idFromBytes(rand(16));
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = friendCodeFromBytes(rand(6));

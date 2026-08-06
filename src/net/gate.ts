@@ -8,6 +8,9 @@
 // the page, which lands back here).
 import * as auth from "./auth";
 import * as api from "./api";
+import {
+  fetchServiceStatus, isExportOnly, OPEN_STATUS, peekServiceStatus, signInRefusalMessage,
+} from "./serviceStatus";
 
 const STYLE = `
 .zf-gate { position: fixed; inset: 0; z-index: 100000; display: flex;
@@ -34,6 +37,7 @@ const STYLE = `
 .zf-gate-start:hover { filter: brightness(1.06); }
 .zf-gate-start:disabled { opacity: .5; cursor: default; filter: none; }
 .zf-gate-err { min-height: 16px; margin-top: 10px; font-size: 12px; color: #ffb0a0; }
+.zf-gate-refusal { margin-top: 14px; font-size: 13px; line-height: 1.45; color: #ffd9a0; }
 `;
 
 let styled = false;
@@ -55,6 +59,9 @@ export function requireAuth(): Promise<void> {
   if (!auth.isOnlineAvailable()) return Promise.resolve(); // offline build: no lock
   if (auth.isSignedIn() && !auth.needsUsername()) return Promise.resolve();
 
+  // main() probes before the farm chooser, so this is normally already memoised and
+  // reads synchronously — no round trip and no second repaint of the Google button.
+  let serviceStatus = peekServiceStatus() ?? OPEN_STATUS;
   injectStyle();
   const root = document.createElement("div");
   root.className = "zf-gate";
@@ -70,14 +77,26 @@ export function requireAuth(): Promise<void> {
     };
 
     const showSignIn = () => {
+      // During the closedown the wall explains WHY you are signing in — the account is
+      // no longer a place to play, it is where your farm is waiting to be collected.
+      const exporting = isExportOnly(serviceStatus);
+      const sub = exporting
+        ? "Online Farm is closed while we prepare the full release. Sign in once to "
+          + "download a copy of your farm, then play it in Local Farm."
+        : "Sign in to save your farm and play across devices — your progress, "
+          + "zombies, and friends live on your account.";
+      const refusal = signInRefusalMessage(auth.lastSignInError());
       root.innerHTML =
         `<div class="zf-gate-card">` +
-        `<h1 class="zf-gate-title">Zombie Farm</h1>` +
-        `<p class="zf-gate-sub">Sign in to save your farm and play across devices — ` +
-        `your progress, zombies, and friends live on your account.</p>` +
+        `<h1 class="zf-gate-title">${exporting ? "Export Your Farm" : "Zombie Farm"}</h1>` +
+        `<p class="zf-gate-sub">${sub}</p>` +
         `<div class="zf-gate-gsi"></div>` +
+        (refusal ? `<p class="zf-gate-refusal"></p>` : "") +
         `<div class="zf-gate-hint">We only use your Google account for sign-in.</div>` +
         `</div>`;
+      if (refusal) {
+        (root.querySelector(".zf-gate-refusal") as HTMLElement).textContent = refusal;
+      }
       void auth.renderSignInButton(root.querySelector(".zf-gate-gsi") as HTMLElement);
     };
 
@@ -124,8 +143,15 @@ export function requireAuth(): Promise<void> {
     };
 
     // Google sign-in fires onAuthChange after storing the session → re-render into
-    // the username picker (new account) or finish (returning account).
+    // the username picker (new account), the refusal copy, or finish.
     auth.onAuthChange(render);
     render();
+    // Only when nothing had probed yet (a caller other than main()): fill in and repaint.
+    if (!peekServiceStatus()) {
+      void fetchServiceStatus().then((status) => {
+        serviceStatus = status;
+        if (!done && !auth.isSignedIn()) showSignIn();
+      });
+    }
   });
 }

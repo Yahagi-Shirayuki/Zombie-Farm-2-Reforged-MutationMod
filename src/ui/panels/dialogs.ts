@@ -3,7 +3,7 @@
 // data into `host` (the HUD root) and need nothing else from the Hud class, so
 // they live here as plain functions rather than methods. Hud keeps thin
 // open*/openPanel wrappers that forward to these.
-import { openModal } from "../Modal";
+import { markPrimary, openModal } from "../Modal";
 import { setTintedSrc, tintedImage } from "../tintedSprite";
 import { UI } from "../uiAsset";
 import type { LevelUpView, QuestCompleteView, ObjectActions } from "../hudTypes";
@@ -43,6 +43,7 @@ export function renderLevelUp(host: HTMLElement, view: LevelUpView): void {
   const done = document.createElement("button");
   done.className = "lvl-go";
   done.textContent = "Continue";
+  markPrimary(done); // Enter dismisses the celebration
   done.onclick = () => close();
   panel.appendChild(done);
   requestAnimationFrame(() => panel.classList.add("in"));
@@ -82,7 +83,8 @@ export function renderQuestComplete(
   done.className = "lvl-go";
   done.textContent = "OK";
   // Quest completions may appear while the player is mid-action; the explicit OK
-  // button is the only way to acknowledge (and advance to the next queued one).
+  // button (or Enter) is the only way to acknowledge and advance the queue.
+  markPrimary(done);
   done.onclick = () => close();
   panel.appendChild(done);
   requestAnimationFrame(() => panel.classList.add("in"));

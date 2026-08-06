@@ -650,3 +650,14 @@ CREATE TABLE IF NOT EXISTS black_market_receipts (
 );
 CREATE INDEX IF NOT EXISTS idx_black_market_receipts_account ON black_market_receipts(account_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_v3_account ON audit_events_v3(account_id, created_at);
+
+-- Service closedown switch (see migrations/0042_service_state.sql). One row; the
+-- local admin console flips it over D1 without a Worker deploy.
+CREATE TABLE IF NOT EXISTS service_state (
+  id         INTEGER PRIMARY KEY CHECK (id = 1),
+  mode       TEXT    NOT NULL DEFAULT 'open'
+               CHECK (mode IN ('open','signups_closed','export_only','closed')),
+  notice     TEXT,
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO service_state (id, mode, notice, updated_at) VALUES (1, 'open', NULL, 0);
