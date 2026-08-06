@@ -923,3 +923,69 @@ describe("AudioManager audio-session recovery", () => {
     expect(MockSource.started.length).toBeGreaterThan(0);
   });
 });
+
+describe("AudioManager iOS silent switch", () => {
+  let session: { type: string };
+
+  beforeEach(() => {
+    MockAudio.instances = [];
+    MockAudio.rejectPlay = false;
+    const documentTarget = new EventTarget();
+    Object.defineProperties(documentTarget, {
+      hidden: { get: () => false },
+      hasFocus: { value: () => true },
+    });
+    session = { type: "auto" };
+    vi.stubGlobal("window", new EventTarget());
+    vi.stubGlobal("document", documentTarget);
+    vi.stubGlobal("Audio", MockAudio);
+    vi.stubGlobal("navigator", { audioSession: session });
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  // Without "playback", iOS treats every Web Audio sound as ambient and the
+  // hardware Ring/Silent switch silences the game outright.
+  it("claims the playback category so the Ring/Silent switch can't mute the game", () => {
+    new AudioManager();
+    expect(session.type).toBe("playback");
+  });
+
+  it("also claims it from the start gesture, which is when the session activates", () => {
+    const audio = new AudioManager();
+    session.type = "auto";
+    audio.resumeFromGesture();
+    expect(session.type).toBe("playback");
+  });
+
+  // The category is not mixable, so holding it while silent would keep another
+  // app's music stopped for no reason.
+  it("hands the category back once every channel is off", () => {
+    const audio = new AudioManager();
+    audio.setMusic(false);
+    audio.setSfx(false);
+    expect(session.type).toBe("playback"); // ambience still on
+    audio.setAmbience(false);
+    expect(session.type).toBe("auto");
+
+    audio.setSfx(true);
+    expect(session.type).toBe("playback");
+  });
+
+  it("releases it on master mute and reclaims it on unmute", () => {
+    const audio = new AudioManager();
+    audio.setMaster(false);
+    expect(session.type).toBe("auto");
+    audio.setMaster(true);
+    expect(session.type).toBe("playback");
+  });
+
+  it("works where the API is absent", () => {
+    vi.stubGlobal("navigator", {});
+    expect(() => new AudioManager().setMusic(false)).not.toThrow();
+  });
+});

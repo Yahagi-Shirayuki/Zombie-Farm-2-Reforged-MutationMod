@@ -134,6 +134,32 @@ const WATCHDOG_MS = 2_000;
  */
 const MAX_DECODED_LOOP_SECONDS = 40;
 
+/**
+ * The Web Audio Session API's category control (`navigator.audioSession.type`),
+ * which only WebKit implements and which is the ONLY way to tell iOS what kind of
+ * audio this page is producing.
+ *
+ * It matters because of the hardware Ring/Silent switch. iOS routes Web Audio —
+ * every buffered one-shot, and every looping track once it hands over to its
+ * decoded source — through the "ambient" audio session by default, and ambient
+ * audio is silenced outright when the switch is set to silent. Media elements are
+ * not, which is why a flipped switch used to take out only some of the game and
+ * now takes out nearly all of it. `"playback"` is the category that says "this is
+ * the media the user came for", and it plays through the switch.
+ *
+ * The cost of `"playback"` is that it is not mixable: claiming it stops whatever
+ * the player had going in another app. So it is claimed only while the game is
+ * actually meant to be making sound, and released back to `"auto"` when it isn't.
+ */
+type AudioSessionType = "auto" | "playback" | "transient" | "transient-solo" | "ambient";
+
+/** `navigator.audioSession`, or undefined off WebKit / on older iOS, where the
+ *  silent switch simply cannot be overridden from the web. */
+function audioSessionApi(): { type: AudioSessionType } | undefined {
+  if (typeof navigator === "undefined") return undefined;
+  return (navigator as unknown as { audioSession?: { type: AudioSessionType } }).audioSession;
+}
+
 /** Resolve true if `promise` fulfils within `ms`, false if it rejects OR hangs. */
 function settledWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -616,6 +642,7 @@ export class AudioManager {
     this.ambienceVolume = clampVolume(s.ambienceVolume);
     this.muteWhenUnfocused = s.muteWhenUnfocused ?? false;
     this.applyLoopVolumes();
+    this.applyAudioSessionType();
 
     // Hidden/backgrounded pages always stop audio. Focus events additionally
     // support the optional visible-desktop-window mute behavior. Mobile browsers
@@ -691,6 +718,9 @@ export class AudioManager {
    */
   resumeFromGesture() {
     if (!this.canPlay()) return;
+    // Ahead of any start, so the session that gets activated below is the one that
+    // plays through the Ring/Silent switch rather than an ambient one already running.
+    this.applyAudioSessionType();
     // Start inside the gesture itself — an autoplay policy only honours what the
     // gesture synchronously reaches — then let the async recovery pick up whatever
     // needed the session back first.
@@ -889,6 +919,28 @@ export class AudioManager {
       (!this.muteWhenUnfocused || document.hasFocus());
   }
 
+  /**
+   * Tell iOS whether we are producing media the Ring/Silent switch should respect.
+   *
+   * See AudioSessionType: without this the switch silences every Web Audio sound in
+   * the game. Claim `"playback"` while any channel is on — that is the player asking
+   * for sound — and hand the category back when they have turned everything off, so
+   * a muted game stops displacing whatever else they were listening to.
+   *
+   * Called from the settings toggles and from the start gesture, since some WebKit
+   * builds only pick the category up when the session is next activated. A no-op
+   * everywhere the API is absent.
+   */
+  private applyAudioSessionType() {
+    const session = audioSessionApi();
+    if (!session) return;
+    const wantsSound = this.masterOn && (this.musicOn || this.sfxOn || this.ambienceOn);
+    const want: AudioSessionType = wantsSound ? "playback" : "auto";
+    try {
+      if (session.type !== want) session.type = want;
+    } catch { /* read-only or unsupported value: nothing to fall back to */ }
+  }
+
   // The looping channels' final element volumes: authored base level × per-channel
   // slider × the master slider. One-shots apply the same product in playOneShot.
   private applyLoopVolumes() {
@@ -937,6 +989,7 @@ export class AudioManager {
   // one-shots (via canPlay), on resumes whichever loop toggles are enabled.
   setMaster(on: boolean) {
     this.masterOn = on;
+    this.applyAudioSessionType();
     this.syncFocusAudio();
     this.persist();
   }
@@ -949,6 +1002,7 @@ export class AudioManager {
 
   setMusic(on: boolean) {
     this.musicOn = on;
+    this.applyAudioSessionType();
     if (on && this.canPlay()) {
       this.startWatchdog();
       void this.activeBgm().play().catch(() => this.arm());
@@ -1020,6 +1074,7 @@ export class AudioManager {
   // --- sfx -----------------------------------------------------------------
   setSfx(on: boolean) {
     this.sfxOn = on;
+    this.applyAudioSessionType();
     this.persist();
   }
 
@@ -1218,6 +1273,7 @@ export class AudioManager {
   // --- ambience ------------------------------------------------------------
   setAmbience(on: boolean) {
     this.ambienceOn = on;
+    this.applyAudioSessionType();
     if (on && this.canPlay()) this.startAmbience();
     else this.stopAmbience();
     this.persist();

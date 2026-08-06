@@ -120,9 +120,15 @@ const ABILITY_PASSIVE_STEP = 2 * ABILITY_PASSIVE_R + 6; // horizontal pitch of t
 const ABILITY_PASSIVE_GAP = 7;
 /** Gap between the top HUD and the button column when there is no passive row. */
 const ABILITY_ACTIVE_GAP = 14;
-/** A visible-but-recharging button: still there to aim at, still tappable, but
- *  plainly not armed yet. */
-const ABILITY_RECHARGING_ALPHA = 0.45;
+// Activated buttons hold their slot for the whole fight and signal availability by
+// darkening instead of vanishing. Tint (not alpha) keeps them solid over a busy
+// battlefield, so a dark button still reads as a button.
+// Kept light enough that the ICON stays legible at every level: the player learns
+// the column by which move sits in which slot, so an unreadable slot is no better
+// than a missing one.
+const ABILITY_TINT_ARMED = 0xffffff; // a tap lands right now
+const ABILITY_TINT_RECHARGING = 0x9a9a9a; // in position, mid wind-up or cooling down
+const ABILITY_TINT_UNAVAILABLE = 0x5e5e5e; // nobody in position to perform it
 
 /** The face of a tappable ability button: the HUD's plank browns, a lit top bevel,
  *  a warm inner rule, and a dark rim — the same read as the farm's wooden buttons. */
@@ -765,7 +771,13 @@ export class RaidScene {
   /** Build both ability strips from the army's abilities: one tappable wooden
    *  button per distinct ACTIVATED move (badge = how many zombies are ready) and
    *  one small static icon per TEAM-passive ability in play. Self-buffs aren't
-   *  shown at all — the player has no decision to make about them. */
+   *  shown at all — the player has no decision to make about them.
+   *
+   *  Every activated button takes its slot in the column HERE, once, and keeps it
+   *  for the whole fight. Nothing is ever removed or re-packed: a knocked-back Large
+   *  used to take Smash out of the column, sliding Explode up into the space the
+   *  player's thumb was already aimed at, and the next tap blew up a Small instead.
+   *  A move that can't be used is darkened in place. */
   private async buildAbilityStrip() {
     const keys = [
       ...this.sim.activatedKeys.map((key) => ({ key, activated: true })),
@@ -778,8 +790,10 @@ export class RaidScene {
         icons.set(key, icon ? await loadTex(icon) : null);
       })
     );
+    let activeSlot = 0;
     for (const { key, activated } of keys) {
       const cell = this.makeAbilityCell(key, icons.get(key) ?? null, activated);
+      if (activated) cell.cell.y = activeSlot++ * ABILITY_ACTIVE_STEP;
       (activated ? this.activeAbilityStrip : this.passiveAbilityStrip).addChild(cell.cell);
       this.abilityCells.push({ key, ...cell, activated });
       if (!activated) this.hasPassiveAbilities = true;
@@ -1811,35 +1825,40 @@ export class RaidScene {
     this.retreatBtn.visible = (this.phase === "intro" || this.phase === "fight")
       && !this.sim.finished && !this.retreatRequested;
 
-    // A button is on screen for as long as the move is POSSIBLE — its zombie is
-    // standing at the line (or, for Mini Buddy, waiting in the charge slot) —
-    // rather than only in the instants it is off cooldown. `present` is the wider,
-    // stable window; `ready` is whether a tap would land right now. Splitting them
-    // is what stops the column strobing between swings and gives the player a fixed
-    // target to time a wind-up into. A recharging button dims but stays tappable.
-    // Passive icons appear once a carrier has advanced onto the battlefield.
+    // Activated buttons never move and never leave; they only darken. Three states,
+    // read off the sim:
+    //   armed       — a zombie can perform it this instant; a tap lands.
+    //   recharging  — its zombie is in position, but is mid wind-up or cooling down.
+    //   unavailable — nobody is in position to perform it at all.
+    // `present` (in position) is deliberately steadier than `ready` (tap lands now):
+    // driving the look off `ready` alone would strobe the column between swings and
+    // leave nothing to time a wind-up into. Every button stays tappable in all three
+    // states — a tap the sim refuses is simply a no-op.
+    // Passive icons still appear only once a carrier has advanced onto the field;
+    // they aren't tap targets, so re-packing that row is harmless.
     // All of it is throttled: this changes on sim events, not per render frame.
     this.abilityRefreshMs -= dtSec * 1000;
     if (this.abilityRefreshMs <= 0 || resized) {
       this.abilityRefreshMs = 150;
       const status = new Map(this.sim.activatedStatus().map((s) => [s.key, s]));
       const teamStatus = new Map(this.sim.teamAbilityStatus().map((s) => [s.key, s.count]));
-      let activeSlot = 0;
       let passiveSlot = 0;
       this.abilityCells.forEach((c) => {
-        const st = c.activated ? status.get(c.key) : null;
-        const deployed = c.activated ? 0 : (teamStatus.get(c.key) ?? 0);
-        c.cell.visible = c.activated ? !!st?.present : deployed > 0;
-        if (!c.cell.visible) return;
+        let count: number;
         if (c.activated) {
-          c.cell.y = activeSlot++ * ABILITY_ACTIVE_STEP;
-          c.cell.alpha = st!.ready > 0 ? 1 : ABILITY_RECHARGING_ALPHA;
+          const st = status.get(c.key);
+          count = st?.ready ?? 0;
+          c.cell.tint = count > 0
+            ? ABILITY_TINT_ARMED
+            : st?.present ? ABILITY_TINT_RECHARGING : ABILITY_TINT_UNAVAILABLE;
         } else {
+          count = teamStatus.get(c.key) ?? 0;
+          c.cell.visible = count > 0;
+          if (!c.cell.visible) return;
           c.cell.x = passiveSlot++ * ABILITY_PASSIVE_STEP;
         }
         // One is the common case and needs no number; the badge is there to say
         // "more than one of these is available right now".
-        const count = c.activated ? st!.ready : deployed;
         if (c.badge) {
           c.badge.text = String(count);
           c.badge.visible = count > 1;
