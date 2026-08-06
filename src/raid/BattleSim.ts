@@ -287,6 +287,8 @@ export interface SimUnit {
   name: string;
   group?: string;
   className?: string;
+  /** Presentation-only body tint (see CombatUnit.color). Never read by the sim. */
+  color?: [number, number, number];
   isBoss: boolean;
   isGarden: boolean;
   isHeadless: boolean;
@@ -491,6 +493,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     name: u.name,
     group: u.group,
     className: u.className,
+    color: u.color,
     isBoss: u.isBoss,
     isGarden: u.isGarden,
     isHeadless: u.isHeadless,

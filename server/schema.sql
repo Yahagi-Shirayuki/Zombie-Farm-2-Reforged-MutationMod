@@ -514,6 +514,10 @@ CREATE TABLE IF NOT EXISTS roster_v3 (
   -- sale. The unit is not a new acquisition, so the client must not credit it to
   -- the Zombie Almanac (see migration 0039).
   from_escrow      INTEGER NOT NULL DEFAULT 0,
+  -- Inherited body tint as JSON "[r,g,b]" (Zombie Pot children mix their parents').
+  -- NULL means no inherited tint: render the species' catalog colour. Lives here so
+  -- it survives the new unit id a Black Market settlement mints (migration 0041).
+  color            TEXT,
   created_at       INTEGER NOT NULL,
   PRIMARY KEY (account_id, unit_id)
 );
@@ -606,6 +610,9 @@ CREATE TABLE IF NOT EXISTS black_market_orders (
   escrow_mutation INTEGER,
   escrow_invasions INTEGER,
   escrow_brains INTEGER NOT NULL DEFAULT 0,
+  -- The escrowed zombie's body tint, so a cancel hands back the same-looking unit
+  -- and a buyer receives the one they saw listed (migration 0041).
+  escrow_color TEXT,
   -- Set when the creator collects (acknowledges) a FULFILLED order; NULL on a
   -- fulfilled row means the outcome has not been shown to its creator yet.
   acknowledged_at INTEGER,
@@ -613,6 +620,7 @@ CREATE TABLE IF NOT EXISTS black_market_orders (
   -- records the offered unit for filled requests). Drives the History tab.
   delivered_mutation INTEGER,
   delivered_invasions INTEGER,
+  delivered_color TEXT,
   -- Delivery of the traded zombie. It waits on the order after settlement and is
   -- minted into the recipient's roster only when they collect it, which is refused
   -- while their farm AND Mausoleum are full. NULL on a FULFILLED row means still

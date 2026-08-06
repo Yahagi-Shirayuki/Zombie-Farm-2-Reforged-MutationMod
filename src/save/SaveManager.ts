@@ -492,7 +492,11 @@ export class SaveManager {
     const roster = boot.gameplay.roster.filter((unit) => !hiddenPotParents.has(unit.id)).map((unit) => {
       const layout = rosterLayout.get(unit.id);
       return { id: unit.id, key: unit.key, name: layout?.name, mutation: unit.mutation, invasions: unit.invasions,
-        stored: unit.stored, pos: layout?.pos, color: layout?.color };
+        stored: unit.stored, pos: layout?.pos,
+        // The server's tint wins over the local hint: after a Black Market trade the
+        // unit arrives under a new id that no hint of ours describes, and the
+        // authoritative row is the only place its colour survived.
+        color: unit.color ?? layout?.color };
     });
     return {
       version: SAVE_VERSION,

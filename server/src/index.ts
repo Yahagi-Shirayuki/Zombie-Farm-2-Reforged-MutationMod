@@ -1399,7 +1399,10 @@ app.get("/friends/:id/save", async (c) => {
     ownedZombies: boot.gameplay.roster.map((unit) => {
       const layout = rosterLayout.get(unit.id);
       return { id: unit.id, key: unit.key, name: layout?.name, mutation: unit.mutation, invasions: unit.invasions,
-        stored: unit.stored, pos: layout?.pos, color: layout?.color };
+        stored: unit.stored, pos: layout?.pos,
+        // Authoritative tint first — a traded zombie's colour lives on the roster row,
+        // not in the id-keyed layout hint (see migration 0041).
+        color: unit.color ?? layout?.color };
     }),
     raids: { completed: boot.gameplay.raids.progress, lastRaidAt: boot.gameplay.raids.lastRaidAt, attackOrder: [] },
   };

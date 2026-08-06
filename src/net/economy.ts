@@ -127,6 +127,10 @@ export class EconomyClient {
    *  the UI surfaces a reload prompt rather than letting the player discover it by
    *  pressing Invade. */
   onRulesetSkew: ((serverVersion: number, clientVersion: number) => void) | null = null;
+  /** The session id of the invasion THIS document is playing right now (set from
+   *  /raid/start, cleared once its finish is submitted or the launch is abandoned).
+   *  Read only by recoverResumableRaid, which must never settle a live fight. */
+  private liveRaidSessionId: string | null = null;
 
   constructor(
     private state: GameState,
@@ -167,7 +171,10 @@ export class EconomyClient {
         catch { /* another client may have acquired it between bootstrap and claim */ }
         bootstrap = await api.bootstrap(true);
       }
-      bootstrap = await this.recoverResumableRaid(bootstrap);
+      // The ONLY bootstrap allowed to abandon a live session: this one runs once, at
+      // boot, so a raid the server still holds open belongs to a previous page load and
+      // has no scene left to finish it.
+      bootstrap = await this.recoverResumableRaid(bootstrap, true);
       this.queue.adoptBootstrap(bootstrap);
       this.ready = true;
       this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
@@ -243,8 +250,10 @@ export class EconomyClient {
       await api.acquireWriter(observedGeneration, false);
       let bootstrap = await api.bootstrap(true);
       if (bootstrap.writer.status !== "mine") return false;
-      // Only now does the raid recovery in the caller's bootstrap become reachable:
-      // it no-ops while the lease is unowned.
+      // Only now does the raid recovery in the caller's bootstrap become reachable: it
+      // no-ops while the lease is unowned. Resend-only — this path exists BECAUSE the
+      // document was suspended mid-session, which is precisely when the fight is still
+      // on screen and must not be abandoned.
       bootstrap = await this.recoverResumableRaid(bootstrap);
       this.queue.adoptBootstrap(bootstrap);
       this.ready = true;
@@ -799,9 +808,30 @@ export class EconomyClient {
     }
   }
 
+  /** Mark the invasion this document is currently playing, so a mid-fight bootstrap
+   * cannot mistake it for an abandoned session. Cleared when its finish is submitted
+   * (from then on the persisted pending transcript is what recovery resends) or when a
+   * launch is aborted before the battle scene comes up. */
+  setLiveRaid(sessionId: string | null): void {
+    this.liveRaidSessionId = sessionId;
+  }
+
   /** Resolve a server session discovered by bootstrap. A durable completed transcript
-   * wins over the old crash fallback; only a genuinely abandoned session retreats. */
-  private async recoverResumableRaid(bootstrap: BootstrapResponse): Promise<BootstrapResponse> {
+   * wins over the old crash fallback; only a genuinely abandoned session retreats.
+   *
+   * `mayAbandon` is the whole safety property here, so it is OFF by default and passed
+   * only by start(). Abandoning means posting a tick-0 retreat, which settles the fight
+   * at zero — correct for a session orphaned by a previous page load, catastrophic for
+   * one that is being played right now. Every other caller (the recovery backoff, the
+   * iOS writer re-claim, the CAS reload, refreshAuthoritative) runs MID-SESSION and used
+   * to do exactly that: the player then won, /raid/finish replayed the stored zero
+   * result, and the victory panel patched itself to 0 gold / 0 brains / no loot with no
+   * error shown. Those callers keep the half that is always safe — resending a completed
+   * transcript whose POST failed. */
+  private async recoverResumableRaid(
+    bootstrap: BootstrapResponse,
+    mayAbandon = false
+  ): Promise<BootstrapResponse> {
     if (bootstrap.writer.status !== "mine") return bootstrap;
     const pending = this.readPendingRaid();
     const resumable = bootstrap.resumableRaid;
@@ -813,6 +843,9 @@ export class EconomyClient {
       await this.sendRaidFinish(pending);
       this.clearPendingRaid(pending.sessionId);
     } else {
+      // Second gate, independent of the caller: a session this document is fighting is
+      // never abandonable, even from a boot-time bootstrap.
+      if (!mayAbandon || this.liveRaidSessionId === resumable.sessionId) return bootstrap;
       if (pending) this.clearPendingRaid(pending.sessionId);
       await api.raidFinish(resumable.sessionId, 0, [{ seq: 1, tick: 0, type: "retreat" }]);
     }

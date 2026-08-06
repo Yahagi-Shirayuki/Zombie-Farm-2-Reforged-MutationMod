@@ -226,6 +226,7 @@ export function buildPlayerUnits(
     u.group = z.group;
     u.className = z.className;
     u.mutation = z.mutation;
+    u.color = z.color;
     u.damageReduction = z.group === "Headless" ? 0 : Math.min(0.95, protect * 0.20);
     u.teamAuraStats = {
       baseStr: auraBaseStr + mut.str,

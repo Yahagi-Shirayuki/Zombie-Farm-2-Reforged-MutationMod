@@ -834,7 +834,7 @@ export class RaidScene {
     if (u.team === "player") {
       // Real farm-style zombie rig (with the walk animation). Most families use
       // their authored raid height; Headless retains its actual farm silhouette.
-      actor = new RaidActor(this.assets, u.sourceKey, u.mutation, u.group);
+      actor = new RaidActor(this.assets, u.sourceKey, u.mutation, u.group, u.color);
       const b = actor.getSizingBounds();
       const heightScale = zombieRaidHeightScale(
         u.group ?? (u.isHeadless ? "Headless" : u.isGarden ? "Garden" : "Regular"),

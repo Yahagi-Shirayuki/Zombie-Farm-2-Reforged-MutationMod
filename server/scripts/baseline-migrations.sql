@@ -48,4 +48,5 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0037_raid_zombie_pity.sql'),
   ('0038_gift_reward_roll.sql'),
   ('0039_roster_escrow_return.sql'),
-  ('0040_black_market_delivery_claim.sql');
+  ('0040_black_market_delivery_claim.sql'),
+  ('0041_roster_color.sql');

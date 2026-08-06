@@ -126,6 +126,33 @@ describe("RaidActor mutation rendering", () => {
     expect(arms[1].rotation).toBeLessThan(-0.3);
   });
 
+  it("tints the battlefield rig with the unit's own colour, matching the farm", () => {
+    // A Zombie Pot child carries an inherited tint. The raid rig used to ignore it
+    // and always use the model's catalog colour, so the same zombie was one colour
+    // on the farm and in the Army screen and another in the fight.
+    const owned = new RaidActor(assets(), "test", 0, "", [16, 32, 48]);
+    const children = (owned as unknown as {
+      root: { children: { tint: number }[] };
+    }).root.children;
+
+    // Body and arms take the owned tint; the model's own colour is white, so
+    // seeing 0x102030 at all proves the argument won.
+    expect(children.filter((sprite) => sprite.tint === 0x102030).length).toBeGreaterThan(0);
+
+    // Default eyes keep their authored light-yellow regardless of the body tint.
+    const eyes = (owned as unknown as { eyes: { sp: { tint: number } }[] }).eyes;
+    expect(eyes.every(({ sp }) => sp.tint === 0xffffff)).toBe(true);
+  });
+
+  it("falls back to the model's catalog colour when the unit has no tint", () => {
+    const plain = new RaidActor(assets(), "test");
+    const tinted = (plain as unknown as {
+      root: { children: { tint: number }[] };
+    }).root.children.filter((sprite) => sprite.tint === 0xffffff);
+    // model.color is [255,255,255], so every tintable part lands on white.
+    expect(tinted.length).toBeGreaterThan(0);
+  });
+
   it("raises healing arms forward from rest to overhead, then resets", () => {
     const actor = new RaidActor(assets(), "test");
     const arms = (actor as unknown as { arms: { rotation: number }[] }).arms;

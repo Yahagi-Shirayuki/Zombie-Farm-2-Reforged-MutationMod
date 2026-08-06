@@ -867,7 +867,7 @@ export class ZombieField {
    * its position while replacing its identity. */
   reconcileServerRoster(
     saves: { id: string; key: string; mutation: number; invasions: number; stored: boolean;
-      restored?: boolean }[],
+      restored?: boolean; color?: [number, number, number] }[],
     aliases: Record<string, string> = {}
   ) {
     const desiredIds = new Set(saves.map((save) => save.id));
@@ -891,7 +891,12 @@ export class ZombieField {
         // never placed — a Black Market purchase, most often. It has no position
         // of its own, so it joins the player at the farmer instead of the corner.
         const home = source ?? this.arrivalTile();
-        const data = makeOwned(save.id, def, home.col, home.row, save.invasions, save.mutation, source?.color, source?.name);
+        // Prefer the server's tint. A unit with no local counterpart is exactly the
+        // case the old code could not colour — a Black Market purchase or a cancelled
+        // listing coming home under a new id — and it used to fall back to the
+        // species' catalog colour, permanently, once the next save was written.
+        const data = makeOwned(save.id, def, home.col, home.row, save.invasions, save.mutation,
+          save.color ?? source?.color, source?.name);
         if (save.stored) this.stored.push(data);
         else this.addUnit(data);
         // A server unit with no local counterpart arriving AFTER go-live is a real

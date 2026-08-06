@@ -430,6 +430,89 @@ describe("Black Market", () => {
     expect((await bootstrap(full.seller)).gameplay.roster).toHaveLength(16);
   });
 
+  it("carries a zombie's body tint through a listing, its card, and a cancel", async () => {
+    // A Zombie Pot child's tint used to live only in the presentation blob, keyed by
+    // unit id. Cancelling a sale hands the zombie back under a NEW id, so the tint
+    // stopped resolving and the zombie reverted to its species' catalog colour for
+    // good. It now travels with the escrowed mutation/veterancy.
+    const seller = await signIn(uniqueSub("market-color"));
+    const unitId = `market-color-${crypto.randomUUID()}`;
+    await grantRoster(seller, [
+      { id: unitId, key: "ZombieActorRegularTier1", mutation: 2, invasions: 3 },
+    ]);
+    const tint = [17, 34, 51];
+    const presentation = await call<any>("PUT", "/presentation", seller.token, {
+      protocolVersion: 3, expectedVersion: 0,
+      data: { rosterLayout: [{ id: unitId, color: tint }] },
+    });
+    expect(presentation.status, JSON.stringify(presentation.body)).toBe(200);
+
+    const before = await bootstrap(seller);
+    const created = await call<any>("POST", "/black-market/orders", seller.token, {
+      operationId: operation("color-create"), expectedAccountVersion: before.accountVersion,
+      kind: "SELL_ZOMBIE", unitId, priceBrains: 3,
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    // The listing card describes one concrete zombie, so it shows that zombie's colour.
+    expect(created.body.order).toMatchObject({ color: tint });
+
+    const escrowed = await bootstrap(seller);
+    const cancelled = await call<any>("POST", `/black-market/orders/${created.body.order.id}/cancel`,
+      seller.token, {
+        operationId: operation("color-cancel"), expectedAccountVersion: escrowed.accountVersion,
+      });
+    expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200);
+
+    const restored = (await bootstrap(seller)).gameplay.roster;
+    expect(restored).toHaveLength(1);
+    // A new unit id — and the same colour, which is the whole point.
+    expect(restored[0].id).not.toBe(unitId);
+    expect(restored[0]).toMatchObject({
+      key: "ZombieActorRegularTier1", mutation: 2, invasions: 3, restored: true, color: tint,
+    });
+  });
+
+  it("delivers a purchased zombie in the colour the buyer saw on its card", async () => {
+    const seller = await signIn(uniqueSub("market-color-sale-seller"));
+    const buyer = await signIn(uniqueSub("market-color-sale-buyer"));
+    await grantBalance(buyer, { brains: 5 });
+    const unitId = `market-color-sale-${crypto.randomUUID()}`;
+    await grantRoster(seller, [{ id: unitId, key: "ZombieActorRegularTier1", mutation: 4 }]);
+    const tint = [200, 120, 40];
+    await call<any>("PUT", "/presentation", seller.token, {
+      protocolVersion: 3, expectedVersion: 0,
+      data: { rosterLayout: [{ id: unitId, color: tint }] },
+    });
+
+    const sellerBefore = await bootstrap(seller);
+    const created = await call<any>("POST", "/black-market/orders", seller.token, {
+      operationId: operation("color-sale-create"), expectedAccountVersion: sellerBefore.accountVersion,
+      kind: "SELL_ZOMBIE", unitId, priceBrains: 5,
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+
+    const buyerBefore = await bootstrap(buyer);
+    const filled = await call<any>("POST", `/black-market/orders/${created.body.order.id}/fulfill`,
+      buyer.token, {
+        operationId: operation("color-sale-fulfill"), expectedAccountVersion: buyerBefore.accountVersion,
+      });
+    expect(filled.status, JSON.stringify(filled.body)).toBe(200);
+
+    // The delivery card the buyer collects from carries the colour too.
+    const owed = await call<any>("GET", "/black-market/fulfillments", buyer.token);
+    expect(owed.body.fulfillments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: created.body.order.id, color: tint }),
+    ]));
+
+    await bootstrap(buyer);
+    const collected = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`,
+      buyer.token, {});
+    expect(collected.status, JSON.stringify(collected.body)).toBe(200);
+    expect((await bootstrap(buyer)).gameplay.roster).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "ZombieActorRegularTier1", mutation: 4, color: tint }),
+    ]));
+  });
+
   it("surfaces a fulfilled post to its creator until collected", async () => {
     const seller = await signIn(uniqueSub("market-collect-seller"));
     const buyer = await signIn(uniqueSub("market-collect-buyer"));

@@ -146,6 +146,12 @@ export interface RosterUnitProjection {
    *  Zombie Almanac again. Absent on every other unit — and on an older Worker,
    *  where the client simply keeps the pre-fix behaviour. */
   restored?: boolean;
+  /** Inherited body tint, carried authoritatively for units whose colour has to
+   *  survive a change of unit id — a Black Market cancel or delivery mints a new
+   *  one, and the presentation hint that used to hold the tint is keyed by the old
+   *  id. Absent means "no inherited tint": the client falls back to its own
+   *  presentation hint and then to the species' catalog colour. */
+  color?: [number, number, number];
 }
 
 export interface GameplayProjection {
@@ -292,6 +298,10 @@ export interface BlackMarketOrderView {
   mutationRequired?: number;
   mutation?: number;
   invasions?: number;
+  /** The listed zombie's body tint, so its card looks like the unit it describes
+   *  rather than a stock member of the species. SELL_ZOMBIE only; absent means the
+   *  catalog colour. */
+  color?: [number, number, number];
   priceBrains: number;
   status: BlackMarketOrderStatus;
   createdAt: number;
@@ -333,6 +343,9 @@ export interface BlackMarketFulfillmentView {
    * recording (migration 0033). */
   mutation?: number;
   invasions?: number;
+  /** The traded unit's body tint. Absent on trades settled before it was recorded
+   *  (migration 0041), and on any unit that never had one. */
+  color?: [number, number, number];
   priceBrains: number;
   createdAt: number;
   fulfilledAt: number;
@@ -388,6 +401,9 @@ export interface BlackMarketHistoryEntry {
    * delivered-unit recording (migration 0033). */
   mutation: number | null;
   invasions: number;
+  /** The delivered unit's body tint. Absent on trades that predate migration 0041
+   *  and on units that never had one. */
+  color?: [number, number, number];
   priceBrains: number;
   /** Display name of the other party in the trade. */
   counterparty: string;

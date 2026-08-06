@@ -144,6 +144,11 @@ export interface CombatUnit {
   /** Player zombie taxonomy, carried for presentation sizing. Enemies omit it. */
   group?: string;
   className?: string;
+  /** Owned body tint (Zombie Pot children inherit a mixed parent colour). Purely
+   *  presentational — carried so the battlefield rig matches the farm and the
+   *  Army screen instead of falling back to the catalog colour. Never read by the
+   *  sim, so it cannot affect deterministic replay. */
+  color?: [number, number, number];
   str: number;
   dex: number;
   con: number;

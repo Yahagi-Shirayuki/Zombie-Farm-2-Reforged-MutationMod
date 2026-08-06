@@ -3058,7 +3058,7 @@ export class Hud {
         // species portrait and say nothing about mutations.
         if (entry.mutation !== undefined && this.zombieMutationPortraitOf) {
           onFirstVisible(portrait, () => {
-            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!)
+            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!, entry.color)
               .then((source) => { if (card.isConnected) portrait.src = source; })
               .catch(() => { /* retain the static species portrait */ });
           });
@@ -3172,7 +3172,7 @@ export class Hud {
         portrait.src = this.zombiePortraitOf?.(entry.zombieKey) ?? cardFor(entry.zombieKey)?.portrait ?? "";
         if (entry.mutation && this.zombieMutationPortraitOf) {
           onFirstVisible(portrait, () => {
-            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!)
+            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!, entry.color)
               .then((source) => { if (row.isConnected) portrait.src = source; })
               .catch(() => { /* retain the static species portrait */ });
           });
@@ -3237,7 +3237,7 @@ export class Hud {
           // therefore deliberately retain the neutral species portrait.
           if (order.kind === "SELL_ZOMBIE" && this.zombieMutationPortraitOf) {
             onFirstVisible(portrait, () => {
-              void this.zombieMutationPortraitOf?.(order.zombieKey, order.mutation ?? 0)
+              void this.zombieMutationPortraitOf?.(order.zombieKey, order.mutation ?? 0, order.color)
                 .then((source) => {
                   if (generation === renderGeneration && marketCard.isConnected) portrait.src = source;
                 })
@@ -5279,6 +5279,19 @@ export class Hud {
       div.innerHTML = html;
       none.replaceWith(div);
     }
+  }
+
+  /** Explain a settlement that does not match the fight the player just watched. The
+   *  reward rows are already zero when this fires (the server's stored result is the
+   *  truth about what was PAID), and a silent zero on a won invasion is exactly how this
+   *  went unreported for days. No-op if the panel is gone. */
+  setRaidResultNotice(message: string) {
+    const body = this.el.querySelector(".raid-res-panel .rr-body");
+    if (!body || body.querySelector(".rr-notice")) return;
+    const notice = document.createElement("div");
+    notice.className = "rr-notice";
+    notice.textContent = message;
+    body.appendChild(notice);
   }
 
   /** Patch the server-authoritative brain award into an already-open victory panel. */

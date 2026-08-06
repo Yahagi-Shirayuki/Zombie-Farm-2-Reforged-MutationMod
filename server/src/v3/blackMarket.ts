@@ -22,6 +22,7 @@ import {
   isTradableZombie,
   type BlackMarketPurchaseRequirement,
 } from "../rosterCatalog";
+import { parseRosterColor, serializeRosterColor } from "./rosterColor";
 
 const ACTIVE_LIMIT = 10 as const;
 const DAILY_LIMIT = 50 as const;
@@ -82,11 +83,50 @@ interface OrderRow {
   created_at: number;
   escrow_mutation: number | null;
   escrow_invasions: number | null;
+  /** The escrowed zombie's body tint, JSON "[r,g,b]" (migration 0041). NULL is the
+   *  normal case: no inherited tint, render the species' catalog colour. */
+  escrow_color?: string | null;
   // Present on every `SELECT o.*`; the traded unit as stamped at settlement, and
   // whether the recipient has taken delivery of it yet (migrations 0033 / 0040).
   delivered_mutation?: number | null;
   delivered_invasions?: number | null;
+  delivered_color?: string | null;
   claimed_at?: number | null;
+}
+
+/** The body tint to escrow with a zombie that is about to change hands.
+ *
+ *  A trade always mints a NEW unit id (a cancel hands the zombie back as a fresh
+ *  row, a fulfilment delivers one to the recipient), and a tint that only lives in
+ *  the owner's presentation blob is keyed by the OLD id — so it stopped resolving
+ *  and the zombie silently reverted to its species' catalog colour. Reading it here,
+ *  once, at the moment the unit leaves its owner, is what lets the escrow carry it
+ *  across that id change like the mutation and veterancy already do.
+ *
+ *  The authoritative column wins when it has one (the unit was traded before); the
+ *  owner's presentation hint covers every unit that has only ever been theirs.
+ *  Either way an unrecognised value degrades to NULL — "no inherited tint" — which
+ *  is the correct answer for all but a Zombie Pot child. */
+async function escrowedColor(
+  db: D1Database, accountId: string, unitId: string
+): Promise<string | null> {
+  const [row, presentation] = await Promise.all([
+    db.prepare("SELECT color FROM roster_v3 WHERE account_id=? AND unit_id=?")
+      .bind(accountId, unitId).first<{ color: string | null }>(),
+    db.prepare("SELECT current_json FROM presentations_v3 WHERE account_id=?")
+      .bind(accountId).first<{ current_json: string }>(),
+  ]);
+  const authoritative = parseRosterColor(row?.color);
+  if (authoritative) return serializeRosterColor(authoritative);
+  try {
+    const data = JSON.parse(presentation?.current_json ?? "{}") as {
+      rosterLayout?: { id?: unknown; color?: unknown }[];
+    };
+    const hint = (data.rosterLayout ?? []).find((entry) => entry?.id === unitId);
+    return serializeRosterColor(hint?.color);
+  } catch {
+    return null;
+  }
 }
 
 interface ReceiptRow { request_fingerprint: string; order_id: string }
@@ -176,6 +216,9 @@ const toView = (row: OrderRow, accountId: string): BlackMarketOrderView => ({
   ...(row.kind === "SELL_ZOMBIE" && row.escrow_mutation !== null
     ? { mutation: row.escrow_mutation, invasions: row.escrow_invasions ?? 0 }
     : {}),
+  ...(row.kind === "SELL_ZOMBIE" && parseRosterColor(row.escrow_color)
+    ? { color: parseRosterColor(row.escrow_color)! }
+    : {}),
   priceBrains: row.price_brains,
   status: row.status,
   createdAt: row.created_at,
@@ -262,6 +305,8 @@ interface FulfillmentRow {
   escrow_invasions: number | null;
   delivered_mutation: number | null;
   delivered_invasions: number | null;
+  escrow_color: string | null;
+  delivered_color: string | null;
   creator_account_id: string;
   claimed_at: number | null;
   fulfilled_by_name: string | null;
@@ -282,7 +327,8 @@ export async function fulfillments(
 ): Promise<BlackMarketFulfillmentsResponse> {
   const result = await db.prepare(`SELECT o.id,o.kind,o.zombie_key,o.mutated_required,o.price_brains,
       o.created_at,o.closed_at,o.escrow_mutation,o.escrow_invasions,
-      o.delivered_mutation,o.delivered_invasions,o.creator_account_id,o.claimed_at,
+      o.delivered_mutation,o.delivered_invasions,o.escrow_color,o.delivered_color,
+      o.creator_account_id,o.claimed_at,
       a.username AS fulfilled_by_name, ca.username AS creator_name
     FROM black_market_orders o
     LEFT JOIN accounts a ON a.id=o.fulfilled_by_account_id
@@ -301,6 +347,7 @@ export async function fulfillments(
       (row.kind === "SELL_ZOMBIE" ? row.escrow_mutation : null);
     const invasions = row.delivered_invasions ??
       (row.kind === "SELL_ZOMBIE" ? row.escrow_invasions : null);
+    const color = parseRosterColor(row.delivered_color ?? row.escrow_color);
     const mine = row.creator_account_id === accountId;
     // A sale's buyer is its fulfiller, so "who completed the trade" is the wrong name
     // to show them — every card names the player on the OTHER side.
@@ -311,6 +358,7 @@ export async function fulfillments(
       zombieKey: row.zombie_key,
       mutated: !!row.mutated_required,
       ...(mutation !== null ? { mutation, invasions: invasions ?? 0 } : {}),
+      ...(color ? { color } : {}),
       priceBrains: row.price_brains,
       createdAt: row.created_at,
       fulfilledAt: row.closed_at,
@@ -353,6 +401,9 @@ async function claimDelivery(
   const unitId = crypto.randomUUID();
   const mutation = row.delivered_mutation ?? row.escrow_mutation ?? 0;
   const invasions = row.delivered_invasions ?? row.escrow_invasions ?? 0;
+  // Trades settled before migration 0041 recorded no tint; those units keep the
+  // catalog colour, which is all the server can honestly say about them.
+  const color = row.delivered_color ?? row.escrow_color ?? null;
   // The `/black-market/*` writer middleware opens this caller's operation lease for
   // the life of the request, so requiring it here is what fences the claim against a
   // second device — the same guard every other market mutation uses.
@@ -363,10 +414,10 @@ async function claimDelivery(
   const guard = "EXISTS(SELECT 1 FROM black_market_orders WHERE id=? AND delivered_unit_id=?)";
   const committed = await db.batch([
     claim,
-    db.prepare(`INSERT INTO roster_v3(account_id,unit_id,zombie_key,mutation,invasions,stored,created_at)
-      SELECT ?,?,?,?,?,${claimDestinationSql},? WHERE ${guard}`)
+    db.prepare(`INSERT INTO roster_v3(account_id,unit_id,zombie_key,mutation,invasions,stored,created_at,color)
+      SELECT ?,?,?,?,?,${claimDestinationSql},?,? WHERE ${guard}`)
       .bind(accountId, unitId, row.zombie_key, mutation, invasions,
-        ...claimDestinationBinds(accountId), now, row.id, unitId),
+        ...claimDestinationBinds(accountId), now, color, row.id, unitId),
     db.prepare(`UPDATE account_runtime_v3 SET account_version=account_version+1,updated_at=?
       WHERE account_id=? AND ${guard}`).bind(now, accountId, row.id, unitId),
     db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
@@ -457,6 +508,7 @@ interface HistoryRow {
   closed_at: number;
   delivered_mutation: number | null;
   delivered_invasions: number | null;
+  delivered_color: string | null;
   creator_account_id: string;
   creator_name: string | null;
   fulfiller_name: string | null;
@@ -470,7 +522,7 @@ export async function history(
 ): Promise<BlackMarketHistoryResponse> {
   const [entries, earnedTotals, bestSale, spentTotals, mostTraded] = await Promise.all([
     db.prepare(`SELECT o.id,o.kind,o.zombie_key,o.price_brains,o.closed_at,
-        o.delivered_mutation,o.delivered_invasions,o.creator_account_id,
+        o.delivered_mutation,o.delivered_invasions,o.delivered_color,o.creator_account_id,
         ca.username AS creator_name, fa.username AS fulfiller_name
       FROM black_market_orders o
       JOIN accounts ca ON ca.id=o.creator_account_id
@@ -514,6 +566,7 @@ export async function history(
       zombieKey: row.zombie_key,
       mutation: row.delivered_mutation,
       invasions: row.delivered_invasions ?? 0,
+      ...(parseRosterColor(row.delivered_color) ? { color: parseRosterColor(row.delivered_color)! } : {}),
       priceBrains: row.price_brains,
       counterparty: (mine ? row.fulfiller_name : row.creator_name) ?? "Player",
       fulfilledAt: row.closed_at,
@@ -587,6 +640,7 @@ export async function create(
   let mutation: number | null = null;
   let invasions: number | null = null;
   let unitId: string | null = null;
+  let escrowColor: string | null = null;
   if (kind === "SELL_ZOMBIE") {
     if (!validId(body.unitId)) return { status: 400, error: "bad_unit" };
     const unit = await db.prepare(`SELECT zombie_key,mutation,invasions FROM roster_v3
@@ -596,6 +650,9 @@ export async function create(
     if (!isTradableZombie(unit.zombie_key)) return { status: 403, error: "zombie_not_tradable" };
     zombieKey = unit.zombie_key; mutation = unit.mutation; invasions = unit.invasions;
     mutated = unit.mutation !== 0 ? 1 : 0; unitId = body.unitId;
+    // Escrow the tint alongside the mutation/veterancy it travels with, so a cancel
+    // hands back the same-looking zombie and a buyer receives the one they saw.
+    escrowColor = await escrowedColor(db, accountId, body.unitId);
   } else {
     if (typeof body.zombieKey !== "string" || typeof body.mutated !== "boolean" ||
         !validMutationRequirement(body.mutationRequired) ||
@@ -615,12 +672,12 @@ export async function create(
     AND r.account_version=? AND r.active_batch_id IS NOT NULL)`;
   const statements: D1PreparedStatement[] = [db.prepare(`INSERT INTO black_market_orders
     (id,creator_account_id,kind,zombie_key,mutated_required,mutation_required,price_brains,status,created_day,created_at,
-     source_unit_id,escrow_mutation,escrow_invasions,escrow_brains)
-    SELECT ?,?,?,?,?,?,?,'OPEN',?,?,?,?,?,? WHERE ${guard}
+     source_unit_id,escrow_mutation,escrow_invasions,escrow_brains,escrow_color)
+    SELECT ?,?,?,?,?,?,?,'OPEN',?,?,?,?,?,?,? WHERE ${guard}
       AND (SELECT COUNT(*) FROM black_market_orders WHERE creator_account_id=? AND status='OPEN')<?
       AND (SELECT COUNT(*) FROM black_market_orders WHERE creator_account_id=? AND created_day=?)<?`)
     .bind(orderId, accountId, kind, zombieKey, mutated, mutationRequired, body.priceBrains, dayBucket(now), now,
-      unitId, mutation, invasions, kind === "BUY_ZOMBIE" ? body.priceBrains : 0,
+      unitId, mutation, invasions, kind === "BUY_ZOMBIE" ? body.priceBrains : 0, escrowColor,
       accountId, expectedVersion, accountId, ACTIVE_LIMIT, accountId, dayBucket(now), DAILY_LIMIT)];
   if (kind === "SELL_ZOMBIE") {
     statements.push(db.prepare(`DELETE FROM roster_v3 WHERE account_id=? AND unit_id=? AND locked_by_raid IS NULL
@@ -683,11 +740,14 @@ export async function cancel(
   // from_escrow=1: this is the seller's own zombie coming home, not an acquisition.
   // Without the mark the client sees an unfamiliar unit id and credits the Zombie
   // Almanac, so list/cancel cycles inflated that species' lifetime count.
+  // The restored row carries the escrowed tint too: it is the same zombie coming
+  // home, and it arrives under a new unit id that the owner's presentation hint
+  // cannot describe.
   if (row.kind === "SELL_ZOMBIE") statements.push(db.prepare(`INSERT INTO roster_v3
-    (account_id,unit_id,zombie_key,mutation,invasions,stored,from_escrow,created_at)
-    SELECT ?,?,?,?,?,${claimDestinationSql},1,? WHERE ${guard}`).bind(accountId, restoredId, row.zombie_key,
+    (account_id,unit_id,zombie_key,mutation,invasions,stored,from_escrow,created_at,color)
+    SELECT ?,?,?,?,?,${claimDestinationSql},1,?,? WHERE ${guard}`).bind(accountId, restoredId, row.zombie_key,
       row.escrow_mutation ?? 0, row.escrow_invasions ?? 0,
-      ...claimDestinationBinds(accountId), now, orderId, operationId));
+      ...claimDestinationBinds(accountId), now, row.escrow_color ?? null, orderId, operationId));
   else statements.push(db.prepare(`UPDATE balances SET brains=brains+? WHERE account_id=? AND ${guard}`)
     .bind(row.price_brains, accountId, orderId, operationId));
   statements.push(
@@ -729,7 +789,7 @@ export async function fulfill(
     blackMarketPurchaseRequirement(row.zombie_key) ?? {}
   );
 
-  let offered: { unitId: string; mutation: number; invasions: number } | null = null;
+  let offered: { unitId: string; mutation: number; invasions: number; color: string | null } | null = null;
   if (row.kind === "BUY_ZOMBIE") {
     if (!validId(body.unitId)) return { status: 400, error: "bad_unit" };
     const unit = await db.prepare(`SELECT unit_id,zombie_key,mutation,invasions FROM roster_v3
@@ -743,7 +803,10 @@ export async function fulfill(
     if (!unit || unit.zombie_key !== row.zombie_key || !mutationMatches)
       return { status: 409, error: "zombie_mismatch" };
     if (!isTradableZombie(unit.zombie_key)) return { status: 403, error: "zombie_not_tradable" };
-    offered = { unitId: unit.unit_id, mutation: unit.mutation, invasions: unit.invasions };
+    offered = {
+      unitId: unit.unit_id, mutation: unit.mutation, invasions: unit.invasions,
+      color: await escrowedColor(db, accountId, unit.unit_id),
+    };
   } else {
     const balance = await db.prepare("SELECT brains FROM balances WHERE account_id=?").bind(accountId)
       .first<{ brains: number }>();
@@ -772,17 +835,19 @@ export async function fulfill(
   // a request's escrow columns hold brains, so the offered unit has nowhere
   // else to live once the fulfiller's roster row is deleted.
   const delivered = row.kind === "SELL_ZOMBIE"
-    ? { mutation: row.escrow_mutation ?? 0, invasions: row.escrow_invasions ?? 0 }
-    : { mutation: offered!.mutation, invasions: offered!.invasions };
+    ? { mutation: row.escrow_mutation ?? 0, invasions: row.escrow_invasions ?? 0,
+      color: row.escrow_color ?? null }
+    : { mutation: offered!.mutation, invasions: offered!.invasions, color: offered!.color };
   const claim = db.prepare(`UPDATE black_market_orders SET status='FULFILLED',closed_at=?,
-      closed_operation_id=?,fulfilled_by_account_id=?,delivered_mutation=?,delivered_invasions=?
+      closed_operation_id=?,fulfilled_by_account_id=?,delivered_mutation=?,delivered_invasions=?,
+      delivered_color=?
       WHERE id=? AND status='OPEN'
       AND creator_account_id!=? AND ${actorAsset}
       AND EXISTS(SELECT 1 FROM account_runtime_v3 WHERE account_id=? AND account_version=? AND active_batch_id IS NOT NULL)
       AND NOT EXISTS(SELECT 1 FROM account_runtime_v3 WHERE account_id=black_market_orders.creator_account_id
         AND active_batch_id IS NOT NULL AND active_batch_expires_at>?)
       AND ${recipientRequirement.sql}`)
-    .bind(now, operationId, accountId, delivered.mutation, delivered.invasions,
+    .bind(now, operationId, accountId, delivered.mutation, delivered.invasions, delivered.color,
       orderId, accountId, ...actorAssetBinds,
       accountId, expectedVersion, now, ...recipientRequirement.binds);
   const guard = "EXISTS(SELECT 1 FROM black_market_orders WHERE id=? AND status='FULFILLED' AND closed_operation_id=?)";

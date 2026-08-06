@@ -13,6 +13,7 @@ import { applyCommandBatch, freshGameplayState, zombieDefaultMutation } from "./
 import { levelForXp } from "../levels";
 import { projectRun } from "./epicBoss";
 import { RAID_RULESET_VERSION } from "../raidVerifier";
+import { parseRosterColor, serializeRosterColor } from "./rosterColor";
 
 interface RuntimeRow {
   account_version: number;
@@ -46,6 +47,8 @@ interface RosterRow {
   stored: number;
   locked_by_raid: string | null;
   from_escrow: number;
+  /** JSON "[r,g,b]" inherited body tint, or NULL for the catalog colour. */
+  color: string | null;
 }
 interface RaidRow {
   id: string;
@@ -130,7 +133,7 @@ async function loadRows(db: D1Database, accountId: string, now: number) {
     db.prepare("SELECT * FROM quest_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<CoreRow>(),
     db.prepare("SELECT version, current_json FROM presentations_v3 WHERE account_id = ?").bind(accountId).first<PresentationRow>(),
-    db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, locked_by_raid, from_escrow
+    db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, locked_by_raid, from_escrow, color
       FROM roster_v3 WHERE account_id = ? ORDER BY created_at, unit_id`).bind(accountId).all<RosterRow>(),
     db.prepare(`SELECT id, raid_id, roster_json, started_at, earliest_finish_at, expires_at
       FROM raid_sessions_v3 WHERE account_id = ? AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1`)
@@ -150,21 +153,27 @@ async function loadRows(db: D1Database, accountId: string, now: number) {
 function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection {
   const base = freshGameplayState();
   const core = parse<ReturnType<typeof coreFrom>>(rows.core.current_json, coreFrom(base));
-  const roster = rows.roster.map((u) => ({
-    id: u.unit_id,
-    key: u.zombie_key,
-    // Older v3 harvests persisted every new zombie with mutation 0. Market-mutant
-    // species have a guaranteed catalog bit, so repair those legacy rows in the
-    // authoritative projection. Explicit inherited masks remain untouched.
-    mutation: u.mutation || zombieDefaultMutation(u.zombie_key),
-    invasions: u.invasions,
-    stored: !!u.stored,
-    ...(u.locked_by_raid ? { lockedByRaid: u.locked_by_raid } : {}),
-    // A zombie handed back by a cancelled Black Market sale. It reaches the client
-    // under a new unit id, so the flag is what stops the Almanac counting the
-    // player's own zombie as freshly obtained every list/cancel cycle.
-    ...(u.from_escrow ? { restored: true as const } : {}),
-  }));
+  const roster = rows.roster.map((u) => {
+    const color = parseRosterColor(u.color);
+    return {
+      id: u.unit_id,
+      key: u.zombie_key,
+      // Older v3 harvests persisted every new zombie with mutation 0. Market-mutant
+      // species have a guaranteed catalog bit, so repair those legacy rows in the
+      // authoritative projection. Explicit inherited masks remain untouched.
+      mutation: u.mutation || zombieDefaultMutation(u.zombie_key),
+      invasions: u.invasions,
+      stored: !!u.stored,
+      ...(u.locked_by_raid ? { lockedByRaid: u.locked_by_raid } : {}),
+      // A zombie handed back by a cancelled Black Market sale. It reaches the client
+      // under a new unit id, so the flag is what stops the Almanac counting the
+      // player's own zombie as freshly obtained every list/cancel cycle.
+      ...(u.from_escrow ? { restored: true as const } : {}),
+      // Set only for a unit whose tint survived a trade (see migration 0041). Absent
+      // means the client falls back to its presentation hint, then the catalog colour.
+      ...(color ? { color } : {}),
+    };
+  });
   const epicBoss = projectRun(rows.epicBoss);
   if (epicBoss) {
     const owned = new Set(roster.map((unit) => unit.id));
@@ -380,13 +389,13 @@ export async function applyBatch(
     const old = oldRoster.get(unit.id);
     if (old && JSON.stringify(old) === JSON.stringify(unit)) continue;
     statements.push(db.prepare(`INSERT INTO roster_v3
-      (account_id, unit_id, zombie_key, mutation, invasions, stored, locked_by_raid, created_at)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${guard}
+      (account_id, unit_id, zombie_key, mutation, invasions, stored, locked_by_raid, created_at, color)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${guard}
       ON CONFLICT(account_id, unit_id) DO UPDATE SET zombie_key=excluded.zombie_key,
         mutation=excluded.mutation, invasions=excluded.invasions, stored=excluded.stored,
-        locked_by_raid=excluded.locked_by_raid`)
+        locked_by_raid=excluded.locked_by_raid, color=excluded.color`)
       .bind(accountId, unit.id, unit.key, unit.mutation, unit.invasions, unit.stored ? 1 : 0,
-        unit.lockedByRaid ?? null, now, accountId, body.batchId));
+        unit.lockedByRaid ?? null, now, serializeRosterColor(unit.color), accountId, body.batchId));
   }
   const durableKinds = new Set(["power.buy", "object.buy", "object.refund", "object.upgrade", "storage.claim", "roster.sell", "roster.combine_start", "roster.combine", "farmer.buy", "pet.buy"]);
   body.commands.forEach((entry, index) => {

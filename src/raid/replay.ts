@@ -43,7 +43,18 @@ import type { RaidOutcome } from "./types";
 // then lost the fight on the server's un-tapped wall while winning it on screen, and the
 // finish was rejected (`illegal_ability` / `truncated_transcript`). Losses were absorbed
 // by the `clientWin` concession; wins were not, so a winning Ninja run could never settle.
-export const RAID_RULESET_VERSION = 14;
+// 15: NOT a simulation change — a deliberate retirement of every bundle that can
+// destroy its own live invasion. Up to v14 the client's abandoned-raid recovery
+// (EconomyClient.recoverResumableRaid) ran from four MID-SESSION bootstraps and settled
+// the fight in progress with a tick-0 retreat; the player then won, /raid/finish
+// replayed that stored zero result, and the victory panel showed 0 gold / 0 brains /
+// no loot with no error anywhere. The fix is client-side, so a cached or installed v14
+// bundle would keep eating wins until its owner happened to accept the update prompt.
+// Bumping here refuses `/raid/start` from those bundles (426 stale_ruleset → the
+// existing reload prompt), which is the only way to make the fix reach everyone. Cost,
+// accepted knowingly: an invasion in flight at deploy time settles as stale_ruleset and
+// pays nothing.
+export const RAID_RULESET_VERSION = 15;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

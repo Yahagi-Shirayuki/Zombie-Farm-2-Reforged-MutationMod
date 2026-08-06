@@ -18,7 +18,7 @@ import { almanacEntries, isEpicZombie, obtainHint } from "./zombie/almanac";
 import { POT_DURATION_MS } from "./zombie/ZombiePot";
 import { isCombinePromotion } from "./zombie/combineSpecies";
 import { GameState } from "./GameState";
-import { takeStoredObject } from "./storedObjectOwnership";
+import { ensureLocalStoredIds, takeStoredObject } from "./storedObjectOwnership";
 import { Hud, graveNeededFor, LevelUpUnlock, ReceivedView, QuestCompleteView, QuestReward, type Mode } from "./hud";
 import { JobSystem } from "./JobSystem";
 import { AudioManager } from "./audio";
@@ -39,6 +39,11 @@ import { RaidScene } from "./raid/RaidScene";
 import { RAID_COOLDOWN_MS } from "./raid/RaidCatalog";
 import { reconcilePartySelection } from "./raid/partySelection";
 import { postRaidWinQuests } from "./raid/questEvents";
+import {
+  isUnsettledInvasion,
+  UNSETTLED_INVASION_NOTICE,
+  UNSETTLED_INVASION_TOAST,
+} from "./raid/settlementNotice";
 import { screenToGrid, tileCenter, TILE_H, TILE_W, HW, HH } from "./iso";
 import { setFootprint } from "./depthSort";
 import { NightLayer, makeLight } from "./lighting";
@@ -1391,6 +1396,14 @@ async function main() {
   };
   const storedObjectIds = new Map<string, string[]>();
   const objectPurchases = new Map<string, { cost: number; currency: "gold" | "brains" }>();
+  /** The instance id of one stored copy of `key` — what both the retrieve and sell
+   *  paths act on. Online that identity is the server's and comes from the object
+   *  reconcile below; offline the save carries counts only, so it is minted on first
+   *  use (otherwise a reloaded local shed holds items that can't be placed or sold). */
+  const storedInstanceId = (key: string): string | undefined =>
+    economy
+      ? storedObjectIds.get(key)?.[0]
+      : ensureLocalStoredIds(state, storedObjectIds, key, () => `stored-${crypto.randomUUID()}`);
   if (!visiting && onlineFarm) {
     let authoritativeObjectIds = new Set<string>();
     const acct = api.getSession()?.accountId ?? "anon";
@@ -3200,6 +3213,7 @@ async function main() {
   hud.onLaunchRaid = async (raidId, partyIds, opts) => {
     if (raidActive || Date.now() < raidLaunchLockedUntil) return false;
     raidSessionId = null;
+    economy?.setLiveRaid(null);
     // ONLINE: the server owns the between-raids cooldown. Ask it to authorize the
     // launch; if it's still on cooldown (and no voucher bypass), decline so the army
     // screen stays up. On success beginRaid runs with serverAuthorized so it doesn't
@@ -3246,6 +3260,10 @@ async function main() {
           return false;
         }
         raidSessionId = gate.sessionId ?? null;
+        // Fence the live session against the abandoned-raid recovery: from here until
+        // its finish is submitted, no bootstrap may retreat it out from under the
+        // player (see EconomyClient.recoverResumableRaid).
+        economy?.setLiveRaid(raidSessionId);
         raidLaunchLockedUntil = Math.max(
           raidLaunchLockedUntil,
           gate.earliestFinishAt == null
@@ -3288,7 +3306,12 @@ async function main() {
     const setup = raids.beginRaid(raidId, partyIds, opts);
     // Offline play has no server timestamp, but uses the same gentle relaunch delay.
     if (setup && !onlineFarm) raidLaunchLockedUntil = Date.now() + 15_000;
-    if (!setup) return false; // gated (cooldown/army) — the army screen stays up
+    if (!setup) {
+      // The server already opened a session but no battle will run, so drop the fence:
+      // this one really IS abandoned and recovery should be free to close it.
+      economy?.setLiveRaid(null);
+      return false; // gated (cooldown/army) — the army screen stays up
+    }
     // First invasion that actually fields a hazard: hazards are the one part of a
     // fight the player has to handle by hand, and nothing on screen says so. Ask the
     // resolved setup rather than the raid's data flags — raids 2/10/11 declare a grab
@@ -3346,6 +3369,16 @@ async function main() {
           // when it lands (the panel shows an empty Loot row until then).
           economy!.onRaidSettled = (res) => {
             economy!.onRaidSettled = null;
+            // A session can be settled by something OTHER than the fight just played:
+            // a boot-time abandon from another device that took the writer, or a raid
+            // that outlived its 15-minute server TTL. /raid/finish then answers 200
+            // with the ALREADY-STORED result, and patching those zeros in silently is
+            // what let a won invasion read "0 gold, 0 brains, no loot" with nothing to
+            // report. Say what happened instead of quietly overwriting the victory.
+            if (isUnsettledInvasion(outcome, res.outcome)) {
+              hud.setRaidResultNotice(UNSETTLED_INVASION_NOTICE);
+              hud.showToast(UNSETTLED_INVASION_TOAST, 8000);
+            }
             if (res.outcome) zombies.applyServerRaidOutcome(res.outcome.survivors, res.outcome.losses);
             // Online the tutorial's invade beat no longer rides the local quest event,
             // so advance it from the verified outcome as soon as it lands (closing the
@@ -3377,6 +3410,9 @@ async function main() {
             gold: sr?.gold ?? 0,
             xp: sr?.xp ?? 0,
           });
+          // submitRaid persists this transcript before its first await, so recovery now
+          // resends the REAL fight rather than needing the fence.
+          economy!.setLiveRaid(null);
           // Always observe settlement, even when there were no casualties or the
           // player has not closed the result panel yet. If every idempotent retry
           // fails, a bootstrap still recovers any commit whose response was lost.
@@ -3488,11 +3524,17 @@ async function main() {
     if (onlineGameplayBlocked()) return;
     const def = placeCatalog.get(key);
     if (!def) return;
+    // Resolve the copy being taken out BEFORE entering placement: a shed slot with
+    // no identity behind it would otherwise flick placement mode on and straight
+    // back off, which reads as the panel closing and nothing happening.
+    const instanceId = storedInstanceId(key);
+    if (!instanceId) {
+      hud.showToast("That item is no longer in your shed.");
+      return;
+    }
     await ensureObjectTexture(assets, def.sprite);
     if (def.growingSprite) await ensureObjectTexture(assets, def.growingSprite);
     hud.setPlacing(def); // enter placement mode (fires onModeChange first)
-    const instanceId = storedObjectIds.get(key)?.[0];
-    if (!instanceId) { hud.setPlacing(null); return; }
     retrieving = { key, instanceId }; // ...then arm retrieval so onModeChange doesn't clear it
   };
 
@@ -3800,8 +3842,12 @@ async function main() {
   hud.onSellStoredItem = async (key) => {
     if (onlineGameplayBlocked()) return false;
     const def = placeCatalog.get(key);
-    const instanceId = storedObjectIds.get(key)?.[0];
-    if (!def || !instanceId || def.category === "functional") return false;
+    const instanceId = storedInstanceId(key);
+    if (!def || def.category === "functional") return false;
+    if (!instanceId) {
+      hud.showToast("That item is no longer in your shed.");
+      return false;
+    }
     const purchase = objectPurchases.get(instanceId);
     const boughtWithBrains = purchase ? purchase.currency === "brains" : !!def.brainsNeeded;
     const refund = purchase ? sellBack(purchase.cost, boughtWithBrains) : sellRefund(def);

@@ -97,9 +97,17 @@ export class RaidActor {
   private deathT = -1; // ≥0 once dead: seconds into the head-pop animation
   private specialHeadFx: SpecialHeadFx | null = null;
 
-  constructor(assets: GameAssets, key: string, mutation = 0, group = "") {
+  constructor(
+    assets: GameAssets,
+    key: string,
+    mutation = 0,
+    group = "",
+    /** The owned unit's body tint. Omitted (enemies, reference rigs, tests) falls
+     *  back to the model's catalog colour. */
+    color?: [number, number, number],
+  ) {
     this.container.addChild(this.root);
-    this.build(assets, key, mutation, group);
+    this.build(assets, key, mutation, group, color);
   }
 
   /**
@@ -126,7 +134,10 @@ export class RaidActor {
     return this.getSizingBounds().height / Math.max(0.001, this.renderScale);
   }
 
-  private build(assets: GameAssets, key: string, mutation: number, group: string) {
+  private build(
+    assets: GameAssets, key: string, mutation: number, group: string,
+    color?: [number, number, number],
+  ) {
     const m: ZombieModel =
       assets.zombieModels[key] ?? assets.zombieModels["ZombieActorRegularTier1"];
     const mutationParts = mutationBitsForRendering(assets.zombies, key, mutation).flatMap((bit) => {
@@ -150,7 +161,9 @@ export class RaidActor {
     // A head mutation that carries its own face (the pumpkin) takes the zombie's
     // eyes and jaw with the skull, instead of leaving them in front of it.
     const coversFace = mutationParts.some(({ bit }) => mutationCoversFace(bit));
-    const [r, g, b] = m.color;
+    // Same rule as the farm rig and the portraits: an owned tint wins over the
+    // model's catalog colour, so a Pot child looks the same everywhere.
+    const [r, g, b] = color ?? m.color;
     const tint = (r << 16) | (g << 8) | b;
     this.renderScale = MODEL_BASE * (m.scale ?? 1);
     this.root.sortableChildren = true;

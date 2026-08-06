@@ -413,6 +413,62 @@ describe("v3 raid dependency ids", () => {
     expect(bootstrap).toHaveBeenCalledTimes(2);
   });
 
+  it("never retreats the invasion this document is still fighting", async () => {
+    // The bug this locks out: any mid-fight bootstrap (the recovery backoff, the writer
+    // re-claim, a CAS reload, refreshAuthoritative) used to settle the LIVE session with
+    // a tick-0 retreat. The player then won, /raid/finish replayed that stored zero
+    // result, and the victory panel showed 0 gold / 0 brains / no loot.
+    vi.stubGlobal("localStorage", memoryStorage());
+    const gameplay = {
+      balance: { gold: 200, brains: 15, xp: 0 },
+      farm: { version: 0, plots: {} }, objects: { version: 0, objects: [] },
+      quests: { version: 0, completed: [], progress: [] }, inventory: {},
+      storage: { received: {}, stored: {} }, roster: [], farmSize: 30,
+      climates: ["grass"], farmerHeads: [1], farmerHeadId: 1, ownedPets: [],
+      activePet: null, penPets: [], zombieMax: 16, tutorialRewarded: false,
+      raids: { progress: {}, lastRaidAt: 0 }, raidRevival: null, epicBoss: null,
+    };
+    const live = {
+      protocolVersion: 3, serverTime: 1, minimumProtocolVersion: 3,
+      mutationsEnabled: true, accountVersion: 1, writerGeneration: 1,
+      writerDeviceId: "this-device",
+      writer: { status: "mine", generation: 1, lastActivityAt: 1 },
+      gameplay, presentation: { version: 0 },
+      social: { friends: [], incomingRequestCount: 0, inboxCount: 0 },
+      resumableRaid: {
+        sessionId: "being-played-right-now", raidId: "3", startedAt: 1,
+        earliestFinishAt: 16_000, expiresAt: 900_000, rosterIds: ["zombie-1"],
+      },
+    } as any;
+    const bootstrap = vi.spyOn(api, "bootstrap").mockResolvedValue(live);
+    const finish = vi.spyOn(api, "raidFinish").mockResolvedValue({
+      lastRaidAt: 1, balance: gameplay.balance, gold: 0, xp: 0,
+      firstClear: false, raidProgress: {},
+    });
+
+    const economy = new EconomyClient(new GameState(), "live-raid-account");
+    economy.setLiveRaid("being-played-right-now");
+    await economy.refreshAuthoritative();
+
+    expect(finish).not.toHaveBeenCalled();
+    expect(bootstrap).toHaveBeenCalledTimes(1); // no re-fetch: nothing was settled
+
+    // Structural half of the guard: a mid-session bootstrap cannot abandon ANY session,
+    // fenced or not. This is what closes the window between /raid/start creating the
+    // session and the launch handler learning its id.
+    economy.setLiveRaid(null);
+    await economy.refreshAuthoritative();
+    await (economy as any).recover();
+    await (economy as any).reloadAfterConflict();
+    expect(finish).not.toHaveBeenCalled();
+
+    // Only the boot bootstrap may retire a session left behind by a previous page load.
+    await economy.start();
+    expect(finish).toHaveBeenCalledWith("being-played-right-now", 0, [
+      { seq: 1, tick: 0, type: "retreat" },
+    ]);
+  });
+
   it("replays a durable completed invasion after reload instead of retreating", async () => {
     vi.stubGlobal("localStorage", memoryStorage());
     const accountId = "durable-raid-recovery";
