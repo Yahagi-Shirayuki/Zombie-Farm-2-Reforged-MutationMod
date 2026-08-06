@@ -236,6 +236,31 @@ export function openSettings(hud: Hud): void {
     );
   }
 
+  // How zombies are drawn, everywhere they appear (farm, raids, Black Market, cards,
+  // Mausoleum). Both are pure display choices — the unit keeps its real mutations and
+  // its inherited tint either way, so nothing here changes stats or what a trade is
+  // worth. Requested by players who want their silver zombies to look silver even when
+  // they were bred from greens, and by players who prefer an undecorated horde.
+  const appearanceBlock: HTMLElement[] = [];
+  if (hud.getZombieAppearance && hud.onSetZombieAppearance) {
+    const current = hud.getZombieAppearance();
+    appearanceBlock.push(
+      settingChoiceRow(
+        "Zombie Colour",
+        [
+          { id: "inherited", label: "Inherited" },
+          { id: "species", label: "By Type" },
+        ],
+        current.bodyColor,
+        (v) => hud.onSetZombieAppearance?.({ ...hud.getZombieAppearance!(), bodyColor: v }),
+      ),
+      noteEl("Inherited keeps the mixed skin a Zombie Pot child was born with. By Type gives every zombie its own species' colour — a silver looks silver however it was bred."),
+      settingRow("Show Mutations", current.showMutations,
+        (v) => hud.onSetZombieAppearance?.({ ...hud.getZombieAppearance!(), showMutations: v })),
+      noteEl("Off hides crop mutations (onion heads, celery arms) on every zombie. They keep the mutations and their stat bonuses — this only changes how they look."),
+    );
+  }
+
   const ambienceBlock: HTMLElement[] = [];
   if (hud.getDayNightMode && hud.onSetDayNightMode) {
     ambienceBlock.push(
@@ -419,6 +444,7 @@ export function openSettings(hud: Hud): void {
     ...accountBlock,
     ...ambienceBlock,
     ...bgBlock,
+    ...appearanceBlock,
     spriteRow, spriteNote,
     diagnostics,
     noteEl("Copies this build's id, your browser, and any recorded errors. Nothing is sent anywhere — paste it into a bug report."),

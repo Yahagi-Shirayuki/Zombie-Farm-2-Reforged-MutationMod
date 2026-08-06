@@ -594,6 +594,27 @@ describe("protocol v3 command engine", () => {
     expect(result.state.roster[0].mutation).toBe(1 | 4 | 64 | 1024);
   });
 
+  it("mutates from crops that touch off the zombie plot's lattice", () => {
+    const state = freshGameplayState();
+    // Plots plowed in a second stroke share no lattice with the zombie's: these four
+    // sit flush against its footprint at origins that are not (±4, ±4) away.
+    state.farm.plots = {
+      "4:4": { state: "planted", cropKey: "ZombieActorRegularTier1", plantedAt: 0, growMs: 1, sell: 0, xp: 1, fertilized: false, zombie: true },
+      "1:0": { state: "planted", cropKey: "tomato", plantedAt: 999, growMs: 99_999, sell: 1, xp: 1, fertilized: false, zombie: false },
+      "6:0": { state: "planted", cropKey: "carrot", plantedAt: 999, growMs: 99_999, sell: 1, xp: 1, fertilized: false, zombie: false },
+      "0:6": { state: "planted", cropKey: "celery", plantedAt: 999, growMs: 99_999, sell: 1, xp: 1, fertilized: false, zombie: false },
+      "8:7": { state: "planted", cropKey: "lima_beans", plantedAt: 999, growMs: 99_999, sell: 1, xp: 1, fertilized: false, zombie: false },
+      // Still one clear tile short of touching, on either axis.
+      "9:4": { state: "planted", cropKey: "dragon_fruit", plantedAt: 999, growMs: 99_999, sell: 1, xp: 1, fertilized: false, zombie: false },
+      "4:9": { state: "planted", cropKey: "garlic", plantedAt: 999, growMs: 99_999, sell: 1, xp: 1, fertilized: false, zombie: false },
+    };
+    const result = applyCommandBatch(state, commands(
+      { type: "farm.harvest", oc: 4, or: 4 },
+    ), { now: 1_000, random: () => 0.1, id: () => "offgrid-mutant" });
+
+    expect(result.state.roster[0].mutation).toBe(1 | 4 | 64 | 1024);
+  });
+
   it("rolls multiple non-conflicting adjacent crops independently", () => {
     const state = freshGameplayState();
     state.farm.plots = {

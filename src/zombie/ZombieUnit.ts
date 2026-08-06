@@ -25,6 +25,7 @@ import {
 import {
   BRUTE_EYEBALL_SCALE,
   DEFAULT_ZOMBIE_EYE_TINT,
+  displayedAppearance,
   isBruteEyeball,
   zombiePartTint,
 } from "./appearance";
@@ -194,10 +195,17 @@ export class ZombieUnit {
     const m: ZombieModel =
       assets.zombieModels[this.data.key] ??
       assets.zombieModels["ZombieActorRegularTier1"];
-    const [r, g, b] = this.data.color ?? m.color;
+    // What this unit LOOKS like on the farm, after the device's display prefs. The
+    // data keeps its real mask and inherited tint; only the drawing changes.
+    const shown = displayedAppearance(this.data.mutation, this.data.color);
+    const [r, g, b] = shown.color ?? m.color;
     const tint = (r << 16) | (g << 8) | b; // authentic Market colour
     const scale = zombieFarmScale(this.data.group, this.data.className, this.data.key);
     this.renderScale = scale;
+    // Both feet are resolved from the model below, or stubbed at the end for a rig
+    // that has none (Headless). Cleared first so a rebuild cannot hold on to the
+    // previous rig's — by then destroyed — sprites.
+    this.footF = this.footB = undefined as unknown as Sprite;
     this.root.sortableChildren = true;
     this.neck = { x: m.neck.x, y: m.neck.y };
     const replaceable: Record<MutationReplacement, Sprite[]> = { body: [], armF: [], head: [] };
@@ -248,10 +256,10 @@ export class ZombieUnit {
     // Attach crop-mutation parts from the unit's mask (onion head, celery arm, …).
     // Independent of species: a combined zombie shows exactly the mutations it
     // carries. Head parts join headParts (tilt with the head-nod); the rest sit flat.
-    this.addMutations(assets, m, replaceable, headForeground);
+    this.addMutations(assets, m, replaceable, headForeground, shown.mutation);
     this.applyArmPose();
     this.buildFarmEffects();
-    const headFxKind = specialHeadFxKind(this.data.key, this.data.mutation);
+    const headFxKind = specialHeadFxKind(this.data.key, shown.mutation);
     if (headFxKind) {
       this.specialHeadFx = new SpecialHeadFx(headFxKind);
       this.root.addChild(this.specialHeadFx.container);
@@ -263,6 +271,34 @@ export class ZombieUnit {
     const bounds = this.root.getLocalBounds();
     this.hitHalfW = (bounds.width * scale) / 2 + 4;
     this.hitH = bounds.height * scale + 4;
+  }
+
+  /** Reassemble this unit's rig from the same data, picking up a changed display
+   *  preference (mutations hidden / species body colour). Nothing about the unit
+   *  itself changes — only how it is drawn — so its position, path, sleep state and
+   *  selection survive. Cheap enough for the whole farm: the same work spawning one
+   *  zombie already does. */
+  rebuildAppearance(assets: GameAssets) {
+    for (const child of [...this.root.children]) {
+      if (child === this.ring || child === this.fertilizeCloud) continue;
+      this.root.removeChild(child);
+      child.destroy({ children: true });
+    }
+    this.parts = [];
+    this.headParts = [];
+    this.eyeParts = [];
+    this.arms = [];
+    this.specialHeadFx = null; // its container was a child, destroyed above
+    this.fertilizeCloud.clear(); // buildFarmEffects redraws it
+    const closed = this.eyesClosed;
+    this.eyesClosed = false; // fresh eye sprites are open; setEyesClosed early-outs otherwise
+    this.build(assets);
+    this.setEyesClosed(closed);
+    // build() recomputes hitH, and the invasion bubble hangs off it — a rig that just
+    // lost its mutation art is shorter, so re-place the bubble rather than leaving it
+    // floating at the old silhouette's height.
+    this.syncInvasionBubble();
+    this.sync();
   }
 
   private buildFarmEffects() {
@@ -287,9 +323,11 @@ export class ZombieUnit {
     model: ZombieModel,
     replaceable: Record<MutationReplacement, Sprite[]>,
     headForeground: Sprite[],
+    // The mask to DRAW — the unit's own, unless the player turned mutations off.
+    mask: number,
   ) {
     const neck = model.neck;
-    for (const bit of mutationBitsForRendering(assets.zombies, this.data.key, this.data.mutation)) {
+    for (const bit of mutationBitsForRendering(assets.zombies, this.data.key, mask)) {
       const partKey = model.mutationOverrides?.[String(bit)] ?? String(bit);
       const mp = assets.mutationParts[partKey];
       if (!mp) continue;

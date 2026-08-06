@@ -26,13 +26,22 @@ export const CROP_MUTATIONS: Readonly<Record<string, number>> = {
 
 export const CROP_MUTATION_CHANCE = 0.25;
 
-/** Origin offsets for the eight plots whose edges or corners touch a plot. */
-export function touchingPlotOffsets(plotSize: number): readonly (readonly [number, number])[] {
-  return [
-    [-plotSize, -plotSize], [0, -plotSize], [plotSize, -plotSize],
-    [-plotSize, 0],                         [plotSize, 0],
-    [-plotSize, plotSize],  [0, plotSize],  [plotSize, plotSize],
-  ];
+/** Do two plot footprints of `plotSize` tiles square touch along an edge or a corner?
+ *
+ * Plots are free-placed: a plow stroke snaps to the lattice its own anchor tile
+ * establishes (see plowSelection.snapPlowOrigin), so a plot laid down in a second
+ * stroke can sit flush against the first without its origin being a whole plot away.
+ * Testing the eight exact ±plotSize offsets — which is what this used to do — missed
+ * every one of those neighbours, and crops beside an off-grid zombie plot never
+ * mutated it. Footprints never overlap (Field.areaFree / engine.overlapsExistingPlot),
+ * so "within one plot on both axes" is exactly "sharing an edge or a corner", and the
+ * eight-neighbour maximum still holds: nine 4x4 footprints is all that fits in the
+ * 12x12 span an origin this close can occupy. */
+export function plotsTouch(
+  ac: number, ar: number, bc: number, br: number, plotSize: number
+): boolean {
+  if (ac === bc && ar === br) return false; // the plot itself
+  return Math.abs(bc - ac) <= plotSize && Math.abs(br - ar) <= plotSize;
 }
 
 export interface CropMutationOptions {

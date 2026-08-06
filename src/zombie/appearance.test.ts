@@ -4,6 +4,7 @@ import {
   BRUTE_ZOMBIE_EYE_TINT,
   DEFAULT_ZOMBIE_EYE_TINT,
   DEFAULT_ZOMBIE_TEETH_TINT,
+  displayedAppearance,
   isBruteEyeball,
   zombiePartTint,
 } from "./appearance";
@@ -19,6 +20,23 @@ describe("zombie appearance", () => {
     expect(zombiePartTint("defaultUpperTeeth", 0x7bff4a)).toBe(DEFAULT_ZOMBIE_TEETH_TINT);
     expect(zombiePartTint("defaultLowerTeeth.png", 0xffff5f)).toBe(DEFAULT_ZOMBIE_TEETH_TINT);
     expect(zombiePartTint("defaultEyeL", 0x123456, "Large")).toBe(BRUTE_ZOMBIE_EYE_TINT);
+  });
+
+  it("draws the unit as it is by default", () => {
+    const inherited: [number, number, number] = [10, 20, 30];
+    expect(displayedAppearance(64, inherited, { bodyColor: "inherited", showMutations: true }))
+      .toEqual({ mutation: 64, color: inherited });
+  });
+
+  it("drops the inherited tint in species colour mode, so the model catalog wins", () => {
+    expect(displayedAppearance(64, [10, 20, 30], { bodyColor: "species", showMutations: true }))
+      .toEqual({ mutation: 64, color: undefined });
+  });
+
+  it("hides mutations without touching the body tint", () => {
+    const inherited: [number, number, number] = [10, 20, 30];
+    expect(displayedAppearance(64 | 8192, inherited, { bodyColor: "inherited", showMutations: false }))
+      .toEqual({ mutation: 0, color: inherited });
   });
 
   it("adds one-fifth-size eyeballs inside every Large zombie's eyes", () => {

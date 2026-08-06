@@ -109,7 +109,17 @@ normal conflict path. What the creator *does* get (added with migration `0032`) 
 collection acknowledgment: a fulfilled order keeps `acknowledged_at IS NULL` until its
 creator collects it via `POST /black-market/orders/:id/collect`. The client fetches
 `GET /black-market/fulfillments` at sign-in (toast) and when the market panel opens
-(collection strip); collecting only dismisses the notice, never gates the assets.
+(collection strip).
+
+**Superseded twice — collect now hands over the assets.** Migration `0040` made the
+traded ZOMBIE wait on the order (`claimed_at`) rather than be minted into a crypt the
+recipient may not own, and migration `0043` made a SALE's BRAINS wait too (`payout_at`):
+the buyer pays at settlement, but the seller is credited by their own collect. (Tester
+report: the brains simply appeared in the balance and Collect did nothing.) A filled
+REQUEST still pays its fulfiller inside the fulfil batch — they are present, with the
+panel open, and hold no card to collect from. `GET /black-market/summary` reports the
+caller's `heldBrains`, and the fulfillments query surfaces any sale whose payout is
+still pending even once acknowledged, so held money always has a card to arrive through.
 
 Completed trades also feed a permanent ledger (migration `0033` + the panel's History
 tab). Fulfillment stamps the actually-traded unit into `delivered_mutation` /

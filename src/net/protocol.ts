@@ -314,6 +314,10 @@ export interface BlackMarketSummary {
   postsToday: number;
   activeLimit: 10;
   dailyLimit: 50;
+  /** Brains the market is holding for this account: sales that settled while they were
+   *  away and have not been collected yet. Optional — an older deployed Worker omits
+   *  it, and the panel simply shows no held total. */
+  heldBrains?: number;
   serverTime: number;
 }
 
@@ -329,10 +333,10 @@ export interface BlackMarketMutationResponse {
   summary: BlackMarketSummary;
 }
 
-/** One of the caller's own orders that a counterparty fulfilled and the caller
- * has not yet collected (acknowledged). The trade itself already settled —
- * brains/zombie landed the moment it was fulfilled — so collecting only
- * dismisses the notice. */
+/** One of the caller's own orders that a counterparty fulfilled and the caller has
+ * not yet collected. Collecting is what hands over what the trade owes them: the
+ * zombie (`awaitingClaim`) and/or the brains the market is holding for a sale
+ * (`awaitingPayout`). With neither flag the card is a pure notice. */
 export interface BlackMarketFulfillmentView {
   id: string;
   kind: BlackMarketOrderKind;
@@ -356,6 +360,10 @@ export interface BlackMarketFulfillmentView {
    *  refused while their farm and Mausoleum are both full. Absent on the pure
    *  brains-earned card an older Worker is the only source of. */
   awaitingClaim?: boolean;
+  /** This card owes the viewer `priceBrains`: their sale settled and the market is
+   *  holding the payment until they collect it (migration 0043). Absent on a card
+   *  whose brains already landed — including every trade older than that change. */
+  awaitingPayout?: boolean;
 }
 
 export interface BlackMarketFulfillmentsResponse {
@@ -378,6 +386,9 @@ export interface BlackMarketCollectResponse {
   /** Set when this collect took delivery of a zombie, so the client knows to refresh
    *  its authoritative roster (and can say where the unit landed). */
   claimed?: ClaimedUnit;
+  /** Brains this collect actually paid out of the market (a settled sale). Absent when
+   *  there were none to pay — including a repeat collect, which pays nothing. */
+  brainsPaid?: number;
   /** The account's authoritative balance, echoed so collecting shows the brains the
    *  trade already paid. Settlement credits them when the OTHER player fulfils the
    *  order, so without this the creator's client keeps a stale balance until its next

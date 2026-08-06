@@ -16,6 +16,7 @@ import {
 import {
   BRUTE_EYEBALL_SCALE,
   DEFAULT_ZOMBIE_EYE_TINT,
+  displayedAppearance,
   isBruteEyeball,
   zombiePartTint,
 } from "../zombie/appearance";
@@ -107,7 +108,10 @@ export class RaidActor {
     color?: [number, number, number],
   ) {
     this.container.addChild(this.root);
-    this.build(assets, key, mutation, group, color);
+    // Raid rigs honour the same display prefs as the farm and the portraits, so a
+    // player who hid mutations (or pinned species colours) sees the same zombie here.
+    const shown = displayedAppearance(mutation, color);
+    this.build(assets, key, shown.mutation, group, shown.color);
   }
 
   /**

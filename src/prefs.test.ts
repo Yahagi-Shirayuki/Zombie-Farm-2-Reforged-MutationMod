@@ -3,6 +3,9 @@ import {
   getDayNightMode,
   isLocalNight,
   setDayNightMode,
+  setShowZombieMutations,
+  setZombieBodyColorMode,
+  zombieAppearancePrefs,
 } from "./prefs";
 
 describe("environment preferences", () => {
@@ -18,6 +21,16 @@ describe("environment preferences", () => {
     expect(getDayNightMode()).toBe("auto");
     setDayNightMode("night");
     expect(getDayNightMode()).toBe("night");
+  });
+
+  it("defaults zombies to their inherited colours with mutations shown", () => {
+    expect(zombieAppearancePrefs()).toEqual({ bodyColor: "inherited", showMutations: true });
+    setZombieBodyColorMode("species");
+    setShowZombieMutations(false);
+    expect(zombieAppearancePrefs()).toEqual({ bodyColor: "species", showMutations: false });
+    setZombieBodyColorMode("inherited");
+    setShowZombieMutations(true);
+    expect(zombieAppearancePrefs()).toEqual({ bodyColor: "inherited", showMutations: true });
   });
 
   it("uses the device-local 7pm to 7am night window", () => {

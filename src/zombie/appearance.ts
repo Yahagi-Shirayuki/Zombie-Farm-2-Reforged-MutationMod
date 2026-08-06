@@ -1,3 +1,24 @@
+import { zombieAppearancePrefs, type ZombieAppearancePrefs } from "../prefs";
+
+/** What a zombie should actually be DRAWN as, after this device's display prefs.
+ *
+ *  Every rig that assembles a zombie — the farm actor, the raid actor, the mutation
+ *  portraits behind every card and menu tile — resolves its mask and tint through
+ *  here, so the two toggles apply everywhere a zombie is visible at once.
+ *
+ *  `color` undefined means "no inherited tint": the caller falls back to the model
+ *  catalog's species colour, which is exactly what "species" mode wants. */
+export function displayedAppearance<T>(
+  mutation: number,
+  color: T | undefined,
+  prefs: ZombieAppearancePrefs = zombieAppearancePrefs(),
+): { mutation: number; color: T | undefined } {
+  return {
+    mutation: prefs.showMutations ? mutation : 0,
+    color: prefs.bodyColor === "species" ? undefined : color,
+  };
+}
+
 /** White multiplication preserves the eye sprite's authored light-yellow color. */
 export const DEFAULT_ZOMBIE_EYE_TINT = 0xffffff;
 export const BRUTE_ZOMBIE_EYE_TINT = 0x111111;

@@ -239,3 +239,33 @@ wrangler d1 execute zombiefarm --remote --json --command \
   "SELECT COUNT(*) AS v3_bad FROM roster_v3 WHERE (mutation & 951)!=0 \
      AND (zombie_key LIKE 'ZombieActorHeadless%' OR zombie_key='ZombieActorBombie')"
 ```
+
+### Applying migration `0043_black_market_brain_payout`
+
+The migration and the Worker deploy are a PAIR, and the order matters. The migration
+backfills every order that is `FULFILLED` at the moment it runs as already paid
+(`payout_at = closed_at`), because those brains were credited at settlement by the old
+code. Any sale fulfilled AFTER the migration but BEFORE the new Worker is live is
+credited by the old code *and* left `payout_at IS NULL`, so its seller would be paid a
+second time when they collect.
+
+Deploy the Worker straight after applying the migration, then close that window by
+sweeping anything the old code settled inside it. `<deploy_epoch_ms>` is the moment the
+new Worker went live:
+
+```sh
+wrangler d1 execute zombiefarm --remote --json --command \
+  "UPDATE black_market_orders SET payout_at = closed_at \
+   WHERE status='FULFILLED' AND payout_at IS NULL AND closed_at < <deploy_epoch_ms>"
+```
+
+Deploying BEFORE the migration is the worse order: the new code writes `payout_at` on
+every fulfil, so the whole Black Market 500s on a missing column until the migration
+lands. After both are in place this must return 0 — every unpaid row should be a sale
+that settled under the new Worker and is genuinely waiting to be collected:
+
+```sh
+wrangler d1 execute zombiefarm --remote --json --command \
+  "SELECT COUNT(*) AS suspect FROM black_market_orders \
+   WHERE status='FULFILLED' AND payout_at IS NULL AND closed_at < <deploy_epoch_ms>"
+```

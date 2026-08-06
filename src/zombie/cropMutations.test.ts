@@ -1,13 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { resolveCropMutations, touchingPlotOffsets } from "./cropMutations";
+import { resolveCropMutations, plotsTouch } from "./cropMutations";
 
 describe("crop-adjacency mutations", () => {
-  it("enumerates all eight touching plots and excludes the center", () => {
-    expect(touchingPlotOffsets(4)).toEqual([
+  it("touches all eight lattice neighbours and not the plot itself", () => {
+    const touching = [
       [-4, -4], [0, -4], [4, -4],
       [-4, 0],           [4, 0],
       [-4, 4],  [0, 4],  [4, 4],
-    ]);
+    ];
+    for (const [dc, dr] of touching) expect(plotsTouch(0, 0, dc, dr, 4)).toBe(true);
+    expect(plotsTouch(0, 0, 0, 0, 4)).toBe(false);
+  });
+
+  it("touches plots laid down flush but off the lattice", () => {
+    // A plot two tiles east and a full plot north: its footprint runs along the top
+    // edge without its origin being (0,-4). This is the reported bug — a farm plowed
+    // in several strokes has plots that touch without sharing a lattice.
+    expect(plotsTouch(0, 0, 2, -4, 4)).toBe(true);
+    expect(plotsTouch(0, 0, -1, 4, 4)).toBe(true);
+    expect(plotsTouch(0, 0, 4, 3, 4)).toBe(true);
+  });
+
+  it("does not touch a plot with a gap between the footprints", () => {
+    expect(plotsTouch(0, 0, 5, 0, 4)).toBe(false); // one clear tile column between
+    expect(plotsTouch(0, 0, 0, -5, 4)).toBe(false);
+    expect(plotsTouch(0, 0, 8, 8, 4)).toBe(false);
   });
 
   it("gives one adjacent crop a 25% roll", () => {

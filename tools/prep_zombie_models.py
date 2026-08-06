@@ -365,6 +365,39 @@ def main():
             bit, part = VARIANT_OVERRIDE[key]
             models[key]["mutationOverrides"] = {str(bit): part}
 
+    # ---- Colour class consistency ------------------------------------------
+    # A zombie's body tint IS its colour class made visible: every Green zombie
+    # shares one tint, every Blue another, and the Market/planting menu files them
+    # under that class. Nine mutants disagreed with their own class, because their
+    # tint is the AUTHENTIC ZF2 per-unit colour while the class comes from the
+    # rarity band the zombie sits in here:
+    #   * Celery/Broccoli/Garlic/Cauliflower/Lima Bean/Flytrap/Dragon Fruit were
+    #     re-banded by tools/reforge_economy.py MUTANT_CLASS_REBALANCE when their
+    #     unlock levels moved (read that table's comment first — the CLASS is
+    #     deliberate and load-bearing, and must not be reverted to match the key).
+    #   * Eyebiscus/Heartichoke were never re-banded; ZF2 simply shipped them as a
+    #     green and a blue body under a tier-4 key.
+    # Tester report: "Celery zombies are labeled as red despite having blue skin".
+    # The fix is the tint, since the class decides ability tiers and the Black
+    # Market gravestone gate. Each mutant takes the tint of the plain Regular
+    # zombie in its band, so it looks like the class it is filed under.
+    CLASS_COLOUR_BAND = {
+        "ZombieActorRegularTier2Celery": 3,
+        "ZombieActorRegularTier2Broccoli": 3,
+        "ZombieActorRegularTier2Garlic": 3,
+        "ZombieActorRegularTier2Cauliflower": 3,
+        "ZombieActorRegularTier2LimaBeans": 4,
+        "ZombieActorRegularTier3VenusFlytrap": 4,
+        "ZombieActorRegularTier3DragonFruit": 4,
+        "ZombieActorRegularTier4Eyebiscus": 4,
+        "ZombieActorRegularTier4Heartichoke": 4,
+    }
+    for key, band in CLASS_COLOUR_BAND.items():
+        band_color = models[f"ZombieActorRegularTier{band}"]["color"]
+        for catalog in (models, full_models):
+            if key in catalog:
+                catalog[key]["color"] = list(band_color)
+
     # mutations.json: rig for each mutation BIT, so the runtime can attach the part
     # onto any base body. Head-relative parts (hats) add the model's neck offset at
     # runtime; head-slot parts (onionHead) and root parts (arms/body/collar) use

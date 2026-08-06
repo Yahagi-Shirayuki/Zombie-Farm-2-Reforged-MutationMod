@@ -9,7 +9,7 @@ import {
   mutationPartZIndex,
   type MutationReplacement,
 } from "./mutationVisual";
-import { zombiePartTint } from "./appearance";
+import { displayedAppearance, zombiePartTint } from "./appearance";
 import { classify } from "./taxonomy";
 
 const MUT_BASE_FOREGROUND_Z = 30;
@@ -144,6 +144,10 @@ export class MutationPortraits {
   constructor(private renderer: Renderer, private assets: GameAssets) {}
 
   get(key: string, mutation: number, color?: [number, number, number]): Promise<string> {
+    // Normalize through the display prefs BEFORE the cache key is formed: a portrait
+    // is cached by what it will look like, so flipping "show mutations" or the body
+    // colour mode addresses a different entry instead of returning a stale one.
+    ({ mutation, color } = displayedAppearance(mutation, color));
     const cacheKey = `${key}|${mutation}|${color?.join(",") ?? "default"}`;
     const existing = this.cache.get(cacheKey);
     if (existing) return existing;

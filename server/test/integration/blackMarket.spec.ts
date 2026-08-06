@@ -223,10 +223,25 @@ describe("Black Market", () => {
 
     const sellerAfter = await bootstrap(seller);
     const buyerAfter = await bootstrap(buyer);
-    expect(sellerAfter.gameplay.balance.brains).toBe(sellerBefore.gameplay.balance.brains + 5);
+    // The buyer pays at settlement; the seller's brains stay with the market until
+    // they collect, and the zombie likewise waits for the buyer to collect it.
+    expect(sellerAfter.gameplay.balance.brains).toBe(sellerBefore.gameplay.balance.brains);
     expect(buyerAfter.gameplay.balance.brains).toBe(buyerBefore.gameplay.balance.brains - 5);
-    // The brains move at settlement, the zombie waits to be collected.
     expect(buyerAfter.gameplay.roster).toHaveLength(0);
+    const sellerSummary = await call<any>("GET", "/black-market/summary", seller.token);
+    expect(sellerSummary.body.heldBrains).toBe(5);
+    const sellerPaid = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, seller.token, {});
+    expect(sellerPaid.status, JSON.stringify(sellerPaid.body)).toBe(200);
+    expect(sellerPaid.body.brainsPaid).toBe(5);
+    expect((await bootstrap(seller)).gameplay.balance.brains)
+      .toBe(sellerBefore.gameplay.balance.brains + 5);
+    // Collecting again pays nothing more.
+    const sellerRepeat = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, seller.token, {});
+    expect(sellerRepeat).toMatchObject({ status: 200, body: { ok: true, alreadyCollected: true } });
+    expect(sellerRepeat.body.brainsPaid).toBeUndefined();
+    expect((await bootstrap(seller)).gameplay.balance.brains)
+      .toBe(sellerBefore.gameplay.balance.brains + 5);
+    expect((await call<any>("GET", "/black-market/summary", seller.token)).body.heldBrains).toBe(0);
     const waiting = await call<any>("GET", "/black-market/fulfillments", buyer.token);
     expect(waiting.body.fulfillments).toEqual([
       expect.objectContaining({ id: created.body.order.id, awaitingClaim: true }),
@@ -265,7 +280,8 @@ describe("Black Market", () => {
 
     const buyerBefore = await bootstrap(buyer);
     expect(buyerBefore.gameplay.roster.filter((unit: any) => !unit.stored)).toHaveLength(16);
-    // The purchase itself still goes through — the brains move, the seller is paid.
+    // The purchase itself still goes through — the buyer pays, and the seller's brains
+    // wait on the order for them to collect.
     const fulfilled = await call<any>("POST", `/black-market/orders/${created.body.order.id}/fulfill`, buyer.token, {
       operationId: operation("full-fulfill"), expectedAccountVersion: buyerBefore.accountVersion,
     });
@@ -541,7 +557,7 @@ describe("Black Market", () => {
     });
     expect(fulfilled.status, JSON.stringify(fulfilled.body)).toBe(200);
 
-    // BOTH sides hold a card for the same order: the seller's says the brains landed,
+    // BOTH sides hold a card for the same order: the seller's owes them the brains,
     // the buyer's still owes them the zombie. The two flags are independent, so one
     // collecting cannot dismiss the other's.
     const pending = await call<any>("GET", "/black-market/fulfillments", seller.token);
@@ -549,7 +565,7 @@ describe("Black Market", () => {
     expect(pending.body.fulfillments).toHaveLength(1);
     expect(pending.body.fulfillments[0]).toMatchObject({
       id: orderId, kind: "SELL_ZOMBIE", zombieKey: "ZombieActorRegularTier1",
-      mutated: true, mutation: 4, invasions: 2, priceBrains: 5,
+      mutated: true, mutation: 4, invasions: 2, priceBrains: 5, awaitingPayout: true,
     });
     expect(pending.body.fulfillments[0].awaitingClaim).toBeUndefined();
     const buyerPending = await call<any>("GET", "/black-market/fulfillments", buyer.token);
@@ -558,7 +574,9 @@ describe("Black Market", () => {
     ]);
 
     const collected = await call<any>("POST", `/black-market/orders/${orderId}/collect`, seller.token, {});
-    expect(collected).toMatchObject({ status: 200, body: { ok: true, alreadyCollected: false } });
+    expect(collected).toMatchObject({
+      status: 200, body: { ok: true, alreadyCollected: false, brainsPaid: 5 },
+    });
     expect(collected.body.claimed).toBeUndefined();
     const again = await call<any>("POST", `/black-market/orders/${orderId}/collect`, seller.token, {});
     expect(again).toMatchObject({ status: 200, body: { ok: true, alreadyCollected: true } });

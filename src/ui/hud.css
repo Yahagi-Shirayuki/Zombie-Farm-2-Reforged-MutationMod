@@ -744,7 +744,8 @@
 #hud .cmb-time { font-size: 13px; font-weight: 800; color: #b6f36a; }
 #hud .cmb-head > * { min-width: 0; overflow-wrap: anywhere; }
 #hud .cmb-slots { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 10px; }
-#hud .cmb-slot { min-height: 108px; border-radius: 12px; border: 2px dashed #6b4a24; background: #2c1c0e;
+/* position:relative anchors the corner magnifier (.mkt-info) inside the slot. */
+#hud .cmb-slot { position: relative; min-height: 108px; border-radius: 12px; border: 2px dashed #6b4a24; background: #2c1c0e;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 8px;
   box-sizing: border-box; min-width: 0; }
 #hud .cmb-slot.filled { border-style: solid; border-color: #8ad14a; background: #34240f; cursor: pointer; }
@@ -756,6 +757,11 @@
   overflow-wrap: anywhere; }
 #hud .cmb-slot .cmb-hint { font-size: 12px; color: #a98a5f; font-style: italic; text-align: center;
   overflow-wrap: anywhere; }
+/* Species name — sits above the mutation list wherever the pot shows a zombie, so a
+   heavily mutated unit is still identifiable. */
+#hud .cmb-sty { font-size: 11px; font-weight: 700; color: #9fd0f0; text-align: center;
+  max-width: 130px; overflow-wrap: anywhere; line-height: 1.2; }
+#hud .cmb-result .cmb-sty { font-size: 13px; max-width: none; }
 #hud .cmb-plus { font-size: 26px; font-weight: 900; color: #d8bc40; }
 #hud .cmb-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
   gap: 7px; max-height: 34vh; overflow: auto; padding: 2px;
@@ -768,6 +774,8 @@
 #hud .cmb-z.disabled:hover { background: #3a2612; }
 #hud .cmb-z .cmb-zpor { width: 50px; height: 50px; border-radius: 7px; background: #24160a center/contain no-repeat; }
 #hud .cmb-z .cmb-zn { font-size: 10px; font-weight: 700; max-width: 72px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#hud .cmb-z .cmb-zty { font-size: 9px; color: #9fd0f0; max-width: 72px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #hud .cmb-z .cmb-zmut { position: absolute; top: 2px; left: 2px; font-size: 8px; font-weight: 800;
   background: #7d3ad1; color: #fff; padding: 0 4px; border-radius: 5px; }
@@ -1066,6 +1074,9 @@
   font-weight: 700; font-size: 17px; color: #48300f; text-shadow: 0 1px 0 rgba(255,255,255,.4); }
 #hud .mkt-cur span { display: flex; align-items: center; gap: 4px; }
 #hud .mkt-cur img { height: 21px; }
+/* Brains the market is holding for uncollected sales, beside the player's own total. */
+#hud .mkt-cur .bm-held { font-size: 12px; font-weight: 700; color: #8ad14a;
+  background: rgba(138,209,74,.14); border-radius: 7px; padding: 2px 7px; margin-left: -10px; }
 #hud .mkt-tabs { display: flex; gap: 7px; justify-content: center; margin-bottom: 7px; }
 #hud .mkt-tab { border-style: solid; border-width: 7px 20px;
   border-image: url("/assets/ui/market/tab.png") 16 fill / 7px 20px stretch;

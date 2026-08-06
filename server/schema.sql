@@ -627,6 +627,11 @@ CREATE TABLE IF NOT EXISTS black_market_orders (
   -- owed; delivered_unit_id records which unit it became.
   claimed_at INTEGER,
   delivered_unit_id TEXT,
+  -- Payout of the traded brains. A SALE's brains are held by the market after
+  -- settlement and credited to its creator when they collect; a filled REQUEST pays
+  -- its fulfiller inside the fulfil batch and is stamped there. NULL on a FULFILLED
+  -- sale means the market is still holding them (migration 0043).
+  payout_at INTEGER,
   CHECK ((kind='SELL_ZOMBIE' AND source_unit_id IS NOT NULL AND escrow_mutation IS NOT NULL AND
     escrow_invasions IS NOT NULL AND escrow_brains=0) OR (kind='BUY_ZOMBIE' AND
     source_unit_id IS NULL AND escrow_mutation IS NULL AND escrow_invasions IS NULL AND
@@ -640,6 +645,7 @@ CREATE INDEX IF NOT EXISTS idx_black_market_uncollected ON black_market_orders(c
 CREATE INDEX IF NOT EXISTS idx_black_market_fulfiller ON black_market_orders(fulfilled_by_account_id,status,closed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_black_market_unclaimed_sale ON black_market_orders(fulfilled_by_account_id,status,claimed_at);
 CREATE INDEX IF NOT EXISTS idx_black_market_unclaimed_request ON black_market_orders(creator_account_id,status,claimed_at);
+CREATE INDEX IF NOT EXISTS idx_black_market_unpaid ON black_market_orders(creator_account_id,status,payout_at);
 CREATE TABLE IF NOT EXISTS black_market_receipts (
   operation_id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

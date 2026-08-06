@@ -22,12 +22,71 @@ export function isFarmBackground(value: unknown): value is FarmBackground {
   return value === "deep-forest" || value === "woodland" || value === "light-meadow";
 }
 
+/** How an owned zombie's body is tinted.
+ *  • "inherited" — a Zombie Pot child keeps the mixed tint it was born with.
+ *  • "species"   — every zombie wears its own species' colour, so a silver made
+ *                  from two greens looks silver. */
+export type ZombieBodyColorMode = "inherited" | "species";
+export const DEFAULT_BODY_COLOR_MODE: ZombieBodyColorMode = "inherited";
+
+/** One device's zombie-appearance choices, read wherever a zombie is drawn. */
+export interface ZombieAppearancePrefs {
+  bodyColor: ZombieBodyColorMode;
+  showMutations: boolean;
+}
+
 const SPRITE_KEY = "zf2r.spriteSet";
 const FARM_BG_KEY = "zf2r.farmBackground";
 const DAY_NIGHT_KEY = "zf2r.dayNight";
 const FRIEND_SORT_KEY = "zf2r.friendSort";
 const ZOMBIE_SORT_KEY = "zf2r.zombieSort";
 const HAZARD_TIP_KEY = "zf2r.seenHazardTip";
+const BODY_COLOR_KEY = "zf2r.zombieBodyColor";
+const SHOW_MUTATIONS_KEY = "zf2r.showZombieMutations";
+
+/** localStorage.getItem that survives a browser with storage denied (private mode,
+ *  blocked third-party context). Appearance prefs are read while DRAWING, so a throw
+ *  here would take the frame with it. */
+function readPref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writePref(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* preference is optional */
+  }
+}
+
+/** Which body tint a combined zombie shows. Defaults to the inherited mix (what the
+ *  Zombie Pot has always produced); "species" makes every unit wear its own type's
+ *  colour instead. */
+export function getZombieBodyColorMode(): ZombieBodyColorMode {
+  return readPref(BODY_COLOR_KEY) === "species" ? "species" : DEFAULT_BODY_COLOR_MODE;
+}
+
+export function setZombieBodyColorMode(mode: ZombieBodyColorMode): void {
+  writePref(BODY_COLOR_KEY, mode);
+}
+
+/** Whether crop mutations are drawn on zombies at all. Defaults to on. */
+export function getShowZombieMutations(): boolean {
+  return readPref(SHOW_MUTATIONS_KEY) !== "0";
+}
+
+export function setShowZombieMutations(on: boolean): void {
+  writePref(SHOW_MUTATIONS_KEY, on ? "1" : "0");
+}
+
+/** Both appearance choices at once, for the render sites that apply them. */
+export function zombieAppearancePrefs(): ZombieAppearancePrefs {
+  return { bodyColor: getZombieBodyColorMode(), showMutations: getShowZombieMutations() };
+}
 
 /** Which sprite pack to render with. Defaults to ZF2 (the only pack wired today). */
 export function getSpriteSet(): SpriteSet {

@@ -50,4 +50,5 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0039_roster_escrow_return.sql'),
   ('0040_black_market_delivery_claim.sql'),
   ('0041_roster_color.sql'),
-  ('0042_service_state.sql');
+  ('0042_service_state.sql'),
+  ('0043_black_market_brain_payout.sql');

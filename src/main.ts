@@ -55,6 +55,7 @@ import {
   DEFAULT_FARM_BACKGROUND, getFarmBackground, isFarmBackground, setFarmBackground,
   FARM_BG_DENSITY, type FarmBackground, getDayNightMode, setDayNightMode,
   isLocalNight, type DayNightMode, hasSeenHazardTip, markHazardTipSeen,
+  zombieAppearancePrefs, setZombieBodyColorMode, setShowZombieMutations,
 } from "./prefs";
 import { BASE } from "./base";
 import { TutorialController } from "./tutorial/TutorialController";
@@ -2907,19 +2908,22 @@ async function main() {
     // same writer preparation as any other external mutation. A pure acknowledgment
     // (the brains-earned card) still does not.
     if (awaitingClaim) await economy?.prepareExternalMutation();
-    // The BALANCE has to move on screen either way: the brains were credited at
-    // settlement, by the counterparty's fulfil, an event this client never observed.
-    // Without adopting a fresh balance the payout stays invisible until the next
-    // bootstrap or command batch.
+    // The BALANCE has to move on screen either way: a sale's brains are PAID OUT by
+    // this call (the market held them until now), and a filled request's were credited
+    // at settlement — an event this client never observed. Without adopting a fresh
+    // balance neither shows up until the next bootstrap or command batch.
     const result = await api.collectBlackMarketOrder(orderId);
-    // A claimed zombie arrives as a roster row this client has never seen, so take the
-    // authoritative refresh rather than the cheap balance adopt.
-    if (result.claimed) await economy?.refreshAuthoritative();
+    // A claimed zombie arrives as a roster row this client has never seen, and a payout
+    // bumps the account version server-side (it moves real currency). Both need the
+    // authoritative refresh rather than the cheap balance adopt: adopting a balance
+    // alone would leave this client's expectedAccountVersion one behind, so its very
+    // next command batch would 409 into a conflict rebase.
+    if (result.claimed || result.brainsPaid) await economy?.refreshAuthoritative();
     // Remain compatible while the manually deployed Worker rolls forward: an older
     // one omits the balance, so pay for a second round-trip only in that case.
     else if (result.balance) economy?.adoptExternalBalance(result.balance);
     else await economy?.refreshAuthoritative();
-    return result.claimed ?? null;
+    return { claimed: result.claimed ?? null, brainsPaid: result.brainsPaid ?? 0 };
   };
   hud.getBlackMarketHistory = () => api.blackMarketHistory();
   hud.refreshFriends = async () => {
@@ -3046,9 +3050,16 @@ async function main() {
       if (zombies) hud.showToast(zombies === 1
         ? "A Black Market zombie is waiting for you! Visit the market to collect. 🧟"
         : `${zombies} Black Market zombies are waiting for you! Visit the market to collect. 🧟`);
-      else hud.showToast(n === 1
-        ? "One of your Black Market posts was fulfilled! Visit the market to collect. 💰"
-        : `${n} of your Black Market posts were fulfilled! Visit the market to collect. 💰`);
+      else {
+        // Name the money when the market is holding some: this toast used to promise a
+        // "collect" that only dismissed a notice, because the brains had already landed.
+        const brains = rows.reduce((total, row) => total + (row.awaitingPayout ? row.priceBrains : 0), 0);
+        hud.showToast(brains
+          ? `${brains} brains from your Black Market sales are waiting! Visit the market to collect. 💰`
+          : n === 1
+            ? "One of your Black Market posts was fulfilled! Visit the market to collect. 💰"
+            : `${n} of your Black Market posts were fulfilled! Visit the market to collect. 💰`);
+      }
     }).catch(() => { /* best-effort toast; a market-disabled server must not surface an error */ });
   }
 
@@ -3064,6 +3075,17 @@ async function main() {
     setFarmBackground(bg);
     buildFoliage();
     saveManager.save();
+  };
+
+  // Zombie appearance (Settings): both toggles are device-local display choices, so
+  // they are persisted to prefs and applied live. The farm's standing zombies are
+  // reassembled here; portraits re-render on demand because MutationPortraits keys its
+  // cache by the appearance it draws, and raid actors are built fresh on entry.
+  hud.getZombieAppearance = () => zombieAppearancePrefs();
+  hud.onSetZombieAppearance = (prefs) => {
+    setZombieBodyColorMode(prefs.bodyColor);
+    setShowZombieMutations(prefs.showMutations);
+    zombies.refreshAppearance();
   };
 
   hud.getRaidBoosts = (raidId) => ({

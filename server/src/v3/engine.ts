@@ -27,7 +27,7 @@ import {
 } from "../../../src/farmer";
 import { dropsEpicBossToken } from "../../../src/epicBoss/tokens";
 import { combineMasks } from "../../../src/zombie/mutations";
-import { resolveCropMutations, touchingPlotOffsets } from "../../../src/zombie/cropMutations";
+import { resolveCropMutations, plotsTouch } from "../../../src/zombie/cropMutations";
 import { createCombineRandom, isCombinePromotion, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
 import { harvestXp, plowXp } from "../../../src/farmRewards";
 import { questSubjectMatches } from "../../../src/quest/matching";
@@ -287,16 +287,20 @@ function hasMutationMonolith(state: MutableGameplayState): boolean {
   );
 }
 
-/** All eight plots touching this 4x4 plot. Crop age is deliberately ignored. */
+/** Every plot touching this 4x4 plot — edge or corner. Plot origins are free-placed
+ *  (see `validCoord` above), so this is a footprint test rather than a lookup of the
+ *  eight lattice-aligned neighbours; a plot laid down flush but off-lattice mutates
+ *  its neighbour exactly like an aligned one. Crop age is deliberately ignored. */
 function adjacentCropKeys(
   plots: Record<string, FarmPlotProjection>,
   oc: number,
   or: number
 ): string[] {
   const keys: string[] = [];
-  for (const [dc, dr] of touchingPlotOffsets(PLOT_SIZE)) {
-    const plot = plots[plotKey(oc + dc, or + dr)];
-    if (plot?.state === "planted" && !plot.zombie) keys.push(plot.cropKey);
+  for (const [key, plot] of Object.entries(plots)) {
+    const [otherC, otherR] = key.split(":").map(Number);
+    if (!plotsTouch(oc, or, otherC, otherR, PLOT_SIZE)) continue;
+    if (plot.state === "planted" && !plot.zombie) keys.push(plot.cropKey);
   }
   return keys;
 }

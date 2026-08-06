@@ -192,6 +192,13 @@ export class ZombieField {
     this.state.setZombieCount(this.units.length);
   }
 
+  /** Redraw every deployed zombie after a display preference changed (mutations
+   *  hidden, species body colour). Stored units carry no sprite, so they pick the new
+   *  look up whenever they are deployed. */
+  refreshAppearance() {
+    for (const unit of this.units) unit.rebuildAppearance(this.assets);
+  }
+
   private addUnit(data: OwnedZombie) {
     const unit = new ZombieUnit(this.assets, this.field, data);
     this.field.entityLayer.addChild(unit.container);

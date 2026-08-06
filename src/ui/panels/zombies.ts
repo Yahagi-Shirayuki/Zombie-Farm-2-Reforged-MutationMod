@@ -377,39 +377,18 @@ function confirmSellZombie(hud: Hud, info: ZombieInfo, value: number, refresh?: 
   panel.append(por, msg, btns);
 }
 
-/** The lines printed under a pre-purchase zombie card: what the gravestone costs and
- *  how long it takes, whatever still gates it, and the guaranteed-mutation blurb the
- *  description parchment used to carry. The gates are reported in the same order the
- *  shop cards apply them — a level lock hides a grave lock, because reaching the level
- *  is the first thing that has to happen. */
-export function catalogZombieNotes(
-  card: {
-    cost: number; brains?: boolean; timeLabel: string; level: number; description?: string;
-    cfg: { unlockGrave?: "Blue" | "Red" | "Silver" };
-  },
-  playerLevel: number,
-  hasGrave: (grave: "Blue" | "Red" | "Silver") => boolean,
-): string[] {
-  const grave = card.cfg.unlockGrave;
-  const gate = playerLevel < card.level
-    ? `Unlocks at level ${card.level}.`
-    : grave && !hasGrave(grave) ? `Needs the ${grave} Grave on your farm.` : "";
-  return [
-    `${card.cost} ${card.brains ? "brains" : "gold"} · grows in ${card.timeLabel}`,
-    gate,
-    card.description ?? "",
-  ].filter(Boolean);
-}
-
 /** Preview the inspect card for a catalog species the player does not own yet —
  *  opened by the magnifier on a Market or plant-menu gravestone so its stats and
  *  abilities can be read BEFORE buying. Same card the roster and Black Market
  *  listings use, built from catalog data: no veterancy (nothing has fought yet),
  *  and any guaranteed catalog mutation folded in exactly as the unit dug up will
  *  carry it. Stats include the player's own farmer bonuses, matching the Black
- *  Market's inspect — the numbers are what THIS farm would field. `meta` lines
- *  (price, unlock requirement, mutation blurb) sit under the card. */
-export function openCatalogZombieCard(hud: Hud, card: MenuCard, meta: string[]) {
+ *  Market's inspect — the numbers are what THIS farm would field.
+ *
+ *  Only the mutation blurb is printed under the card. Price, grow time and the
+ *  unlock gate are on the gravestone the magnifier was tapped on, and repeating
+ *  them here just made the card end in things the player had already read. */
+export function openCatalogZombieCard(hud: Hud, card: MenuCard) {
   const zombie = card.zombie;
   if (!zombie) return;
   const bonus = mutationBonus(zombie.mutation);
@@ -426,10 +405,10 @@ export function openCatalogZombieCard(hud: Hud, card: MenuCard, meta: string[]) 
     host: hud.el, bgClass: "zpreview-bg", panelClass: "zpanel", replaceSelector: ".zpreview-bg",
   });
   panel.appendChild(buildZombieCard(hud, info, panel));
-  for (const line of meta) {
+  if (card.description) {
     const note = document.createElement("p");
     note.className = "alm-hint";
-    note.textContent = line;
+    note.textContent = card.description;
     panel.appendChild(note);
   }
 }

@@ -89,7 +89,7 @@ export const FARMERS_GUIDE_PAGES: GuidePage[] = [
     sections: [
       {
         title: "Obtaining Mutations",
-        body: "Plant vegetables directly beside a zombie plot to give the harvested zombie a chance at developing the mutation associated with them. If you want to ensure that a specific mutation is obtained, then plant a mutated zombie directly instead.",
+        body: "Plant vegetables directly beside a zombie plot to give the harvested zombie a chance at developing the mutation associated with them. Any plot touching the zombie's counts — edge or corner — even if the two were plowed in different passes and don't line up. If you want to ensure that a specific mutation is obtained, then plant a mutated zombie directly instead.",
       },
       {
         title: "Headless Zombies",
@@ -97,7 +97,7 @@ export const FARMERS_GUIDE_PAGES: GuidePage[] = [
       },
       {
         title: "Zombie Pot",
-        body: "The Zombie Pot can also combine two zombies and inherit compatible traits. The zombie you place in Slot 1 decides what type comes out — Slot 2 only donates its mutations, and where two mutations compete for the same body part the stronger one wins. Special zombies fit in Slot 1 only, and are always passed on. At higher levels, combining two zombies of the same type breeds them up into a Silver zombie of that type, and every eligible pairing comes with a low chance of mutating into powerful special zombies instead.",
+        body: "The Zombie Pot can also combine two zombies and inherit compatible traits. It works with the zombies standing on your farm, so bring anything you want to combine out of the Mausoleum first. The zombie you place in Slot 1 decides what type comes out — Slot 2 only donates its mutations, and where two mutations compete for the same body part the stronger one wins. Special zombies fit in Slot 1 only, and are always passed on. At higher levels, combining two zombies of the same type breeds them up into a Silver zombie of that type, and every eligible pairing comes with a low chance of mutating into powerful special zombies instead.",
       },
     ],
   },

@@ -20,7 +20,10 @@ import { canGiftBrain, type Friend } from "./social/friends";
 import { planGiftAll, type GiftAllPlan } from "./social/giftAll";
 import { FRIEND_SORTS, isFriendSort, sortFriends } from "./social/friendSort";
 import { isMobile } from "./platform";
-import { getFriendSort, setFriendSort, type DayNightMode, type FarmBackground } from "./prefs";
+import {
+  getFriendSort, setFriendSort,
+  type DayNightMode, type FarmBackground, type ZombieAppearancePrefs,
+} from "./prefs";
 import { fmtCooldown, MCDONNELL_ID, VOUCHER_KEY } from "./raid/RaidCatalog";
 import { marketPageSize } from "./marketPageSize";
 import { veterancy } from "./zombie/traits";
@@ -62,7 +65,7 @@ import {
 } from "./ui/panels/settings";
 import { openStorage as openStoragePanel } from "./ui/panels/storage";
 import {
-  buildZombieCard, buildRosterCard, catalogZombieNotes, openCatalogZombieCard,
+  buildZombieCard, buildRosterCard, openCatalogZombieCard,
   openZombieInfo as openZombieInfoPanel,
   openZombiesPanel, rosterInfo, type ZombiesPanelTab,
 } from "./ui/panels/zombies";
@@ -1338,10 +1341,11 @@ export class Hud {
   /** The caller's settled-but-uncollected trades (both sides). */
   getBlackMarketFulfillments: (() => Promise<BlackMarketFulfillmentView[]>) | null = null;
   /** Collect one settled trade: takes delivery of the zombie it owes (returning the
-   *  unit that landed) and/or acknowledges it. Rejects with `no_room` when a delivery
-   *  has nowhere to go. */
+   *  unit that landed) and the brains the market held for it, and acknowledges it.
+   *  Rejects with `no_room` when a delivery has nowhere to go. */
   onCollectBlackMarketOrder:
-    ((orderId: string, awaitingClaim: boolean) => Promise<ClaimedUnit | null>) | null = null;
+    ((orderId: string, awaitingClaim: boolean) =>
+      Promise<{ claimed: ClaimedUnit | null; brainsPaid: number }>) | null = null;
   /** Completed-trade ledger (both roles) + lifetime aggregates. */
   getBlackMarketHistory: (() => Promise<BlackMarketHistoryResponse>) | null = null;
   /** The speed-grow (Insta-Grow) boost + a live owned-count getter, for the
@@ -1513,6 +1517,10 @@ export class Hud {
   getFarmBackground: (() => FarmBackground) | null = null;
   /** Change the farm background — rebuilds the foliage ring live. */
   onSetFarmBackground: ((bg: FarmBackground) => void) | null = null;
+  /** How zombies are drawn on this device (body tint source + whether mutations show).
+   *  Applies live, everywhere a zombie is visible: farm, raids, cards and menus. */
+  getZombieAppearance: (() => ZombieAppearancePrefs) | null = null;
+  onSetZombieAppearance: ((prefs: ZombieAppearancePrefs) => void) | null = null;
 
   /** Hide/show the farm chrome (top bar, tools, menus) so the live battle scene
    *  can take over the screen. Raid panels stay visible. */
@@ -1686,7 +1694,7 @@ export class Hud {
           timeLabel: c.timeLabel,
           graveNeeded: c.cfg.unlockGrave,
           description: c.description,
-          inspect: () => this.openCatalogZombie(c),
+          inspect: () => openCatalogZombieCard(this, c),
           onPick: () => { this.setPlanting(c.cfg); bg.remove(); },
         }));
       if (tab === "Items") {
@@ -2296,15 +2304,6 @@ export class Hud {
     return card;
   }
 
-  /** Show the inspect card for a zombie the player is thinking about buying, from
-   *  either shop surface (Market gravestone or the plot's plant picker). */
-  private openCatalogZombie(c: MenuCard) {
-    // No grave predicate wired (Local Farm boot) means no grave gate, exactly as the
-    // shop cards themselves read it.
-    const owns = this.hasGrave ?? (() => true);
-    openCatalogZombieCard(this, c, catalogZombieNotes(c, this.state.level, owns));
-  }
-
   // Small parchment popup describing a Market item, opened from a card's magnifier.
   private showItemInfo(en: MktEntry) {
     document.querySelector("#hud .info-bg")?.remove();
@@ -2621,7 +2620,7 @@ export class Hud {
     // beside the name here: this card's corners already hold the time/cost readouts.
     if (c.cfg.isZombie && c.zombie) {
       const info = magnifierButton(`See ${c.name}'s card`, "See this zombie's card",
-        () => this.openCatalogZombie(c));
+        () => openCatalogZombieCard(this, c));
       info.classList.add("pm-info");
       name.appendChild(info);
     }
@@ -2851,8 +2850,17 @@ export class Hud {
     close.onclick = () => bg.remove();
     const balance = document.createElement("div");
     balance.className = "mkt-cur";
+    // Brains the market is holding: settled sales this player has not collected yet.
+    // Shown beside their own balance so the money is visibly SOMEWHERE while it waits.
+    let heldBrains = 0;
     const refreshBalance = () => {
       balance.innerHTML = `<span><img src="${UI("topbar_brain_icon.png")}">${this.state.brains}</span>`;
+      if (heldBrains <= 0) return;
+      const held = document.createElement("span");
+      held.className = "bm-held";
+      held.textContent = `+${heldBrains} held`;
+      held.title = "Brains your settled sales are holding. Collect them above.";
+      balance.appendChild(held);
     };
     refreshBalance();
 
@@ -3070,12 +3078,16 @@ export class Hud {
       if (!bg.isConnected) return;
       fulfillStrip.replaceChildren();
       fulfillStrip.hidden = !rows.length;
+      heldBrains = rows.reduce((total, row) => total + (row.awaitingPayout ? row.priceBrains : 0), 0);
+      refreshBalance();
       if (!rows.length) return;
       const header = document.createElement("div");
       header.className = "bm-fulfill-title";
-      header.textContent = rows.some((row) => row.awaitingClaim)
-        ? "Trades settled! Collect to take delivery."
-        : "Your posts went through! Collect to dismiss.";
+      header.textContent = heldBrains
+        ? `Trades settled! The market is holding ${heldBrains} brains for you — collect them.`
+        : rows.some((row) => row.awaitingClaim)
+          ? "Trades settled! Collect to take delivery."
+          : "Your posts went through! Collect to dismiss.";
       const rail = document.createElement("div");
       rail.className = "bm-fulfill-rail";
       fulfillStrip.append(header, rail);
@@ -3085,6 +3097,7 @@ export class Hud {
         // Collect below — until then it lives on the order, so nothing can strand it in
         // a Mausoleum the farm does not have.
         const claiming = !!entry.awaitingClaim;
+        const paying = !!entry.awaitingPayout;
         const sold = entry.kind === "SELL_ZOMBIE" && !claiming;
         const zombieName = cardFor(entry.zombieKey)?.name ?? entry.zombieKey;
         const card = document.createElement("div");
@@ -3122,7 +3135,9 @@ export class Hud {
         const when = new Date(entry.fulfilledAt).toLocaleDateString();
         const room = this.canTakeZombieDelivery?.() ?? true;
         meta.textContent = sold
-          ? `Bought by ${entry.fulfilledBy} · ${when}\nThe brains are already in your balance.`
+          ? `Bought by ${entry.fulfilledBy} · ${when}\n${paying
+            ? `The market is holding ${entry.priceBrains} brains — collect to bank them.`
+            : "The brains are already in your balance."}`
           : claiming
             ? `From ${entry.fulfilledBy} · ${when}\n${room
               ? "Waiting for you — collect to bring it home."
@@ -3140,11 +3155,16 @@ export class Hud {
         action.onclick = async () => {
           action.disabled = true;
           try {
-            const claimed = await this.onCollectBlackMarketOrder?.(entry.id, claiming);
+            const result = await this.onCollectBlackMarketOrder?.(entry.id, claiming);
+            const claimed = result?.claimed ?? null;
             card.remove();
             if (!rail.childElementCount) fulfillStrip.hidden = true;
+            heldBrains = Math.max(0, heldBrains - (result?.brainsPaid ?? 0));
+            refreshBalance();
             this.showToast(sold
-              ? `Cha-ching! ${zombieName} sold to ${entry.fulfilledBy} for ${entry.priceBrains} brains. 🧠`
+              ? result?.brainsPaid
+                ? `Cha-ching! ${result.brainsPaid} brains collected — ${zombieName} sold to ${entry.fulfilledBy}. 🧠`
+                : `Cha-ching! ${zombieName} sold to ${entry.fulfilledBy} for ${entry.priceBrains} brains. 🧠`
               : claimed?.stored
                 ? `${zombieName} is resting in your Mausoleum — deploy it when there's room. 🧟`
                 : `${zombieName} has joined your horde! 🧟`);
@@ -4461,6 +4481,27 @@ export class Hud {
     this.el.appendChild(bg);
 
     const portraitOf = (key: string) => this.zombiePortraitOf?.(key) ?? "";
+    // A heavily mutated zombie can be unrecognisable — a pumpkin head and a celery
+    // arm hide most of the body. Every tile in this panel names the SPECIES as well,
+    // so the player can tell what they are actually putting in (tester request).
+    const typeNameOf = (key: string) =>
+      this.blackMarketZombieCards.find((card) => card.cfg.key === key)?.name
+      ?? this.zombieCards.find((card) => card.cfg.key === key)?.name
+      ?? key;
+    const typeLine = (text: string) => {
+      const el = document.createElement("div");
+      el.className = "cmb-sty";
+      el.textContent = text;
+      return el;
+    };
+    // The same corner magnifier the Market cards carry: it opens this individual's
+    // inspect card so its class, stats, mutations and abilities can be read before it
+    // goes in the pot. Deliberately WITHOUT the card's Store/Sell/Deploy row (`id`
+    // omitted) — acting on a zombie from inside the picker would leave it selected in
+    // a slot while it left the roster.
+    const inspectButton = (z: RosterEntry) =>
+      magnifierButton(`See ${z.name}'s card`, "See this zombie's card",
+        () => this.openZombieInfo({ ...rosterInfo(this, z), id: undefined }));
     const showPortrait = (
       el: HTMLElement,
       key: string,
@@ -4547,7 +4588,7 @@ export class Hud {
         const mut = document.createElement("div");
         mut.className = "cmb-rm";
         mut.textContent = mutationLabel(st.result!.mutation) || "no mutations";
-        result.append(p, n, mut);
+        result.append(p, n, typeLine(typeNameOf(st.result!.key)), mut);
         wrap.append(head, result, note, go);
       } else {
         // Show the two parents going in (from the pending job's keys + masks).
@@ -4562,7 +4603,7 @@ export class Hud {
           const mut = document.createElement("div");
           mut.className = "cmb-sm";
           mut.textContent = mutationLabel(mask) || "no mutations";
-          d.append(p, mut);
+          d.append(p, typeLine(typeNameOf(key)), mut);
           return d;
         };
         const plus = document.createElement("div");
@@ -4605,8 +4646,11 @@ export class Hud {
       const st = this.getPotStatus?.();
       if (st?.busy) { renderBusy(); return; }
       wrap.innerHTML = "";
+      // Stored zombies are deliberately NOT offered here (tester request): the pot
+      // sits on the farm, so it works with the army standing on it. A zombie in the
+      // Mausoleum has to be deployed from the Zombies menu first.
       const roster = (this.getRoster?.() ?? []).filter((zombie) =>
-        this.canCombineZombie?.(zombie.key) ?? true
+        !zombie.stored && (this.canCombineZombie?.(zombie.key) ?? true)
       );
       const canUseInSlot = (key: string, slot: "A" | "B") =>
         this.canCombineZombie?.(key, slot) ?? true;
@@ -4635,7 +4679,7 @@ export class Hud {
           const mut = document.createElement("div");
           mut.className = "cmb-sm";
           mut.textContent = mutationLabel(z.mutation) || "no mutations";
-          d.append(p, n, mut);
+          d.append(p, n, typeLine(z.typeName), mut, inspectButton(z));
           d.title = "Tap to remove";
           d.onclick = () => { if (which === "A") pickA = null; else pickB = null; renderIdle(); };
         } else {
@@ -4660,7 +4704,11 @@ export class Hud {
       if (roster.length < 2) {
         const e = document.createElement("div");
         e.className = "cmb-empty";
-        e.textContent = "You need at least two zombies to combine. Grow more first!";
+        // Stored zombies are filtered out above, so say so rather than telling a
+        // player with a full Mausoleum to go and grow more.
+        e.textContent = (this.getRoster?.() ?? []).some((zombie) => zombie.stored)
+          ? "You need two zombies on the farm to combine. Deploy some from the Mausoleum first!"
+          : "You need at least two zombies to combine. Grow more first!";
         list.appendChild(e);
       } else {
         for (const z of roster) {
@@ -4675,7 +4723,10 @@ export class Hud {
           const n = document.createElement("div");
           n.className = "cmb-zn";
           n.textContent = z.name;
-          c.append(p, n);
+          const ty = document.createElement("div");
+          ty.className = "cmb-zty";
+          ty.textContent = z.typeName;
+          c.append(p, n, ty, inspectButton(z));
           if (z.mutation) {
             const m = document.createElement("div");
             m.className = "cmb-zmut";

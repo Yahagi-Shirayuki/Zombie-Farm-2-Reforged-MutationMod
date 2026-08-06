@@ -92,6 +92,9 @@ interface OrderRow {
   delivered_invasions?: number | null;
   delivered_color?: string | null;
   claimed_at?: number | null;
+  /** When the earner was credited (migration 0043). NULL on a FULFILLED sale means
+   *  the market is still holding the brains for its creator to collect. */
+  payout_at?: number | null;
 }
 
 /** The body tint to escrow with a zombie that is about to change hands.
@@ -232,17 +235,23 @@ async function orderRow(db: D1Database, id: string): Promise<OrderRow | null> {
 }
 
 export async function summary(db: D1Database, accountId: string, now: number): Promise<BlackMarketSummary> {
-  const [active, daily] = await Promise.all([
+  const [active, daily, held] = await Promise.all([
     db.prepare("SELECT COUNT(*) n FROM black_market_orders WHERE creator_account_id=? AND status='OPEN'")
       .bind(accountId).first<{ n: number }>(),
     db.prepare("SELECT COUNT(*) n FROM black_market_orders WHERE creator_account_id=? AND created_day=?")
       .bind(accountId, dayBucket(now)).first<{ n: number }>(),
+    // Brains the market is holding for this account: every sale of theirs that has
+    // settled but not been collected (migration 0043).
+    db.prepare(`SELECT COALESCE(SUM(price_brains),0) brains FROM black_market_orders
+      WHERE creator_account_id=? AND status='FULFILLED' AND kind='SELL_ZOMBIE' AND payout_at IS NULL`)
+      .bind(accountId).first<{ brains: number }>(),
   ]);
   return {
     activePosts: active?.n ?? 0,
     postsToday: daily?.n ?? 0,
     activeLimit: ACTIVE_LIMIT,
     dailyLimit: DAILY_LIMIT,
+    heldBrains: held?.brains ?? 0,
     serverTime: now,
   };
 }
@@ -309,6 +318,7 @@ interface FulfillmentRow {
   delivered_color: string | null;
   creator_account_id: string;
   claimed_at: number | null;
+  payout_at: number | null;
   fulfilled_by_name: string | null;
   creator_name: string | null;
 }
@@ -328,13 +338,17 @@ export async function fulfillments(
   const result = await db.prepare(`SELECT o.id,o.kind,o.zombie_key,o.mutated_required,o.price_brains,
       o.created_at,o.closed_at,o.escrow_mutation,o.escrow_invasions,
       o.delivered_mutation,o.delivered_invasions,o.escrow_color,o.delivered_color,
-      o.creator_account_id,o.claimed_at,
+      o.creator_account_id,o.claimed_at,o.payout_at,
       a.username AS fulfilled_by_name, ca.username AS creator_name
     FROM black_market_orders o
     LEFT JOIN accounts a ON a.id=o.fulfilled_by_account_id
     JOIN accounts ca ON ca.id=o.creator_account_id
     WHERE o.status='FULFILLED' AND (
-      (o.creator_account_id=?1 AND o.acknowledged_at IS NULL)
+      -- A card the creator has not dismissed, OR one still holding their brains: as
+      -- long as the market owes something there is a card to collect it from, so an
+      -- acknowledgment that somehow outran its payout cannot strand the money.
+      (o.creator_account_id=?1 AND (o.acknowledged_at IS NULL
+        OR (o.kind='SELL_ZOMBIE' AND o.payout_at IS NULL)))
       OR (o.claimed_at IS NULL AND ?1 = CASE o.kind
             WHEN 'SELL_ZOMBIE' THEN o.fulfilled_by_account_id ELSE o.creator_account_id END))
     ORDER BY o.closed_at DESC LIMIT ?2`).bind(accountId, FULFILLMENT_PAGE).all<FulfillmentRow>();
@@ -365,6 +379,10 @@ export async function fulfillments(
       fulfilledBy: counterparty,
       ...(row.claimed_at === null && (row.kind === "SELL_ZOMBIE") !== mine
         ? { awaitingClaim: true }
+        : {}),
+      // The market is holding this sale's brains for its creator until they collect.
+      ...(mine && row.kind === "SELL_ZOMBIE" && row.payout_at === null
+        ? { awaitingPayout: true }
         : {}),
     };
   });
@@ -431,16 +449,47 @@ async function claimDelivery(
   return { unit: { unitId, zombieKey: row.zombie_key, mutation, invasions, stored: !!stored?.stored } };
 }
 
+/** Pay out a sale the market is still holding brains for. Idempotent on `payout_at`:
+ *  the timestamp is claimed first and every other statement is guarded on it having
+ *  landed, so a double-tapped Collect (or a retry) credits exactly once. Returns the
+ *  brains actually credited — 0 when another request got there first. */
+async function payOutSale(
+  db: D1Database,
+  accountId: string,
+  row: OrderRow,
+  now: number
+): Promise<number> {
+  const paid = db.prepare(`UPDATE black_market_orders SET payout_at=?
+    WHERE id=? AND creator_account_id=? AND status='FULFILLED' AND payout_at IS NULL
+      AND EXISTS(SELECT 1 FROM account_runtime_v3 WHERE account_id=? AND active_batch_id IS NOT NULL)`)
+    .bind(now, row.id, accountId, accountId);
+  const guard = "EXISTS(SELECT 1 FROM black_market_orders WHERE id=? AND payout_at=?)";
+  const committed = await db.batch([
+    paid,
+    db.prepare(`UPDATE balances SET brains=brains+? WHERE account_id=? AND ${guard}`)
+      .bind(row.price_brains, accountId, row.id, now),
+    db.prepare(`UPDATE account_runtime_v3 SET account_version=account_version+1,updated_at=?
+      WHERE account_id=? AND ${guard}`).bind(now, accountId, row.id, now),
+    db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
+      SELECT ?,?,'black_market_payout',?,? WHERE ${guard}`)
+      .bind(`${accountId}:payout:${row.id}`, accountId,
+        JSON.stringify({ orderId: row.id, brains: row.price_brains }), now, row.id, now),
+  ]);
+  return (committed[0]?.meta.changes ?? 0) === 1 ? row.price_brains : 0;
+}
+
 /** Collect one settled order: take delivery of the zombie it owes this account (if
- * any), then acknowledge it so it stops surfacing as uncollected.
+ * any) and the brains the market is holding for it, then acknowledge it so it stops
+ * surfacing as uncollected.
  *
  * The claim runs FIRST and its failure aborts the whole thing — acknowledging an order
  * whose zombie could not land would dismiss the only card that can still deliver it.
  *
- * It also echoes the current balance. The brains were credited at settlement, by the
- * other player's fulfil — an event this account's client never saw — so collecting is
- * the moment it must learn the new total. Reading it here costs one extra SELECT and
- * saves the client a whole second round-trip. */
+ * It also echoes the current balance, which is what a seller's collect is FOR: a sale's
+ * brains wait on the order until this call pays them out (migration 0043). A filled
+ * request's brains were credited to its fulfiller at settlement instead, so for that
+ * card the echo is still just news the client never saw. Reading the balance here costs
+ * one extra SELECT and saves the client a whole second round-trip. */
 export async function collect(
   db: D1Database,
   accountId: string,
@@ -463,6 +512,15 @@ export async function collect(
     if (!("unit" in result)) return result;
     claimed = result.unit;
   }
+  // Only a SALE holds brains for its creator; a request's went to its fulfiller at
+  // settlement. The payout is deliberately independent of the acknowledgment below —
+  // it has its own idempotency marker, so money can never ride on a notice flag.
+  const owedBrains = isCreator && row.kind === "SELL_ZOMBIE" && row.payout_at == null;
+  const brainsPaid = owedBrains ? await payOutSale(db, accountId, row, now) : 0;
+  // Like the claim above: a payout that did not land must NOT be acknowledged away.
+  // The usual cause is a concurrent collect that already paid — the retry then sees
+  // `payout_at` set, skips the payout, and dismisses the card normally.
+  if (owedBrains && !brainsPaid) return { status: 409, error: "payout_conflict" };
   const acknowledged = isCreator
     ? await db.prepare(`UPDATE black_market_orders SET acknowledged_at=?
         WHERE id=? AND creator_account_id=? AND status='FULFILLED' AND acknowledged_at IS NULL`)
@@ -470,10 +528,11 @@ export async function collect(
     : null;
   return {
     ok: true,
-    // "Already collected" only describes the acknowledgment. A claim that just landed
-    // is news either way, so a fresh delivery never reports as a repeat.
-    alreadyCollected: !claimed && (acknowledged?.meta.changes ?? 0) !== 1,
+    // "Already collected" only describes the acknowledgment. A claim or a payout that
+    // just landed is news either way, so neither reports as a repeat.
+    alreadyCollected: !claimed && !brainsPaid && (acknowledged?.meta.changes ?? 0) !== 1,
     ...(claimed ? { claimed } : {}),
+    ...(brainsPaid ? { brainsPaid } : {}),
     ...await balanceEcho(db, accountId),
   };
 }
@@ -838,9 +897,15 @@ export async function fulfill(
     ? { mutation: row.escrow_mutation ?? 0, invasions: row.escrow_invasions ?? 0,
       color: row.escrow_color ?? null }
     : { mutation: offered!.mutation, invasions: offered!.invasions, color: offered!.color };
+  // A filled REQUEST pays its fulfiller in this batch (they are here, with the panel
+  // open, and hold no card to collect from), so it is stamped paid. A SALE's brains
+  // stay with the market until its creator collects — `payout_at` NULL — because the
+  // seller is typically offline right now and would otherwise find the payout already
+  // in their balance with nothing left for Collect to do.
+  const payoutAt = row.kind === "SELL_ZOMBIE" ? null : now;
   const claim = db.prepare(`UPDATE black_market_orders SET status='FULFILLED',closed_at=?,
       closed_operation_id=?,fulfilled_by_account_id=?,delivered_mutation=?,delivered_invasions=?,
-      delivered_color=?
+      delivered_color=?,payout_at=?
       WHERE id=? AND status='OPEN'
       AND creator_account_id!=? AND ${actorAsset}
       AND EXISTS(SELECT 1 FROM account_runtime_v3 WHERE account_id=? AND account_version=? AND active_batch_id IS NOT NULL)
@@ -848,16 +913,15 @@ export async function fulfill(
         AND active_batch_id IS NOT NULL AND active_batch_expires_at>?)
       AND ${recipientRequirement.sql}`)
     .bind(now, operationId, accountId, delivered.mutation, delivered.invasions, delivered.color,
-      orderId, accountId, ...actorAssetBinds,
+      payoutAt, orderId, accountId, ...actorAssetBinds,
       accountId, expectedVersion, now, ...recipientRequirement.binds);
   const guard = "EXISTS(SELECT 1 FROM black_market_orders WHERE id=? AND status='FULFILLED' AND closed_operation_id=?)";
   const statements: D1PreparedStatement[] = [claim];
   if (row.kind === "SELL_ZOMBIE") {
+    // The buyer pays now; the seller is paid by their own collect (see `payoutAt`).
     statements.push(
       db.prepare(`UPDATE balances SET brains=brains-? WHERE account_id=? AND ${guard}`)
-        .bind(row.price_brains, accountId, orderId, operationId),
-      db.prepare(`UPDATE balances SET brains=brains+? WHERE account_id=? AND ${guard}`)
-        .bind(row.price_brains, row.creator_account_id, orderId, operationId)
+        .bind(row.price_brains, accountId, orderId, operationId)
     );
   } else {
     statements.push(
