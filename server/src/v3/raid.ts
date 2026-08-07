@@ -296,7 +296,9 @@ export async function finishRaid(
   // How far the replay had to depart from the client's account of the fight. Zero on a
   // fight both simulations agreed on, so a non-zero rate on a raid is the signal that
   // caught the ruleset-14 wall desync — keep it queryable rather than player-facing.
-  const divergence = verified.ok && (verified.divergence.overrunTicks || verified.divergence.inputsAfterFinish)
+  const divergence = verified.ok &&
+    (verified.divergence.overrunTicks || verified.divergence.inputsAfterFinish ||
+     verified.divergence.refusedInputs)
     ? verified.divergence
     : null;
   // Client-only hazards can make the visible fight finish after the two deterministic
@@ -304,6 +306,9 @@ export async function finishRaid(
   // (`truncated_transcript`) or may disagree about a post-divergence interaction. A
   // client concession is pure self-harm, so accept only those divergence-shaped replay
   // failures as a zero-reward loss. Structural transcript failures remain rejected.
+  // The three `illegal_*` entries are kept for older clients only: since the finish path
+  // started dropping refused taps (see advanceRaidSegment) the replay no longer returns
+  // them, and a WIN that used to die here now settles on the server's own fight.
   const concessionReplayErrors = new Set([
     "truncated_transcript", "illegal_bubble", "illegal_ability", "illegal_wall_tap",
     "input_after_finish",

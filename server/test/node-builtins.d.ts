@@ -1,0 +1,26 @@
+// Minimal declarations for the Node builtins used by migration0044.test.ts.
+//
+// tsconfig.json pins `types: ["@cloudflare/workers-types"]` on purpose: the Worker has
+// no Node runtime, and leaving @types/node out is what stops `fs`/`path` being imported
+// into src/ by accident. That's worth keeping — so the one test that genuinely runs
+// under Node (it rehearses a migration against a real SQLite database) declares exactly
+// the surface it uses here, rather than opening the whole Node API to the project.
+//
+// Only widen this if another Node-hosted test needs it.
+
+declare module "node:sqlite" {
+  export class DatabaseSync {
+    constructor(path: string);
+    exec(sql: string): void;
+    prepare(sql: string): { get(...params: unknown[]): unknown };
+    close(): void;
+  }
+}
+
+declare module "node:fs" {
+  export function readFileSync(path: string, encoding: "utf8"): string;
+}
+
+declare module "node:url" {
+  export function fileURLToPath(url: string | URL): string;
+}

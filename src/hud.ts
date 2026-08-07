@@ -11,7 +11,10 @@ import type { FarmerBodyDef, FarmerCatalog, FarmerHeadDef, PetCatalog, PetDef } 
 import { EPIC_BOSS_FIGHT_BRAIN_COST, type EpicBossPayment } from "./epicBoss/tokens";
 import { AudioManager } from "./audio";
 import { RosterEntry } from "./zombie/types";
-import { ALL_BITS, bitAllowed, MUTATIONS, mutationLabel, mutationBonus } from "./zombie/mutations";
+import {
+  bitAllowed, MUTATION_LIST, mutationLabel, mutationBonus,
+} from "./zombie/mutations";
+import { maskHas } from "./zombie/mutationMask";
 import { QuestView } from "./quest/types";
 import type { RaidCardView, RaidPartyView, RaidResultView, RaidLaunchOpts, LootDrop } from "./raid/RaidManager";
 import { lootDropLabel } from "./raid/RaidManager";
@@ -2960,12 +2963,14 @@ export class Hud {
     const mutationChoices = document.createElement("div");
     mutationChoices.className = "bm-mutation-choices";
     mutationChoices.hidden = true;
-    const mutationChecks = ALL_BITS.map((bit) => {
+    const mutationChecks = MUTATION_LIST.map((mutation) => {
       const label = document.createElement("label");
       const input = document.createElement("input");
       input.type = "checkbox";
-      input.value = String(bit);
-      label.append(input, MUTATIONS[bit].name);
+      // The bit rides on the checkbox because that is what the order stores; the form
+      // itself is built from the catalog, so a new mutation appears here for free.
+      input.value = String(mutation.bit);
+      label.append(input, mutation.name);
       mutationChoices.appendChild(label);
       return input;
     });
@@ -3007,7 +3012,7 @@ export class Hud {
       for (const input of mutationChecks) {
         const bit = Number(input.value);
         const wearable = selling || bitAllowed(bit, headless);
-        const storable = (bit & REQUESTABLE_MUTATION_MASK) !== 0;
+        const storable = maskHas(REQUESTABLE_MUTATION_MASK, bit);
         const blocked = !wearable || !storable;
         if (blocked) input.checked = false;
         input.disabled = blocked;

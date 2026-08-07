@@ -9,6 +9,7 @@ import {
   isMutationForegroundPart,
   matchesMutationReplacement,
   mutationBitsForRendering,
+  mutationPartFor,
   mutationCoversFace,
   mutationPartZIndex,
   type MutationReplacement,
@@ -145,8 +146,7 @@ export class RaidActor {
     const m: ZombieModel =
       assets.zombieModels[key] ?? assets.zombieModels["ZombieActorRegularTier1"];
     const mutationParts = mutationBitsForRendering(assets.zombies, key, mutation).flatMap((bit) => {
-      const partKey = m.mutationOverrides?.[String(bit)] ?? String(bit);
-      const part = assets.mutationParts[partKey];
+      const part = mutationPartFor(assets.mutationParts, m, bit);
       const texture = part ? assets.zombiePartTex[part.file] : undefined;
       return part && texture ? [{ bit, part, texture }] : [];
     });

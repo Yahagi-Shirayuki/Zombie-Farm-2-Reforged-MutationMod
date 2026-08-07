@@ -677,6 +677,9 @@
 #hud .ztip b { display: block; font-size: 13px; color: #ffe08a; margin-bottom: 2px; }
 #hud .ztip span { display: block; font-size: 12px; line-height: 1.3; opacity: .95; }
 #hud .ztip .zeff { display: inline; color: #eaffd8; font-weight: 800; }
+/* A mutation that trades one stat for another writes its penalty in the same place as
+   its gain, so the two have to be told apart at a glance (see mutationTipText). */
+#hud .ztip .zeff-down { color: #ffb3a7; }
 /* stat breakdown (Base → modifiers → Total) inside a stat tooltip */
 #hud .ztip { max-width: min(230px, calc(100vw - 16px)); }
 #hud .ztip .zbd { display: block; margin-top: 6px; border-top: 1px solid rgba(216,180,94,.35); padding-top: 4px; }

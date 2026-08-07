@@ -87,12 +87,14 @@ export function blackMarketPurchaseLock(
   return null;
 }
 
-/** Mutations a wanted post may name. The stored column is capped at 8191 by
- * `black_market_orders.mutation_required`'s CHECK (migration 0030) — the OR of the
- * 13 bits that existed then — and SQLite cannot widen a CHECK in place, so the
- * headless-only Pumpking (8192) is not requestable yet. The compose form greys it
- * out and the Worker rejects it, rather than letting D1 fail the INSERT. */
-export const REQUESTABLE_MUTATION_MASK = ALL_BITS.reduce((mask, bit) => mask | bit, 0) & 8191;
+/** Mutations a wanted post may name: every mutation the catalog knows.
+ *
+ * `black_market_orders.mutation_required` used to CHECK `BETWEEN 1 AND 8191` — the OR
+ * of the 13 bits that existed at migration 0030 — which silently made each new
+ * mutation unrequestable until someone rebuilt the table. Migration 0044 replaced it
+ * with a plain `> 0` bound and moved the exact legal set here, where the catalog is,
+ * so a mutation added to mutations.ts is requestable the moment it exists. */
+export const REQUESTABLE_MUTATION_MASK = ALL_MUTATIONS_MASK;
 
 /** A specific request matches when the bit is present, even if the zombie carries
  * other mutations too. Without a specific bit, preserve the any/none behavior. */
@@ -103,8 +105,8 @@ export function matchesBlackMarketMutation(
 ): boolean {
   if (mutationRequired === undefined) return (mutationMask !== 0) === mutated;
   return SLOTS.every((slot) => {
-    const requestedInSlot = mutationRequired & SLOT_MASK[slot];
-    return requestedInSlot === 0 || (mutationMask & requestedInSlot) !== 0;
+    const requestedInSlot = maskIntersect(mutationRequired, SLOT_MASK[slot]);
+    return requestedInSlot === 0 || maskIntersect(mutationMask, requestedInSlot) !== 0;
   });
 }
 
@@ -112,11 +114,12 @@ export function matchesBlackMarketMutation(
  * "or", while requirements spanning separate slots use "+". */
 export function blackMarketMutationRequirementLabel(mask: number): string {
   return SLOTS
-    .map((slot) => Object.values(MUTATIONS)
-      .filter((mutation) => mutation.slot === slot && (mask & mutation.bit) !== 0)
+    .map((slot) => MUTATION_LIST
+      .filter((mutation) => mutation.slot === slot && maskHas(mask, mutation.bit))
       .map((mutation) => mutation.name)
       .join(" or "))
     .filter(Boolean)
     .join(" + ");
 }
-import { ALL_BITS, MUTATIONS, SLOTS, SLOT_MASK } from "./zombie/mutations";
+import { ALL_MUTATIONS_MASK, MUTATION_LIST, SLOTS, SLOT_MASK } from "./zombie/mutations";
+import { maskHas, maskIntersect } from "./zombie/mutationMask";

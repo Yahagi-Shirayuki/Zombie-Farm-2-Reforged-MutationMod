@@ -19,6 +19,7 @@ import {
   matchesMutationReplacement,
   mutationCoversFace,
   mutationBitsForRendering,
+  mutationPartFor,
   mutationPartZIndex,
   type MutationReplacement,
 } from "./mutationVisual";
@@ -312,12 +313,12 @@ export class ZombieUnit {
     this.root.addChild(this.fertilizeCloud);
   }
 
-  // Attach crop-mutation parts for this unit's mutation mask. Each bit maps to a
+  // Attach crop-mutation parts for this unit's mutation mask. Each mutation maps to a
   // ZombieSheet part (mutations.json); head parts join the tilting headParts, the
   // rest sit on the root. Positions use the same rig math as the base model, so a
-  // mutation lands correctly on any species' body. A model may remap a bit to an
-  // alternate part (Tier-4 variants: bit 512 -> heartichokeBody, bit 4 -> eyebiscusHat)
-  // so the shared stat bit still shows the variant's own hair on the field.
+  // mutation lands correctly on any species' body. A model may remap a mutation to an
+  // alternate part (Tier-4 variants: cauli -> heartichokeBody, carrot -> eyebiscusHat)
+  // so a shared mutation still shows the variant's own hair on the field.
   private addMutations(
     assets: GameAssets,
     model: ZombieModel,
@@ -328,8 +329,7 @@ export class ZombieUnit {
   ) {
     const neck = model.neck;
     for (const bit of mutationBitsForRendering(assets.zombies, this.data.key, mask)) {
-      const partKey = model.mutationOverrides?.[String(bit)] ?? String(bit);
-      const mp = assets.mutationParts[partKey];
+      const mp = mutationPartFor(assets.mutationParts, model, bit);
       if (!mp) continue;
       const tex = assets.zombiePartTex[mp.file];
       if (!tex) continue;

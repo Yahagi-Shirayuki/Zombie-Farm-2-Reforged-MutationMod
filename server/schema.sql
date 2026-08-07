@@ -595,8 +595,12 @@ CREATE TABLE IF NOT EXISTS black_market_orders (
   kind TEXT NOT NULL CHECK (kind IN ('BUY_ZOMBIE', 'SELL_ZOMBIE')),
   zombie_key TEXT NOT NULL,
   mutated_required INTEGER NOT NULL CHECK (mutated_required IN (0, 1)),
+  -- Deliberately only bounded as positive: the exact requestable set is the shared
+  -- mutation catalog (REQUESTABLE_MUTATION_MASK), enforced by the Worker before the
+  -- INSERT, so adding a mutation never needs a schema change. Migration 0044 rebuilt
+  -- this table to drop the old BETWEEN 1 AND 8191, which was a 13-bit cap.
   mutation_required INTEGER CHECK (mutation_required IS NULL OR (
-    mutation_required BETWEEN 1 AND 8191
+    mutation_required > 0
     AND kind='BUY_ZOMBIE'
   )),
   price_brains INTEGER NOT NULL CHECK (price_brains BETWEEN 1 AND 1000000),

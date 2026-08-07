@@ -1,5 +1,6 @@
 import { Container, Graphics } from "pixi.js";
 import { SLOT_MASK } from "./mutations";
+import { maskIntersect } from "./mutationMask";
 
 export type SpecialHeadFxKind = "kindle" | "flame" | "confetti";
 
@@ -19,7 +20,7 @@ const CONFETTI_COLORS = [0xf94144, 0xf9c74f, 0x43aa8b, 0x577590, 0xe36bae, 0xf37
  *  mutation has taken the slot. A Pumpking IS the zombie's head, so a Flamehead
  *  wearing one shows the pumpkin instead of a flame where its head would be. */
 export function specialHeadFxKind(key: string, mutation = 0): SpecialHeadFxKind | null {
-  if ((mutation & SLOT_MASK.head) !== 0) return null;
+  if (maskIntersect(mutation, SLOT_MASK.head) !== 0) return null;
   return SPECIAL_HEAD_FX[key] ?? null;
 }
 

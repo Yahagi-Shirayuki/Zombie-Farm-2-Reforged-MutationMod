@@ -2759,7 +2759,7 @@
    }
   ],
   "mutationOverrides": {
-   "4": "eyebiscusHat"
+   "carrot": "eyebiscusHat"
   }
  },
  "ZombieActorRegularTier4Heartichoke": {
@@ -2897,7 +2897,7 @@
    }
   ],
   "mutationOverrides": {
-   "512": "heartichokeBody"
+   "cauli": "heartichokeBody"
   }
  },
  "ZombieActorRegular2Tier5": {

@@ -159,6 +159,13 @@ export function focusFactor(focus: number, concentration: boolean): number {
  *  Player attack multipliers aren't baked into zombies.json and the source attacks
  *  are ~1.0, so the base per-hit multiplier is 1x — scaled by the focus-based
  *  distraction factor (negated by Concentration) times any self damage ability. */
+/** The lowest str/con/dex a player zombie can be reduced to. Only reachable via a
+ *  mutation penalty (mutations.ts MutationStats): every other modifier is a positive
+ *  multiplier on a positive base. Zero, not a small positive, because "does nothing"
+ *  is a coherent outcome and the derivations below all define a sane behaviour for it
+ *  — what must never happen is a NEGATIVE stat inverting the sign of a hit. */
+export const MIN_COMBAT_STAT = 0;
+
 export function buildPlayerUnits(
   party: OwnedZombie[],
   opts: {
@@ -210,9 +217,19 @@ export function buildPlayerUnits(
     const auraBaseDex = bDex * v * eff.allStatsMult * eff.selfSpeedMult;
     const auraBaseCon = bCon * v * eff.allStatsMult * eff.selfHpMult *
       (opts.farmerLifeMult ?? 1);
-    const str = auraBaseStr * (1 + statAura * 0.10) + mut.str;
-    const dex = auraBaseDex * (1 + statAura * 0.10) + mut.dex;
-    const con = auraBaseCon * (1 + lifeAura * 0.10) + mut.con;
+    // A mutation may carry a PENALTY (mutations.ts MutationStats), so the flat term
+    // added here can be negative and can in principle outweigh a weak species' base
+    // stat. Floor the result: a crippled zombie is meant to be bad, not inverted.
+    // Below MIN_COMBAT_STAT the existing derivations take over (a 0 dex becomes the
+    // 0.1 floor in deriveAttackIntervalMs = one swing per 20s; a 0 con becomes 1 HP in
+    // unit(); a 0 str is simply no damage), which is the intended "useless but alive".
+    //
+    // No current mutation is negative, so this floor never binds on today's data and
+    // every recorded raid replays identically. Authoring the first negative mutation
+    // IS a rules change — bump the replay ruleset version in that same commit.
+    const str = Math.max(MIN_COMBAT_STAT, auraBaseStr * (1 + statAura * 0.10) + mut.str);
+    const dex = Math.max(MIN_COMBAT_STAT, auraBaseDex * (1 + statAura * 0.10) + mut.dex);
+    const con = Math.max(MIN_COMBAT_STAT, auraBaseCon * (1 + lifeAura * 0.10) + mut.con);
     const focus = base * v * eff.allStatsMult;
     // Distraction resistance keys off the unit's real focus stat. Damage abilities
     // are already part of finalPower (`str`) so lasers and healing see them too.

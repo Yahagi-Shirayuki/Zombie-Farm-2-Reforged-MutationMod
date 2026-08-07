@@ -1052,19 +1052,24 @@ describe("raid finish — clientWin concession", () => {
     expect(finished).toMatchObject({ status: 422, body: { error: "bad_sequence" } });
   });
 
-  it("settles a loss after a post-divergence interaction disagrees with the verifier", async () => {
-    const { session, sessionId } = await raidReadyZombie("batch-concede-interaction");
+  it("settles after a post-divergence interaction disagrees with the verifier", async () => {
+    const { session, sessionId, unitId } = await raidReadyZombie("batch-concede-interaction");
     const finished = await call<any>("POST", "/raid/finish", session.token, {
       sessionId,
       finalTick: 0,
       // A hazard can change which unit is charging/active, making a locally accepted
-      // interaction illegal in the hazard-free replay.
+      // interaction illegal in the hazard-free replay. The verifier now DROPS the tap it
+      // will not take — refusing it is refusing the player help, so it can only cost the
+      // server's own army — and settles the fight it actually simulated. This used to
+      // reach the concession fallback, which paid the same nothing but reported every
+      // unit as unaccounted-for rather than bringing the survivor home.
       inputs: [{ seq: 1, tick: 0, type: "bubble", unitId: "not-charging-server-side" }],
       clientWin: false,
     });
     expect(finished).toMatchObject({
       status: 200,
-      body: { gold: 0, brains: 0, xp: 0, outcome: { win: false, survivors: [], losses: [] } },
+      // Still zero: `win` is ANDed with the client's conceded loss.
+      body: { gold: 0, brains: 0, xp: 0, outcome: { win: false, survivors: [unitId], losses: [] } },
     });
   });
 

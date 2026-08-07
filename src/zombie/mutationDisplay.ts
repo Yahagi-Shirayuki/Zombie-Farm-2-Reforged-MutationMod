@@ -8,14 +8,21 @@
 // This module turns a mask into the per-mutation rows the card shows.
 //
 // Two things are deliberately NOT re-derived here:
-//   • the bonus is reported in DISPLAYED units, not the raw 1–4 points — the tiles
+//   • the effect is reported in DISPLAYED units, not the raw 1–4 points — the tiles
 //     normalize against a per-stat reference, so Carrot's "+1 dex" reads +23 Speed
 //     while Tomato's "+1 str" reads +4 Damage (see statDisplay).
 //   • each mutation's contribution is measured by chaining through the same
 //     rounding boundaries the tile uses, so the rows always SUM to the "Mutation"
 //     line in the stat breakdown rather than drifting a point away from it.
+//
+// A mutation may move SEVERAL stats, and may move one DOWN (mutations.ts
+// MutationStats), so an entry carries a list of effects rather than one number, and
+// every one of them is written signed.
 import { BASE } from "../base";
-import { MUTATIONS, mutationBonus, mutationsOf, type Slot, type Stat } from "./mutations";
+import {
+  mutationBonus, mutationsOf, statEffectsOf,
+  type MutationDef, type Slot, type Stat,
+} from "./mutations";
 import { STATS, displayStat } from "./traits";
 
 // ZF2's own 40x40 mutation icons (MutationIcons.png — the vegetable in a lab flask),
@@ -35,21 +42,27 @@ export const MUTATION_ICON: Record<string, string> = {
   dragon: iconFile("dragonfruit"), pumpking: iconFile("pumpking"),
 };
 
-/** Tier-4 variants share a lower tier's bit for stats and slot occupancy but ship
- *  their OWN art and name — Eyebiscus rides Carrot's bit 4, Heartichoke rides
- *  Cauliflower's 512. Naming such a zombie's mutation off the bit alone is simply
- *  wrong (the reported "Cauli-hair" text on Heartichoke), so the two species get an
- *  explicit override here, art included: the game authored icons for both. MIRRORS
+/** One species' replacement art and name for a mutation it shares with others. */
+export interface MutationVariant {
+  part: string; // mutations.json key for the rig art
+  name: string;
+  icon: string;
+}
+
+/** Tier-4 variants share a lower tier's MUTATION for stats and slot occupancy but ship
+ *  their OWN art and name — Eyebiscus rides Carrot's, Heartichoke rides Cauliflower's.
+ *  Naming such a zombie's mutation off the shared one alone is simply wrong (the
+ *  reported "Cauli-hair" text on Heartichoke), so the two species get an explicit
+ *  override here, art included: the game authored icons for both.
+ *
+ *  Species key -> mutation key -> what that species shows instead. MIRRORS
  *  `mutationOverrides` in zombie/models.json — pinned against it by the tests. */
-export const MUTATION_VARIANTS: Record<
-  string,
-  Record<number, { part: string; name: string; icon: string }>
-> = {
+export const MUTATION_VARIANTS: Record<string, Record<string, MutationVariant>> = {
   ZombieActorRegularTier4Eyebiscus: {
-    4: { part: "eyebiscusHat", name: "Eyebiscus", icon: iconFile("eyebiscus") },
+    carrot: { part: "eyebiscusHat", name: "Eyebiscus", icon: iconFile("eyebiscus") },
   },
   ZombieActorRegularTier4Heartichoke: {
-    512: { part: "heartichokeBody", name: "Heartichoke", icon: iconFile("heartichoke") },
+    cauli: { part: "heartichokeBody", name: "Heartichoke", icon: iconFile("heartichoke") },
   },
 };
 
@@ -67,6 +80,13 @@ const STAT_LABELS: Record<Stat, string> = {
   con: STATS.find((s) => s.key === "con")!.label,
 };
 
+/** What one mutation does to one stat, in the units the tiles show. */
+export interface MutationCardEffect {
+  stat: Stat;
+  statLabel: string; // "Damage" / "Speed" / "Life"
+  delta: number; // what it moves THIS zombie's displayed stat by; NEGATIVE for a penalty
+}
+
 /** One mutation as the card shows it. */
 export interface MutationCardEntry {
   bit: number;
@@ -75,8 +95,10 @@ export interface MutationCardEntry {
   icon: string; // the card's 40x40 icon URL
   name: string; // "Onionhead", "Eyebiscus", …
   slotLabel: string; // which body slot it occupies (one mutation per slot)
-  statLabel: string; // "Damage" / "Speed" / "Life"
-  delta: number; // what it adds to THIS zombie's displayed stat
+  /** Every stat this mutation moves, in str/dex/con order. A mutation may trade one
+   *  stat for another, so this can mix gains and penalties; it is never empty for a
+   *  catalogued mutation, and a stat the mutation leaves alone is simply absent. */
+  effects: MutationCardEffect[];
 }
 
 /** The minimum a zombie must carry for its mutation rows. `str`/`dex`/`con`
@@ -96,40 +118,72 @@ export function mutationEntries(z: MutationSource): MutationCardEntry[] {
   const bonus = mutationBonus(z.mutation);
   // Strip the mutations back off to recover the species' own stats, then re-apply
   // them one at a time so each row reports its marginal, already-rounded gain.
-  const base: Record<Stat, number> = {
+  return mutationEntriesFrom(defs, {
     str: z.str - bonus.str,
     dex: z.dex - bonus.dex,
     con: z.con - bonus.con,
-  };
+  }, MUTATION_VARIANTS[z.key]);
+}
+
+/** The card rows for an explicit set of mutation defs applied to explicit UNMUTATED
+ *  stats. Split out from mutationEntries so the row maths can be exercised against a
+ *  mutation the shipped catalog doesn't contain — which is the only way to cover a
+ *  multi-stat or penalty-carrying mutation before one ships. */
+export function mutationEntriesFrom(
+  defs: readonly MutationDef[],
+  base: Record<Stat, number>,
+  variants?: Record<string, MutationVariant>,
+): MutationCardEntry[] {
   const applied: Record<Stat, number> = { str: 0, dex: 0, con: 0 };
-  const variants = MUTATION_VARIANTS[z.key];
 
   return defs.map((def) => {
-    const before = displayStat(def.stat, base[def.stat] + applied[def.stat]);
-    applied[def.stat] += def.amount;
-    const after = displayStat(def.stat, base[def.stat] + applied[def.stat]);
-    const variant = variants?.[def.bit];
+    // One row per stat this mutation moves. Each is measured by stepping THROUGH the
+    // rounding boundary the tile uses, so a mutation that gives and takes reports both
+    // halves at the same fidelity as a single-stat one.
+    const effects = statEffectsOf(def).map((effect) => {
+      const before = displayStat(effect.stat, base[effect.stat] + applied[effect.stat]);
+      applied[effect.stat] += effect.amount;
+      const after = displayStat(effect.stat, base[effect.stat] + applied[effect.stat]);
+      return {
+        stat: effect.stat,
+        statLabel: STAT_LABELS[effect.stat],
+        delta: after - before,
+      };
+    });
+    const variant = variants?.[def.key];
     return {
       bit: def.bit,
-      partKey: variant?.part ?? String(def.bit),
+      partKey: variant?.part ?? def.key,
       icon: variant?.icon ?? MUTATION_ICON[def.key],
       name: variant?.name ?? def.name,
       slotLabel: SLOT_LABELS[def.slot],
-      statLabel: STAT_LABELS[def.stat],
-      delta: after - before,
+      effects,
     };
   });
 }
 
-/** The tooltip body for one mutation — the tile itself is unlabelled, so this is
- *  where the bonus is read. Two lines under the name: the gain, then the slot. */
+/** One effect as the tooltip writes it: always signed, so a penalty reads as a penalty
+ *  rather than as a smaller gain. */
+export function mutationEffectText(effect: MutationCardEffect): string {
+  return `${effect.delta >= 0 ? "+" : ""}${effect.delta} ${effect.statLabel}`;
+}
+
+/** The tooltip body for one mutation — the tile itself is unlabelled, so this is where
+ *  the effect is read. One line per stat it moves, then the slot. Penalties carry
+ *  `zeff-down` so the card can colour a trade-off differently from a pure gain. */
 export function mutationTipText(entry: MutationCardEntry): string {
-  return `<span class="zeff">+${entry.delta} ${entry.statLabel}</span><br>${entry.slotLabel} slot`;
+  const lines = entry.effects
+    .map((effect) => {
+      const cls = effect.delta < 0 ? "zeff zeff-down" : "zeff";
+      return `<span class="${cls}">${mutationEffectText(effect)}</span>`;
+    })
+    .join("<br>");
+  return `${lines}<br>${entry.slotLabel} slot`;
 }
 
 /** Every mutation name a mask stands for on THIS species, e.g. "Onionhead, Celery-arms".
  *  Variant-aware, unlike the raw `mutationLabel` in mutations.ts. */
 export function mutationNames(key: string, mask: number): string[] {
   const variants = MUTATION_VARIANTS[key];
-  return mutationsOf(mask).map((def) => variants?.[def.bit]?.name ?? MUTATIONS[def.bit].name);
+  return mutationsOf(mask).map((def) => variants?.[def.key]?.name ?? def.name);
 }

@@ -22,7 +22,7 @@ import { raidLoot, dropEcon, MAX_SEED_ITEMS } from "./raidLootCatalog";
 import { rollLoot, resolveLoot, type LootGrant } from "./loot";
 import { rollBrainDrop } from "../../src/raid/brainDrops";
 import { planBuy, planUse, planGiftRedeem, type InventoryAction } from "./inventory";
-import { zombieSell, isKnownZombie, MAX_MUTATION } from "./rosterCatalog";
+import { zombieSell, isKnownZombie, sanitizeMutationMask } from "./rosterCatalog";
 import { validateUnit, type RosterAction } from "./roster";
 import { BASE_FARM_SIZE, sizeTier, nextSize, climateCost } from "./shopCatalog";
 import { levelForXp } from "./levels";
@@ -2407,7 +2407,7 @@ export async function applyRosterActions(
       // never invents a new species) — so a granted result that isn't a parent key is a
       // fabrication and is rejected (the job is still cleared so the client isn't stuck).
       const validKey = (a.key === job.key_a || a.key === job.key_b) && isKnownZombie(a.key);
-      const mutation = Number.isInteger(a.mutation) && a.mutation! >= 0 ? Math.min(MAX_MUTATION, a.mutation!) : 0;
+      const mutation = sanitizeMutationMask(a.mutation);
       const stmts: D1PreparedStatement[] = [
         db.prepare("INSERT INTO roster_actions (id, account_id, created_at) VALUES (?, ?, ?)").bind(a.id, accountId, now),
         db.prepare("DELETE FROM combine_jobs WHERE account_id = ?").bind(accountId),

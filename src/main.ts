@@ -1272,6 +1272,29 @@ async function main() {
   saveManager.onStorageError = (message) => hud.showToast(message);
   jobs.onQueueChanged = () => saveManager.checkpointJobs();
 
+  // Pixi's ticker is requestAnimationFrame-driven and may stop completely when
+  // the tab/window is backgrounded. Keep a separate monotonic clock for just the
+  // queued farm-job pipeline. If frames are merely throttled, each sparse frame
+  // advances the missing time; if they stop, the first focus/visible event does.
+  // Nothing else (notably raids) receives this elapsed time.
+  let lastJobAdvanceAt = Date.now();
+  const advanceFarmJobsToNow = (forceSilent = false) => {
+    const now = Date.now();
+    const elapsed = (now - lastJobAdvanceAt) / 1000;
+    // A throttled/hidden tab can complete several queued jobs in one catch-up.
+    // Do that work silently so their independent one-shots do not all burst at once.
+    jobs.advanceElapsed(elapsed, forceSilent || elapsed > 0.25);
+    lastJobAdvanceAt = now;
+  };
+
+  // Battles suspend the farm queue and JobSystem replays the suspended span on the way
+  // out (see JobSystem.setPaused), so the two clocks have to be handed off cleanly.
+  // Re-baseline this one at each edge: while paused it accumulates a gap it will never
+  // apply, and a tab frozen through the whole invasion would otherwise hand that same
+  // span back a second time on the first frame after the result panel closes.
+  const pauseFarmJobs = () => { advanceFarmJobsToNow(); jobs.setPaused(true); };
+  const resumeFarmJobs = () => { advanceFarmJobsToNow(); jobs.setPaused(false); lastJobAdvanceAt = Date.now(); };
+
   // Visit mode: if a friend farm was requested (via enterVisit → reload), hydrate
   // THEIR read-only save into these fresh singletons and — crucially — never call
   // enableAutosave(). The player's own save is never loaded in this mode, so a
@@ -3168,7 +3191,7 @@ async function main() {
     }
     const paidRun = state.epicBossRun ?? gate.run;
     const setup = buildEpicBossSetup(def, paidRun, party, assets, state);
-    jobs.setPaused(true);
+    pauseFarmJobs();
     raidActive = true;
     world.visible = false;
     hud.setRaiding(true);
@@ -3236,7 +3259,7 @@ async function main() {
         hud.openRaidResult(view, () => {
           if (raidScene) { app.stage.removeChild(raidScene.container); raidScene.destroy(); raidScene = null; }
           raidActive = false;
-          jobs.setPaused(false);
+          resumeFarmJobs();
           world.visible = true;
           hud.setRaiding(false);
           audio.exitRaid();
@@ -3269,7 +3292,7 @@ async function main() {
           }).catch(() => {
             hud.showToast("The fight result could not be verified. Reconnecting will recover it.");
             if (raidScene) { app.stage.removeChild(raidScene.container); raidScene.destroy(); raidScene = null; }
-            raidActive = false; jobs.setPaused(false); world.visible = true; hud.setRaiding(false); audio.exitRaid();
+            raidActive = false; resumeFarmJobs(); world.visible = true; hud.setRaiding(false); audio.exitRaid();
             flushQuestCompletions();
           });
           return;
@@ -3412,7 +3435,7 @@ async function main() {
         "keep at it and it'll go away!"
       );
     }
-    jobs.setPaused(true);
+    pauseFarmJobs();
     raidActive = true;
     world.visible = false;
     hud.setRaiding(true); // battle scene takes over the screen
@@ -3542,7 +3565,7 @@ async function main() {
             raidScene = null;
           }
           raidActive = false;
-          jobs.setPaused(false);
+          resumeFarmJobs();
           world.visible = true;
           hud.setRaiding(false);
           audio.exitRaid(); // battle over — hand the farm bed back
@@ -4694,21 +4717,6 @@ async function main() {
     bar.addChild(bg, fill, label);
     field.labelLayer.addChild(bar);
     return { bar, fill, label };
-  };
-
-  // Pixi's ticker is requestAnimationFrame-driven and may stop completely when
-  // the tab/window is backgrounded. Keep a separate monotonic clock for just the
-  // queued farm-job pipeline. If frames are merely throttled, each sparse frame
-  // advances the missing time; if they stop, the first focus/visible event does.
-  // Nothing else (notably raids) receives this elapsed time.
-  let lastJobAdvanceAt = Date.now();
-  const advanceFarmJobsToNow = (forceSilent = false) => {
-    const now = Date.now();
-    const elapsed = (now - lastJobAdvanceAt) / 1000;
-    // A throttled/hidden tab can complete several queued jobs in one catch-up.
-    // Do that work silently so their independent one-shots do not all burst at once.
-    jobs.advanceElapsed(elapsed, forceSilent || elapsed > 0.25);
-    lastJobAdvanceAt = now;
   };
 
   // requestAnimationFrame normally stops in a hidden tab. Keep the small farm-job

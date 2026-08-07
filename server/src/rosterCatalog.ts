@@ -245,8 +245,14 @@ export function zombieSell(key: string): number {
   return Math.max(1, Math.floor(cost / 2));
 }
 
-/** Max mutation bitmask we accept on a granted/seeded unit (mutations.ts uses a small
- *  bitfield; this is a generous plausibility bound, not the exact legal set). */
-export const MAX_MUTATION = 0xffff;
+/** The mutation mask we accept on a granted/seeded unit: exactly the bits the shared
+ *  catalog defines, with anything else dropped.
+ *
+ *  This used to be a magnitude clamp (`Math.min(0xffff, mask)`), which capped the
+ *  system at 16 mutations and — worse — turned an out-of-range value into 0xffff, a
+ *  mask of arbitrary *other* mutations rather than none. Intersecting against the
+ *  catalog is both the tighter check and the one that never needs revisiting: it
+ *  widens on its own as mutations are added (see src/zombie/mutations.ts). */
+export { sanitizeMutationMask } from "../../src/zombie/mutations";
 /** Max veterancy invasions we accept (plausibility bound). */
 export const MAX_INVASIONS = 100_000;

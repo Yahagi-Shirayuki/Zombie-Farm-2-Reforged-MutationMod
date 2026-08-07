@@ -28,6 +28,7 @@ import {
 import { advanceRaidArmy, raidArmyHasExited } from "./raidOutro";
 import { zombieRaidHeightScale } from "../zombie/displayScale";
 import { zombieBasicAttackName } from "./zombieAttackPresentation";
+import { zombieFacingDelta } from "./zombieFacing";
 import { isMobile } from "../platform";
 import { readSafeAreaInsets } from "../safeArea";
 import { computeRaidHudLayout } from "./raidHudLayout";
@@ -1555,8 +1556,11 @@ export class RaidScene {
       const simMoving = Math.hypot(u.vx, u.vy) > 6;
       const exitMarch = (this.phase === "retreat" || this.phase === "outro") && u.team === "player" && u.alive;
       if (tok.actor) {
-        if (exitMarch) tok.actor.setFacingFromDelta(this.phase === "retreat" ? -1 : 1);
-        else if (Math.abs(u.vx) > 6) tok.actor.setFacingFromDelta(u.vx);
+        const facing = zombieFacingDelta(u, {
+          exitMarch,
+          retreating: this.phase === "retreat",
+        });
+        if (facing !== null) tok.actor.setFacingFromDelta(facing);
         const moving = u.alive && (simMoving || exitMarch);
         // The source focus pose narrows the eyes while the gold bar is advancing.
         // A distracted zombie or one waiting on the full-bar brain bubble is no

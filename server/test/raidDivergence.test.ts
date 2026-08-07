@@ -65,15 +65,30 @@ describe("client-only hazard timeline divergence", () => {
     expect(retreated.divergence.overrunTicks).toBe(0);
   });
 
-  it("still rejects a forged input rather than shrugging it off", () => {
-    // Only the fight's LENGTH is forgiven. A tap addressing a unit in the wrong state is
-    // the signal that caught the ruleset-14 wall desync — it stays fatal.
-    expect(replayRaid(createPinnedSim(CONFIG), 400, [
+  it("drops a tap its own sim refuses instead of throwing the victory away", () => {
+    // The residual of the same outage: a grabbed zombie leaves the client and the server
+    // disagreeing about a UNIT's state, not just the fight's length, and the finish died
+    // on `illegal_ability`. Refusing a tap is refusing the player help, so it can only
+    // cost the server's army — settle its own fight and record the disagreement.
+    const clean = replayRaid(createPinnedSim(CONFIG), 400, []);
+    const forged = replayRaid(createPinnedSim(CONFIG), 400, [
       { seq: 1, tick: 10, type: "ability", abilityKey: "forged" },
-    ])).toMatchObject({ error: "illegal_ability" });
+      { seq: 2, tick: 10, type: "bubble", unitId: "not-in-this-raid" },
+    ]);
+    expect(forged).toMatchObject({ ok: true });
+    if (!forged.ok || !clean.ok) return;
+    expect(forged.divergence.refusedInputs).toBe(2);
+    expect(forged.outcome).toEqual(clean.outcome); // a refused tap changes nothing
+  });
+
+  it("still rejects a structurally broken transcript", () => {
+    // Forgiveness stops at "well-formed". A missing id is a broken transcript.
     expect(replayRaid(createPinnedSim(CONFIG), 400, [
-      { seq: 1, tick: 10, type: "bubble", unitId: "not-in-this-raid" },
+      { seq: 1, tick: 10, type: "bubble" } as never,
     ])).toMatchObject({ error: "illegal_bubble" });
+    expect(replayRaid(createPinnedSim(CONFIG), 400, [
+      { seq: 1, tick: 10, type: "ability" } as never,
+    ])).toMatchObject({ error: "illegal_ability" });
   });
 
   it("never simulates past the four-minute cap", () => {
@@ -94,7 +109,7 @@ describe("client-only hazard timeline divergence", () => {
     expect(segment).toMatchObject({ ok: true });
     if (!segment.ok) return;
     expect(segment.finished).toBe(false);
-    expect(segment.divergence).toEqual({ overrunTicks: 0, inputsAfterFinish: 0 });
+    expect(segment.divergence).toEqual({ overrunTicks: 0, inputsAfterFinish: 0, refusedInputs: 0 });
   });
 
   it("drops a tap that lands after the server's fight ended", () => {

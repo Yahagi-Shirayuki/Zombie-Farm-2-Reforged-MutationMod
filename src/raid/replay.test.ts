@@ -76,13 +76,32 @@ function tapWallOnFirstSight(sim: BattleSim): { unitId: string; tick: number } {
 }
 
 describe("deterministic raid replay", () => {
-  it("rejects reordered, future, illegal, and oversized transcripts", () => {
+  it("rejects reordered, future, malformed, and oversized transcripts", () => {
     expect(replayRaid(worstCaseSim(), 1, [{ seq: 2, tick: 0, type: "retreat" }])).toMatchObject({ error: "bad_sequence" });
     expect(replayRaid(worstCaseSim(), 1, [{ seq: 1, tick: 2, type: "retreat" }])).toMatchObject({ error: "bad_input_tick" });
-    expect(replayRaid(worstCaseSim(), 1, [{ seq: 1, tick: 0, type: "ability", abilityKey: "forged" }])).toMatchObject({ error: "illegal_ability" });
-    expect(replayRaid(worstCaseSim(), 1, [{ seq: 1, tick: 0, type: "wallTap", unitId: "e0" }])).toMatchObject({ error: "illegal_wall_tap" });
+    // A transcript that isn't shaped like one is still fatal, whatever the path.
+    expect(replayRaid(worstCaseSim(), 1, [{ seq: 1, tick: 0, type: "ability" } as never])).toMatchObject({ error: "illegal_ability" });
+    expect(replayRaid(worstCaseSim(), 1, [{ seq: 1, tick: 0, type: "wallTap" } as never])).toMatchObject({ error: "illegal_wall_tap" });
+    expect(replayRaid(worstCaseSim(), 1, [{ seq: 1, tick: 0, type: "shove" } as never])).toMatchObject({ error: "bad_input_type" });
     const tooMany = Array.from({ length: RAID_MAX_INPUTS + 1 }, (_, n) => ({ seq: n + 1, tick: 0, type: "retreat" as const }));
     expect(replayRaid(worstCaseSim(), 1, tooMany)).toMatchObject({ error: "too_many_inputs" });
+  });
+
+  // The finish path forgives a well-formed tap the server's own sim won't take: it is
+  // player help the server's army never receives, so dropping it can only make the
+  // server's result worse. A checkpoint has no such licence.
+  it("drops a refused tap at the finish and counts it, but still fails a checkpoint", () => {
+    const refused = replayRaid(worstCaseSim(), 1, [
+      { seq: 1, tick: 0, type: "ability", abilityKey: "forged" },
+      { seq: 2, tick: 0, type: "wallTap", unitId: "e0" },
+      { seq: 3, tick: 0, type: "bubble", unitId: "nobody" },
+    ]);
+    expect(refused).toMatchObject({ ok: true });
+    if (refused.ok) expect(refused.divergence.refusedInputs).toBe(3);
+
+    expect(advanceRaidSegment(worstCaseSim(), 0, 1, 0, [
+      { seq: 1, tick: 0, type: "ability", abilityKey: "forged" },
+    ], false)).toMatchObject({ error: "illegal_ability" });
   });
 
   it("chips the verifier's wall by the same taps the player landed", () => {
@@ -133,7 +152,7 @@ describe("deterministic raid replay", () => {
     expect(replayed).toMatchObject({ ok: true });
     if (replayed.ok) expect(replayed.outcome).toEqual(outcome);
     // A transcript the two sims agreed on runs to the same length, with nothing dropped.
-    if (replayed.ok) expect(replayed.divergence).toEqual({ overrunTicks: 0, inputsAfterFinish: 0 });
+    if (replayed.ok) expect(replayed.divergence).toEqual({ overrunTicks: 0, inputsAfterFinish: 0, refusedInputs: 0 });
 
     // Drop the taps (pre-14 behaviour) and the verifier is still stuck behind a wall the
     // player knocked down on screen. It no longer FAILS the settlement over that — it

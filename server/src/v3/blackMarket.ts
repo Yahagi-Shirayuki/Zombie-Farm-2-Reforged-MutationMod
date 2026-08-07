@@ -14,6 +14,7 @@ import type {
 } from "../../../src/net/protocol";
 import objectRows from "../../../public/assets/placeables.json";
 import { SLOTS, SLOT_MASK } from "../../../src/zombie/mutations";
+import { maskIntersect, maskWithout } from "../../../src/zombie/mutationMask";
 import { REQUESTABLE_MUTATION_MASK } from "../../../src/blackMarketRules";
 import { levelForXp, XP_THRESHOLDS } from "../levels";
 import {
@@ -145,14 +146,13 @@ const validId = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(value);
 const validPrice = (value: unknown): value is number =>
   Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= MAX_PRICE;
-// REQUESTABLE_MUTATION_MASK is shared with the compose form (see blackMarketRules):
-// the stored column's CHECK caps it at the 13 bits that existed in migration 0030, so
-// a bit added later (Pumpking) is rejected here as a clean 400 rather than failing the
-// D1 INSERT. Widening the CHECK needs a table rebuild, which would cascade-delete
-// black_market_receipts — deliberately deferred.
+// REQUESTABLE_MUTATION_MASK is shared with the compose form (see blackMarketRules) and
+// is now the whole catalog: since migration 0044 the stored column only CHECKs `> 0`,
+// so THIS is the exact legal set and a request naming an unknown bit is a clean 400.
+// Adding a mutation needs no schema change — the bound widens with the catalog.
 const validMutationRequirement = (value: unknown): value is number | undefined =>
   value === undefined || (Number.isSafeInteger(value) && Number(value) > 0 &&
-    (Number(value) & ~REQUESTABLE_MUTATION_MASK) === 0);
+    maskWithout(Number(value), REQUESTABLE_MUTATION_MASK) === 0);
 export const matchesMutationRequirement = (
   mutation: number,
   mutated: number,
@@ -160,17 +160,19 @@ export const matchesMutationRequirement = (
 ): boolean => {
   if (mutationRequired === null) return (mutation !== 0) === !!mutated;
   return SLOTS.every((slot) => {
-    const requestedInSlot = mutationRequired & SLOT_MASK[slot];
-    return requestedInSlot === 0 || (mutation & requestedInSlot) !== 0;
+    const requestedInSlot = maskIntersect(mutationRequired, SLOT_MASK[slot]);
+    return requestedInSlot === 0 || maskIntersect(mutation, requestedInSlot) !== 0;
   });
 };
+// SQLite's `&` is 64-bit, unlike JavaScript's — these predicates stay correct for
+// every bit the mask can hold, so only the JS-side arithmetic above had to change.
 const mutationRequirementSql = (mutationRequired: number | null): {
   sql: string;
   binds: number[];
 } => {
   if (mutationRequired === null) return { sql: "(mutation!=0)=?", binds: [] };
   const slotMasks = SLOTS
-    .map((slot) => mutationRequired & SLOT_MASK[slot])
+    .map((slot) => maskIntersect(mutationRequired, SLOT_MASK[slot]))
     .filter((mask) => mask !== 0);
   return {
     sql: slotMasks.map(() => "(mutation & ?) != 0").join(" AND "),

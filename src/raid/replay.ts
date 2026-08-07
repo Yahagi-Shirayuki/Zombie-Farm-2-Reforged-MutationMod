@@ -66,7 +66,18 @@ import type { RaidOutcome } from "./types";
 // 1 s hold kept (see ATTACK_OVERRIDES in tools/prep_raids.py). The struck zombie now holds
 // its slot instead of being re-sent to the back of the formation, so a v16 client and a v17
 // Worker would disagree about the Lawyers fight from the boss's first special onward.
-export const RAID_RULESET_VERSION = 17;
+// 18: a ONE-USE activated ability (Explode / Explode Ver.2 / Mini Buddy) is now spent
+// the instant the player commits it, not when its wind-up pays off. Anything that
+// cancels a wind-up mid-charge — a knockback, the Video Games boss's pixelFire, and
+// (client-only) a trapeze or crab grab — used to hand the move straight back, because
+// `usedAbilities` was written at the payoff and Explode carries no cooldown to mask the
+// gap. On the two hazard raids that made the two simulations disagree about a REFUSED
+// tap rather than about timing: the client's grabbed leprechaun could explode a second
+// time, the server's (which never grabs anyone) was still charging the first, and the
+// finish died on `illegal_ability` — a player-reported bug on exactly the Silver Small's
+// two explosion buttons. Same cost as v15: an invasion in flight at deploy time settles
+// as stale_ruleset and pays nothing.
+export const RAID_RULESET_VERSION = 18;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;
@@ -86,6 +97,10 @@ export interface ReplayDivergence {
   overrunTicks: number;
   /** Taps dropped because the server's fight had already ended when they arrived. */
   inputsAfterFinish: number;
+  /** Well-formed taps the server's own sim REFUSED — its copy of that unit was in a
+   *  different state than the player's. Dropped rather than fatal on the finish path
+   *  (see `advanceRaidSegment`), and counted here so the desync stays queryable. */
+  refusedInputs: number;
 }
 
 export type ReplayResult =
@@ -109,11 +124,17 @@ export type SegmentResult =
  * player never receives, and the overrun only ever runs the server's OWN deterministic
  * simulation to its own conclusion.
  *
- * Deliberately NOT covered: a tap the sim REFUSES (`illegal_bubble` / `illegal_ability`
- * / `illegal_wall_tap`) stays fatal. Those address a unit in the wrong state rather than
- * a fight in the wrong phase, they are ~30x rarer in practice than the timing failures,
- * and they are the signal that caught the ruleset-14 wall desync. A checkpoint passes
- * false — mid-fight segments must stay exact. */
+ * A tap the sim REFUSES (`illegal_bubble` / `illegal_ability` / `illegal_wall_tap`) is
+ * dropped the same way, for the same reason. All three are the player HELPING their own
+ * army — releasing a charged zombie, spending an activated move, chipping a wall — so a
+ * refusal is help the server's player never receives, and every consequence lands on the
+ * server's own outcome: a slower fight, fewer survivors, less reward. It cannot invent a
+ * win. Holding them fatal instead cost 84 accounts their hazard-raid victories outright
+ * (`clientWin` concedes losses only), which is a far worse answer than settling the
+ * server's honest, un-helped fight. `refusedInputs` keeps the desync signal that caught
+ * the ruleset-14 wall bug. Structurally malformed input (a non-string id, an unknown
+ * type, a bad tick or sequence) remains fatal — that is a broken transcript, not a
+ * disagreement about state. A checkpoint passes false: mid-fight segments stay exact. */
 export function advanceRaidSegment(
   sim: BattleSim,
   startTick: number,
@@ -145,6 +166,13 @@ export function advanceRaidSegment(
   let cursor = 0;
   let retreated = false;
   let inputsAfterFinish = 0;
+  let refusedInputs = 0;
+  /** A well-formed tap the sim would not take. Fatal mid-fight, dropped at the finish. */
+  const refuse = (error: string): { ok: false; error: string } | null => {
+    if (!runToCompletion) return { ok: false, error };
+    refusedInputs++;
+    return null;
+  };
   for (let tick = startTick; tick <= finalTick; tick++) {
     while (cursor < inputs.length && inputs[cursor].tick === tick) {
       const input = inputs[cursor++];
@@ -156,13 +184,25 @@ export function advanceRaidSegment(
         continue;
       }
       if (input.type === "bubble") {
-        if (typeof input.unitId !== "string" || !sim.popBubble(input.unitId)) return { ok: false, error: "illegal_bubble" };
+        if (typeof input.unitId !== "string") return { ok: false, error: "illegal_bubble" };
+        if (!sim.popBubble(input.unitId)) {
+          const fatal = refuse("illegal_bubble");
+          if (fatal) return fatal;
+        }
       } else if (input.type === "ability") {
-        if (typeof input.abilityKey !== "string" || !sim.activate(input.abilityKey)) return { ok: false, error: "illegal_ability" };
+        if (typeof input.abilityKey !== "string") return { ok: false, error: "illegal_ability" };
+        if (!sim.activate(input.abilityKey)) {
+          const fatal = refuse("illegal_ability");
+          if (fatal) return fatal;
+        }
       } else if (input.type === "wallTap") {
         // Only a live wall takes a tap, so this can neither reach a normal enemy nor
         // outrun the wall's own hit points: `tapWall` refuses everything else.
-        if (typeof input.unitId !== "string" || !sim.tapWall(input.unitId)) return { ok: false, error: "illegal_wall_tap" };
+        if (typeof input.unitId !== "string") return { ok: false, error: "illegal_wall_tap" };
+        if (!sim.tapWall(input.unitId)) {
+          const fatal = refuse("illegal_wall_tap");
+          if (fatal) return fatal;
+        }
       } else if (input.type === "retreat") {
         retreated = true;
       } else return { ok: false, error: "bad_input_type" };
@@ -191,7 +231,7 @@ export function advanceRaidSegment(
     outcome: sim.finished || retreated ? (retreated ? { ...sim.outcome(), win: false, survivors: [] } : sim.outcome()) : undefined,
     retreated,
     lastSeq,
-    divergence: { overrunTicks, inputsAfterFinish },
+    divergence: { overrunTicks, inputsAfterFinish, refusedInputs },
   };
 }
 

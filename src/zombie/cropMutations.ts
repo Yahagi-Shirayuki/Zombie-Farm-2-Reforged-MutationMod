@@ -1,28 +1,56 @@
-import { addMutation, bitGrowable, slotOf } from "./mutations";
+import { addMutation, bitGrowable, resolveMutationBit, type MutationRef } from "./mutations";
 
-/** Mutation-bearing vegetable crops. Tier-4 visual variants intentionally share
- * the same mutation bit as their underlying Carrot/Cauliflower mutation. */
-export const CROP_MUTATIONS: Readonly<Record<string, number>> = {
-  tomato: 1,
-  onion: 2,
-  carrot: 4,
-  eyebiscus: 4,
-  turnip: 8,
-  potato: 16,
-  coffee: 32,
-  celery: 64,
-  broccoli: 128,
-  garlic: 256,
-  cauliflower: 512,
-  heartichoke: 512,
-  lima_beans: 1024,
-  venus_flytrap: 2048,
-  dragon_fruit: 4096,
+/** A crop table: which mutations each crop key grows. One name, or a list of them. */
+export type CropMutationTable =
+  Readonly<Record<string, MutationRef | readonly MutationRef[]>>;
+
+/** Which mutations a vegetable crop grows on a zombie planted beside it.
+ *
+ * Keys are crop keys from public/assets/plants.json; values name mutations from the
+ * catalog in mutations.ts — by key, which is what new entries should use. A crop may
+ * grant SEVERAL mutations by listing them: each one rolls on its own (see
+ * resolveCropMutations), so a crop naming a head and an arm mutation can produce
+ * either, both, or neither. Two crops may also name the SAME mutation — the Tier-4
+ * visual variants deliberately do, sharing their base crop's bit — and adjacency
+ * counts then pool, exactly as two plots of the base crop would. */
+export const CROP_MUTATIONS: CropMutationTable = {
+  tomato: "tomato",
+  onion: "onion",
+  carrot: "carrot",
+  eyebiscus: "carrot",
+  turnip: "turnip",
+  potato: "potato",
+  coffee: "coffee",
+  celery: "celery",
+  broccoli: "broccoli",
+  garlic: "garlic",
+  cauliflower: "cauli",
+  heartichoke: "cauli",
+  lima_beans: "limabean",
+  venus_flytrap: "flytrap",
+  dragon_fruit: "dragon",
   // Grows on the headless family ONLY (bitGrowable): a zombie that already has a head
   // never grows a pumpkin, however many are planted beside it. It can still inherit
   // one in the Zombie Pot — that is the only route to a Regular wearing it.
-  pumpking: 8192,
+  pumpking: "pumpking",
 };
+
+/** The mutations one crop grows, resolved to bits. Unknown names are dropped, so a
+ *  typo costs that crop its mutation rather than mutating the wrong slot. */
+export function cropMutationBits(
+  cropKey: string,
+  crops: CropMutationTable = CROP_MUTATIONS,
+): number[] {
+  const refs = crops[cropKey];
+  if (refs === undefined) return [];
+  const list: readonly MutationRef[] = Array.isArray(refs) ? refs : [refs as MutationRef];
+  const out: number[] = [];
+  for (const ref of list) {
+    const bit = resolveMutationBit(ref);
+    if (bit !== null && !out.includes(bit)) out.push(bit);
+  }
+  return out;
+}
 
 export const CROP_MUTATION_CHANCE = 0.25;
 
@@ -48,6 +76,9 @@ export interface CropMutationOptions {
   guaranteed?: boolean;
   headless?: boolean;
   random?: () => number;
+  /** Crop table to roll against. Defaults to CROP_MUTATIONS; overridden by tests and
+   *  by anything that wants to try a table without editing the shipped one. */
+  crops?: CropMutationTable;
 }
 
 /** Resolve all crop-adjacency mutations for one harvested zombie.
@@ -63,16 +94,19 @@ export function resolveCropMutations(
 ): number {
   const counts = new Map<number, number>();
   for (const key of adjacentCropKeys) {
-    const bit = CROP_MUTATIONS[key];
-    if (bit) counts.set(bit, (counts.get(bit) ?? 0) + 1);
+    // Counting per BIT, not per crop, is what makes eyebiscus stack with carrot: two
+    // crops naming one mutation pool their adjacency into a single roll.
+    for (const bit of cropMutationBits(key, options.crops)) {
+      counts.set(bit, (counts.get(bit) ?? 0) + 1);
+    }
   }
 
   const random = options.random ?? Math.random;
   const successes: { bit: number; roll: number }[] = [];
   for (const [bit, count] of counts) {
-    if (slotOf(bit) === null) continue;
-    // A mutation this body type can't grow never even rolls — no wasted roll, and no
-    // dependence on addMutation to refuse it further down.
+    // cropMutationBits has already dropped anything the catalog doesn't know, so every
+    // bit here has a slot. A mutation this body type can't grow never even rolls — no
+    // wasted roll, and no dependence on addMutation to refuse it further down.
     if (!bitGrowable(bit, !!options.headless)) continue;
     const roll = random();
     const chance = options.guaranteed ? 1 : Math.min(1, count * CROP_MUTATION_CHANCE);

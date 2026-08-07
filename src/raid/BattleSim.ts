@@ -963,6 +963,13 @@ export class BattleSim {
     pick.windupMs = windup;
     pick.windupTotal = windup;
     pick.abilityCdMs = ab.cooldownMs;
+    // A one-use move is spent when the player COMMITS it, not when it pays off. The
+    // wind-up is cancellable — knockback, pixelFire, and the two client-only grabs all
+    // clear `windupKey` — and Explode carries no cooldown to cover the gap, so marking
+    // it at the payoff handed the move straight back every time its charge was
+    // interrupted. On a hazard raid only the CLIENT interrupts, so only the client
+    // re-armed, and the server refused the second tap as `illegal_ability`.
+    if (ab.useOnce) pick.usedAbilities.push(key);
     return true;
   }
 
@@ -991,7 +998,7 @@ export class BattleSim {
     this.attacksLanded++;
     p.windupKey = null;
     p.windupMs = 0;
-    if (ab.useOnce && !p.usedAbilities.includes(key)) p.usedAbilities.push(key);
+    // `useOnce` was already spent at activate() — a cancelled charge must not refund it.
     p.timerMs = this.cycleMs(p, null); // resume normal attacks after a beat
   }
 

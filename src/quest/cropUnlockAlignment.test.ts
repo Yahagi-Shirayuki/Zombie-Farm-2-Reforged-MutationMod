@@ -3,7 +3,7 @@ import plants from "../../public/assets/plants.json";
 import quests from "../../public/assets/quests.json";
 import zombies from "../../public/assets/zombies.json";
 import { XP_THRESHOLDS } from "../GameState";
-import { CROP_MUTATIONS } from "../zombie/cropMutations";
+import { cropMutationBits } from "../zombie/cropMutations";
 
 // The crop rebalance (tools/reforge_economy.py CROP_REBALANCE) respreads the 25
 // regular crops over levels 1-45. Two invariants have to hold for that ladder to
@@ -119,7 +119,7 @@ const mutants = ZOMBIES.filter((z) => z.category === "mutant");
  *  lower tier's bit, so a bit can have more than one crop. */
 function earliestCropFor(bit: number): number | null {
   const levels = plants
-    .filter((p) => CROP_MUTATIONS[p.key] === bit)
+    .filter((p) => cropMutationBits(p.key).includes(bit))
     .map((p) => p.level);
   return levels.length ? Math.min(...levels) : null;
 }

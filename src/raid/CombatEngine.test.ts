@@ -453,3 +453,48 @@ describe("Lawyers boss — his special stuns, it does not push back", () => {
     expect(stunners).toEqual(["CorporateBossPunchSpecial"]);
   });
 });
+
+describe("buildPlayerUnits — a mutation penalty cannot invert a zombie", () => {
+  // A mutation may subtract (mutations.ts MutationStats), and a big enough penalty on
+  // a weak species drives the raw stat below zero. Every stat here arrives already
+  // baked (makeOwned), so these units stand in for one carrying such a mutation.
+  const crippled = (over: Partial<OwnedZombie>): OwnedZombie[] => [{
+    id: "z1", key: "ZombieActorRegularTier1", name: "Husk", typeName: "Zombie",
+    group: "Regular", className: "Green", classColor: "#000",
+    mutation: 0, str: 2, dex: 2, con: 3, focus: 100, invasions: 0, col: 0, row: 0,
+    ...over,
+  }];
+
+  it("never produces a negative stat", () => {
+    const u = buildPlayerUnits(crippled({ str: -6, dex: -3, con: -4 }))[0];
+    expect(u.str).toBe(0);
+    expect(u.dex).toBe(0);
+    expect(u.con).toBe(0);
+  });
+
+  it("leaves it alive and harmless rather than healing what it hits", () => {
+    // The real hazard: a negative str would make every swing ADD hp to the enemy.
+    const u = buildPlayerUnits(crippled({ str: -6 }))[0];
+    expect(u.str).toBe(0);
+    expect(u.maxHp).toBeGreaterThan(0); // still a body on the field
+    expect(u.attackCooldownMs).toBeGreaterThan(0);
+    expect(Number.isFinite(u.attackCooldownMs)).toBe(true);
+  });
+
+  it("floors a zeroed speed to a real, very slow attack clock", () => {
+    // dex 0 must not divide by zero — deriveAttackIntervalMs floors it at 0.1.
+    const u = buildPlayerUnits(crippled({ dex: -5 }))[0];
+    const healthy = buildPlayerUnits(crippled({}))[0];
+    expect(u.attackCooldownMs).toBeGreaterThan(healthy.attackCooldownMs);
+    expect(u.attackCooldownMs).toBe(20_000); // 2s ÷ the 0.1 dex floor
+  });
+
+  it("does not change a zombie whose stats are all positive", () => {
+    // The floor must be inert on every unit that exists today, so recorded raids
+    // replay identically (no ruleset bump for shipping it).
+    const u = buildPlayerUnits(crippled({}))[0];
+    expect(u.str).toBeCloseTo(2);
+    expect(u.dex).toBeCloseTo(2);
+    expect(u.con).toBeCloseTo(3);
+  });
+});

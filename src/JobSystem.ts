@@ -62,6 +62,8 @@ export class JobSystem {
   private pending = new Set<string>(); // dedupe key "kind:bc,br"
   // Raids own the screen and suspend farm mutations/audio behind the battle.
   private paused = false;
+  // When the current pause began, so resuming can replay it (see setPaused).
+  private pausedAt: number | null = null;
   // While elapsed background time is replayed, actions must use the replay
   // cursor rather than Date.now(). Otherwise every planting completed by one
   // catch-up pass receives the same (late) timestamp.
@@ -196,9 +198,31 @@ export class JobSystem {
     return this.active !== null || this.queue.length > 0;
   }
 
-  /** Suspend/resume queued farmer work without cancelling or replaying it. */
+  /** Suspend/resume queued farmer work without cancelling it.
+   *
+   *  Resuming REPLAYS the paused interval through the same elapsed-time catch-up a
+   *  backgrounded tab uses. An invasion hides the farm for two to four minutes, and
+   *  before this the queue simply stood still through all of it: a player who lined up
+   *  a field of plowing and then went raiding came back to a farmer standing exactly
+   *  where they left them, having done nothing. The farm is never simulated DURING the
+   *  battle — the raid owns the frame budget — it is caught up in one pass on the way
+   *  out, and `advanceElapsed` stops the moment the queue drains, so the cost is the
+   *  queue's own length rather than the time spent away.
+   *
+   *  Wall clock, not frame time, so a tab backgrounded mid-invasion still settles up. */
   setPaused(paused: boolean): void {
+    if (paused === this.paused) return; // nested pauses must not restart the clock
     this.paused = paused;
+    if (paused) {
+      this.pausedAt = Date.now();
+      return;
+    }
+    const since = this.pausedAt;
+    this.pausedAt = null;
+    if (since === null) return;
+    // Silent: a queue that drains in one pass would otherwise fire every completion
+    // one-shot at once, over the victory panel.
+    this.advanceElapsed(Math.max(0, Date.now() - since) / 1000, true);
   }
 
   /** Persist action intent, not Pixi animation state. A partially-walked/worked

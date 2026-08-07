@@ -1,5 +1,5 @@
 {
- "1": {
+ "tomato": {
   "file": "tomatoHead",
   "group": "head",
   "headRel": false,
@@ -9,7 +9,7 @@
   "ay": 0.7,
   "z": 4
  },
- "2": {
+ "onion": {
   "file": "onionHead",
   "group": "head",
   "headRel": false,
@@ -19,7 +19,7 @@
   "ay": 0.8,
   "z": 4
  },
- "4": {
+ "carrot": {
   "file": "carrotHat",
   "group": "head",
   "headRel": true,
@@ -29,7 +29,7 @@
   "ay": 1,
   "z": 6
  },
- "8": {
+ "turnip": {
   "file": "turnipArm",
   "group": "root",
   "headRel": false,
@@ -40,7 +40,7 @@
   "z": 8,
   "replaces": "armF"
  },
- "16": {
+ "potato": {
   "file": "potatoHead",
   "group": "head",
   "headRel": false,
@@ -50,7 +50,7 @@
   "ay": 0.85,
   "z": 4
  },
- "32": {
+ "coffee": {
   "file": "coffeeHead",
   "group": "head",
   "headRel": false,
@@ -60,7 +60,7 @@
   "ay": 0.85,
   "z": 4
  },
- "64": {
+ "celery": {
   "file": "celeryArm",
   "group": "root",
   "headRel": false,
@@ -71,7 +71,7 @@
   "z": 8,
   "replaces": "armF"
  },
- "128": {
+ "broccoli": {
   "file": "broccoliHat",
   "group": "head",
   "headRel": true,
@@ -81,7 +81,7 @@
   "ay": 0.75,
   "z": 6
  },
- "256": {
+ "garlic": {
   "file": "garlicHead",
   "group": "head",
   "headRel": false,
@@ -91,7 +91,7 @@
   "ay": 0.8,
   "z": 4
  },
- "512": {
+ "cauli": {
   "file": "cauliflowerHat",
   "group": "head",
   "headRel": true,
@@ -101,7 +101,7 @@
   "ay": 0.75,
   "z": 6
  },
- "1024": {
+ "limabean": {
   "file": "limaBeanBody",
   "group": "root",
   "headRel": false,
@@ -112,7 +112,7 @@
   "z": 3,
   "replaces": "body"
  },
- "2048": {
+ "flytrap": {
   "file": "flytrapCollar",
   "group": "root",
   "headRel": false,
@@ -122,7 +122,7 @@
   "ay": 0.9,
   "z": 3
  },
- "4096": {
+ "dragon": {
   "file": "dragonArm",
   "group": "root",
   "headRel": false,
@@ -133,7 +133,7 @@
   "z": 8,
   "replaces": "armF"
  },
- "8192": {
+ "pumpking": {
   "file": "pumpkinHead",
   "group": "head",
   "headRel": false,

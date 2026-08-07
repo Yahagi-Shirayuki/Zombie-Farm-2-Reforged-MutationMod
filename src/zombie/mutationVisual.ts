@@ -1,9 +1,32 @@
-import type { ZombieDef } from "../assets";
-import { bitsOf, HEADLESS_HEAD_MASK } from "./mutations";
+import type { MutationPart, ZombieDef, ZombieModel } from "../assets";
+import { bitOf, bitsOf, mutationOf } from "./mutations";
 
 export type MutationReplacement = "body" | "armF" | "head";
 
-const CARROT_MUTATION_BIT = 4;
+const CARROT_MUTATION_BIT = bitOf("carrot");
+const PUMPKING_BIT = bitOf("pumpking");
+
+/**
+ * The art a mutation draws on a given model, or undefined when this build ships no
+ * part for it (an incomplete asset never removes a base part — see the rigs).
+ *
+ * Both mutations.json and a model's `mutationOverrides` are keyed by the mutation's
+ * KEY ("pumpking"). A raw bit key ("8192") is still accepted as a fallback so art
+ * authored against the old numeric form — including an existing mod's — keeps
+ * resolving. Overrides are how the Tier-4 variants show their own art for a mutation
+ * they share (carrot -> eyebiscusHat, cauli -> heartichokeBody).
+ */
+export function mutationPartFor(
+  parts: Readonly<Record<string, MutationPart>>,
+  model: Pick<ZombieModel, "mutationOverrides"> | undefined,
+  bit: number,
+): MutationPart | undefined {
+  const key = mutationOf(bit)?.key;
+  const overrides = model?.mutationOverrides;
+  const named = (key ? overrides?.[key] : undefined) ?? overrides?.[String(bit)];
+  if (named) return parts[named];
+  return (key ? parts[key] : undefined) ?? parts[String(bit)];
+}
 
 /**
  * Does this mutation replace the whole head, face and all?
@@ -18,7 +41,7 @@ const CARROT_MUTATION_BIT = 4;
  * has no head parts to hide.
  */
 export function mutationCoversFace(bit: number): boolean {
-  return (bit & HEADLESS_HEAD_MASK) !== 0;
+  return bit === PUMPKING_BIT;
 }
 
 /** Carrot-eyed and its Eyebiscus visual override are eye attachments, so they

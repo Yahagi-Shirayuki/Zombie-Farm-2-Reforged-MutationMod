@@ -176,7 +176,16 @@ export interface MutationDisplayGain {
  * into one raw sum, and normalizing that sum once avoids double rounding.
  */
 export function mutationDisplayGains(base: BaseStats, mask: number): MutationDisplayGain[] {
-  const bonus = mutationBonus(mask);
+  return statDisplayGains(base, mutationBonus(mask));
+}
+
+/** The same, from an explicit raw stat delta rather than a mask. Split out so a
+ *  mutation that MOVES A STAT DOWN can be covered before the catalog ships one: a
+ *  penalty must survive normalization with its sign intact, not read as a bonus. */
+export function statDisplayGains(
+  base: BaseStats,
+  bonus: Record<"str" | "dex" | "con", number>,
+): MutationDisplayGain[] {
   const gains: MutationDisplayGain[] = [];
   for (const meta of STATS) {
     if (meta.key === "focus") continue; // focus is never mutated
@@ -194,15 +203,21 @@ export function mutationDisplayGains(base: BaseStats, mask: number): MutationDis
  * use. Undefined when the species carries no mutation.
  *
  * The mutation is deliberately NOT named. The two Tier-4 mutants reuse a lower tier's
- * bit (Eyebiscus carries Carrot's 4, Heartichoke Cauliflower's 512), so a name derived
+ * mutation (Eyebiscus carries Carrot's, Heartichoke Cauliflower's), so a name derived
  * from the mask is simply wrong for them — the reported "wrong text ... for Heartichoke
  * (lvl 44)" defect, which read "Cauli-hair". The card's own title already names the
  * species, so the bonus is what the line needs to carry.
  */
 export function mutationMarketDescription(base: BaseStats, mask: number): string | undefined {
-  const gains = mutationDisplayGains(base, mask);
+  return describeMutationGains(mutationDisplayGains(base, mask));
+}
+
+/** The Market line for an already-measured set of gains. Undefined when there are none. */
+export function describeMutationGains(gains: MutationDisplayGain[]): string | undefined {
   if (!gains.length) return undefined;
-  const effects = gains.map((g) => `+${g.delta} ${g.label}`).join(", ");
+  // Always signed: a mutation may trade one stat for another, and a card that wrote
+  // "+8 Life, 12 Speed" for a -12 would sell the penalty as a bonus.
+  const effects = gains.map((g) => `${g.delta >= 0 ? "+" : ""}${g.delta} ${g.label}`).join(", ");
   return `Starts with a guaranteed mutation: ${effects}. Mutations carry into Zombie Pot combinations.`;
 }
 

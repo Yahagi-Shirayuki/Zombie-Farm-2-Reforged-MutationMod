@@ -5,10 +5,14 @@ import { describe, it, expect } from "vitest";
 import { readdirSync } from "node:fs";
 import models from "../../public/assets/zombie/models.json";
 import {
-  mutationEntries, mutationNames, mutationTipText, MUTATION_ICON, MUTATION_VARIANTS,
+  mutationEntries, mutationEffectText, mutationNames, mutationTipText,
+  mutationEntriesFrom, MUTATION_ICON, MUTATION_VARIANTS, type MutationCardEntry,
 } from "./mutationDisplay";
-import { ALL_BITS, MUTATIONS, mutationBonus } from "./mutations";
-import { statBreakdown } from "./statDisplay";
+import {
+  ALL_BITS, bitOf, mutationOf, mutationBonus, type MutationDef,
+} from "./mutations";
+import { describeMutationGains, statBreakdown, statDisplayGains } from "./statDisplay";
+import { displayStat } from "./traits";
 
 // A plain Regular tier-1 (str/dex/con 2) unless a test says otherwise. Raw stats
 // INCLUDE the mask's bonuses, exactly as makeOwned stores them.
@@ -28,48 +32,49 @@ describe("mutationEntries", () => {
   });
 
   it("names each mutation the zombie carries, in tier order", () => {
-    const rows = mutationEntries(zombie(1 | 64)); // Tomatohead + Celery-arms
+    const rows = mutationEntries(zombie(bitOf("tomato") | bitOf("celery")));
     expect(rows.map((r) => r.name)).toEqual(["Tomatohead", "Celery-arms"]);
     expect(rows.map((r) => r.slotLabel)).toEqual(["Head", "Arm"]);
-    expect(rows.map((r) => r.statLabel)).toEqual(["Damage", "Damage"]);
+    expect(rows.map((r) => r.effects.map((e) => e.statLabel))).toEqual([["Damage"], ["Damage"]]);
   });
 
   it("reports the bonus in DISPLAYED units, not the raw 1-4 points", () => {
     // Carrot is +1 raw dex, but Speed's display reference is small, so it reads far
     // larger than Tomato's +1 raw str does on Damage. This is the whole reason the
     // row quotes a normalized number.
-    const [carrot] = mutationEntries(zombie(4));
-    const [tomato] = mutationEntries(zombie(1));
-    expect(carrot.delta).toBeGreaterThan(tomato.delta);
-    expect(tomato.delta).toBe(4);
-    expect(carrot.delta).toBe(23);
+    const [carrot] = mutationEntries(zombie(bitOf("carrot")));
+    const [tomato] = mutationEntries(zombie(bitOf("tomato")));
+    expect(carrot.effects[0].delta).toBeGreaterThan(tomato.effects[0].delta);
+    expect(tomato.effects[0].delta).toBe(4);
+    expect(carrot.effects[0].delta).toBe(23);
   });
 
   it("splits a stat's total across the mutations that share it, without drift", () => {
     // Tomato (+1 str) and Celery (+3 str) both raise Damage: the two rows must add up
     // to exactly the "Mutation" line the stat breakdown shows, not a point either way.
-    const z = { ...zombie(1 | 64), focus: 50, invasions: 9, group: "Regular", className: "Green" };
+    const z = { ...zombie(bitOf("tomato") | bitOf("celery")), focus: 50, invasions: 9, group: "Regular", className: "Green" };
     const rows = mutationEntries(z);
     const line = statBreakdown(z, "str", () => false).lines.find((l) => l.label === "Mutation");
-    expect(rows.reduce((sum, r) => sum + r.delta, 0)).toBe(Number(line!.amount));
+    const damage = rows.flatMap((r) => r.effects).filter((e) => e.stat === "str");
+    expect(damage.reduce((sum, e) => sum + e.delta, 0)).toBe(Number(line!.amount));
   });
 
   it("names a Tier-4 variant after ITS OWN mutation, not the bit it shares", () => {
     // Heartichoke rides Cauliflower's bit 512; calling it "Cauli-hair" was the bug.
-    const [heartichoke] = mutationEntries(zombie(512, { key: "ZombieActorRegularTier4Heartichoke" }));
+    const [heartichoke] = mutationEntries(zombie(bitOf("cauli"), { key: "ZombieActorRegularTier4Heartichoke" }));
     expect(heartichoke.name).toBe("Heartichoke");
     expect(heartichoke.icon).toContain("heartichoke");
-    const [eyebiscus] = mutationEntries(zombie(4, { key: "ZombieActorRegularTier4Eyebiscus" }));
+    const [eyebiscus] = mutationEntries(zombie(bitOf("carrot"), { key: "ZombieActorRegularTier4Eyebiscus" }));
     expect(eyebiscus.name).toBe("Eyebiscus");
     expect(eyebiscus.icon).toContain("eyebiscus");
     // The shared bit still means Cauli-hair on anybody else.
-    expect(mutationEntries(zombie(512))[0].name).toBe("Cauli-hair");
+    expect(mutationEntries(zombie(bitOf("cauli")))[0].name).toBe("Cauli-hair");
   });
 
   it("gives every mutation an icon", () => {
     for (const bit of ALL_BITS) {
       const [row] = mutationEntries(zombie(bit));
-      expect(row.icon, `${MUTATIONS[bit].name} has no icon`).toBeTruthy();
+      expect(row.icon, `${mutationOf(bit)!.name} has no icon`).toBeTruthy();
     }
   });
 });
@@ -103,8 +108,8 @@ describe("mutation art", () => {
     for (const [key, overrides] of rig) {
       const variants = MUTATION_VARIANTS[key];
       expect(variants, `${key} has no card variant`).toBeTruthy();
-      for (const [bit, part] of Object.entries(overrides)) {
-        expect(variants[Number(bit)].part).toBe(part);
+      for (const [mutationKey, part] of Object.entries(overrides)) {
+        expect(variants[mutationKey]?.part, `${key} -> ${mutationKey}`).toBe(part);
       }
     }
   });
@@ -119,12 +124,76 @@ describe("mutationNames", () => {
 });
 
 describe("mutationTipText", () => {
-  it("is just the gain and the slot it occupies", () => {
-    // The tile carries no label, so the bonus must be here — and nothing else, the
+  it("is just the effect and the slot it occupies", () => {
+    // The tile carries no label, so the effect must be here — and nothing else, the
     // name is the tooltip's own title.
-    const [flytrap] = mutationEntries(zombie(2048));
+    const [flytrap] = mutationEntries(zombie(bitOf("flytrap")));
     expect(mutationTipText(flytrap)).toBe(
-      `<span class="zeff">+${flytrap.delta} Life</span><br>Neck slot`
+      `<span class="zeff">+${flytrap.effects[0].delta} Life</span><br>Neck slot`
     );
+  });
+
+  it("writes a penalty signed, on its own line, and marks it as a loss", () => {
+    // A mutation that trades stats writes both halves in the same tooltip, so the
+    // penalty has to be distinguishable from a smaller gain — by the sign AND by a
+    // class the card can colour (see hud.css .zeff-down).
+    const entry: MutationCardEntry = {
+      bit: 1, partKey: "1", icon: "", name: "Cornhead", slotLabel: "Head",
+      effects: [
+        { stat: "con", statLabel: "Life", delta: 27 },
+        { stat: "dex", statLabel: "Speed", delta: -45 },
+      ],
+    };
+    expect(mutationTipText(entry)).toBe(
+      '<span class="zeff">+27 Life</span><br>'
+      + '<span class="zeff zeff-down">-45 Speed</span><br>Head slot'
+    );
+    expect(mutationEffectText({ stat: "dex", statLabel: "Speed", delta: 0 })).toBe("+0 Speed");
+  });
+});
+
+describe("a mutation that trades one stat for another", () => {
+  // Cornhead: big Life, real Speed cost. Nothing in the shipped catalog does this yet,
+  // so it is supplied as an explicit def — mutationEntriesFrom is the same code path
+  // mutationEntries uses once the defs are resolved.
+  const CORNHEAD: MutationDef = {
+    bit: 1 << 20, key: "cornhead", name: "Cornhead", slot: "head",
+    stats: { con: 8, dex: -2 },
+  };
+  // A plain Regular tier-1's unmutated stats.
+  const base = { str: 2, dex: 2, con: 3 };
+
+  it("reports a row per stat, gains and penalties together", () => {
+    const [row] = mutationEntriesFrom([CORNHEAD], base);
+    expect(row.name).toBe("Cornhead");
+    expect(row.slotLabel).toBe("Head");
+    expect(row.effects.map((e) => e.statLabel)).toEqual(["Speed", "Life"]);
+    const speed = row.effects.find((e) => e.stat === "dex")!;
+    const life = row.effects.find((e) => e.stat === "con")!;
+    expect(speed.delta).toBeLessThan(0); // the penalty survives normalization
+    expect(life.delta).toBeGreaterThan(0);
+    // ...in displayed units, measured through the same rounding as any other row.
+    expect(life.delta).toBe(displayStat("con", base.con + 8) - displayStat("con", base.con));
+    expect(speed.delta).toBe(displayStat("dex", base.dex - 2) - displayStat("dex", base.dex));
+  });
+
+  it("chains with another mutation on the same stat without drift", () => {
+    // Carrot (+1 dex) and Cornhead (-2 dex) share the Speed stat: the two rows must
+    // still add up to the net change, which is what the stat breakdown will show.
+    const carrot = mutationOf("carrot")!;
+    const rows = mutationEntriesFrom([carrot, CORNHEAD], base);
+    const speed = rows.flatMap((r) => r.effects).filter((e) => e.stat === "dex");
+    expect(speed).toHaveLength(2);
+    const net = displayStat("dex", base.dex + 1 - 2) - displayStat("dex", base.dex);
+    expect(speed.reduce((sum, e) => sum + e.delta, 0)).toBe(net);
+  });
+
+  it("sells itself honestly on the Market card", () => {
+    const gains = statDisplayGains(base, { str: 0, dex: -2, con: 8 });
+    expect(describeMutationGains(gains)).toContain("-45 Speed");
+    expect(describeMutationGains(gains)).toContain("+27 Life");
+    // The penalty is not silently dropped, and not written as though it were a gain.
+    expect(describeMutationGains(gains)).not.toContain("+-");
+    expect(describeMutationGains(gains)).not.toContain("+45 Speed");
   });
 });

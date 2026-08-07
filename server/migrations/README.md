@@ -87,6 +87,7 @@ manual `schema.sql` touched the table):
 | `0037_raid_zombie_pity` | `ALTER TABLE raid_state_v3 ADD COLUMN zombie_dry_json` | Fails if `zombie_dry_json` exists. Every account starts empty (`'{}'`) — as above, dry wins before this were never counted, and `progress_json` records lifetime wins, not wins since the last rare zombie. |
 | `0038_gift_reward_roll` | Two `ALTER TABLE gifts ADD COLUMN reward_*` statements | Fails if either column exists. Gifts already sitting unclaimed in an inbox take the defaults (`'brain'` / `1`) and so still pay the single brain their sender was promised. |
 | `0039_roster_escrow_return` | `ALTER TABLE roster_v3 ADD COLUMN from_escrow` | Fails if `from_escrow` exists. Every existing unit starts at 0 — zombies restored from a cancelled sale before this were already credited to the Almanac, and those counts never decrease. |
+| `0044_black_market_mutation_width` | **Table rebuild**: recreates `black_market_orders` (to widen `mutation_required`'s CHECK from `BETWEEN 1 AND 8191` to `> 0`) *and* `black_market_receipts`, then drops and renames | The only rebuild since `0020`. Rows are copied by explicit column list; the old **receipts** table is dropped **before** the old orders table, because `DROP TABLE` fires `ON DELETE CASCADE` and would otherwise take every idempotency receipt with it. Re-running it fails (the `_0044` tables already exist) — snapshot both tables first, and verify the counts afterwards. |
 
 The remaining current migrations use repeatable deletes or `CREATE … IF NOT EXISTS`
 (including `0029_restore_ledger`, which recreates the `ledger` table dropped by the v3
@@ -131,6 +132,12 @@ wrangler d1 execute zombiefarm --remote --command \
 - For Black Market sale cancellation, verify `roster_v3.from_escrow` exists after
   migration `0039` — the bootstrap roster projection selects it, and the cancel that
   returns the escrowed zombie writes it, so both fail without it.
+- After migration `0044`, verify the rebuild kept everything: `SELECT COUNT(*) FROM
+  black_market_orders` and `... FROM black_market_receipts` should match the
+  pre-migration snapshot, no `black_market_orders_0044` / `black_market_receipts_0044`
+  should remain, and `SELECT sql FROM sqlite_master WHERE name='black_market_orders'`
+  should show `mutation_required > 0` (not `BETWEEN 1 AND 8191`). Composing a wanted
+  post for Pumpking is the end-to-end check — it was rejected before this migration.
 
 ## Going forward
 

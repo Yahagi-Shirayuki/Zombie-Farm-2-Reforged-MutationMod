@@ -8,6 +8,7 @@ import {
   REQUESTABLE_MUTATION_MASK,
 } from "./blackMarketRules";
 import { ALL_BITS, HEADLESS_HEAD_MASK } from "./zombie/mutations";
+import { maskHas, maskUnion } from "./zombie/mutationMask";
 
 describe("Black Market compose defaults", () => {
   it("opens a roster-originated sale with that zombie selected", () => {
@@ -70,12 +71,15 @@ describe("Black Market purchase requirements", () => {
     expect(matchesBlackMarketMutation(0, false)).toBe(true);
   });
 
-  it("bounds requestable mutations by what the orders table can store", () => {
-    // The column's CHECK (migration 0030) caps the mask at the 13 bits that existed
-    // then, so Pumpking (8192) is excluded until that can be widened.
-    expect(REQUESTABLE_MUTATION_MASK).toBe(8191);
+  it("makes every catalogued mutation requestable, including ones added later", () => {
+    // Migration 0030's CHECK used to cap this at the 13 bits that existed then, which
+    // excluded Pumpking (8192) and would have excluded every mutation after it. Since
+    // 0044 the column only requires `> 0` and the catalog is the bound — so this must
+    // track ALL_BITS rather than a hard-coded number.
+    expect(REQUESTABLE_MUTATION_MASK).toBe(ALL_BITS.reduce(maskUnion, 0));
     for (const bit of ALL_BITS) {
-      expect((bit & REQUESTABLE_MUTATION_MASK) !== 0).toBe(bit !== HEADLESS_HEAD_MASK);
+      expect(maskHas(REQUESTABLE_MUTATION_MASK, bit)).toBe(true);
     }
+    expect(maskHas(REQUESTABLE_MUTATION_MASK, HEADLESS_HEAD_MASK)).toBe(true);
   });
 });

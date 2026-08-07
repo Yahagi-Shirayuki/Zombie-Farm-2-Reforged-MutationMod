@@ -6,6 +6,7 @@ import {
   matchesMutationReplacement,
   mutationCoversFace,
   mutationBitsForRendering,
+  mutationPartFor,
   mutationPartZIndex,
   type MutationReplacement,
 } from "./mutationVisual";
@@ -81,8 +82,7 @@ export function buildZombiePortraitRig(
   }
 
   for (const bit of mutationBitsForRendering(assets.zombies, key, mutation)) {
-    const partKey = model.mutationOverrides?.[String(bit)] ?? String(bit);
-    const part = assets.mutationParts[partKey];
+    const part = mutationPartFor(assets.mutationParts, model, bit);
     const texture = part ? assets.zombiePartTex[part.file] : undefined;
     if (!part || !texture) continue;
     const sprite = new Sprite(texture);

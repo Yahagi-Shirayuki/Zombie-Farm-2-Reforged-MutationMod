@@ -139,7 +139,9 @@ describe("JobSystem elapsed-time catch-up", () => {
     expect(jobs.busy).toBe(true);
   });
 
-  it("pauses queued farm work during a raid and resumes without replaying raid time", () => {
+  it("holds queued farm work through a raid, then replays the raid's own duration", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
     const walk = new FakeWalk();
     const jobs = new JobSystem(
       {} as never,
@@ -151,17 +153,77 @@ describe("JobSystem elapsed-time catch-up", () => {
 
     jobs.enqueueWalk(10, 10);
     jobs.setPaused(true);
+
+    // Nothing runs while the battle owns the screen — not the foreground tick, and not
+    // the background clock the hidden-tab catch-up feeds in.
     jobs.advanceElapsed(30);
     jobs.update(30);
-
     expect(walk.arrivals).toEqual([]);
     expect(jobs.busy).toBe(true);
 
+    // Three minutes of invasion. Coming back off it settles the queue up in one pass,
+    // with no caller needing to know how long the fight took.
+    vi.setSystemTime(1_180_000);
     jobs.setPaused(false);
-    jobs.advanceElapsed(1);
 
     expect(walk.arrivals).toEqual([10]);
     expect(jobs.busy).toBe(false);
+  });
+
+  it("charges a raid's catch-up only once, and only for the paused interval", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000_000);
+    const walk = new FakeWalk();
+    const jobs = new JobSystem(
+      {} as never, {} as never, walk as never, {} as never, () => {},
+    );
+
+    jobs.enqueueWalk(1, 1);
+    jobs.setPaused(true);
+    jobs.setPaused(true); // a nested pause must not restart the clock
+    vi.setSystemTime(2_060_000);
+    jobs.setPaused(false);
+    expect(walk.arrivals).toEqual([1]);
+
+    // Resuming an already-running queue replays nothing — only a real pause has time to
+    // give back, so an unpaired setPaused(false) cannot fast-forward the farm.
+    jobs.enqueueWalk(2, 2);
+    vi.setSystemTime(2_120_000);
+    jobs.setPaused(false);
+    expect(walk.arrivals).toEqual([1]);
+    expect(jobs.busy).toBe(true);
+  });
+
+  it("replays the raid silently, so a drained queue does not burst its one-shots", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(3_000_000);
+    const sounds: string[] = [];
+    const field = {
+      highlightLayer: new Container(), plowHighlightLayer: new Container(), labelLayer: new Container(),
+      resolveTill: (col: number, row: number) => ({ valid: true, oc: col, or: row }),
+      reserveTill: () => {}, unreserveTill: () => {},
+      plotCenterOf: (col: number, row: number) => ({ x: col, y: row }),
+      hasFastWork: () => false, hasPlowFree: () => false,
+      tillAt: () => true,
+    };
+    const state = {
+      gold: 100, spendGold: (amount: number) => { state.gold -= amount; }, addXp: () => {},
+      onFarm: null, onTreeHarvest: null, canMutateOnline: null,
+    };
+    const jobs = new JobSystem(
+      field as never, { setWorking: () => {} } as never, new FakeWalk() as never, state as never,
+      () => {}, (sound) => sounds.push(sound),
+    );
+
+    jobs.enqueue("till", 2, 2);
+    jobs.enqueue("till", 6, 6);
+    jobs.setPaused(true);
+    vi.setSystemTime(3_180_000);
+    jobs.setPaused(false);
+
+    expect(jobs.busy).toBe(false); // both plots plowed while the player was fighting
+    expect(state.gold).toBe(80);
+    expect(sounds).toEqual([]);
   });
 
   it("suppresses one-shot audio while completing background catch-up work", () => {

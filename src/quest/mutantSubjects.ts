@@ -1,7 +1,7 @@
 // Mutation-derived quest subjects.
 //
-// The Market sells one pre-mutated zombie per mutation bit ("Carrot Zombie" = bit 4,
-// "Tomato Zombie" = bit 1, ...). Two shipped quests name those species directly:
+// The Market sells one pre-mutated zombie per mutation ("Carrot Zombie" carries the
+// carrot mutation, and so on). Two shipped quests name those species directly:
 // #55 "Mutation Nation" (harvest a Tomato + a Carrot Zombie) and #56 "It's Alive!"
 // (combine them). But a mutation acquired the OTHER way — growing a plain zombie
 // beside tomato/carrot crops — lands as a mutation bit on a `ZombieActorRegularTier1`
@@ -13,9 +13,10 @@
 // event carries ALIASES: the extra names that same single event answers to. See
 // questSubjectMatches.
 //
-// Two Tier-4 mutants deliberately reuse a lower tier's bit (Eyebiscus = Carrot's 4,
-// Heartichoke = Cauliflower's 512), so a bit can map to more than one species name
-// and every one of them is a valid alias.
+// Two Tier-4 mutants deliberately reuse a lower tier's mutation (Eyebiscus = Carrot's,
+// Heartichoke = Cauliflower's), so one mutation can map to more than one species name
+// and every one of them is a valid alias. This module indexes by the raw bit because
+// that is what zombies.json rows carry.
 import { bitsOf } from "../zombie/mutations";
 
 /** The shape this module needs from a zombie catalog row (public/assets/zombies.json). */
