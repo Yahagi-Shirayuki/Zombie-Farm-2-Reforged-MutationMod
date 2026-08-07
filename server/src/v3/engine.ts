@@ -68,6 +68,7 @@ interface ZombieRule extends NamedRule {
   tier?: number;
   category?: string;
   group?: string;
+  className?: string;
 }
 
 const plantNames = new Map((plantRows as (NamedRule & { key: string })[]).map((r) => [r.key, r.name]));
@@ -105,9 +106,29 @@ function combinerCombined(
   };
 }
 
-/** Use the same slot-1 species, permanent-special, and rare-promotion rules as
- * the timed client Zombie Pot. */
+/** Coloured graves this farm has placed. They gate the matched-pair colour ladder
+ *  (Green -> Blue -> Red) exactly as they gate planting that class on the client, so
+ *  the authoritative result can never award a colour the player has not unlocked. */
+const COLOR_GRAVE_KEYS = {
+  Blue: "gravestoneBlue",
+  Red: "gravestoneRed",
+  Silver: "gravestoneSilver",
+} as const;
+
+function hasColorGrave(
+  state: MutableGameplayState,
+  color: "Blue" | "Red" | "Silver"
+): boolean {
+  const key = COLOR_GRAVE_KEYS[color];
+  return state.objects.objects.some(
+    (object) => object.status === "placed" && object.catalogKey === key
+  );
+}
+
+/** Use the same slot-1 species, permanent-special, colour-ladder and rare-promotion
+ * rules as the timed client Zombie Pot. */
 function combinedSpecies(
+  state: MutableGameplayState,
   a: RosterUnitProjection,
   b: RosterUnitProjection,
   playerLevel: number
@@ -116,15 +137,16 @@ function combinedSpecies(
   const br = zombieRuleByKey.get(b.key);
   return selectCombineSpecies(
     {
-      key: a.key, tier: ar?.tier, group: ar?.group,
+      key: a.key, tier: ar?.tier, group: ar?.group, className: ar?.className,
       isMutant: ar?.category === "mutant", isSpecial: ar?.category === "special",
     },
     {
-      key: b.key, tier: br?.tier, group: br?.group,
+      key: b.key, tier: br?.tier, group: br?.group, className: br?.className,
       isMutant: br?.category === "mutant", isSpecial: br?.category === "special",
     },
     playerLevel,
-    createCombineRandom(a.id, b.id)
+    createCombineRandom(a.id, b.id),
+    (color) => hasColorGrave(state, color)
   );
 }
 
@@ -835,7 +857,7 @@ function applyOne(
       const requestedLevel = Number.isInteger(command.playerLevel) && command.playerLevel! >= 1
         ? command.playerLevel!
         : level;
-      if (!combinedSpecies(a, b, Math.min(requestedLevel, level))) return reject(sequence, "special_pair");
+      if (!combinedSpecies(state, a, b, Math.min(requestedLevel, level))) return reject(sequence, "special_pair");
       // Entering the Pot consumes both active slots immediately. The rows remain
       // reserved internally so collection can derive and validate the exact child.
       a.stored = true;
@@ -883,20 +905,22 @@ function applyOne(
       const requestedLevel = Number.isInteger(command.playerLevel) && command.playerLevel! >= 1
         ? command.playerLevel!
         : level;
-      const resultKey = combinedSpecies(a, b, Math.min(requestedLevel, level));
+      const resultKey = combinedSpecies(state, a, b, Math.min(requestedLevel, level));
       if (!resultKey) return reject(sequence, "special_pair");
       const capacity = placedCapacity(state);
       const activeAfterParents = activeUnits(state) - Number(!a.stored) - Number(!b.stored);
-      if (marker && activeAfterParents >= capacity.army) {
+      // Where the child lands once both parents are consumed: the Mausoleum when the
+      // collecting player asked for it (the Pot offers the crypt directly), otherwise
+      // the army — falling back to the crypt for an unreserved legacy job whose farm is
+      // full. Neither having room means it has nowhere to exist — and a farm with no
+      // Mausoleum placed has NO crypt room at all — so the combine is refused rather
+      // than flagging the child `stored` into a building the player does not own.
+      // Decided BEFORE the parents leave the roster: rejecting afterwards would destroy
+      // them for nothing. Consuming a crypt-bound parent frees its slot.
+      const stored = command.stored === true || (!marker && activeAfterParents >= capacity.army);
+      if (!stored && activeAfterParents >= capacity.army) {
         return reject(sequence, "capacity_full");
       }
-      // Where the child lands once both parents are consumed: the army first, the
-      // Mausoleum once that is full. Neither having room means it has nowhere to exist
-      // — and a farm with no Mausoleum placed has NO crypt room at all — so the combine
-      // is refused rather than flagging the child `stored` into a building the player
-      // does not own. Decided BEFORE the parents leave the roster: rejecting afterwards
-      // would destroy them for nothing. Consuming a crypt-bound parent frees its slot.
-      const stored = marker ? false : activeAfterParents >= capacity.army;
       const freedCrypt = [a, b].filter((parent) => parent.stored && !reservedInPot(parent)).length;
       if (stored && storedUnits(state) - freedCrypt >= capacity.storage) {
         return reject(sequence, "capacity_full");

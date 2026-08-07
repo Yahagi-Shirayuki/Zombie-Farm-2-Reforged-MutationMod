@@ -8368,6 +8368,7 @@
   "movable": true,
   "rotations": 1,
   "sprite": "pettingZoo.png",
+  "backSprite": "pettingZoo_back.png",
   "nativeW": 384,
   "nativeH": 222,
   "pivotX": 0.4375,

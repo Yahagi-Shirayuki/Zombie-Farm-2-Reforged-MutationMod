@@ -26,7 +26,9 @@ import {
   maxLuckTiers,
   power,
   raidTier,
+  resolveStageWave,
   rewardPreview,
+  seededRandom,
 } from "./RaidCatalog";
 import { ABILITY_TIER, ABILITY_POOL } from "../zombie/traits";
 import { displayTotals } from "../zombie/statDisplay";
@@ -161,6 +163,11 @@ export interface RaidLaunchOpts {
   /** ONLINE: server-pinned brain award, revealed at start for the boss-death visual
    * but credited only after the deterministic replay verifies the win. */
   serverBrainDrop?: number;
+  /** Seed for any per-fight randomness in the wave itself (today only the Robots'
+   *  random boss — see resolveStageWave). ONLINE this MUST be the raid session id,
+   *  because the server pinned its own wave from the same seed and the replay
+   *  compares the two. Offline any value works; omitting it draws a fresh one. */
+  waveSeed?: string;
 }
 
 /** A committed raid ready to be played out (by the live scene or the instant
@@ -329,7 +336,13 @@ export class RaidManager {
   beginRaid(raidId: number, partyIds: string[], opts: RaidLaunchOpts = {}): RaidSetup | null {
     const raid = this.raid(raidId);
     if (!raid) return null;
-    const stage = fightStage(raid, this.state.level);
+    // Resolve the wave BEFORE anything reads it: a random-boss stage has no bossKey
+    // until this runs, and the boss decides the throws, specials and wall below.
+    const authored = fightStage(raid, this.state.level);
+    const stage = authored && resolveStageWave(
+      authored,
+      seededRandom(opts.waveSeed ?? `${raidId}:${this.now()}:${Math.random()}`)
+    );
     const byId = new Map(this.deployed().map((z) => [z.id, z]));
     const party = partyIds.map((id) => byId.get(id)).filter(Boolean) as OwnedZombie[];
 
@@ -457,29 +470,9 @@ export class RaidManager {
     };
   }
 
-  /** Every enemy key in a stage (boss + fixed + weighted minions), so a stage-wide scan
-   *  can find actions that live on a minion rather than the designated boss. */
-  private stageRosterKeys(stage: RaidStage): string[] {
-    return [
-      stage.bossKey ?? "",
-      ...(stage.enemyKeys ?? []),
-      ...(stage.weighted ?? []).map((w) => w.enemy),
-    ].filter(Boolean);
-  }
-
-  /** Find a named bossAction anywhere in the stage roster (the Robot `junkWall` lives on
-   *  the JunkBot minion, not the BrainBot boss), returning the first match. */
-  private findStageAction(stage: RaidStage, name: string) {
-    for (const k of this.stageRosterKeys(stage)) {
-      const a = this.assets.enemyStats[k]?.bossActions?.find((x) => x.name === name);
-      if (a) return a;
-    }
-    return undefined;
-  }
-
   /** Build the templates the boss can spawn: `summonBoss` reinforces with a copy of
    *  the wave's minion; `wall` drops a high-HP blocker sized from the action's `hp`.
-   *  Each is null unless the stage actually fields that action. */
+   *  Each is null unless the stage's BOSS actually carries that action. */
   private summonWallTemplatesOf(
     stage: RaidStage,
     enemyUnits: CombatUnit[]
@@ -492,8 +485,7 @@ export class RaidManager {
         const minion = enemyUnits.find((u) => !u.isBoss);
         if (minion) summonTemplate = { ...minion };
       }
-      // Scan the whole roster — the junkWall action is on the JunkBot minion, not the boss.
-      const wall = this.findStageAction(stage, "wall");
+      const wall = actions.find((a) => a.name === "wall");
       if (wall) {
         const hp = Math.max(1, Math.round(wall.hp ?? 1500));
         // Use the action's own wall art (Ninja carrotWall.png / Robot junkWall.png); the
@@ -526,16 +518,16 @@ export class RaidManager {
   /** Build the boss's SPECIAL (non-throw) actions for the selected stage — lasers,
    *  AoE bursts, turn-zombie, etc. Same gate as throws (needs a boss and an "active"
    *  stage). Cast/cooldown come from the source castTime/cooldownTime (seconds);
-   *  where a special has no cooldown the cast doubles as the recovery. */
+   *  where a special has no cooldown the cast doubles as the recovery.
+   *
+   *  Strictly the BOSS's own list. Each robot carries a different special (JunkBot the
+   *  junk wall, BrainBot telekinesis, BroBot only faster throws) and the source note is
+   *  explicit that "a Robot will only use their special abilities when they are the boss
+   *  of the invasion" — so a stage-wide scan for an action is exactly the bug that had
+   *  BrainBot summoning JunkBot's walls. */
   private bossSpecialsOf(stage: RaidStage): BossSpecial[] {
     if (!stage.bossKey || stage.throwingDisabled) return [];
-    const actions = [...(this.assets.enemyStats[stage.bossKey]?.bossActions ?? [])];
-    // The Robot junkWall lives on the JunkBot minion, not the BrainBot boss — pull it into
-    // the boss's schedule so the wall still gets cast (the designated boss drops it).
-    if (!actions.some((a) => a.name === "wall")) {
-      const wall = this.findStageAction(stage, "wall");
-      if (wall) actions.push(wall);
-    }
+    const actions = this.assets.enemyStats[stage.bossKey]?.bossActions ?? [];
     return actions
       .filter((a) => a.name !== "throw")
       .map((a) => {

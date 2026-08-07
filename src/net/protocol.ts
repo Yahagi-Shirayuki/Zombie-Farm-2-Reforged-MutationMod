@@ -44,7 +44,10 @@ export type GameplayCommand =
   | { type: "roster.sell"; unitId: string }
   | { type: "roster.status"; unitId: string; stored: boolean }
   | { type: "roster.combine_start"; potId: string; parentAId: string; parentBId: string; playerLevel?: number }
-  | { type: "roster.combine"; potId?: string; parentAId: string; parentBId: string; playerLevel?: number }
+  /** `stored`: collect the child straight into the Mausoleum (the player chose the
+   *  crypt, or the farm is full). Omitted keeps the old farm-first placement. */
+  | { type: "roster.combine"; potId?: string; parentAId: string; parentBId: string;
+      playerLevel?: number; stored?: boolean }
   | { type: "shop.size"; size: number; currency: "gold" | "brains" }
   | { type: "shop.climate"; terrain: string }
   | { type: "farmer.buy"; headId: number }

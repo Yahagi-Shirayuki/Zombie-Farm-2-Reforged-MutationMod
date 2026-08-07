@@ -37,6 +37,7 @@ const SAMPLES: Record<GameplayCommand["type"], GameplayCommand> = {
   },
   "roster.combine": {
     type: "roster.combine", potId: "pot-1", parentAId: "z-1", parentBId: "z-2", playerLevel: 25,
+    stored: true,
   },
   "shop.size": { type: "shop.size", size: 40, currency: "gold" },
   "shop.climate": { type: "shop.climate", terrain: "swamp" },

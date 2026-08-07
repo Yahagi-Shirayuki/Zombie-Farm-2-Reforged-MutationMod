@@ -86,7 +86,7 @@ export function lockReason(raid: RaidDef, level: number): string {
  *  lvl4→[2] (+lumberjack), lvl5→[3] (boss, no throws), lvl6→[4] (boss throws). */
 export function fightStage(raid: RaidDef, playerLevel: number): RaidStage | null {
   if (!raid.stages.length) return null;
-  let bossIdx = raid.stages.findIndex((s) => s.bossKey);
+  let bossIdx = raid.stages.findIndex((s) => s.bossKey || s.randomBoss);
   if (bossIdx < 0) bossIdx = raid.stages.length - 1;
   const idx = Math.max(
     0,
@@ -144,4 +144,59 @@ export function itemDrop(raid: RaidDef): string | null {
 export function maxLuckTiers(raid: RaidDef): number {
   const tiers = raid.loot.filter((t) => t.some((x) => x)).length;
   return Math.max(0, tiers - 1);
+}
+
+// ---- Random-boss waves (Robots) --------------------------------------------
+//
+// GROUND TRUTH `-[ZFFightMan initialSpawn]`: a raid whose data sets `randomBoss`
+// (only Zombies vs Robots does) takes a branch guarded on that flag which copies the
+// raid's `enemies` array — ONE entry per enemy type — into `enemyList`, picks index
+// `floor((arc4random() % 100) / 100 * count) % count`, spawns THAT entry as the boss
+// and `removeObjectAtIndex:`es it. `spawnEnemy` then draws the survivors the same
+// way, one at a time, removing each as it goes. So the fight fields exactly one of
+// each robot, in a random order, with a random one of them leading it — which is what
+// the wiki describes ("There are three types of Robots here… any one of them has a
+// random chance to be the Boss", population 3) and what the frequencies do NOT do.
+//
+// The reimplementation reproduces that as a one-shot resolution instead of a spawn
+// loop, because everything downstream (boss specials, the wall template, the pinned
+// server config, the replay) reads a stage with a concrete `bossKey`.
+
+/** Deterministic 0..1 stream from a string seed (FNV-1a → mulberry32). Both the client
+ *  and the server must draw the SAME wave or the verified replay diverges, so the draw
+ *  is seeded by the raid session id rather than Math.random. */
+export function seededRandom(seed: string): () => number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  let state = h || 1;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Turn a `randomBoss` stage into a concrete one: draw the boss from the roster, then
+ *  order the rest as the spawn queue. Any other stage is returned untouched, so every
+ *  caller can resolve unconditionally and then read `bossKey` / `enemyKeys` normally.
+ *  `rand` must be seeded (see seededRandom) wherever the fight is server-verified. */
+export function resolveStageWave(stage: RaidStage, rand: () => number): RaidStage {
+  if (!stage.randomBoss) return stage;
+  const roster = (stage.weighted ?? []).map((entry) => entry.enemy).filter(Boolean);
+  if (!roster.length) return stage;
+  // Source order: the boss is drawn (and removed) first, then each remaining spawn.
+  const bossKey = roster.splice(Math.min(roster.length - 1, Math.floor(rand() * roster.length)), 1)[0];
+  const enemyKeys: string[] = [];
+  while (roster.length) {
+    enemyKeys.push(roster.splice(Math.min(roster.length - 1, Math.floor(rand() * roster.length)), 1)[0]);
+  }
+  // `enemyKeys` now drives the wave, so drop `weighted`: buildEnemyUnits prefers the
+  // explicit list, and leaving both would let a later reader re-derive the old
+  // frequency allocation (which could never field all three bots).
+  return { ...stage, bossKey, enemyKeys, weighted: undefined, population: enemyKeys.length };
 }

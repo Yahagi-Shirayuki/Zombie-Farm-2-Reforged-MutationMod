@@ -48,12 +48,19 @@ Each attack in `Attacks.json` carries effect flags, applied by the combat code
 - **Knockback** (`knockBack: true`) — the struck zombie is **interrupted** (its
   `damageIn:` / `fightAttack:` are unscheduled) and, per the binary,
   **`setZombieToLastIndex`** — sent to the **back of the line**. It must charge to the
-  front again. Attacks with it: `OldMcDonnellPunch`, `CorporateBossPunchSpecial`,
-  `LumberjackSpecial`, `SpecialBossAttack`, `VideoGameBossPunch` /
-  `VideoGameKnightPoke` / `VideoGameMonsterFlail`. **This is the "boss pushes zombies
-  back" mechanic.**
+  front again. Attacks with it in the SOURCE: `OldMcDonnellPunch`,
+  `CorporateBossPunchSpecial`, `LumberjackSpecial`, `SpecialBossAttack`,
+  `VideoGameBossPunch` / `VideoGameKnightPoke` / `VideoGameMonsterFlail`. **This is the
+  "boss pushes zombies back" mechanic.**
 - **Stun** (`stun: true`, `stunTimer` seconds) — the zombie can't act for the duration.
   `CorporateBossPunchSpecial` (1 s); the player Explode ability stuns enemies (3 s).
+- **DELIBERATE DIVERGENCE (ruleset v17)** — the reimplementation strips `knockBack` from
+  `CorporateBossPunchSpecial`, so the Lawyers boss's Double Punch (40%) **stuns only**.
+  The source flags that attack both ways, but his page lists his special as a stun, and
+  it is the ONLY `stun: true` attack in the table — leaving the shove on made him play as
+  yet another push-back boss. The override lives in `ATTACK_OVERRIDES`
+  (`tools/prep_raids.py`) so regenerating `attacks.json` cannot undo it. Don't "fix" it
+  back to the plist.
 - **Zombie AoE** (`zombieAOE` radius) + **`cantInterrupt`** — the player Bash/Explode
   abilities hit an area and can't be interrupted.
 - **`speedMultiplier`** scales the attack/knockback animation speed (Lumberjack 5×,

@@ -10,6 +10,11 @@ export interface RaidStage {
   enemyKeys: string[];
   /** The boss unit for this wave, if any. */
   bossKey?: string;
+  /** Robots only. The wave has no authored boss: one entry of `weighted` is drawn at
+   *  random to lead it and the REST make up the minions, so every bot type appears
+   *  exactly once and any of them can be the boss. resolveStageWave() turns such a
+   *  stage into a concrete one before anything reads `bossKey`. */
+  randomBoss?: boolean;
   /** Source wave ordinal (NOT a player-level gate). */
   wave?: number;
   /** Weighted-spawn population cap (used by the late endless waves). */

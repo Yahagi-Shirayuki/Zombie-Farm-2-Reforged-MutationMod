@@ -5,7 +5,7 @@ import { snapPlowOrigin } from "./plowSelection";
 // blocks — no 'unsafe-eval'). Side-effect import; must run before `new Application()`.
 // pixi.js lists ./lib/unsafe-eval/init.* under "sideEffects", so it survives bundling.
 import "pixi.js/unsafe-eval";
-import { loadAssets, ensureObjectTexture, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
+import { loadAssets, ensureObjectTexture, ensureObjectTextures, objectSpriteFiles, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
 import { MAX_ZOMBIE_POTS, noRoomForAnother } from "./placementLimit";
 import { Field, CARROT, CropConfig, PLOT } from "./Field";
 import { Actor } from "./Actor";
@@ -1579,8 +1579,7 @@ async function main() {
         if (object.status !== "placed") continue;
         const def = placeCatalog.get(object.catalogKey);
         if (!def) continue;
-        sprites.add(def.sprite);
-        if (def.growingSprite) sprites.add(def.growingSprite);
+        for (const file of objectSpriteFiles(def)) sprites.add(file);
       }
       await Promise.allSettled([...sprites].map((sprite) => ensureObjectTexture(assets, sprite)));
       if (generation !== objectReconcileGeneration) return false; // superseded: keep the aliases
@@ -1588,7 +1587,7 @@ async function main() {
       // invisible object still holding its tiles against every future placement. Skip it
       // and let the next reconcile retry the download.
       const textureReady = (def: PlaceableDef) =>
-        !!assets.objects[def.sprite] && (!def.growingSprite || !!assets.objects[def.growingSprite]);
+        objectSpriteFiles(def).every((file) => !!assets.objects[file]);
 
       const current = new Map(field.serializeObjects().map((object) => [object.id, object]));
       /** Local objects already adopted by a server object in this pass. */
@@ -1724,8 +1723,8 @@ async function main() {
     // parents (a combine can't fabricate an arbitrary expensive result).
     zombies.onCombineStart = (potId, parentAId, parentBId) =>
       economy!.submitRoster({ type: "combineStart", potId, parentAId, parentBId, playerLevel: state.level });
-    zombies.onCombineCollect = (potId, unitId, key, mutation) =>
-      economy!.submitRoster({ type: "combineCollect", potId, unitId, key, mutation });
+    zombies.onCombineCollect = (potId, unitId, key, mutation, stored) =>
+      economy!.submitRoster({ type: "combineCollect", potId, unitId, key, mutation, stored });
     for (const pot of zombies.pendingPotParents()) {
       economy.restoreCombineParents(pot.potId, pot.parentAId, pot.parentBId, pot.playerLevel);
     }
@@ -2348,8 +2347,7 @@ async function main() {
   hud.onBuy = async (def) => {
     if (onlineGameplayBlocked()) return;
     if (hud.objectLimitReached?.(def)) return;
-    await ensureObjectTexture(assets, def.sprite);
-    if (def.growingSprite) await ensureObjectTexture(assets, def.growingSprite);
+    await ensureObjectTextures(assets, def);
     if (def.storageSlots && field.shedId()) upgradeBuilding(def, field.shedId()); // upgrade, don't place
     // A placed Mausoleum upgrades in place too; a lower/equal tier is a no-op.
     else if (def.zombieStorage && field.mausoleumId()) {
@@ -2416,7 +2414,7 @@ async function main() {
   hud.onMausoleumUpgrade = async () => {
     const def = nextMausoleumTier();
     if (!def) return;
-    await ensureObjectTexture(assets, def.sprite);
+    await ensureObjectTextures(assets, def);
     upgradeBuilding(def, field.mausoleumId());
   };
   hud.canStoreZombies = () => !!field.mausoleumId() && !zombies.mausoleumFull;
@@ -2476,6 +2474,9 @@ async function main() {
       totalMs: pot.totalMs(),
       monolith: field.hasCombineMonolith(), // Clay Monolith speeds the pot timer
       canCollect: zombies.canAdd(),
+      // The Pot can hand the child straight to the Mausoleum, so a full farm no
+      // longer strands a finished combine.
+      canStore: zombies.canStoreCombine(),
       pending: pot.pending
         ? {
             keyA: pot.pending.keyA, keyB: pot.pending.keyB,
@@ -2503,13 +2504,13 @@ async function main() {
     }
     return ok;
   };
-  hud.onCollectCombine = async () => {
+  hud.onCollectCombine = async (stored) => {
     if (onlineGameplayBlocked()) return null;
     if (!activePotId) return null;
     const targetPotId = activePotId;
     const pending = zombies.potFor(targetPotId).pending;
     const combined = pending ? combinedPotSubjects(pending) : null;
-    const z = zombies.collectCombine(walk.tile.col, walk.tile.row, targetPotId);
+    const z = zombies.collectCombine(walk.tile.col, walk.tile.row, targetPotId, { stored });
     if (z) {
       if (combined?.subject) {
         questBus.post(QuestEvent.CombinerCombined, combined.subject, 1, combined.aliases);
@@ -2528,11 +2529,12 @@ async function main() {
       catch { hud.showToast("The combine result is waiting for the server to reconnect."); }
       zombies.confirmCombineCollection(targetPotId);
       saveManager.flushCritical();
-    } else if (zombies.combineReadyFor(targetPotId) && zombies.canAdd()) {
-      // The job is still ready and the farm has room, so this was not the ordinary
-      // "wait for a slot" refusal — the collection could not be handed to the server
-      // (or its species no longer resolves). collectCombine has already put the job
-      // back; say so rather than letting the button appear dead.
+    } else if (zombies.combineReadyFor(targetPotId) &&
+               (stored ? zombies.canStoreCombine() : zombies.canAdd())) {
+      // The job is still ready and the chosen destination has room, so this was not the
+      // ordinary "wait for a slot" refusal — the collection could not be handed to the
+      // server (or its species no longer resolves). collectCombine has already put the
+      // job back; say so rather than letting the button appear dead.
       hud.showToast("That combine could not be confirmed just now — it is still in the Pot. Try again in a moment.");
     }
     return z ? z.name : null;
@@ -3362,6 +3364,9 @@ async function main() {
           bypassed: !!gate.bypassed,
           serverDice: gate.dice ?? 0,
           serverBrainDrop: gate.brainDrop ?? 0,
+          // The server pinned its wave from this same id, so a raid with per-fight
+          // randomness (the Robots' random boss) resolves identically on both sides.
+          waveSeed: raidSessionId ?? undefined,
         };
       } catch (error) {
         if (error instanceof api.ApiError) {
@@ -3613,8 +3618,7 @@ async function main() {
       hud.showToast("That item is no longer in your shed.");
       return;
     }
-    await ensureObjectTexture(assets, def.sprite);
-    if (def.growingSprite) await ensureObjectTexture(assets, def.growingSprite);
+    await ensureObjectTextures(assets, def);
     hud.setPlacing(def); // enter placement mode (fires onModeChange first)
     retrieving = { key, instanceId }; // ...then arm retrieval so onModeChange doesn't clear it
   };
@@ -3712,8 +3716,7 @@ async function main() {
     const entry = state.received[index];
     const def = entry ? receivedDef(entry) : undefined;
     if (!def) return;
-    await ensureObjectTexture(assets, def.sprite);
-    if (def.growingSprite) await ensureObjectTexture(assets, def.growingSprite);
+    await ensureObjectTextures(assets, def);
     hud.setPlacing(def);
     receiving = index; // arm after setPlacing so onModeChange doesn't clear it
   };
@@ -3995,6 +3998,35 @@ async function main() {
     !def.storageSlots && !def.zombieStorage &&
     state.storedItemTotal() < state.storageItemCap;
 
+  // The Move / Rotate / Store / Sell sheet for a placed object. Both entry points
+  // (desktop tap and touch long-press) go through here so every object reachable
+  // from one is reachable from the other.
+  const openObjectActionsFor = (oid: string, def: PlaceableDef) => {
+    hud.openObjectActions({
+      name: def.name,
+      portrait: `${BASE}assets/objects/${def.sprite}`,
+      tint: objectTint(def.color), // monoliths share one sprite, coloured per def
+      canStore: canStore(def),
+      canSell: def.category !== "functional",
+      sellRefund: sellRefund(def),
+      sellBrains: false,
+      // The pen's own collection, which used to be all a tap on it could reach.
+      ...(def.petPen
+        ? { manageLabel: "Pets", onManage: () => hud.openStorage("Pets", true) }
+        : {}),
+      onMove: () => {
+        hud.setMode("move"); // fires onModeChange (clears carry) FIRST...
+        carrying = { id: oid, def, flipped: field.objectFlipOf(oid) }; // ...then pick up this object
+        const o = field.objectOriginOf(oid);
+        if (o) field.setObjectCursor(def, o.oc + Math.floor((def.tileW - 1) / 2),
+          o.or + Math.floor((def.tileH - 1) / 2), oid, carrying.flipped);
+      },
+      onRotate: () => { field.flipObject(oid); saveManager.save(); },
+      onStore: () => storeObject(oid),
+      onSell: () => sellObject(oid),
+    });
+  };
+
   // Remove tool: a placed OBJECT sells back for a 50% refund; any plot is cleared
   // to bare ground for no money. A planted crop forfeits its cost and reward.
   const tryRemove = async (col: number, row: number, wx: number, wy: number) => {
@@ -4054,7 +4086,6 @@ async function main() {
   const interactWithObject = (objId: string, objDef: PlaceableDef): boolean => {
     if (objDef.tapSound) audio.tap(objDef.tapSound);
     if (objDef.storageSlots) hud.openStorage();
-    else if (objDef.petPen) hud.openStorage("Pets", true);
     else if (objDef.zombieStorage) hud.openMausoleum();
     else if (objDef.zombiePatch) {
       const napping = zombies.toggleGather(field.patchRestTiles());
@@ -4067,26 +4098,7 @@ async function main() {
     } else if (field.isObjectReady(objId)) {
       enqueueHarvestTarget({ kind: "tree", instanceId: objId });
     } else {
-      const oid = objId, def = objDef;
-      hud.openObjectActions({
-        name: def.name,
-        portrait: `${BASE}assets/objects/${def.sprite}`,
-        tint: objectTint(def.color), // monoliths share one sprite, coloured per def
-        canStore: canStore(def),
-        canSell: def.category !== "functional",
-        sellRefund: sellRefund(def),
-        sellBrains: false,
-        onMove: () => {
-          hud.setMode("move");
-          carrying = { id: oid, def, flipped: field.objectFlipOf(oid) };
-          const o = field.objectOriginOf(oid);
-          if (o) field.setObjectCursor(def, o.oc + Math.floor((def.tileW - 1) / 2),
-            o.or + Math.floor((def.tileH - 1) / 2), oid, carrying.flipped);
-        },
-        onRotate: () => { field.flipObject(oid); saveManager.save(); },
-        onStore: () => storeObject(oid),
-        onSell: () => sellObject(oid),
-      });
+      openObjectActionsFor(objId, objDef);
     }
     return true;
   };
@@ -4446,10 +4458,6 @@ async function main() {
         if (objDef?.tapSound) audio.tap(objDef.tapSound);
         if (objId && objDef && objDef.storageSlots) {
           hud.openStorage();
-        } else if (objId && objDef && objDef.petPen) {
-          // The pen is an in-world shortcut to the same authoritative collection
-          // used by the Pets market tab; it never grants or imports ownership.
-          hud.openStorage("Pets", true);
         } else if (objId && objDef && objDef.zombieStorage) {
           hud.openMausoleum(); // the Mausoleum's storage slots
         } else if (objId && objDef && objDef.zombiePatch) {
@@ -4464,27 +4472,8 @@ async function main() {
         } else if (objId && field.isObjectReady(objId)) {
           enqueueHarvestTarget({ kind: "tree", instanceId: objId });
         } else if (objId && objDef) {
-          // A placed decoration/tree: Move / Store / Sell popup.
-          const oid = objId, def = objDef;
-          hud.openObjectActions({
-            name: def.name,
-            portrait: `${BASE}assets/objects/${def.sprite}`,
-            tint: objectTint(def.color), // monoliths share one sprite, coloured per def
-            canStore: canStore(def),
-            canSell: def.category !== "functional",
-            sellRefund: sellRefund(def),
-            sellBrains: false,
-            onMove: () => {
-              hud.setMode("move"); // fires onModeChange (clears carry) FIRST...
-              carrying = { id: oid, def, flipped: field.objectFlipOf(oid) }; // ...then pick up this object
-              const o = field.objectOriginOf(oid);
-              if (o) field.setObjectCursor(def, o.oc + Math.floor((def.tileW - 1) / 2),
-                o.or + Math.floor((def.tileH - 1) / 2), oid, carrying.flipped);
-            },
-            onRotate: () => { field.flipObject(oid); saveManager.save(); },
-            onStore: () => storeObject(oid),
-            onSell: () => sellObject(oid),
-          });
+          // A placed decoration/tree/Pet Pen: Move / Rotate / Store / Sell popup.
+          openObjectActionsFor(objId, objDef);
         } else if (field.isRipe(col, row)) {
           const origin = field.plotOriginAt(col, row);
           if (origin) enqueueHarvestTarget({
@@ -4794,10 +4783,7 @@ async function main() {
     }
     zombies.update(dt);
     zombies.setInvasionReady(!raidActive && raids.cooldownRemaining() <= 0);
-    field.updatePetPenOcclusion(
-      penPetActors.map((pet) => pet.container),
-      [actor.container, ...zombies.characterContainers(), ...(petActor ? [petActor.container] : [])],
-    );
+    field.updatePetPenOcclusion(penPetActors.map((pet) => pet.container));
     field.update(dt);
     // Farmer's lantern light follows the lamp carried in his hand, only at night.
     if (isNight) {
@@ -4911,7 +4897,7 @@ async function main() {
     place: async (key: string, oc: number, or: number) => {
       const def = placeCatalog.get(key);
       if (!def) return null;
-      await ensureObjectTexture(assets, def.sprite);
+      await ensureObjectTextures(assets, def);
       return field.placeObject(def, oc, or);
     },
     // Debug: spawn a zombie of `key` carrying mutation mask `mask` (bit OR), for

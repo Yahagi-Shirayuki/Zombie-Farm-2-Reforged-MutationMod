@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SequencedCommand } from "../../src/net/protocol";
+import type { RosterUnitProjection, SequencedCommand } from "../../src/net/protocol";
 import { EPIC_BOSSES } from "../../src/epicBoss/catalog";
 import { COMBINE_SPECIAL_CHANCE, createCombineRandom } from "../../src/zombie/combineSpecies";
 import { encodeReceivedZombie } from "../../src/zombie/receivedReward";
@@ -1340,6 +1340,66 @@ describe("protocol v3 command engine", () => {
     expect(result.results[0]).toMatchObject({ status: "applied" });
     expect(result.state.roster.find((unit) => unit.id === "recycled-slot-child"))
       .toMatchObject({ stored: true });
+  });
+
+  it("breeds a matched pair up one colour class when its grave is placed", () => {
+    const twoGreens = (): RosterUnitProjection[] => [
+      { id: "a", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: false },
+      { id: "b", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: false },
+    ];
+    // No Blue Grave: two Regular Zombies stay Regular Zombies.
+    const locked = freshGameplayState();
+    locked.roster = twoGreens();
+    expect(applyCommandBatch(locked, commands(
+      { type: "roster.combine", parentAId: "a", parentBId: "b" },
+    ), { now: 1, random: () => 0.99, id: () => "child" }).state.roster[0].key)
+      .toBe("ZombieActorRegularTier1");
+
+    // With it placed, the pair breeds up to the Regular blue (Zyborg).
+    const unlocked = freshGameplayState();
+    unlocked.roster = twoGreens();
+    unlocked.objects.objects.push({
+      instanceId: "grave", catalogKey: "gravestoneBlue", status: "placed",
+    });
+    expect(applyCommandBatch(unlocked, commands(
+      { type: "roster.combine", parentAId: "a", parentBId: "b" },
+    ), { now: 1, random: () => 0.99, id: () => "child" }).state.roster[0].key)
+      .toBe("ZombieActorRegularTier2");
+  });
+
+  it("collects a combine straight into the Mausoleum when the player asks", () => {
+    const state = freshGameplayState();
+    state.zombieMax = 5; // the farm has room; the crypt is a deliberate choice
+    state.objects.objects.push({ instanceId: "tomb", catalogKey: "mausoleum3", status: "placed" });
+    state.roster = [
+      { id: "a", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: true, lockedByRaid: "pot:pot-1" },
+      { id: "b", key: "ZombieActorGirlTier1", mutation: 0, invasions: 0, stored: true, lockedByRaid: "pot:pot-1" },
+    ];
+
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", potId: "pot-1", parentAId: "a", parentBId: "b", stored: true },
+    ), { now: 1, id: () => "crypt-child" });
+
+    expect(result.results[0]).toMatchObject({ status: "applied", createdIds: ["crypt-child"] });
+    expect(result.state.roster).toEqual([
+      { id: "crypt-child", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: true },
+    ]);
+  });
+
+  it("refuses a crypt collection with no Mausoleum to hold it", () => {
+    const state = freshGameplayState();
+    state.zombieMax = 5;
+    state.roster = [
+      { id: "a", key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: true, lockedByRaid: "pot:pot-1" },
+      { id: "b", key: "ZombieActorGirlTier1", mutation: 0, invasions: 0, stored: true, lockedByRaid: "pot:pot-1" },
+    ];
+
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", potId: "pot-1", parentAId: "a", parentBId: "b", stored: true },
+    ), { now: 1, id: () => "homeless-child" });
+
+    expect(result.results[0]).toMatchObject({ status: "rejected", error: "capacity_full" });
+    expect(result.state.roster.map((unit) => unit.id)).toEqual(["a", "b"]);
   });
 
   it("uses a mutant only as the mutation donor and never invents mutations", () => {

@@ -99,21 +99,35 @@ Pot's first slot is the type that comes out; slot 2 contributes only its mutatio
 Combat tier and mutant/veggie status no longer affect the result, and the promotion
 roll below is the only randomness left in species selection.
 
+**A matched pair climbs the colour ladder.** Two parents of the **same species** breed
+one colour class up, within their own body type:
+
+| Pair | Result | Gate |
+| --- | --- | --- |
+| Green + Green | that body type's **Blue** (Zyborg, Zmurf, ZomBeauty, ZomBruiser, Kindlehead, ZomBotanist) | the **Blue Grave** is placed |
+| Blue + Blue | its **Red** (Zombot, ZomGoblin, Amazombie, ZomBrute, Flamehead, Flower Zombie) | the **Red Grave** is placed |
+| Red + Red | its **Silver** (Robo Zombie, Imp Zombie, Zombielocks, Zombarian, Party Zombie, Zombee) | player level 25+ |
+
+The grave gate is the same one that unlocks planting that class, checked when the
+result is derived (client: `Field.hasGrave`; server: its own placed objects), so a
+combine can never hand out a colour the farm has not unlocked. A step whose gate is
+closed falls through to the ordinary rules, taking nothing away.
+
+The **colour class** is authoritative here, not the `Tier<n>` token in the key — the
+mutants were deliberately re-banded (Lima Beans is a Silver under a `Tier2` key, Celery
+a Red). A matched pair that is already Silver — including the mutant silvers Eyebiscus
+and Heartichoke — keeps its own species rather than flattening to its group's plain
+silver.
+
 At player level 25 and above, two **non-special** zombies whose body types both map to
 a combining-only special have a 25% chance to promote the output to **slot 1's** tier-5
 special: Garden produces Zombutterfly, Large produces Zomviking, Small produces
 Zombricaun, Female produces Zombelly Dancer, Regular produces Zombotron, and Headless
-produces Skull Head. A failed roll falls through to the ordinary rules below.
-
-At player level 25 and above, a pair of the **same species** (two ZomBrutes, two
-Flameheads) breeds up to that body type's **Silver** (tier-4) unit: Garden produces
-Zombee, Large produces Zombarian, Small produces Imp Zombie, Female produces
-Zombielocks, Regular produces Robo Zombie, and Headless produces Party Zombie. The
-tier-5 promotion above takes precedence when it hits, so a matched Flamehead pair
-usually yields a Party Zombie and rarely a Skull Head. A matched pair that is already
-silver (including the mutant silvers Eyebiscus and Heartichoke) keeps its own species
-rather than flattening to its group's plain silver, and below level 25 a matched pair
-returns slot 1's species like any other combine.
+produces Skull Head. This roll sits **between** the ladder's rungs: the Green and Blue
+steps are resolved first (so a green pair breeds to blue rather than leaping to a
+special), and the roll then takes precedence over the Red -> Silver step, so a matched
+Flamehead pair usually yields a Party Zombie and rarely a Skull Head. A failed roll
+falls through to the ordinary rules.
 
 A named special is a permanent output type: it may only be placed in **slot 1** (the
 Pot refuses to start otherwise, client and server), and it is always inherited. Two

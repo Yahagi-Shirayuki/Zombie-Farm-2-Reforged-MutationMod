@@ -679,7 +679,11 @@ export class BattleSim {
         this.boss.y = BOSS_STRUCT_Y;
       }
     }
-    this.bossThrow = bossThrow;
+    // Own it: enrage halves `intervalMs` IN PLACE (see applyEnrage), and the verifier is
+    // handed the same pinned config object every time it builds a sim. Sharing it meant a
+    // second sim off one config started with an already-enraged boss — the replay silently
+    // stopped being a pure function of (config, transcript).
+    this.bossThrow = bossThrow ? { ...bossThrow } : null;
     this.specials = this.boss ? bossSpecials : [];
     this.actions = this.buildActionBudget();
     this.rollNextAction();

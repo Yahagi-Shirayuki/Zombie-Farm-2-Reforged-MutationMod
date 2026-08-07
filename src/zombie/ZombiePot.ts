@@ -11,9 +11,10 @@
 //     (flag 15) is a SEPARATE item that halves mutant-zombie GROW times, not this.)
 //   * SPECIES IS A DELIBERATE DIVERGENCE, not recovered behavior. Slot 1 determines
 //     the result species, so the player picks the outcome. Named Specials are
-//     restricted to slot 1 and are always inherited; a level-25+ pair of the SAME
-//     species breeds up to that body type's Silver (tier-4), and level-25+ non-special
-//     pairs retain their 10% chance to promote the slot-1 body type to its tier-5
+//     restricted to slot 1 and are always inherited; a pair of the SAME species climbs
+//     the colour ladder — Green -> Blue -> Red once the matching grave is owned, then
+//     Red -> that body type's Silver (tier-4) at level 25+ — and level-25+ non-special
+//     pairs retain their chance to promote the slot-1 body type to its tier-5
 //     Special instead.
 //     The recovered `determineBaseClass` instead resolved species from the catalog —
 //     non-veggie parent wins, then higher combat tier, then a coin flip on a tie.
@@ -31,7 +32,9 @@
 // holds at most one job, mirroring the single in-game Zombie Pot building.
 import { OwnedZombieSave, ZombiePotSave } from "../save/schema";
 import { combineMasks } from "./mutations";
-import { createCombineRandom, selectCombineSpecies } from "./combineSpecies";
+import {
+  createCombineRandom, selectCombineSpecies, type CombineGraveUnlock,
+} from "./combineSpecies";
 
 /** Default combine duration: 1 hour, in ms (binary: getCombineTime = 3600.0 s). */
 export const POT_DURATION_MS = 60 * 60 * 1000;
@@ -60,6 +63,8 @@ type ZombieSnapshot = Pick<OwnedZombieSave, "key"> & {
    * special-species override rules. */
   group?: string;
   isSpecial?: boolean;
+  /** Colour class, which decides how far a matched pair breeds up the ladder. */
+  className?: string;
 };
 
 const mixColors = (
@@ -89,7 +94,11 @@ export class ZombiePot {
     /** Is this species headless? Injected because the pot carries no catalog, and the
      *  child's body type decides which inherited mutations survive (see combineMasks).
      *  The default answers "no", which only misses the headless-only Pumpking bit. */
-    private isHeadlessKey: (key: string) => boolean = () => false
+    private isHeadlessKey: (key: string) => boolean = () => false,
+    /** Does the farm own this coloured grave? Read when the result is derived rather
+     *  than captured at start, so it always agrees with what the server sees at
+     *  collection. The default answers "no", leaving the ladder switched off. */
+    private hasGrave: CombineGraveUnlock = () => false
   ) {}
 
   /** Is a combine currently running (started, not yet collected)? */
@@ -163,6 +172,8 @@ export class ZombiePot {
       baseB: b.isBaseClass,
       groupA: a.group,
       groupB: b.group,
+      classA: a.className,
+      classB: b.className,
       specialA: a.isSpecial,
       specialB: b.isSpecial,
       playerLevel,
@@ -219,15 +230,16 @@ export class ZombiePot {
       : this.rng;
     return selectCombineSpecies(
       {
-        key: j.keyA, tier: j.tierA, group: j.groupA,
+        key: j.keyA, tier: j.tierA, group: j.groupA, className: j.classA,
         isMutant: j.baseA, isSpecial: j.specialA,
       },
       {
-        key: j.keyB, tier: j.tierB, group: j.groupB,
+        key: j.keyB, tier: j.tierB, group: j.groupB, className: j.classB,
         isMutant: j.baseB, isSpecial: j.specialB,
       },
       j.playerLevel ?? 1,
-      random
+      random,
+      this.hasGrave
     );
   }
 

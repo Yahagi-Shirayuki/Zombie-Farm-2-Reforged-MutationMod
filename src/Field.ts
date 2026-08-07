@@ -2,7 +2,7 @@
 // happens on PLOTS — 4x4 tile blocks that can be placed FREELY anywhere a 4x4 area
 // is available (not on a fixed lattice). A plot cycles through soil states:
 //   plowed -> planted -> (grows) -> harvest -> dirt (crop) / hole (zombie) -> re-till.
-import { Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
+import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import {
   DIRT_FILE, GameAssets, HOLE_FILE, multiplyObjectTint, objectTint, PlaceableDef, PLOWED_FILE, SEED_FILE,
 } from "./assets";
@@ -45,6 +45,17 @@ const FERT_CANOPY_DY = 52; // leaves emit this far above the crop's ground conta
 const TREE_CANOPY_HEIGHT_RATIO = 0.65;
 const TREE_CANOPY_WIDTH_RATIO = 0.92;
 const TREE_TRUNK_WIDTH_RATIO = 0.38;
+
+// The Pet Pen's masked near-wall copy sits above every footprint-sorted entity.
+// sortLayer only assigns zIndex 0..n-1 to nodes that registered a footprint and
+// leaves the rest alone, so any value past the layer's child count is "always last".
+const PEN_OVERLAY_Z = 100000;
+
+// Depth-key nudge that puts a two-layer object's NEAR art after its far wall — the two
+// share one footprint, so without it their order is whatever the child list happens to
+// be. Deliberately far below every actor bias (pets 0.4, zombies 0.5, farmer 0.6): it
+// must separate the pair without ever tying with, or overtaking, a character.
+const BACK_LAYER_BIAS = 0.1;
 
 export interface CropConfig {
   key: string;
@@ -143,12 +154,14 @@ interface FarmObject {
   oc: number; // footprint origin (north tile)
   or: number;
   sprite: Sprite;
-  rearSprite?: Sprite; // Pet Pen: second rear-rail crop
-  frontSprite?: Sprite; // Pet Pen: screen-facing rail crop
-  gateSprite?: Sprite; // Pet Pen: entire gate/top metalwork foreground crop
-  rearOverlay?: Container; // rear rails, masked to outside-character silhouettes
-  frontOverlay?: Container; // front rails, masked to inside-pet silhouettes
-  rearMask?: Graphics;
+  // Two-layer objects (the Pet Pen): `backSprite` is the source's childNode art — the
+  // far wall — sorted just BEHIND the main sprite so pen contents stand between them.
+  backSprite?: Sprite;
+  // The near wall must cover the pets inside the pen even though they stand "in front"
+  // of the pen's footprint. A second copy of the main art, masked to those pets'
+  // silhouettes and pinned above the whole layer, does that without inverting the
+  // object's ordering against characters outside the pen.
+  frontOverlay?: Container;
   frontMask?: Graphics;
   light?: Sprite; // additive night glow (glowing objects only), lives in the night layer
   // Fruit trees only: readyAt = epoch ms the fruit ripens; ready = fruit present.
@@ -223,7 +236,6 @@ export class Field {
   private fenceBlock = new Map<string, Set<string>>();
   private nextObjId = 1;
   private highlightedObj: string | null = null;
-  private petPenTextures = new WeakMap<Sprite, Texture[]>();
 
   constructor(private assets: GameAssets) {
     this.groundObjectLayer.sortableChildren = true;
@@ -866,8 +878,7 @@ export class Field {
     for (const o of this.objects.values()) {
       if (!o.def.harvestValue || o.ready || now < o.readyAt) continue;
       o.ready = true;
-      this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, true, o.flipped,
-        o.frontSprite, o.rearSprite, o.gateSprite, o.rearOverlay, o.frontOverlay);
+      this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, true, o.flipped, o);
     }
     // Runs LAST in the frame (after the farmer + zombies have moved), so the
     // footprint depth-sort sees final positions. Ground objects (roads/patch) share
@@ -993,107 +1004,63 @@ export class Field {
   }
   private fitObjectSprite(
     sp: Sprite, def: PlaceableDef, oc: number, or: number, ready = true, flipped = false,
-    front?: Sprite, rear?: Sprite, gate?: Sprite,
-    rearOverlay?: Container, frontOverlay?: Container,
+    extra?: { backSprite?: Sprite; frontOverlay?: Container },
   ) {
     const name = this.objectSpriteName(def, ready);
     const texture = this.assets.objects[name] ?? this.assets.objects[def.sprite] ?? Texture.EMPTY;
     const tint = objectTint(def.color);
-    sp.anchor.set(0.5, 1);
     const s = this.objectScale();
     // Flip = mirror horizontally (about the sprite's bottom-center anchor), so the
     // art faces the other way while sitting in the exact same footprint tiles.
     const a = this.footprintAnchor(oc, or, def.tileW, def.tileH);
     const scaleX = flipped ? -s : s;
-    if (def.petPen && front && rear && gate && texture !== Texture.EMPTY) {
-      for (const old of this.petPenTextures.get(sp) ?? []) old.destroy(false);
-      const f = texture.frame;
-      const split = Math.max(1, Math.min(f.height - 1, Math.round(f.height * 0.47)));
-      // The gate occupies this vertical band. Remove that band from the rear crop
-      // and render it separately with the front rails so its round metal top never
-      // drops behind a character.
-      const gateX0 = Math.round(f.width * 0.16);
-      const gateX1 = Math.round(f.width * 0.37);
-      const rearLeftTexture = new Texture({ source: texture.source,
-        frame: new Rectangle(f.x, f.y, gateX0, split) });
-      const rearRightTexture = new Texture({ source: texture.source,
-        frame: new Rectangle(f.x + gateX1, f.y, f.width - gateX1, split) });
-      const gateTexture = new Texture({ source: texture.source,
-        frame: new Rectangle(f.x + gateX0, f.y, gateX1 - gateX0, split) });
-      const frontTexture = new Texture({ source: texture.source,
-        frame: new Rectangle(f.x, f.y + split, f.width, f.height - split) });
-      this.petPenTextures.set(sp, [rearLeftTexture, rearRightTexture, gateTexture, frontTexture]);
-
-      const layoutCrop = (sprite: Sprite, cropped: Texture, x: number, y: number) => {
-        const crop = cropped.frame;
-        const center = x + crop.width / 2 - f.width / 2;
-        sprite.texture = cropped;
-        sprite.anchor.set(0.5, 0);
-        sprite.scale.set(scaleX, s);
-        sprite.tint = tint;
-        sprite.position.set(a.x + (flipped ? -center : center) * s, a.y - f.height * s + y * s);
-      };
-      layoutCrop(sp, rearLeftTexture, 0, 0);
-      layoutCrop(rear, rearRightTexture, gateX1, 0);
-      layoutCrop(gate, gateTexture, gateX0, 0);
-      layoutCrop(front, frontTexture, 0, split);
-
-      // Both rail halves have a low/base copy. Character-specific high copies are
-      // masked over only the silhouettes that each half must occlude; this avoids
-      // the impossible global ordering cycle created by simultaneous inside and
-      // outside characters.
-      for (const base of [sp, rear, gate, front]) base.zIndex = -1000;
-      const rebuildOverlay = (container: Container | undefined, parts: Array<{
-        texture: Texture; x: number; y: number;
-      }>) => {
-        if (!container) return;
-        for (const child of container.removeChildren()) child.destroy();
-        for (const part of parts) {
-          const copy = new Sprite();
-          layoutCrop(copy, part.texture, part.x, part.y);
-          container.addChild(copy);
-        }
-        container.zIndex = 100000;
-      };
-      rebuildOverlay(rearOverlay, [
-        { texture: rearLeftTexture, x: 0, y: 0 },
-        { texture: rearRightTexture, x: gateX1, y: 0 },
-      ]);
-      rebuildOverlay(frontOverlay, [
-        { texture: gateTexture, x: gateX0, y: 0 },
-        { texture: frontTexture, x: 0, y: split },
-      ]);
-      return;
-    }
-    sp.texture = texture;
-    sp.tint = tint;
-    sp.scale.set(scaleX, s);
-    sp.position.set(a.x, this.objectRenderY(def, a.y));
+    const c1 = oc + def.tileW - 1, r1 = or + def.tileH - 1;
+    const lay = (sprite: Sprite, tex: Texture) => {
+      sprite.texture = tex;
+      sprite.tint = tint;
+      sprite.anchor.set(0.5, 1);
+      sprite.scale.set(scaleX, s);
+      sprite.position.set(a.x, this.objectRenderY(def, a.y));
+    };
+    lay(sp, texture);
     // Depth-sorts by the object's full footprint (see depthSort): an actor on the
     // object's own tiles or south of it draws in front, one behind it is covered.
-    setFootprint(sp, oc, or, oc + def.tileW - 1, or + def.tileH - 1);
+    const back = extra?.backSprite;
+    setFootprint(sp, oc, or, c1, r1, back ? BACK_LAYER_BIAS : 0);
+
+    // ---- Two-layer objects (Pet Pen) --------------------------------------
+    // The source draws the far wall as a childNode at a deeper depth than the base
+    // sprite (TileProperties pettingZoo: pettingzoo_back.png at depth 15, front at 0),
+    // both authored on the same canvas — so the two layers share one transform and
+    // differ only in paint order. The far wall takes the same footprint with no bias,
+    // which is what orders the pair.
+    if (back) {
+      lay(back, this.assets.objects[def.backSprite ?? ""] ?? Texture.EMPTY);
+      setFootprint(back, oc, or, c1, r1);
+    }
+    // Pets stand on the pen's own tiles, so the depth sort puts them in FRONT of it —
+    // right for the far wall, wrong for the near one they should be standing behind.
+    // A masked copy of the near wall, clipped to those pets and pinned above the
+    // layer, restores that without inverting the pen against anything outside it.
+    const overlay = extra?.frontOverlay;
+    if (overlay) {
+      for (const child of overlay.removeChildren()) child.destroy();
+      const copy = new Sprite();
+      lay(copy, texture);
+      overlay.addChild(copy);
+      overlay.zIndex = PEN_OVERLAY_Z;
+    }
   }
 
   private destroyObjectSprites(obj: FarmObject) {
-    const split = this.petPenTextures.get(obj.sprite) ?? [];
     obj.sprite.removeFromParent();
-    obj.rearSprite?.removeFromParent();
-    obj.frontSprite?.removeFromParent();
-    obj.gateSprite?.removeFromParent();
-    obj.rearOverlay?.removeFromParent();
+    obj.backSprite?.removeFromParent();
     obj.frontOverlay?.removeFromParent();
-    obj.rearMask?.removeFromParent();
     obj.frontMask?.removeFromParent();
     obj.sprite.destroy();
-    obj.rearSprite?.destroy();
-    obj.frontSprite?.destroy();
-    obj.gateSprite?.destroy();
-    obj.rearOverlay?.destroy({ children: true });
+    obj.backSprite?.destroy();
     obj.frontOverlay?.destroy({ children: true });
-    obj.rearMask?.destroy();
     obj.frontMask?.destroy();
-    for (const texture of split) texture.destroy(false);
-    this.petPenTextures.delete(obj.sprite);
   }
 
   // Glowing objects (candle altar, sparklers, glow-flora, ...) emit an additive
@@ -1154,29 +1121,21 @@ export class Field {
     const ra = def.growMs ? readyAt ?? now + def.growMs : 0;
     const ready = def.growMs ? now >= ra : false;
     const sprite = new Sprite();
-    const rearSprite = def.petPen ? new Sprite() : undefined;
-    const frontSprite = def.petPen ? new Sprite() : undefined;
-    const gateSprite = def.petPen ? new Sprite() : undefined;
-    const rearOverlay = def.petPen ? new Container() : undefined;
+    // The far wall is a plain second sprite; the near-wall overlay + its mask only
+    // exist for an object whose contents must stand between the two layers.
+    const backSprite = def.backSprite ? new Sprite() : undefined;
     const frontOverlay = def.petPen ? new Container() : undefined;
-    const rearMask = def.petPen ? new Graphics() : undefined;
     const frontMask = def.petPen ? new Graphics() : undefined;
-    if (rearOverlay && rearMask) rearOverlay.mask = rearMask;
     if (frontOverlay && frontMask) frontOverlay.mask = frontMask;
-    this.fitObjectSprite(sprite, def, oc, or, ready, flipped, frontSprite, rearSprite, gateSprite,
-      rearOverlay, frontOverlay);
+    this.fitObjectSprite(sprite, def, oc, or, ready, flipped, { backSprite, frontOverlay });
     const layer = this.isGroundObject(def) ? this.groundObjectLayer : this.entityLayer;
+    if (backSprite) layer.addChild(backSprite);
     layer.addChild(sprite);
-    if (rearSprite) layer.addChild(rearSprite);
-    if (frontSprite) layer.addChild(frontSprite);
-    if (gateSprite) layer.addChild(gateSprite);
-    if (rearOverlay) layer.addChild(rearOverlay);
     if (frontOverlay) layer.addChild(frontOverlay);
-    if (rearMask) layer.addChild(rearMask);
     if (frontMask) layer.addChild(frontMask);
     const oid = id ?? this.mintId();
-    const obj: FarmObject = { id: oid, def, oc, or, sprite, rearSprite, frontSprite, gateSprite,
-      rearOverlay, frontOverlay, rearMask, frontMask, readyAt: ra, ready, flipped };
+    const obj: FarmObject = { id: oid, def, oc, or, sprite, backSprite,
+      frontOverlay, frontMask, readyAt: ra, ready, flipped };
     this.objects.set(oid, obj);
     this.attachObjectLight(obj);
     this.forEachFootprint(oc, or, def.tileW, def.tileH, (t) => this.tileObject.set(t, oid));
@@ -1244,15 +1203,18 @@ export class Field {
     return null;
   }
 
-  /** Rebuild the Pet Pen's character-specific rail masks. A rectangle is enough:
-   * transparent pixels in each rail crop remain transparent, while every rail
-   * pixel intersecting a character receives the requested foreground treatment. */
-  updatePetPenOcclusion(inside: Container[], _outside: Container[]) {
-    const draw = (mask: Graphics | undefined, actors: Container[]) => {
-      if (!mask) return;
+  /** Rebuild the Pet Pen's near-wall mask from the pets standing inside it. A
+   * rectangle per pet is enough: transparent pixels in the wall art stay
+   * transparent, so only actual rail pixels over a pet come forward. The far wall
+   * needs no mask at all — pets are south of it and the depth sort already puts
+   * them in front. */
+  updatePetPenOcclusion(inside: Container[]) {
+    for (const o of this.objects.values()) {
+      const mask = o.def.petPen ? o.frontMask : undefined;
+      if (!mask) continue;
       mask.clear();
       let any = false;
-      for (const actor of actors) {
+      for (const actor of inside) {
         if (!actor.visible || !actor.renderable) continue;
         const b = actor.getLocalBounds();
         if (!(b.width > 0 && b.height > 0)) continue;
@@ -1260,14 +1222,6 @@ export class Field {
         any = true;
       }
       if (any) mask.fill(0xffffff);
-    };
-    for (const o of this.objects.values()) {
-      if (!o.def.petPen) continue;
-      draw(o.frontMask, inside);
-      // The upper ^ rails must always stay behind deployed pets. Do not give the
-      // rear crop any foreground silhouette, even when another nearby character's
-      // bounds overlap the pen on screen.
-      draw(o.rearMask, []);
     }
   }
 
@@ -1341,8 +1295,7 @@ export class Field {
     this.setExtensionBlocks(id, o.def, o.oc, o.or, o.flipped, false);
     o.def = def;
     o.ready = def.growMs ? o.ready : false;
-    this.fitObjectSprite(o.sprite, def, o.oc, o.or, true, o.flipped,
-      o.frontSprite, o.rearSprite, o.gateSprite, o.rearOverlay, o.frontOverlay);
+    this.fitObjectSprite(o.sprite, def, o.oc, o.or, true, o.flipped, o);
     this.forEachFootprint(o.oc, o.or, def.tileW, def.tileH, (t) => this.tileObject.set(t, id));
     this.setExtensionBlocks(id, def, o.oc, o.or, o.flipped, true);
     return true;
@@ -1359,8 +1312,7 @@ export class Field {
     obj.oc = oc;
     obj.or = or;
     if (flipped !== undefined) obj.flipped = flipped;
-    this.fitObjectSprite(obj.sprite, obj.def, oc, or, obj.ready, obj.flipped,
-      obj.frontSprite, obj.rearSprite, obj.gateSprite, obj.rearOverlay, obj.frontOverlay);
+    this.fitObjectSprite(obj.sprite, obj.def, oc, or, obj.ready, obj.flipped, obj);
     this.positionObjectLight(obj);
     this.forEachFootprint(oc, or, obj.def.tileW, obj.def.tileH, (t) => this.tileObject.set(t, id));
     this.setExtensionBlocks(id, obj.def, oc, or, obj.flipped, true);
@@ -1398,8 +1350,7 @@ export class Field {
     if (!o || !o.def.harvestValue) return false;
     o.readyAt = readyAt;
     o.ready = Date.now() >= readyAt;
-    this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, o.ready, o.flipped,
-      o.frontSprite, o.rearSprite, o.gateSprite, o.rearOverlay, o.frontOverlay);
+    this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, o.ready, o.flipped, o);
     return true;
   }
   // Harvest a ripe fruit tree: award its value, reset it to growing. Returns the
@@ -1409,8 +1360,7 @@ export class Field {
     if (!o || !o.def.harvestValue || !o.ready) return null;
     o.ready = false;
     o.readyAt = Date.now() + (o.def.growMs ?? 0);
-    this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, false, o.flipped,
-      o.frontSprite, o.rearSprite, o.gateSprite, o.rearOverlay, o.frontOverlay);
+    this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, false, o.flipped, o);
     return o.def.harvestValue;
   }
   removeObject(id: string): PlaceableDef | null {
@@ -1439,11 +1389,11 @@ export class Field {
     const applyWash = (obj: FarmObject | undefined, wash: number) => {
       if (!obj) return;
       const tint = multiplyObjectTint(objectTint(obj.def.color), wash);
-      for (const sprite of [obj.sprite, obj.rearSprite, obj.frontSprite, obj.gateSprite]) {
+      for (const sprite of [obj.sprite, obj.backSprite]) {
         if (sprite) sprite.tint = tint;
       }
-      for (const overlay of [obj.rearOverlay, obj.frontOverlay]) {
-        for (const child of overlay?.children ?? []) if (child instanceof Sprite) child.tint = tint;
+      for (const child of obj.frontOverlay?.children ?? []) {
+        if (child instanceof Sprite) child.tint = tint;
       }
     };
     applyWash(this.highlightedObj ? this.objects.get(this.highlightedObj) : undefined, 0xffffff);
@@ -1467,8 +1417,7 @@ export class Field {
     const o = this.objects.get(id);
     if (!o) return false;
     o.flipped = !o.flipped;
-    this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, o.ready, o.flipped,
-      o.frontSprite, o.rearSprite, o.gateSprite, o.rearOverlay, o.frontOverlay);
+    this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, o.ready, o.flipped, o);
     return o.flipped;
   }
   // World point the farmer walks to in order to harvest this object (its base).

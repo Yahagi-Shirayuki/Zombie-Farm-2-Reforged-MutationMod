@@ -261,6 +261,10 @@ export interface PlaceableDef {
   rotations: number;
   tapSound?: string; // signature audio played when this decor is tapped (e.g. belltoll.mp3)
   sprite: string; // filename under /assets/objects/
+  /** Far-side art (the source's `childNodes` layer), drawn on the SAME canvas as
+   *  `sprite` but behind anything standing inside the object. Only the Pet Pen has
+   *  one: its far wall, which pets have to walk in front of. */
+  backSprite?: string;
   nativeW: number;
   nativeH: number;
   pivotX: number;
@@ -355,10 +359,10 @@ export interface FarmerBodyDef {
   id: number;
   name: string;
   body: string;
+  /** The body's back / front arm (PlayerDictionary kActorPartTagArmB / ArmF). A body
+   *  owns exactly these two images; the walk animates them by rotation (see Actor). */
   arm1: string;
   arm2: string;
-  arm3: string;
-  arm4: string;
   /** Bodies currently have no independent source price and start unlocked. */
   cost?: number;
   brains?: boolean;
@@ -696,4 +700,17 @@ export async function ensureObjectTexture(
     assets.objects[sprite] = await Assets.load(`${BASE}assets/objects/${sprite}`);
   }
   return assets.objects[sprite];
+}
+
+/** Every /assets/objects/ file a placed object draws: its own art, the pre-harvest
+ *  frame a fruit tree shows, and the far-side layer the Pet Pen renders behind its
+ *  contents. Callers preload the whole list — a missing back layer would leave the
+ *  pen showing only its near wall. */
+export function objectSpriteFiles(def: PlaceableDef): string[] {
+  return [def.sprite, def.growingSprite, def.backSprite].filter((f): f is string => !!f);
+}
+
+/** Preload every texture `def` needs before it can be placed on the farm. */
+export async function ensureObjectTextures(assets: GameAssets, def: PlaceableDef): Promise<void> {
+  await Promise.all(objectSpriteFiles(def).map((file) => ensureObjectTexture(assets, file)));
 }

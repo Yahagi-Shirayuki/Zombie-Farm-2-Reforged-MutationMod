@@ -54,7 +54,19 @@ import type { RaidOutcome } from "./types";
 // existing reload prompt), which is the only way to make the fix reach everyone. Cost,
 // accepted knowingly: an invasion in flight at deploy time settles as stale_ruleset and
 // pays nothing.
-export const RAID_RULESET_VERSION = 15;
+// 16: Zombies vs Robots composes its wave differently. The raid's `randomBoss` flag is
+// now honoured (one of each bot, a random one leading — ground truth ZFFightMan
+// initialSpawn), seeded by the raid session id so the client and the pinned server
+// config draw the SAME wave; and boss specials no longer scan the whole roster, so only
+// a JunkBot boss summons junk walls. A v15 bundle would field the old fixed BrainBot
+// wave against a v16 pinned config and desync on the first tick.
+// 17: the Lawyers boss's Double Punch special (`CorporateBossPunchSpecial`) STUNS and no
+// longer knocks back. The shipped plist flagged it both; his page lists the stun as his
+// special, and he is the only stunner in the attack table, so the shove is dropped and the
+// 1 s hold kept (see ATTACK_OVERRIDES in tools/prep_raids.py). The struck zombie now holds
+// its slot instead of being re-sent to the back of the formation, so a v16 client and a v17
+// Worker would disagree about the Lawyers fight from the boss's first special onward.
+export const RAID_RULESET_VERSION = 17;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;
@@ -66,23 +78,50 @@ export type RaidReplayInput =
   | { seq: number; tick: number; type: "wallTap"; unitId: string }
   | { seq: number; tick: number; type: "retreat" };
 
+/** How far the server's replay had to depart from the client's account of the fight.
+ *  Both counters are ZERO for a fight the two simulations agreed on; anything else is a
+ *  divergence worth watching, which is how the ruleset-14 wall desync was caught. */
+export interface ReplayDivergence {
+  /** Ticks simulated BEYOND the client's `finalTick` to reach an outcome. */
+  overrunTicks: number;
+  /** Taps dropped because the server's fight had already ended when they arrived. */
+  inputsAfterFinish: number;
+}
+
 export type ReplayResult =
-  | { ok: true; outcome: RaidOutcome; retreated: boolean }
+  | { ok: true; outcome: RaidOutcome; retreated: boolean; divergence: ReplayDivergence }
   | { ok: false; error: string };
 
 export type SegmentResult =
-  | { ok: true; snapshot: BattleSimSnapshot; finished: boolean; outcome?: RaidOutcome; retreated: boolean; lastSeq: number }
+  | { ok: true; snapshot: BattleSimSnapshot; finished: boolean; outcome?: RaidOutcome; retreated: boolean; lastSeq: number; divergence: ReplayDivergence }
   | { ok: false; error: string };
 
 /** Advance an existing verifier snapshot. Input ticks/sequences remain global, while
- * only the new segment is simulated. A checkpoint never accepts retreat. */
+ * only the new segment is simulated. A checkpoint never accepts retreat.
+ *
+ * `runToCompletion` is for the FINISH path only. Client-only hazards (the Circus
+ * trapeze, the Beach crab) mean the player's fight and the server's are not the same
+ * LENGTH, and transcript ticks are coordinates in the CLIENT's timeline. `finalTick`
+ * therefore says when the player's fight ended, which is no reason to stop the server's
+ * — but stopping there is what voided ~6% of all Circus/Beach victories. So the server
+ * finishes its own fight, and a tap that arrives after it has done so is dropped rather
+ * than fatal. Both effects are one-way self-harm: a dropped tap is help the server's
+ * player never receives, and the overrun only ever runs the server's OWN deterministic
+ * simulation to its own conclusion.
+ *
+ * Deliberately NOT covered: a tap the sim REFUSES (`illegal_bubble` / `illegal_ability`
+ * / `illegal_wall_tap`) stays fatal. Those address a unit in the wrong state rather than
+ * a fight in the wrong phase, they are ~30x rarer in practice than the timing failures,
+ * and they are the signal that caught the ruleset-14 wall desync. A checkpoint passes
+ * false — mid-fight segments must stay exact. */
 export function advanceRaidSegment(
   sim: BattleSim,
   startTick: number,
   finalTick: number,
   startingSeq: number,
   inputs: RaidReplayInput[],
-  allowRetreat: boolean
+  allowRetreat: boolean,
+  runToCompletion = false
 ): SegmentResult {
   if (!Number.isInteger(startTick) || !Number.isInteger(finalTick) || finalTick < startTick || finalTick > RAID_MAX_TICKS) {
     return { ok: false, error: "bad_final_tick" };
@@ -105,10 +144,17 @@ export function advanceRaidSegment(
   }
   let cursor = 0;
   let retreated = false;
+  let inputsAfterFinish = 0;
   for (let tick = startTick; tick <= finalTick; tick++) {
     while (cursor < inputs.length && inputs[cursor].tick === tick) {
       const input = inputs[cursor++];
-      if (sim.finished) return { ok: false, error: "input_after_finish" };
+      if (sim.finished) {
+        // The server's fight ended before the player's did. A tap cannot change an
+        // outcome that is already settled, so drop it instead of failing the finish.
+        if (!runToCompletion) return { ok: false, error: "input_after_finish" };
+        inputsAfterFinish++;
+        continue;
+      }
       if (input.type === "bubble") {
         if (typeof input.unitId !== "string" || !sim.popBubble(input.unitId)) return { ok: false, error: "illegal_bubble" };
       } else if (input.type === "ability") {
@@ -124,6 +170,20 @@ export function advanceRaidSegment(
     if (retreated || sim.finished || tick === finalTick) break;
     sim.step(RAID_TICK_MS);
   }
+  // Breaking on `finished` above leaves every LATER tap unvisited. They are dropped for
+  // the same reason as the ones the loop did see, so count them the same way.
+  if (runToCompletion) inputsAfterFinish += inputs.length - cursor;
+  // Past `finalTick` the transcript is exhausted (an input beyond it is `bad_input_tick`
+  // above), so this is the server finishing its own unattended fight — no player help
+  // reaches it. RAID_MAX_TICKS still caps it at four minutes, and `future_finish` still
+  // bounds what the client may CLAIM about elapsed wall-clock time.
+  let overrunTicks = 0;
+  if (runToCompletion && !retreated && !sim.finished) {
+    while (!sim.finished && finalTick + overrunTicks < RAID_MAX_TICKS) {
+      sim.step(RAID_TICK_MS);
+      overrunTicks++;
+    }
+  }
   return {
     ok: true,
     snapshot: sim.snapshot(),
@@ -131,14 +191,17 @@ export function advanceRaidSegment(
     outcome: sim.finished || retreated ? (retreated ? { ...sim.outcome(), win: false, survivors: [] } : sim.outcome()) : undefined,
     retreated,
     lastSeq,
+    divergence: { overrunTicks, inputsAfterFinish },
   };
 }
 
 /** Replay only outcome-relevant input against a server-built BattleSim. Rendering and
  * wall-clock frame cadence never enter this function. */
 export function replayRaid(sim: BattleSim, finalTick: number, inputs: RaidReplayInput[]): ReplayResult {
-  const advanced = advanceRaidSegment(sim, 0, finalTick, 0, inputs, true);
+  const advanced = advanceRaidSegment(sim, 0, finalTick, 0, inputs, true, true);
   if (!advanced.ok) return advanced;
+  // Now only a genuine stalemate — neither side able to finish the other inside the
+  // four-minute cap — leaves the replay without an outcome.
   if (!advanced.finished || !advanced.outcome) return { ok: false, error: "truncated_transcript" };
-  return { ok: true, retreated: advanced.retreated, outcome: advanced.outcome };
+  return { ok: true, retreated: advanced.retreated, outcome: advanced.outcome, divergence: advanced.divergence };
 }

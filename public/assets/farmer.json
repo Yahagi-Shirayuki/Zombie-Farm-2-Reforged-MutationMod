@@ -286,36 +286,28 @@
       "name": "Male Body 1",
       "body": "malebody1.png",
       "arm1": "male_arm1.png",
-      "arm2": "male_arm2.png",
-      "arm3": "male_arm3.png",
-      "arm4": "male_arm4.png"
+      "arm2": "male_arm2.png"
     },
     {
       "id": 1,
       "name": "Female Body 1",
       "body": "femalebody1.png",
       "arm1": "female_arm1.png",
-      "arm2": "female_arm2.png",
-      "arm3": "female_arm3.png",
-      "arm4": "female_arm4.png"
+      "arm2": "female_arm2.png"
     },
     {
       "id": 2,
       "name": "Male Body 2",
       "body": "malebody2.png",
       "arm1": "male_arm3.png",
-      "arm2": "male_arm4.png",
-      "arm3": "male_arm3.png",
-      "arm4": "male_arm4.png"
+      "arm2": "male_arm4.png"
     },
     {
       "id": 3,
       "name": "Female Body 2",
       "body": "femalebody2.png",
       "arm1": "female_arm3.png",
-      "arm2": "female_arm4.png",
-      "arm3": "female_arm3.png",
-      "arm4": "female_arm4.png"
+      "arm2": "female_arm4.png"
     }
   ]
 }

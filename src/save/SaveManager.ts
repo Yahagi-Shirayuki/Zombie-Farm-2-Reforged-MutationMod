@@ -1,6 +1,6 @@
 import { GameState } from "../GameState";
 import { CropConfig, Field } from "../Field";
-import { PlaceableDef } from "../assets";
+import { objectSpriteFiles, PlaceableDef } from "../assets";
 import { WalkController } from "../WalkController";
 import { ZombieField } from "../zombie/ZombieField";
 import { QuestSystem } from "../quest/QuestSystem";
@@ -628,7 +628,7 @@ export class SaveManager {
     await Promise.all(objects.flatMap((object) => {
       const def = this.placeCatalog.get(object.key);
       if (!def) return [];
-      return [this.preload(def.sprite), ...(def.growingSprite ? [this.preload(def.growingSprite)] : [])];
+      return objectSpriteFiles(def).map((file) => this.preload(file));
     }));
     this.field.restoreObjects(objects, (key) => this.placeCatalog.get(key));
     this.zombies.restore(data.ownedZombies ?? []);

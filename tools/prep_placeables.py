@@ -494,20 +494,20 @@ def extract_multiplepieces(tp):
     return canvas
 
 
-def extract_layered_loose_sprites(tp):
-    """Composite a loose base sprite with its authored child-node layers.
+def extract_child_layer(tp):
+    """A tile's authored BACK layer: its `childNodes` composited on their own.
 
-    Most decor lives in a TexturePacker atlas, but a few large objects use full
-    standalone canvases. The Pet Pen is the important case: its back wall is a
-    child node and its foreground fence is the base sprite. Both images share an
-    authored canvas, so drawing children first and the base last preserves the
-    source front/back composition.
+    A childNode is a second sprite the source draws at a DEEPER depth than the tile's
+    base art — the Pet Pen is the only tile that has one: `pettingzoo_back.png` at
+    depth 15 behind `pettingzoo_front.png` at depth 0. The two must stay separate
+    images, never flattened together, because pets and characters stand BETWEEN the
+    far and near walls; see Field.fitObjectSprite. Both layers are authored on the
+    same canvas, so the exported back layer aligns with the base sprite pixel for
+    pixel. Returns None when the tile has no child nodes (or their art is missing).
     """
-    base_name = tp.get("spriteSheet")
     children = tp.get("childNodes", [])
-    if not base_name or not children:
+    if not tp.get("spriteSheet") or not children:
         return None
-
     layers = []
     for child in children:
         child_name = child.get("spriteSheet")
@@ -515,10 +515,6 @@ def extract_layered_loose_sprites(tp):
         if child_image is None:
             return None
         layers.append(child_image)
-    base = image(base_name)
-    if base is None:
-        return None
-    layers.append(base)
 
     from PIL import Image
 
@@ -618,10 +614,6 @@ def main():
             if tp.get("multiplePieces"):
                 # frameName is only one fragment; assemble every piece.
                 sprite_img = extract_multiplepieces(tp)
-            elif tp.get("childNodes") and tp.get("spriteSheet"):
-                # Large loose art can be split into back/front layers. The Pet
-                # Pen uses this path (pettingzoo_back + pettingzoo_front).
-                sprite_img = extract_layered_loose_sprites(tp)
             else:
                 fl, fn = tp.get("frameList"), tp.get("frameName")
                 if fl and fn:
@@ -665,6 +657,9 @@ def main():
             skipped_keys.append(key)
             continue
         out_name = emit_sprite(key, sprite_img)
+        # A tile's childNodes ship as a SECOND image drawn behind it (Pet Pen far wall).
+        back_img = extract_child_layer(tp)
+        back_name = "" if is_blank(back_img) else emit_sprite(f"{key}_back", back_img)
         seen.add(tile)
         counts[category] += 1
         # Fruit-tree growing-state sprite (saved as <tile>_growing.png).
@@ -700,6 +695,8 @@ def main():
             "movable": bool(tp.get("movable", True)),
             "rotations": tp.get("rotations", 1),
             "sprite": out_name,
+            # Far-side art drawn BEHIND anything standing inside this object.
+            **({"backSprite": back_name} if back_name else {}),
             "nativeW": sprite_img.width,
             "nativeH": sprite_img.height,
             "pivotX": tp.get("pivotx", 0.5),
@@ -834,7 +831,8 @@ def main():
     # a duplicate that now shares another key's file. Leaving them behind makes the
     # directory look like it still holds art the game can reach.
     referenced = {c["sprite"] for c in catalog} | {
-        c["growingSprite"] for c in catalog if c["growingSprite"]}
+        c["growingSprite"] for c in catalog if c["growingSprite"]} | {
+        c["backSprite"] for c in catalog if c.get("backSprite")}
     orphans = sorted(f for f in os.listdir(OBJDIR)
                      if f.endswith(".png") and f not in referenced)
     for f in orphans:

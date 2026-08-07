@@ -25,7 +25,7 @@ const addObject = (
   const overlayChild = new Sprite();
   const frontOverlay = new Container();
   frontOverlay.addChild(overlayChild);
-  const obj = { id, def, sprite: new Sprite(), gateSprite: new Sprite(), frontOverlay };
+  const obj = { id, def, sprite: new Sprite(), backSprite: new Sprite(), frontOverlay };
   objects.set(id, obj);
   return { ...obj, overlayChild };
 };
@@ -41,7 +41,7 @@ describe("Field.setObjectHighlight", () => {
     expect(gate.sprite.tint).not.toBe(black); // washed while hovered
 
     field.setObjectHighlight(null);
-    for (const sprite of [gate.sprite, gate.gateSprite, gate.overlayChild]) {
+    for (const sprite of [gate.sprite, gate.backSprite, gate.overlayChild]) {
       expect(sprite.tint).toBe(black);
     }
   });

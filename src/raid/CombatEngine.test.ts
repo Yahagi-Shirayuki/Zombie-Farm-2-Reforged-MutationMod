@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { resolveRaid, buildEnemyUnits, buildPlayerUnits } from "./CombatEngine";
 import type { CombatUnit } from "./types";
 import type { OwnedZombie } from "../zombie/types";
+import shippedStats from "../../public/assets/raids/enemy_stats.json";
+import shippedAttacks from "../../public/assets/raids/attacks.json";
 
 // resolveRaid is the deterministic instant-resolver. These tests pin the outcome
 // direction and, crucially, that the recovered damage formula
@@ -427,5 +429,27 @@ describe("resolveRaid — recovered cadence rules reach the resolver", () => {
     const vsMirror = resolveRaid([foe()], [enemy(true)]);
     const vsPlain = resolveRaid([foe()], [enemy(false)]);
     expect(vsMirror.playerDamage).toBeGreaterThan(vsPlain.playerDamage);
+  });
+});
+
+// Data-fidelity regression on the SHIPPED tables (public/assets/raids/*.json).
+describe("Lawyers boss — his special stuns, it does not push back", () => {
+  const boss = () =>
+    buildEnemyUnits(
+      { enemyKeys: [], bossKey: "CityStageActorBoss" },
+      shippedStats as unknown as Parameters<typeof buildEnemyUnits>[1],
+      shippedAttacks as unknown as Parameters<typeof buildEnemyUnits>[2]
+    )[0];
+
+  it("carries the 1-second stun and NO knockback", () => {
+    expect(boss().stunMs).toBe(1000);
+    expect(boss().knockBack).toBeFalsy();
+  });
+
+  it("is still the only enemy in the game that stuns", () => {
+    const stunners = Object.entries(shippedAttacks as Record<string, { stun?: boolean }>)
+      .filter(([, def]) => def.stun)
+      .map(([name]) => name);
+    expect(stunners).toEqual(["CorporateBossPunchSpecial"]);
   });
 });

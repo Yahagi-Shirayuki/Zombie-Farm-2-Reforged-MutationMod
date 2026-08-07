@@ -10,8 +10,8 @@ const catalog: FarmerCatalog = {
     { id: 2, name: "Paid", part: "paid.png", bodyId: 1, sort: 2, cost: 15, brains: true },
   ],
   bodies: [
-    { id: 0, name: "Body A", body: "a.png", arm1: "a1", arm2: "a2", arm3: "a3", arm4: "a4" },
-    { id: 1, name: "Body B", body: "b.png", arm1: "b1", arm2: "b2", arm3: "b3", arm4: "b4" },
+    { id: 0, name: "Body A", body: "a.png", arm1: "a1", arm2: "a2" },
+    { id: 1, name: "Body B", body: "b.png", arm1: "b1", arm2: "b2" },
   ],
 };
 

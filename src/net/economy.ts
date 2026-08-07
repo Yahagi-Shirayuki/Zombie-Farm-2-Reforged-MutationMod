@@ -25,7 +25,9 @@ export type RosterInput =
   | { type: "veteran"; unitIds: string[] }
   | { type: "casualty"; unitIds: string[] }
   | { type: "combineStart"; potId?: string; parentAId: string; parentBId: string; playerLevel?: number }
-  | { type: "combineCollect"; potId?: string; unitId: string; key: string; mutation?: number };
+  | { type: "combineCollect"; potId?: string; unitId: string; key: string; mutation?: number;
+      /** Collect the child straight into the Mausoleum instead of the farm. */
+      stored?: boolean };
 
 export interface FarmActionInput {
   type: "plant" | "harvest" | "plow" | "remove" | "move";
@@ -517,6 +519,7 @@ export class EconomyClient {
         parentAId: this.authoritativeUnitId(parents.parentAId),
         parentBId: this.authoritativeUnitId(parents.parentBId),
         ...(parents.playerLevel === undefined ? {} : { playerLevel: parents.playerLevel }),
+        ...(input.stored ? { stored: true } : {}),
       }, { localUnitId: input.unitId });
       return true;
     }

@@ -8,11 +8,13 @@ import {
   fightStage,
   minArmyFor,
   bossThrowIntervalSecs,
+  resolveStageWave,
+  seededRandom,
   ARMY_CAP,
 } from "../../src/raid/RaidCatalog";
 import { makeOwned } from "../../src/zombie/types";
 import { ABILITY_TIER, abilityTierOf } from "../../src/zombie/traits";
-import { advanceRaidSegment, replayRaid, RAID_RULESET_VERSION, type RaidReplayInput } from "../../src/raid/replay";
+import { advanceRaidSegment, replayRaid, RAID_RULESET_VERSION, type RaidReplayInput, type ReplayResult } from "../../src/raid/replay";
 import type {
   AttackDef,
   BossSpecial,
@@ -20,7 +22,6 @@ import type {
   CombatUnit,
   EnemyStat,
   RaidDef,
-  RaidOutcome,
   RaidStage,
   GrabberConfig,
 } from "../../src/raid/types";
@@ -72,19 +73,6 @@ function grabberOf(_raid: RaidDef): GrabberConfig | null {
   return null;
 }
 
-function stageRosterKeys(stage: RaidStage): string[] {
-  return [stage.bossKey ?? "", ...(stage.enemyKeys ?? []), ...(stage.weighted ?? []).map((w) => w.enemy)]
-    .filter(Boolean);
-}
-
-function findStageAction(stage: RaidStage, name: string) {
-  for (const key of stageRosterKeys(stage)) {
-    const action = enemyStats[key]?.bossActions?.find((candidate) => candidate.name === name);
-    if (action) return action;
-  }
-  return undefined;
-}
-
 function bossThrowOf(
   raid: RaidDef,
   stage: RaidStage,
@@ -105,13 +93,11 @@ function bossThrowOf(
   return { intervalMs: secs * 1000, options };
 }
 
+// Strictly the BOSS's own actions — mirrors RaidManager.bossSpecialsOf, and must stay
+// in step with it or the pinned config and the client's fight disagree.
 function bossSpecialsOf(stage: RaidStage): BossSpecial[] {
   if (!stage.bossKey || stage.throwingDisabled) return [];
-  const actions = [...(enemyStats[stage.bossKey]?.bossActions ?? [])];
-  if (!actions.some((action) => action.name === "wall")) {
-    const wall = findStageAction(stage, "wall");
-    if (wall) actions.push(wall);
-  }
+  const actions = enemyStats[stage.bossKey]?.bossActions ?? [];
   return actions
     .filter((a) => a.name !== "throw")
     .map((a) => ({
@@ -135,7 +121,7 @@ function summonWallTemplates(stage: RaidStage, units: CombatUnit[]): {
     const minion = units.find((u) => !u.isBoss);
     if (minion) summonTemplate = { ...minion };
   }
-  const wall = findStageAction(stage, "wall");
+  const wall = actions.find((a) => a.name === "wall");
   if (wall) {
     const hp = Math.max(1, Math.round(wall.hp ?? 1500));
     wallTemplate = {
@@ -171,7 +157,11 @@ export async function buildPinnedRaid(
   accountId: string,
   raidId: number,
   orderedIds: unknown,
-  concentration: boolean
+  concentration: boolean,
+  /** Seed for the wave's own randomness (the Robots' random boss). It MUST be the
+   *  session id the client is handed back, because the client resolves the same wave
+   *  from it and this pinned config is what the replay is checked against. */
+  waveSeed: string
 ): Promise<BuildPinnedResult> {
   if (!Array.isArray(orderedIds) || orderedIds.length > ARMY_CAP || orderedIds.length === 0) {
     return { ok: false, error: "bad_roster" };
@@ -186,8 +176,9 @@ export async function buildPinnedRaid(
     .first<{ xp: number }>();
   const level = levelForXp(balance?.xp ?? 0);
   if (level < raid.unlockLevel) return { ok: false, error: "locked" };
-  const stage = fightStage(raid, level);
-  if (!stage) return { ok: false, error: "bad_stage" };
+  const authored = fightStage(raid, level);
+  if (!authored) return { ok: false, error: "bad_stage" };
+  const stage = resolveStageWave(authored, seededRandom(waveSeed));
 
   const placeholders = ids.map(() => "?").join(",");
   const owned = await db
@@ -270,7 +261,11 @@ export async function buildPinnedV3Raid(
   accountId: string,
   raidId: number,
   orderedIds: unknown,
-  concentration: boolean
+  concentration: boolean,
+  /** Seed for the wave's own randomness (the Robots' random boss). It MUST be the
+   *  session id the client is handed back, because the client resolves the same wave
+   *  from it and this pinned config is what the replay is checked against. */
+  waveSeed: string
 ): Promise<BuildPinnedResult> {
   if (!Array.isArray(orderedIds) || orderedIds.length > ARMY_CAP || orderedIds.length === 0) {
     return { ok: false, error: "bad_roster" };
@@ -301,8 +296,9 @@ export async function buildPinnedV3Raid(
     catch { return {}; }
   })();
   if (ids.length < minArmyFor(raid, winsObject[String(raidId)] ?? 0)) return { ok: false, error: "army_too_small" };
-  const stage = fightStage(raid, level);
-  if (!stage) return { ok: false, error: "bad_stage" };
+  const authored = fightStage(raid, level);
+  if (!authored) return { ok: false, error: "bad_stage" };
+  const stage = resolveStageWave(authored, seededRandom(waveSeed));
   const core = (() => {
     try {
       return JSON.parse(coreRow?.current_json ?? "{}") as
@@ -356,7 +352,7 @@ export function verifyRaid(
   config: PinnedRaidConfig,
   finalTick: number,
   inputs: RaidReplayInput[]
-): { ok: true; outcome: RaidOutcome; retreated: boolean } | { ok: false; error: string } {
+): ReplayResult {
   return replayRaid(createPinnedSim(config), finalTick, inputs);
 }
 

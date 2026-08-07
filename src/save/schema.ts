@@ -316,6 +316,11 @@ export interface ZombiePotSave {
    *  promotion and permanent-special species override. */
   groupA?: string;
   groupB?: string;
+  /** Parent colour classes (Green / Blue / Red / Silver / ...). A matched pair breeds
+   *  one class up the ladder, so the result cannot be derived without them. Absent on
+   *  jobs persisted before the ladder existed; those keep the older silver rule. */
+  classA?: string;
+  classB?: string;
   specialA?: boolean;
   specialB?: boolean;
   /** Player level captured when the combine began. Optional for old saves. */

@@ -152,7 +152,7 @@ function tintMarketPortrait(img: HTMLImageElement, color?: [number, number, numb
  *  item key, so it always matches the item's real behaviour. */
 function functionalDescription(def: PlaceableDef): string | undefined {
   if (def.petPen)
-    return "A home for up to four cosmetic pets. Tap the Pet Pen on your farm to choose its occupants.";
+    return "A home for up to four cosmetic pets. Tap the Pet Pen on your farm and choose Pets to pick its occupants.";
   if (def.category !== "functional") return undefined;
   if (def.armyMax)
     return `Raises your zombie army limit by ${def.armyMax}, so you can send more zombies on each invasion.`;
@@ -173,7 +173,7 @@ function functionalDescription(def: PlaceableDef): string | undefined {
   if (def.storageSlots)
     return `A shed for objects you've packed away — holds up to ${def.storageSlots} items. Buy a bigger shed to store more.`;
   if (def.petPen)
-    return "An enclosure your pets roam around in. Tap it to pick up to four of the pets you own — one pen is all you need.";
+    return "An enclosure your pets roam around in. Tap it and choose Pets to pick up to four of the pets you own — one pen is all you need.";
   if (def.key === "cameraNormal") return "A decorative camera to show off your farm.";
   return undefined;
 }
@@ -1376,6 +1376,8 @@ export class Hud {
         totalMs: number;
         monolith: boolean;
         canCollect: boolean;
+        /** Is there a placed Mausoleum with a free slot to collect the child into? */
+        canStore: boolean;
         pending: {
           keyA: string; keyB: string; maskA: number; maskB: number;
           colorA?: [number, number, number]; colorB?: [number, number, number];
@@ -1391,8 +1393,9 @@ export class Hud {
   onCombine: ((idA: string, idB: string) => boolean | Promise<boolean>) | null = null;
   /** Reward-only actors cannot be consumed or cloned; specials only fit slot 1. */
   canCombineZombie: ((key: string, slot?: "A" | "B") => boolean) | null = null;
-  /** Collect a finished combine; returns the new zombie's name (or null). */
-  onCollectCombine: (() => string | null | Promise<string | null>) | null = null;
+  /** Collect a finished combine; returns the new zombie's name (or null).
+   *  `stored` sends the child straight to the Mausoleum instead of the farm. */
+  onCollectCombine: ((stored?: boolean) => string | null | Promise<string | null>) | null = null;
   /** Tears down the open combiner's countdown ticker. Held on the instance because
    *  openCombiner can replace a panel it did not build, and dropping that panel's
    *  DOM does not stop the interval its closure owns. */
@@ -4494,6 +4497,15 @@ export class Hud {
       el.textContent = text;
       return el;
     };
+    // Marks a tile whose zombie is resting in the Mausoleum rather than on the farm.
+    // Both can be combined, so the badge is the only thing telling them apart.
+    const storedTag = () => {
+      const el = document.createElement("div");
+      el.className = "cmb-zstored";
+      el.textContent = "Stored";
+      el.title = "Resting in the Mausoleum";
+      return el;
+    };
     // The same corner magnifier the Market cards carry: it opens this individual's
     // inspect card so its class, stats, mutations and abilities can be read before it
     // goes in the pot. Deliberately WITHOUT the card's Store/Sell/Deploy row (`id`
@@ -4559,20 +4571,28 @@ export class Hud {
       note.className = "cmb-note";
 
       // Latched across the async collect so the 250ms tick can't re-enable the
-      // button under an in-flight hand-off and collect the same job twice.
+      // button under an in-flight hand-off and collect the same job twice. Shared by
+      // both destinations so the crypt button cannot double-collect the farm's job.
       let collecting = false;
-      const go = document.createElement("button");
-      go.className = "cmb-go";
-      go.textContent = "Collect";
-      go.onclick = async () => {
+      const collect = async (button: HTMLButtonElement, toCrypt: boolean) => {
         if (collecting) return;
         collecting = true;
-        go.disabled = true;
-        const name = await this.onCollectCombine?.();
+        button.disabled = true;
+        const name = await this.onCollectCombine?.(toCrypt);
         // Collected: the pot is empty again, so go back to the pick-two view.
         if (name) { stop(); renderIdle(); return; }
         collecting = false;
       };
+      const go = document.createElement("button");
+      go.className = "cmb-go";
+      go.textContent = "Collect";
+      go.onclick = () => void collect(go, false);
+      // The Mausoleum is a real destination for the child, so a full farm no longer
+      // strands a finished combine. Only shown while a crypt slot is actually free.
+      const toCrypt = document.createElement("button");
+      toCrypt.className = "cmb-go cmb-store";
+      toCrypt.textContent = "To Mausoleum";
+      toCrypt.onclick = () => void collect(toCrypt, true);
 
       let fill: HTMLElement | null = null;
       if (done) {
@@ -4589,7 +4609,10 @@ export class Hud {
         mut.className = "cmb-rm";
         mut.textContent = mutationLabel(st.result!.mutation) || "no mutations";
         result.append(p, n, typeLine(typeNameOf(st.result!.key)), mut);
-        wrap.append(head, result, note, go);
+        const buttons = document.createElement("div");
+        buttons.className = "cmb-actions";
+        buttons.append(go, toCrypt);
+        wrap.append(head, result, note, buttons);
       } else {
         // Show the two parents going in (from the pending job's keys + masks).
         const slots = document.createElement("div");
@@ -4616,7 +4639,10 @@ export class Hud {
         bar.className = "cmb-prog";
         fill = document.createElement("i");
         bar.appendChild(fill);
-        wrap.append(head, slots, bar, note, go);
+        const buttons = document.createElement("div");
+        buttons.className = "cmb-actions";
+        buttons.append(go, toCrypt);
+        wrap.append(head, slots, bar, note, buttons);
       }
 
       const tick = () => {
@@ -4632,8 +4658,16 @@ export class Hud {
         note.textContent = s.ready
           ? "The combine is done — collect your new zombie."
           : `Combining… ${fmt(s.remainingMs)} left` + (s.monolith ? " (Monolith: ×½)" : "");
-        if (s.ready && !s.canCollect) note.textContent = "Farm full — free a zombie slot to collect.";
+        if (s.ready && !s.canCollect) {
+          note.textContent = s.canStore
+            ? "Farm full — send your new zombie to the Mausoleum."
+            : "Farm and Mausoleum full — free a zombie slot to collect.";
+        }
         go.disabled = collecting || !s.ready || !s.canCollect;
+        // Hidden rather than disabled with no Mausoleum: an always-dead second button
+        // reads as a bug, and the crypt is a real choice only once one is placed.
+        toCrypt.style.display = s.canStore ? "" : "none";
+        toCrypt.disabled = collecting || !s.ready;
       };
       tick();
       stop();
@@ -4646,11 +4680,12 @@ export class Hud {
       const st = this.getPotStatus?.();
       if (st?.busy) { renderBusy(); return; }
       wrap.innerHTML = "";
-      // Stored zombies are deliberately NOT offered here (tester request): the pot
-      // sits on the farm, so it works with the army standing on it. A zombie in the
-      // Mausoleum has to be deployed from the Zombies menu first.
+      // The Mausoleum feeds the Pot directly: a stored zombie can go in without being
+      // deployed first (it is consumed either way, and deploying it just to combine it
+      // needed a free army slot the player often did not have). Each stored tile is
+      // badged so it is clear where the zombie is coming from.
       const roster = (this.getRoster?.() ?? []).filter((zombie) =>
-        !zombie.stored && (this.canCombineZombie?.(zombie.key) ?? true)
+        this.canCombineZombie?.(zombie.key) ?? true
       );
       const canUseInSlot = (key: string, slot: "A" | "B") =>
         this.canCombineZombie?.(key, slot) ?? true;
@@ -4680,6 +4715,7 @@ export class Hud {
           mut.className = "cmb-sm";
           mut.textContent = mutationLabel(z.mutation) || "no mutations";
           d.append(p, n, typeLine(z.typeName), mut, inspectButton(z));
+          if (z.stored) d.appendChild(storedTag());
           d.title = "Tap to remove";
           d.onclick = () => { if (which === "A") pickA = null; else pickB = null; renderIdle(); };
         } else {
@@ -4697,18 +4733,14 @@ export class Hud {
 
       const ruleNote = document.createElement("div");
       ruleNote.className = "cmb-rule-note";
-      ruleNote.textContent = `Slot 1 sets the zombie type; mutations can come from both. Two zombies of the same type breed up into a Silver zombie at level ${COMBINE_SPECIAL_LEVEL}+. Special zombies only fit Slot 1 and always remain the same species.`;
+      ruleNote.textContent = `Slot 1 sets the zombie type; mutations can come from both. Two zombies of the same type breed up a colour: Green to Blue, then Blue to Red, once you own that grave — and two Reds become a Silver at level ${COMBINE_SPECIAL_LEVEL}+. Special zombies only fit Slot 1 and always remain the same species.`;
 
       const list = document.createElement("div");
       list.className = "cmb-list";
       if (roster.length < 2) {
         const e = document.createElement("div");
         e.className = "cmb-empty";
-        // Stored zombies are filtered out above, so say so rather than telling a
-        // player with a full Mausoleum to go and grow more.
-        e.textContent = (this.getRoster?.() ?? []).some((zombie) => zombie.stored)
-          ? "You need two zombies on the farm to combine. Deploy some from the Mausoleum first!"
-          : "You need at least two zombies to combine. Grow more first!";
+        e.textContent = "You need at least two zombies to combine. Grow more first!";
         list.appendChild(e);
       } else {
         for (const z of roster) {
@@ -4727,6 +4759,7 @@ export class Hud {
           ty.className = "cmb-zty";
           ty.textContent = z.typeName;
           c.append(p, n, ty, inspectButton(z));
+          if (z.stored) c.appendChild(storedTag());
           if (z.mutation) {
             const m = document.createElement("div");
             m.className = "cmb-zmut";

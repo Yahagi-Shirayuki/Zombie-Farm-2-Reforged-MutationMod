@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  COMBINE_BLUE_BY_GROUP,
+  COMBINE_RED_BY_GROUP,
   COMBINE_SILVER_BY_GROUP,
   COMBINE_SPECIAL_BY_GROUP,
   COMBINE_SPECIAL_CHANCE,
@@ -144,6 +146,18 @@ describe("Zombie Pot species selection", () => {
     expect(selectCombineSpecies(bombie, { ...bombie }, 45, missesPromotion)).toBeNull();
   });
 
+  it("only breeds a matched pair up to silver from the RED step", () => {
+    // The class is authoritative, not the key: Lima Beans is a silver under a Tier2
+    // key, and re-cooking a pair of them must not flatten them to plain Robo Zombie.
+    const lima = parent("ZombieActorRegularTier2LimaBeans", { group: "Regular", className: "Silver" });
+    expect(selectCombineSpecies(lima, { ...lima }, 45, missesPromotion))
+      .toBe("ZombieActorRegularTier2LimaBeans");
+    // ...and a red mutant under a Tier2 key does breed up.
+    const celery = parent("ZombieActorRegularTier2Celery", { group: "Regular", className: "Red" });
+    expect(selectCombineSpecies(celery, { ...celery }, 45, missesPromotion))
+      .toBe(COMBINE_SILVER_BY_GROUP.Regular);
+  });
+
   it("uses the ordinary rules when the promotion roll fails", () => {
     expect(selectCombineSpecies(
       parent("mutant", { isMutant: true, tier: 5 }),
@@ -151,6 +165,73 @@ describe("Zombie Pot species selection", () => {
       25,
       missesPromotion
     )).toBe("mutant");
+  });
+});
+
+describe("matched-pair colour ladder", () => {
+  /** Every coloured grave placed — the late-game farm. */
+  const allGraves = () => true;
+  const graves = (...owned: string[]) => (color: string) => owned.includes(color);
+
+  it("breeds two greens up to their body type's blue once the Blue Grave is owned", () => {
+    for (const [group, blueKey] of Object.entries(COMBINE_BLUE_BY_GROUP)) {
+      const green = parent(`${group}-green`, { group, className: "Green" });
+      expect(selectCombineSpecies(green, { ...green }, 1, missesPromotion, graves("Blue")))
+        .toBe(blueKey);
+    }
+  });
+
+  it("breeds two blues up to their body type's red once the Red Grave is owned", () => {
+    for (const [group, redKey] of Object.entries(COMBINE_RED_BY_GROUP)) {
+      const blue = parent(`${group}-blue`, { group, className: "Blue" });
+      expect(selectCombineSpecies(blue, { ...blue }, 1, missesPromotion, graves("Red")))
+        .toBe(redKey);
+    }
+  });
+
+  it("holds a step back until its grave is owned", () => {
+    const green = parent("ZombieActorRegularTier1", { group: "Regular", className: "Green" });
+    // No Blue Grave: the pair stays green rather than leaping the lock.
+    expect(selectCombineSpecies(green, { ...green }, 1, missesPromotion, graves("Red")))
+      .toBe("ZombieActorRegularTier1");
+    const blue = parent("ZombieActorRegularTier2", { group: "Regular", className: "Blue" });
+    expect(selectCombineSpecies(blue, { ...blue }, 1, missesPromotion, graves("Blue")))
+      .toBe("ZombieActorRegularTier2");
+  });
+
+  it("climbs one colour at a time — a green pair never lands on red or silver", () => {
+    const green = parent("ZombieActorLargeTier1", { group: "Large", className: "Green" });
+    // Level 45 with every grave: the silver breed-up and the tier-5 roll are both
+    // available, and neither may short-circuit the ladder's first rung.
+    expect(selectCombineSpecies(green, { ...green }, 45, promotes, allGraves))
+      .toBe(COMBINE_BLUE_BY_GROUP.Large);
+  });
+
+  it("tops the ladder out at red -> silver, or the rare special", () => {
+    const red = parent("ZombieActorHeadlessTier3", { group: "Headless", className: "Red" });
+    expect(selectCombineSpecies(red, { ...red }, 25, missesPromotion, allGraves))
+      .toBe(COMBINE_SILVER_BY_GROUP.Headless);
+    expect(selectCombineSpecies(red, { ...red }, 25, promotes, allGraves))
+      .toBe(COMBINE_SPECIAL_BY_GROUP.Headless);
+    // Below the level gate the top step is closed, graves or not.
+    expect(selectCombineSpecies(red, { ...red }, 24, promotes, allGraves))
+      .toBe("ZombieActorHeadlessTier3");
+  });
+
+  it("leaves unmatched pairs and specials on the ordinary rules", () => {
+    const green = parent("ZombieActorRegularTier1", { group: "Regular", className: "Green" });
+    const other = parent("ZombieActorSmallTier1", { group: "Small", className: "Green" });
+    expect(selectCombineSpecies(green, other, 1, missesPromotion, allGraves))
+      .toBe("ZombieActorRegularTier1"); // slot 1 still wins
+    const special = parent("ZombieActorBombie", { group: "Headless", className: "Special", isSpecial: true });
+    expect(selectCombineSpecies(special, other, 45, missesPromotion, allGraves))
+      .toBe("ZombieActorBombie");
+  });
+
+  it("counts a ladder step for the 'combine for' quests", () => {
+    const green = parent("ZombieActorGirlTier1", { group: "Female", className: "Green" });
+    const result = selectCombineSpecies(green, { ...green }, 1, missesPromotion, allGraves)!;
+    expect(isCombinePromotion(result, green.key, green.key)).toBe(true);
   });
 });
 

@@ -23,7 +23,6 @@
   "animID": 4,
   "damageMultiplier": 1,
   "damageTiming": 0.4,
-  "knockBack": true,
   "sfxID": "punch.wav",
   "sfxTiming": 0.4,
   "speedMultiplier": 1,

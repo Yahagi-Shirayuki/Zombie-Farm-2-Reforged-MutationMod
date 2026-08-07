@@ -778,6 +778,7 @@ export const validGameplayCommand = (value: unknown): value is GameplayCommand =
     case "roster.combine":
       return commandString(command.parentAId) && commandString(command.parentBId) &&
         (command.potId === undefined || commandString(command.potId)) &&
+        (command.stored === undefined || typeof command.stored === "boolean") &&
         (command.playerLevel === undefined || (commandInt(command.playerLevel) && command.playerLevel >= 1));
     case "shop.size": return commandInt(command.size) && (command.currency === "gold" || command.currency === "brains");
     case "shop.climate": return commandString(command.terrain);
@@ -1772,10 +1773,13 @@ app.post("/raid/start-v2-replay-disabled", async (c) => {
   if (onCooldown && !(body.useVoucher ?? body.bypass)) {
     return c.json({ ok: false, cooldownRemaining: remaining });
   }
-  const pinned = await buildPinnedRaid(c.env.DB, accountId, raidId!, body.orderedUnitIds, !!body.concentration);
+  // Minted first: it seeds the wave's own randomness (the Robots' random boss), and the
+  // client redraws the same wave from the session id returned below.
+  const sessionId = crypto.randomUUID();
+  const pinned = await buildPinnedRaid(
+    c.env.DB, accountId, raidId!, body.orderedUnitIds, !!body.concentration, sessionId);
   if (!pinned.ok) return c.json({ ok: false, error: pinned.error }, 422);
   const dice = Number.isInteger(body.dice) ? Math.max(0, body.dice as number) : 0;
-  const sessionId = crypto.randomUUID();
   const opened = await db.openVerifiedRaidSession(c.env.DB, {
     id: sessionId,
     accountId,

@@ -120,6 +120,11 @@ export interface ObjectActions {
   onRotate: () => void; // flip the object on the vertical axis (Rotate)
   onStore: () => void;
   onSell: () => void;
+  /** A building whose tap USED to go straight to its own panel (the Pet Pen's pet
+   *  collection) keeps that panel one tap away here — otherwise routing the tap to
+   *  this sheet would be the only way to store it and the only way to lose the panel. */
+  manageLabel?: string;
+  onManage?: () => void;
 }
 
 /** One thing a new level opened up, shown as a framed tile in the level-up popup. */

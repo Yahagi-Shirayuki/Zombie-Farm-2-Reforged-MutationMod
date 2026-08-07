@@ -57,6 +57,9 @@ for entry in market:
     heads.append(head)
 
     body_key = parts["kActorPartTagBody"]
+    # A body owns exactly the two arm images the source names for it. There is no
+    # second "walk pose" to synthesize: PlayerActor rotates these two (see Actor.ts).
+    # `*_arm3/4` are BODY 2's arms and are reached through body 2's own entry.
     bodies[body_id] = {
         "id": body_id,
         "name": ("Female" if body_key.startswith("female") else "Male") +
@@ -64,8 +67,6 @@ for entry in market:
         "body": body_key,
         "arm1": parts["kActorPartTagArmB"],
         "arm2": parts["kActorPartTagArmF"],
-        "arm3": parts["kActorPartTagArmB"].replace("1.png", "3.png"),
-        "arm4": parts["kActorPartTagArmF"].replace("2.png", "4.png"),
     }
 
 result = {

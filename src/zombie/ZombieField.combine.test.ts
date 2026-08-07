@@ -25,10 +25,17 @@ const renderableAssets = (key: string): GameAssets => ({
 } as unknown as GameAssets);
 
 /** A Field that can host a spawned unit (the combine result is added to the farm). */
-const renderableField = (): Field => ({
+const renderableField = (extra: Partial<Record<string, unknown>> = {}): Field => ({
   zombiePotId: () => "pot",
   entityLayer: { addChild: () => {}, removeChild: () => {} },
   patchRestTiles: () => [],
+  objectDefOf: () => ({ zombiePot: true }),
+  mausoleumId: () => null,
+  hasGrave: () => false,
+  hasCombineMonolith: () => false,
+  inBounds: () => true,
+  isPassable: () => true,
+  ...extra,
 } as unknown as Field);
 
 describe("ZombieField combine save migration", () => {
@@ -295,5 +302,124 @@ describe("ZombieField combine save migration", () => {
     expect(zombies.potFor("pot").pending).toMatchObject({
       parentAId: "a", parentBId: "b", keyA: "ordinary", keyB: "mutant",
     });
+  });
+});
+
+describe("Zombie Pot and the Mausoleum", () => {
+  const green = {
+    key: "green", name: "Zombie", group: "Regular", tier: 1, category: "normal",
+    className: "Green", classColor: "#00ff00", str: 1, dex: 1, con: 1, focus: 1,
+  } as ZombieDef;
+
+  /** A field with a Zombie Pot, plus a Mausoleum of `slots` capacity (0 = none). */
+  const cryptField = (slots: number, graves: string[] = []) => renderableField({
+    mausoleumId: () => (slots > 0 ? "crypt" : null),
+    objectDefOf: (id: string) => (id === "crypt" ? { zombieSlots: slots } : { zombiePot: true }),
+    hasGrave: (color: string) => graves.includes(color),
+  });
+
+  const fieldWith = (slots: number, graves: string[] = []) => {
+    const state = new GameState();
+    state.zombieMax = 2;
+    const zombies = new ZombieField(
+      renderableAssets(green.key), cryptField(slots, graves), state,
+      (key) => (key === green.key ? green : undefined)
+    );
+    return { state, zombies };
+  };
+
+  it("combines two zombies resting in the Mausoleum", () => {
+    const { zombies } = fieldWith(5);
+    zombies.restore([
+      { id: "z1", key: green.key, stored: true },
+      { id: "z2", key: green.key, stored: true },
+    ]);
+
+    expect(zombies.combine("z1", "z2", 1000, "pot")).toBe(true);
+    // Both parents are consumed from the crypt, freeing their slots.
+    expect(zombies.roster()).toHaveLength(0);
+    expect(zombies.storedCount).toBe(0);
+    expect(zombies.potFor("pot").pending).toMatchObject({ keyA: green.key, keyB: green.key });
+  });
+
+  it("collects the finished zombie straight into the Mausoleum", () => {
+    const { state, zombies } = fieldWith(5);
+    state.zombieMax = 0; // farm full — the crypt is the only destination left
+    zombies.restorePots({ pot: {
+      parentAId: "a", parentBId: "b", keyA: green.key, keyB: green.key,
+      maskA: 0, maskB: 0, startedAt: 0, finishAt: 0,
+    } });
+
+    expect(zombies.canStoreCombine()).toBe(true);
+    expect(zombies.collectCombine(0, 0, "pot")).toBeNull(); // farm has no room
+    const child = zombies.collectCombine(0, 0, "pot", { stored: true });
+    expect(child).not.toBeNull();
+    expect(zombies.storedCount).toBe(1);
+    expect(zombies.roster()[0]).toMatchObject({ id: child!.id, stored: true });
+    expect(zombies.potFor("pot").pending).toBeNull();
+  });
+
+  it("refuses the crypt when there is no Mausoleum, or it is full", () => {
+    const none = fieldWith(0);
+    none.zombies.restorePots({ pot: {
+      parentAId: "a", parentBId: "b", keyA: green.key, keyB: green.key,
+      maskA: 0, maskB: 0, startedAt: 0, finishAt: 0,
+    } });
+    expect(none.zombies.canStoreCombine()).toBe(false);
+    expect(none.zombies.collectCombine(0, 0, "pot", { stored: true })).toBeNull();
+    // Refused, not consumed: the parents were spent when the combine started.
+    expect(none.zombies.potFor("pot").ready).toBe(true);
+
+    const full = fieldWith(1);
+    full.zombies.restore([{ id: "z1", key: green.key, stored: true }]);
+    full.zombies.restorePots({ pot: {
+      parentAId: "a", parentBId: "b", keyA: green.key, keyB: green.key,
+      maskA: 0, maskB: 0, startedAt: 0, finishAt: 0,
+    } });
+    expect(full.zombies.canStoreCombine()).toBe(false);
+    expect(full.zombies.collectCombine(0, 0, "pot", { stored: true })).toBeNull();
+    expect(full.zombies.potFor("pot").ready).toBe(true);
+  });
+
+  it("tells the server where the child landed", () => {
+    const { zombies } = fieldWith(5);
+    zombies.restorePots({ pot: {
+      parentAId: "a", parentBId: "b", keyA: green.key, keyB: green.key,
+      maskA: 0, maskB: 0, reserved: true, startedAt: 0, finishAt: 0,
+    } });
+    zombies.setRosterLive();
+    const handed: boolean[] = [];
+    zombies.onCombineCollect = (_pot, _id, _key, _mutation, stored) => {
+      handed.push(stored);
+      return true;
+    };
+
+    zombies.collectCombine(0, 0, "pot", { stored: true });
+    expect(handed).toEqual([true]);
+  });
+
+  it("breeds a matched pair up the colour ladder the farm has unlocked", () => {
+    const blue = {
+      ...green, key: "ZombieActorRegularTier2", name: "Zyborg", className: "Blue",
+    } as ZombieDef;
+    const catalog = new Map([[green.key, green], [blue.key, blue]]);
+    const withGrave = (graves: string[]) => {
+      const state = new GameState();
+      const zombies = new ZombieField(
+        renderableAssets(green.key), cryptField(0, graves), state,
+        (key) => catalog.get(key)
+      );
+      zombies.restore([
+        { id: "z1", key: green.key }, { id: "z2", key: green.key },
+      ]);
+      zombies.combine("z1", "z2", 0, "pot");
+      return zombies;
+    };
+
+    // The class of both parents is captured with the job...
+    expect(withGrave([]).potFor("pot").pending).toMatchObject({ classA: "Green", classB: "Green" });
+    // ...and only a farm holding the Blue Grave breeds them up to Zyborg.
+    expect(withGrave([]).combinePreview("pot")).toMatchObject({ key: green.key });
+    expect(withGrave(["Blue"]).combinePreview("pot")).toMatchObject({ key: blue.key });
   });
 });

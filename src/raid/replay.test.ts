@@ -132,10 +132,15 @@ describe("deterministic raid replay", () => {
     const replayed = replayRaid(winnableWallSim(), steps, inputs);
     expect(replayed).toMatchObject({ ok: true });
     if (replayed.ok) expect(replayed.outcome).toEqual(outcome);
+    // A transcript the two sims agreed on runs to the same length, with nothing dropped.
+    if (replayed.ok) expect(replayed.divergence).toEqual({ overrunTicks: 0, inputsAfterFinish: 0 });
 
     // Drop the taps (pre-14 behaviour) and the verifier is still stuck behind a wall the
-    // player knocked down on screen — the fight never finishes in the transcript's window.
-    expect(replayRaid(winnableWallSim(), steps, [])).toMatchObject({ error: "truncated_transcript" });
+    // player knocked down on screen. It no longer FAILS the settlement over that — it
+    // finishes its own slower fight — but the overrun records how far apart they ran.
+    const desynced = replayRaid(winnableWallSim(), steps, []);
+    expect(desynced).toMatchObject({ ok: true });
+    if (desynced.ok) expect(desynced.divergence.overrunTicks).toBeGreaterThan(0);
   });
 
   it("restores a checkpoint to the same outcome as one uninterrupted replay", () => {

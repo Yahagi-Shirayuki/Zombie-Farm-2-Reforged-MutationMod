@@ -59,7 +59,8 @@ export class ZombieField {
    *  field can put the job back instead of destroying it (and its two parents) for a
    *  result that will never be granted. */
   onCombineCollect:
-    ((potId: string, unitId: string, key: string, mutation: number) => boolean) | null = null;
+    ((potId: string, unitId: string, key: string, mutation: number, stored: boolean) => boolean)
+    | null = null;
   private rosterLive = false;
   private combining = false; // suppresses addUnit's generic onGrant during a collect
   private harvesting = false; // suppresses onGrant while spawning a server-harvested crop
@@ -341,8 +342,14 @@ export class ZombieField {
     let pot = this.pots.get(potId);
     if (!pot) {
       // The pot resolves the child's body type through the catalog so its inherited
-      // mask matches what the server computes for the same combine.
-      pot = new ZombiePot(undefined, undefined, (key) => this.resolve(key)?.group === "Headless");
+      // mask matches what the server computes for the same combine, and reads the
+      // farm's coloured graves so a matched pair only breeds up to a class this farm
+      // has actually unlocked (the server checks its own placed graves the same way).
+      pot = new ZombiePot(
+        undefined, undefined,
+        (key) => this.resolve(key)?.group === "Headless",
+        (color) => this.field.hasGrave(color)
+      );
       this.pots.set(potId, pot);
     }
     return pot;
@@ -420,18 +427,19 @@ export class ZombieField {
     );
   }
 
-  /** Traits recorded for a parent fed to the pot. `group` and `isSpecial` drive
-   *  selection (see selectCombineSpecies); `tier` and `isBaseClass` no longer do —
+  /** Traits recorded for a parent fed to the pot. `group`, `className` and `isSpecial`
+   *  drive selection (see selectCombineSpecies); `tier` and `isBaseClass` no longer do —
    *  they are persisted so a job started by an older client still round-trips.
    *  Falls back gracefully when the catalog lacks the unit. */
   private speciesTraits(z: OwnedZombie): {
-    tier: number; isBaseClass: boolean; group?: string; isSpecial: boolean;
+    tier: number; isBaseClass: boolean; group?: string; className?: string; isSpecial: boolean;
   } {
     const def = this.resolve(z.key);
     return {
       tier: def?.tier ?? 0,
       isBaseClass: def?.category === "mutant",
       group: def?.group,
+      className: def?.className,
       isSpecial: def?.category === "special",
     };
   }
@@ -501,20 +509,30 @@ export class ZombieField {
     return id ? this.potFor(id).finishNow() : false;
   }
 
+  /** Can a finished combine be sent straight to the Mausoleum? Needs the building
+   *  placed with a free slot — an empty crypt is never a destination. */
+  canStoreCombine(): boolean {
+    return !!this.field.mausoleumId() && !this.mausoleumFull;
+  }
+
   /**
    * Collect a finished combine: builds the result zombie (species from slot 1,
    * mutations inherited per-slot deterministically) and adds
-   * it to the farm at (col,row). Like any zombie crop, collection waits when the
-   * active army is full. Returns the new unit's data, or null if nothing is ready
-   * or no slot is free. Result species is
-   * re-derived from the catalog by key; an unknown key aborts and returns null
-   * (job already cleared).
+   * it to the farm at (col,row) — or, with `stored`, straight into the Mausoleum,
+   * so a full farm is no longer a reason the Pot cannot be emptied. Like any zombie
+   * crop, collection to the farm waits when the active army is full. Returns the new
+   * unit's data, or null if nothing is ready or the chosen destination has no room.
+   * Result species is re-derived from the catalog by key; an unknown key aborts and
+   * returns null (job already cleared).
    */
-  collectCombine(col: number, row: number, potId?: string): OwnedZombie | null {
+  collectCombine(
+    col: number, row: number, potId?: string, opts: { stored?: boolean } = {}
+  ): OwnedZombie | null {
     const targetPotId = potId ?? this.field.zombiePotId();
     if (!targetPotId) return null;
-    // Like a ripe zombie crop, a ready Pot waits until the active farm has room.
-    if (!this.canAdd()) return null;
+    const toCrypt = !!opts.stored;
+    // Like a ripe zombie crop, a ready Pot waits until its destination has room.
+    if (toCrypt ? !this.canStoreCombine() : !this.canAdd()) return null;
     const pot = this.potFor(targetPotId);
     const pending = pot.pending ? { ...pot.pending } : null;
     const result = pot.collect();
@@ -535,7 +553,8 @@ export class ZombieField {
     // A combine result is granted via onCombineCollect (server validates it against the
     // two parents), NOT the generic onGrant — so suppress the latter while adding.
     this.combining = true;
-    this.addUnit(data);
+    if (toCrypt) this.stored.push(data);
+    else this.addUnit(data);
     this.state.recordZombieDiscovered(data.key);
     this.syncCount();
     this.combining = false;
@@ -544,7 +563,7 @@ export class ZombieField {
         // A refused hand-off means the server will never grant this child. Take the
         // optimistic unit back out and restore the job so the player can collect it
         // again once the client has re-learned the job's parents.
-        if (!this.onCombineCollect(targetPotId, data.id, data.key, data.mutation)) {
+        if (!this.onCombineCollect(targetPotId, data.id, data.key, data.mutation, toCrypt)) {
           this.takeOwned(data.id);
           this.syncCount();
           return abandon();

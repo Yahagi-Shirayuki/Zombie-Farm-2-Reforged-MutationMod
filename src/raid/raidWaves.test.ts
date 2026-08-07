@@ -10,10 +10,12 @@
 // tests pin each raid's authored population so a regenerate can't silently drift again.
 import { describe, it, expect } from "vitest";
 import raidsJson from "../../public/assets/raids/raids.json";
-import { fightStage } from "./RaidCatalog";
-import type { RaidDef } from "./types";
+import enemyStatsJson from "../../public/assets/raids/enemy_stats.json";
+import { fightStage, resolveStageWave, seededRandom } from "./RaidCatalog";
+import type { EnemyStat, RaidDef } from "./types";
 
 const raids = raidsJson as unknown as RaidDef[];
+const enemyStats = enemyStatsJson as unknown as Record<string, EnemyStat>;
 const byId = (id: number) => raids.find((r) => r.id === id)!;
 
 /** Authored `population` per raid, transcribed from the source Enemies.json — either
@@ -66,8 +68,7 @@ describe("raid waves — authored composition, not an extrapolated ladder", () =
 
   it("every population wave carries a boss and a spawnable minion pool", () => {
     // A `population` stage with no weighted pool makes buildEnemyUnits spawn the boss
-    // alone. Robots is the live hazard: its source `boss` field is null (all three bots
-    // carry bossActions), so the boss has to come from the family resolver.
+    // alone.
     for (const r of raids) {
       for (const stage of r.stages) {
         if (!stage.population) continue;
@@ -75,8 +76,91 @@ describe("raid waves — authored composition, not an extrapolated ladder", () =
         expect(`raid${r.id} pool ${total > 0}`).toBe(`raid${r.id} pool true`);
       }
     }
+    // Robots names no boss because it draws one per fight (`randomBoss`); every other
+    // raid must name one, or its wave pays no boss loot, brains or ability unlock.
     for (const r of raids.filter((raid) => raid.id !== 1)) {
-      expect(`raid${r.id} boss ${!!r.stages[0].bossKey}`).toBe(`raid${r.id} boss true`);
+      const stage = r.stages[0];
+      expect(`raid${r.id} boss ${!!(stage.bossKey || stage.randomBoss)}`).toBe(`raid${r.id} boss true`);
+    }
+  });
+});
+
+// ---- Zombies vs Robots: the random boss --------------------------------------
+//
+// Source: `randomBoss: true` on Enemies.json entry 5, honoured by `-[ZFFightMan
+// initialSpawn]` — copy the raid's `enemies` array (one entry per bot), draw one at
+// random as the boss, REMOVE it, then spawn the survivors one at a time. The wiki says
+// the same thing from the player's side: three types of robot, population 3, "any one
+// of them has a random chance to be the Boss".
+//
+// The old frequency allocation could not produce that. 33/33/34 over a population of 2
+// floors every share to 0 and hands both leftover slots to the largest remainders —
+// BrainBot and BroBot, every single time — behind a hardcoded BrainBot boss. So JunkBot
+// never appeared, the boss never changed, and the order never changed: exactly the three
+// things a player reported.
+describe("Zombies vs Robots — randomBoss", () => {
+  const stage = byId(5).stages[0];
+  const BOTS = ["RobotStageActorBroBot", "RobotStageActorJunkBot", "RobotStageActorBrainBot"];
+
+  it("ships a random-boss wave with all three bots and no fixed boss", () => {
+    expect(stage.randomBoss).toBe(true);
+    expect(stage.bossKey).toBeUndefined();
+    expect((stage.weighted ?? []).map((w) => w.enemy).sort()).toEqual([...BOTS].sort());
+  });
+
+  it("fields each bot exactly once, whoever leads", () => {
+    for (let i = 0; i < 200; i++) {
+      const wave = resolveStageWave(stage, seededRandom(`seed-${i}`));
+      expect([wave.bossKey!, ...wave.enemyKeys].sort()).toEqual([...BOTS].sort());
+      expect(wave.population).toBe(2); // the two survivors; +1 boss = the wiki's 3
+      expect(wave.weighted).toBeUndefined(); // no frequency re-derivation downstream
+    }
+  });
+
+  it("gives every bot a real chance at leading the invasion", () => {
+    const led = new Set<string>();
+    for (let i = 0; i < 200; i++) led.add(resolveStageWave(stage, seededRandom(`s${i}`)).bossKey!);
+    expect([...led].sort()).toEqual([...BOTS].sort());
+  });
+
+  it("varies the spawn order of the two survivors", () => {
+    const orders = new Set<string>();
+    for (let i = 0; i < 200; i++) orders.add(resolveStageWave(stage, seededRandom(`o${i}`)).enemyKeys.join(">"));
+    expect(orders.size).toBe(6); // 3 boss choices x 2 orderings of the rest
+  });
+
+  it("draws the SAME wave from the same seed — client and server must agree", () => {
+    // Online, the seed is the raid session id: the server pins its wave from it at
+    // /raid/start and the client redraws from the id in the response. Any divergence
+    // here is a fight the deterministic replay would reject.
+    for (const seed of ["session-a", "session-b", "0", "8f14e45f-ea3f-4f2b-9f2c-000000000000"]) {
+      const a = resolveStageWave(stage, seededRandom(seed));
+      const b = resolveStageWave(stage, seededRandom(seed));
+      expect(a).toEqual(b);
+    }
+  });
+
+  it("only a JunkBot boss brings the junk wall", () => {
+    // Ground truth (and the wiki note): "A Robot will only use their special abilities
+    // when they are the boss of the invasion." The junk wall is authored on JunkBot
+    // alone, so hoisting it onto whoever leads is what had BrainBot summoning junk.
+    const walled = Object.entries(enemyStats)
+      .filter(([, s]) => (s.bossActions ?? []).some((a) => a.name === "wall"))
+      .map(([key]) => key);
+    expect(walled.filter((k) => k.startsWith("RobotStageActor"))).toEqual(["RobotStageActorJunkBot"]);
+    // ...and telekinesis is BrainBot's alone, the same way.
+    const telekinetic = Object.entries(enemyStats)
+      .filter(([, s]) => (s.bossActions ?? []).some((a) => a.name === "telekinesis"))
+      .map(([key]) => key);
+    expect(telekinetic).toEqual(["RobotStageActorBrainBot"]);
+  });
+
+  it("leaves every other raid's wave untouched", () => {
+    for (const r of raids) {
+      for (const s of r.stages) {
+        if (s.randomBoss) continue;
+        expect(resolveStageWave(s, seededRandom("x"))).toBe(s);
+      }
     }
   });
 });

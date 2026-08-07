@@ -66,6 +66,18 @@ WIKI_GOLD = {
     11: (1200, 600),   # Valentine's Day (filled — not in wiki)
 }
 
+# DELIBERATE DIVERGENCE from Attacks.json. Applied to the emitted attacks.json after
+# the verbatim copy, so a regeneration does not silently undo it.
+#   CorporateBossPunchSpecial — the Lawyers boss's Double Punch (40%). The shipped
+#   plist flags it BOTH `knockBack` and `stun`; his wiki page lists his special as a
+#   STUN only, and the stun is what makes him distinct (he is the only attack in the
+#   whole table carrying `stun: true`). Dropping `knockBack` here keeps the 1 s hold
+#   and removes the shove-to-back-of-line, so he no longer plays as another
+#   push-back boss. Removing a key -> list it under REMOVE.
+ATTACK_OVERRIDES = {
+    "CorporateBossPunchSpecial": {"REMOVE": ["knockBack"]},
+}
+
 
 # Each invasion's stage actors live in UnitStats.json under a family prefix. We use
 # this to resolve every raid's minions + boss so the ladder builder can extrapolate
@@ -98,9 +110,11 @@ RAID_MUSIC = {
 }
 DEFAULT_RAID_MUSIC = "fightBGM.mp3"
 
-# When a family has several boss-flagged units (Robots: BrainBot/BroBot/JunkBot are
-# all boss-capable — "any can be the boss"), pick THE boss; the rest become minions.
-BOSS_PREF = {5: "RobotStageActorBrainBot"}
+# When a family has several boss-flagged units, pick THE boss; the rest become minions.
+# Empty today: the one family with several boss-capable units is the Robots, and picking
+# one for it was the bug — `randomBoss` means the fight draws its own (see
+# synth_authored_stage), so pinning BrainBot here made it the boss of every invasion.
+BOSS_PREF = {}
 # McDonnell's authored ladder: bossIdx 3, population base 7. Every extrapolated raid
 # reuses this so fightStage (bossIdx + level − recommendedLevel) paces identically.
 LADDER_POP_BASE = 7
@@ -199,16 +213,20 @@ def synth_authored_stage(e, boss=None, hazards=frozenset()):
     actors (obstacle / initialSpawnClass) are dropped — they arrive on the obstacle
     timer, not in the wave. Returns None when the entry authors no wave at all.
 
-    `boss` is the family-resolved fallback for the raids whose top-level `boss` field is
-    null. Robots is the case that matters: all three bots carry `bossActions` ("any can
-    be the boss") so the source names none, and without the fallback the raid would ship
-    a boss-less stage — no boss loot, no brain drop, no ability-tier unlock. Its authored
-    minion pool still lists the boss unit as a grunt; that is the source's own data and
-    is kept verbatim."""
+    ROBOTS (`randomBoss: true`) is the one raid with no named boss, and that is not an
+    omission: GROUND TRUTH `-[ZFFightMan initialSpawn]` guards a whole branch on the
+    randomBoss flag which copies the raid's `enemies` array into `enemyList`, picks a
+    UNIFORMLY RANDOM entry as the boss, and REMOVES it — so the fight fields exactly one
+    of each robot with a different boss every time (wiki: "any one of them has a random
+    chance to be the Boss"). The stage carries `randomBoss` and NO bossKey; the boss is
+    resolved per fight by resolveStageWave(). `boss` stays the family-resolved fallback
+    for any other raid whose top-level `boss` is null."""
     pop = as_int(e.get("population"))
     pool = [w for w in (e.get("enemies") or []) if w.get("enemy") not in hazards]
     if not pop or not pool:
         return None
+    if e.get("randomBoss"):
+        return norm_stage({"randomBoss": True, "population": pop, "enemies": pool})
     return norm_stage({
         "bossKey": e.get("boss") or boss,
         "population": pop,
@@ -294,6 +312,8 @@ def norm_stage(s):
     out = {"enemyKeys": list(s.get("enemyKeys", []))}
     if s.get("bossKey"):
         out["bossKey"] = s["bossKey"]
+    if s.get("randomBoss"):  # boss drawn from `weighted` per fight (see synth_authored_stage)
+        out["randomBoss"] = True
     if "level" in s:  # source "wave ordinal", not player level
         out["wave"] = as_int(s["level"])
     if "population" in s:
@@ -407,6 +427,19 @@ def main():
             missing.add(f"Attacks:{name}")
             continue
         attack_defs[name] = a
+
+    # Deliberate divergences (see ATTACK_OVERRIDES) — applied last so they survive
+    # every regeneration.
+    for name, override in ATTACK_OVERRIDES.items():
+        target = attack_defs.get(name)
+        if target is None:
+            missing.add(f"AttackOverride:{name}")
+            continue
+        for key in override.get("REMOVE", []):
+            target.pop(key, None)
+        for key, value in override.items():
+            if key != "REMOVE":
+                target[key] = value
 
     with open(os.path.join(OUT, "raids.json"), "w", encoding="utf-8") as f:
         json.dump(raids, f, indent=1)

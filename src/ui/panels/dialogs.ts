@@ -116,6 +116,9 @@ export function renderObjectActions(host: HTMLElement, o: ObjectActions): void {
     b.onclick = () => { close(); fn(); };
     return b;
   };
+  if (o.manageLabel && o.onManage) {
+    btns.append(mk(o.manageLabel, "locate", true, o.onManage));
+  }
   btns.append(
     mk("Move", "locate", true, o.onMove),
     mk("Rotate", "locate", true, o.onRotate),

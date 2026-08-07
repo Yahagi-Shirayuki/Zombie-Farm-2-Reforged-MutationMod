@@ -445,7 +445,7 @@
   "stages": [
    {
     "enemyKeys": [],
-    "bossKey": "RobotStageActorBrainBot",
+    "randomBoss": true,
     "population": 2,
     "weighted": [
      {

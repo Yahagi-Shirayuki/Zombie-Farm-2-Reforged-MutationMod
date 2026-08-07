@@ -135,7 +135,11 @@ export async function startRaid(
   }
   await db.prepare("INSERT OR IGNORE INTO raid_state_v3(account_id) VALUES (?)").bind(accountId).run();
   const concentration = body.concentration === true;
-  const pinned = await buildPinnedV3Raid(db, accountId, raidId, body.orderedUnitIds, concentration);
+  // Minted before the wave is pinned: it doubles as the seed for any per-fight
+  // randomness in the wave (the Robots' random boss), and the client redraws the same
+  // wave from the session id this response returns.
+  const sessionId = crypto.randomUUID();
+  const pinned = await buildPinnedV3Raid(db, accountId, raidId, body.orderedUnitIds, concentration, sessionId);
   if (!pinned.ok) {
     const status = pinned.error === "locked" ? 403 : pinned.error === "bad_raid" || pinned.error === "bad_roster" ? 400 : 409;
     return { status, body: { ok: false, error: pinned.error } };
@@ -166,7 +170,6 @@ export async function startRaid(
   if (remaining) core.inventory[VOUCHER_KEY]--;
   if (dice) core.inventory[DICE_KEY] -= dice;
   if (concentration) core.inventory[CONCENTRATION_KEY]--;
-  const sessionId = crypto.randomUUID();
   const brainDrop = rollPinnedBrainDrop(
     econ.recLevel,
     pinned.config.enemyUnits.some((unit) => unit.isBoss),
@@ -290,6 +293,12 @@ export async function finishRaid(
     return { status: 409, body: { error: "bad_session_config" } };
   }
   const verified = verifyRaid(config, body.finalTick as number, body.inputs as RaidReplayInput[]);
+  // How far the replay had to depart from the client's account of the fight. Zero on a
+  // fight both simulations agreed on, so a non-zero rate on a raid is the signal that
+  // caught the ruleset-14 wall desync — keep it queryable rather than player-facing.
+  const divergence = verified.ok && (verified.divergence.overrunTicks || verified.divergence.inputsAfterFinish)
+    ? verified.divergence
+    : null;
   // Client-only hazards can make the visible fight finish after the two deterministic
   // simulations have diverged. In that case the server may still be fighting
   // (`truncated_transcript`) or may disagree about a post-divergence interaction. A
@@ -515,7 +524,8 @@ export async function finishRaid(
     db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
       SELECT ?, ?, 'raid_finish', ?, ? WHERE ${guard}`)
       .bind(settlementId, accountId, JSON.stringify({ sessionId: session.id, raidId, win, survivors, losses,
-        gold: baseGold + lootGold, brains, xp, ...(concessionFallbackError ? { concessionFallbackError } : {}) }), now,
+        gold: baseGold + lootGold, brains, xp, ...(concessionFallbackError ? { concessionFallbackError } : {}),
+        ...(divergence ? { divergence } : {}) }), now,
         session.id, resultJson),
   ];
   if (revival) statements.push(db.prepare(`INSERT OR IGNORE INTO raid_revivals_v3
