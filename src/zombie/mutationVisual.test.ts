@@ -5,6 +5,7 @@ import {
   mutationBitsForRendering,
   mutationRefsForRendering,
   mutationPartFor,
+  mutationPartForFacing,
   mutationPartZIndex,
 } from "./mutationVisual";
 import { bitOf, MUTATION_LIST, resolveMutationBit } from "./mutations";
@@ -47,7 +48,7 @@ describe("mutation visual replacements", () => {
     expect(matchesMutationReplacement("flytrapCollar", "body")).toBe(false);
   });
 
-  it("replaces only the front arm", () => {
+  it("matches front and back arm replacements separately", () => {
     expect(matchesMutationReplacement("defaultArmF", "armF")).toBe(true);
     expect(matchesMutationReplacement("diverArmF", "armF")).toBe(true);
     expect(matchesMutationReplacement("defaultArmB", "armF")).toBe(false);
@@ -90,6 +91,28 @@ describe("mutation art lookup", () => {
     // it means the change can be made a row at a time without a flicker of ambiguity.
     const parts = { "1": part("oldTomatoHead"), tomato: part("tomatoHead") };
     expect(mutationPartFor(parts, undefined, bitOf("tomato"))?.file).toBe("tomatoHead");
+  });
+
+  it("derives secondary back-arm art from the primary arm entry", () => {
+    const primary = {
+      file: "corn_arm.png", group: "root" as const, headRel: false,
+      ox: 14, oy: 23, ax: 1, ay: 0.4, z: 8, replaces: "armF" as const,
+    };
+    expect(mutationPartFor({ corn_arm: primary }, undefined, "corn_arm_b"))
+      .toEqual({ ...primary, ox: 2, oy: 27, z: 0, replaces: "armB" });
+  });
+
+  it("swaps paired arm art when the actor is mirrored", () => {
+    const primary = {
+      file: "corn_arm.png", group: "root" as const, headRel: false,
+      ox: 14, oy: 23, ax: 1, ay: 0.4, z: 8, replaces: "armF" as const,
+    };
+    const parts = { corn_arm: primary };
+
+    expect(mutationPartForFacing(parts, undefined, "corn_arm", true))
+      .toEqual({ ...primary, ox: 2, oy: 27, z: 0, replaces: "armB" });
+    expect(mutationPartForFacing(parts, undefined, "corn_arm_b", true))
+      .toEqual(primary);
   });
 
   it("honours a model override addressed either way", () => {

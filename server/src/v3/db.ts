@@ -14,6 +14,7 @@ import { levelForXp } from "../levels";
 import { projectRun } from "./epicBoss";
 import { RAID_RULESET_VERSION } from "../raidVerifier";
 import { parseRosterColor, serializeRosterColor } from "./rosterColor";
+import { normalizeMutationIds } from "../../../src/zombie/mutations";
 
 interface RuntimeRow {
   account_version: number;
@@ -94,6 +95,10 @@ const coreFrom = (state: GameplayProjection) => ({
   // clients, and an older bundle parses its pot id straight out of that string, so
   // decorating it would make those clients read one job as two and retire it.
   potSlots: state.potSlots,
+  rosterMutationIds: Object.fromEntries(state.roster.flatMap((unit) => {
+    const ids = normalizeMutationIds(unit.mutationIds);
+    return ids.length ? [[unit.id, ids] as const] : [];
+  })),
 });
 
 async function ensureV3(db: D1Database, accountId: string, now: number): Promise<void> {
@@ -153,8 +158,10 @@ async function loadRows(db: D1Database, accountId: string, now: number) {
 function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection {
   const base = freshGameplayState();
   const core = parse<ReturnType<typeof coreFrom>>(rows.core.current_json, coreFrom(base));
+  const rosterMutationIds = core.rosterMutationIds ?? {};
   const roster = rows.roster.map((u) => {
     const color = parseRosterColor(u.color);
+    const mutationIds = normalizeMutationIds(rosterMutationIds[u.unit_id]);
     return {
       id: u.unit_id,
       key: u.zombie_key,
@@ -169,6 +176,7 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
       // under a new unit id, so the flag is what stops the Almanac counting the
       // player's own zombie as freshly obtained every list/cancel cycle.
       ...(u.from_escrow ? { restored: true as const } : {}),
+      ...(mutationIds.length ? { mutationIds } : {}),
       // Set only for a unit whose tint survived a trade (see migration 0041). Absent
       // means the client falls back to its presentation hint, then the catalog colour.
       ...(color ? { color } : {}),

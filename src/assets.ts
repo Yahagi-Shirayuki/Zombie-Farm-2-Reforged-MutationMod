@@ -75,7 +75,7 @@ export interface MutationPart {
   ay: number;
   z: number;
   /** Base-model silhouette part this mutation replaces. Omitted for overlays. */
-  replaces?: "body" | "armF" | "head";
+  replaces?: "body" | "armF" | "armB" | "head";
 }
 
 // A raid-enemy rig part (raids/enemies/models.json). rx/ry/rw/rh slice the enemy's

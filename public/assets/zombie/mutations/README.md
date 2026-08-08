@@ -53,8 +53,9 @@ running the asset pipeline. (See `looseMutationPath` in `src/assets.ts`.)
   resolves unchanged.
 - `group` is `"head"` (tilts with the head-nod, uses the model's neck offset when
   `headRel`) or `"root"` (arms, bodies, collars — authored z, no tilt).
-- `replaces` hides the base silhouette part underneath: `"head"`, `"armF"` or
-  `"body"`. Omit it for an overlay. A head-slot mutation replaces `"head"` by default.
+- `replaces` hides the base silhouette part underneath: `"head"`, `"armF"`,
+  `"armB"` or `"body"`. Omit it for an overlay. A head-slot mutation replaces
+  `"head"` by default.
 - Art that fails to load is warned about in the console and skipped — the zombie keeps
   its own body part rather than losing it, so a typo costs one attachment, not a rig.
 - JSON has no comments. Do not put `//` in this file's siblings.

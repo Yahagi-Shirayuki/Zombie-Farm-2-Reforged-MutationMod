@@ -1,8 +1,13 @@
 ﻿import {
   addMutationRef,
+  mutationOf,
+  mutationRefs,
+  occupiedMutationSlots,
   refGrowable,
   resolveMutationBit,
   resolveMutationRef,
+  secondaryArmMutationKey,
+  slotOfRef,
   type MutationRef,
   type MutationSet,
 } from "./mutations";
@@ -15,12 +20,14 @@ export type CropMutationTable =
  *
  * Keys are crop keys from public/assets/plants.json; values name mutations from the
  * catalog in mutations.ts. Vanilla mutations resolve to legacy bits; local modded
- * mutations resolve to string ids and are stored in mutationIds. A crop may grant
- * several mutations by listing them: each one rolls on its own. */
+ * mutations resolve to string ids and are stored in mutationIds. Arm-slot mutations
+ * automatically expose a `${key}_b` back-arm pair, so a crop only names the primary
+ * arm mutation. A crop may grant several mutations by listing them: each one rolls
+ * on its own. */
 export const CROP_MUTATIONS: CropMutationTable = {
   tomato: "tomato",
   onion: "onion",
-  carrot: "carrot",
+  carrot: ["carrot", "carrot_arm"],
   eyebiscus: "carrot",
   turnip: ["turnip", "turnip_head", "turnip_eye"],
   potato: "potato",
@@ -37,7 +44,7 @@ export const CROP_MUTATIONS: CropMutationTable = {
   // mod stuffs
   breadfruit: "bread_neck",
   sampaguita: "sampaguita_hair",
-  candycorn: ["corn_head", "corn_arm"],
+  corn: ["corn_head", "corn_arm"],
   Spineapple: "spineapple_body",
   Bloodberry: "bloodberry_hair",
   skellyberry: "skellyberry_body",
@@ -77,6 +84,36 @@ export function cropMutationBits(
 }
 
 export const CROP_MUTATION_CHANCE = 0.25;
+export const MATCHING_BACK_ARM_CHANCE_MULTIPLIER = 0.5;
+
+function pairedBackArmRef(ref: MutationRef): MutationRef | null {
+  const key = mutationOf(ref)?.key;
+  if (!key || slotOfRef(ref) !== "arm") return null;
+  const resolved = resolveMutationRef(secondaryArmMutationKey(key));
+  return resolved !== null && slotOfRef(resolved) === "armB" ? resolved : null;
+}
+
+function mutationChance(count: number, guaranteed: boolean): number {
+  return guaranteed ? 1 : Math.min(1, count * CROP_MUTATION_CHANCE);
+}
+
+function frontArmKey(set: MutationSet): string | null {
+  for (const ref of mutationRefs(set.mask, set.ids)) {
+    if (slotOfRef(ref) === "arm") return mutationOf(ref)?.key ?? null;
+  }
+  return null;
+}
+
+function backArmChance(baseChance: number, frontKey: string | null, pairedWith: MutationRef): number {
+  const pairedKey = mutationOf(pairedWith)?.key ?? null;
+  return frontKey && pairedKey === frontKey
+    ? baseChance * MATCHING_BACK_ARM_CHANCE_MULTIPLIER
+    : baseChance;
+}
+
+function chanceSucceeds(chance: number, random: () => number): boolean {
+  return chance >= 1 || random() < chance;
+}
 
 export function plotsTouch(
   ac: number, ar: number, bc: number, br: number, plotSize: number
@@ -106,17 +143,42 @@ export function resolveCropMutationSet(
   }
 
   const random = options.random ?? Math.random;
-  const successes: { ref: MutationRef; roll: number }[] = [];
+  const guaranteed = !!options.guaranteed;
+  const successes: { ref: MutationRef; roll: number; chance: number }[] = [];
   for (const [ref, count] of counts) {
     if (!refGrowable(ref, !!options.headless)) continue;
     const roll = random();
-    const chance = options.guaranteed ? 1 : Math.min(1, count * CROP_MUTATION_CHANCE);
-    if (chance >= 1 || roll < chance) successes.push({ ref, roll });
+    const chance = mutationChance(count, guaranteed);
+    if (chance >= 1 || roll < chance) successes.push({ ref, roll, chance });
   }
 
-  successes.sort((a, b) => a.roll - b.roll || String(a.ref).localeCompare(String(b.ref)));
+  const growthRank = (ref: MutationRef): number => slotOfRef(ref) === "armB" ? 1 : 0;
+  successes.sort((a, b) => (
+    growthRank(a.ref) - growthRank(b.ref) ||
+    a.roll - b.roll ||
+    String(a.ref).localeCompare(String(b.ref))
+  ));
+  const startingSlots = occupiedMutationSlots(baseMask, baseIds);
   let set: MutationSet = { mask: baseMask, ids: [...(baseIds ?? [])] };
-  for (const success of successes) set = addMutationRef(set, success.ref, !!options.headless);
+  for (const success of successes) {
+    const slot = slotOfRef(success.ref);
+    if (slot === "arm") {
+      const backArmRef = pairedBackArmRef(success.ref);
+      if (!startingSlots.has("arm")) set = addMutationRef(set, success.ref, !!options.headless);
+      if (backArmRef && occupiedMutationSlots(set.mask, set.ids).has("arm") &&
+          refGrowable(backArmRef, !!options.headless)) {
+        const chance = guaranteed
+          ? 1
+          : backArmChance(success.chance, frontArmKey(set), success.ref);
+        if (chanceSucceeds(chance, random)) set = addMutationRef(set, backArmRef, !!options.headless);
+      }
+      continue;
+    }
+    // Explicit back-arm entries are secondary growth too: the front arm must exist,
+    // either before this harvest pass or from an earlier successful roll in it.
+    if (slot === "armB" && !occupiedMutationSlots(set.mask, set.ids).has("arm")) continue;
+    set = addMutationRef(set, success.ref, !!options.headless);
+  }
   return set;
 }
 

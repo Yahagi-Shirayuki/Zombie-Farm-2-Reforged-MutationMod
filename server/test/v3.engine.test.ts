@@ -1804,6 +1804,24 @@ describe("protocol v3 command engine", () => {
     expect(result.questChanges).toContainEqual(expect.objectContaining({ questId: "56", completed: true }));
   });
 
+  it("preserves modded mutation ids through server-authoritative combines", () => {
+    const state = freshGameplayState();
+    state.roster = [
+      { id: "a", key: "ZombieActorRegularTier1", mutation: 0, mutationIds: ["corn_arm"], invasions: 0, stored: false },
+      { id: "b", key: "ZombieActorRegularTier1", mutation: 0, mutationIds: ["apple_head"], invasions: 0, stored: false },
+    ];
+    const result = applyCommandBatch(state, commands(
+      { type: "roster.combine", parentAId: "a", parentBId: "b" }
+    ), { now: 1, id: () => "child" });
+
+    expect(result.results[0].status).toBe("applied");
+    expect(result.state.roster).toContainEqual(expect.objectContaining({
+      id: "child",
+      mutation: 0,
+      mutationIds: ["apple_head", "corn_arm"],
+    }));
+  });
+
   it("counts decorating quest object families authoritatively", () => {
     const state = freshGameplayState();
     state.quests.completed = ["9"];

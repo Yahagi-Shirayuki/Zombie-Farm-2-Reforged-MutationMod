@@ -49,7 +49,7 @@ CROP_REBALANCE = {
     "potato":        (10,  50,  99, 5),
     "sampaguita":    (14,  25,  38, 2),
     "coffee":        (15,  20,  53, 4),
-    "candycorn":     (16,  60,  79, 2),
+    "corn":          (16,  60,  79, 2),
     "venus_flytrap": (19,  80, 111, 3),
     "celery":        (20,  40,  56, 2),
     "Spineapple":    (21,  17,  29, 1),

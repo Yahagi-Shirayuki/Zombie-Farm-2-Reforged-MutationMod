@@ -1,6 +1,5 @@
 ﻿import { Container, Rectangle, Sprite, type Renderer } from "pixi.js";
 import type { GameAssets, ZombieModel } from "../assets";
-import { slotOfRef } from "./mutations";
 import {
   isMutationForegroundPart,
   matchesMutationReplacement,
@@ -8,6 +7,7 @@ import {
   mutationRefsForRendering,
   mutationPartFor,
   mutationPartZIndex,
+  mutationReplacementFor,
   type MutationReplacement,
 } from "./mutationVisual";
 import { displayedAppearance, displayedMutationIds, zombiePartTint } from "./appearance";
@@ -58,7 +58,7 @@ export function buildZombiePortraitRig(
   const [r, g, b] = color ?? model.color;
   const tint = (r << 16) | (g << 8) | b;
   const group = classify(key).group;
-  const replaceable: Record<MutationReplacement, Sprite[]> = { body: [], armF: [], head: [] };
+  const replaceable: Record<MutationReplacement, Sprite[]> = { body: [], armF: [], armB: [], head: [] };
   const headForeground: Sprite[] = [];
 
   for (const part of model.parts) {
@@ -74,6 +74,7 @@ export function buildZombiePortraitRig(
     root.addChild(sprite);
     if (matchesMutationReplacement(part.file, "body")) replaceable.body.push(sprite);
     if (matchesMutationReplacement(part.file, "armF")) replaceable.armF.push(sprite);
+    if (matchesMutationReplacement(part.file, "armB")) replaceable.armB.push(sprite);
     if (part.group === "head" && matchesMutationReplacement(part.file, "head")) {
       replaceable.head.push(sprite);
     }
@@ -93,8 +94,7 @@ export function buildZombiePortraitRig(
       part.ox + (part.headRel ? model.neck.x : 0),
       -part.oy + (part.headRel ? model.neck.y : 0),
     );
-    const replacement: MutationReplacement | undefined =
-      part.replaces ?? (slotOfRef(ref) === "head" ? "head" : undefined);
+    const replacement: MutationReplacement | undefined = mutationReplacementFor(ref, part);
     if (replacement) {
       for (const basePart of replaceable[replacement]) basePart.visible = false;
       if (replacement === "head") {

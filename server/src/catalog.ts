@@ -31,7 +31,7 @@ export const CROPS: Readonly<Record<string, CropEcon>> = {
   potato: { cost: 50, sell: 99, xp: 5, growMs: 86400000, level: 10 },
   sampaguita: { cost: 25, sell: 38, xp: 2, growMs: 1800000, level: 14 },
   coffee: { cost: 20, sell: 53, xp: 4, growMs: 28800000, level: 15 },
-  candycorn: { cost: 60, sell: 79, xp: 2, growMs: 7200000, level: 16 },
+  corn: { cost: 60, sell: 79, xp: 2, growMs: 7200000, level: 16 },
   Spineapple: { cost: 17, sell: 29, xp: 1, growMs: 900000, level: 21 },
   broccoli: { cost: 70, sell: 97, xp: 3, growMs: 14400000, level: 23 },
   garlic: { cost: 50, sell: 88, xp: 4, growMs: 28800000, level: 25 },

@@ -1,7 +1,15 @@
 ﻿import type { MutationPart, ZombieDef, ZombieModel } from "../assets";
-import { bitOf, mutationOf, mutationRefs, slotOfRef, type MutationRef } from "./mutations";
+import {
+  bitOf,
+  mutationOf,
+  mutationRefs,
+  SECONDARY_ARM_SUFFIX,
+  secondaryArmMutationKey,
+  slotOfRef,
+  type MutationRef,
+} from "./mutations";
 
-export type MutationReplacement = "body" | "armF" | "head";
+export type MutationReplacement = "body" | "armF" | "armB" | "head";
 
 const CARROT_MUTATION_BIT = bitOf("carrot");
 const PUMPKING_BIT = bitOf("pumpking");
@@ -17,7 +25,39 @@ export function mutationPartFor(
   const overrides = model?.mutationOverrides;
   const named = (key ? overrides?.[key] : undefined) ?? overrides?.[raw];
   if (named) return parts[named];
-  return (key ? parts[key] : undefined) ?? parts[raw];
+  const direct = (key ? parts[key] : undefined) ?? parts[raw];
+  if (direct) return direct;
+  if (!key || def?.slot !== "armB" || !key.endsWith(SECONDARY_ARM_SUFFIX)) return undefined;
+  const primaryKey = key.slice(0, -SECONDARY_ARM_SUFFIX.length);
+  if (secondaryArmMutationKey(primaryKey) !== key) return undefined;
+  const primaryName = overrides?.[primaryKey] ?? primaryKey;
+  const primary = parts[primaryName];
+  if (!primary) return undefined;
+  return {
+    ...primary,
+    ox: primary.ox - 12,
+    oy: primary.oy + 4,
+    z: 0,
+    replaces: "armB",
+  };
+}
+
+export function mutationPartForFacing(
+  parts: Readonly<Record<string, MutationPart>>,
+  model: Pick<ZombieModel, "mutationOverrides"> | undefined,
+  ref: MutationRef,
+  swapArmSlots: boolean,
+): MutationPart | undefined {
+  if (!swapArmSlots) return mutationPartFor(parts, model, ref);
+  const def = mutationOf(ref);
+  if (def?.slot === "arm") {
+    return mutationPartFor(parts, model, secondaryArmMutationKey(def.key));
+  }
+  if (def?.slot === "armB" && def.key.endsWith(SECONDARY_ARM_SUFFIX)) {
+    const primaryKey = def.key.slice(0, -SECONDARY_ARM_SUFFIX.length);
+    return mutationPartFor(parts, model, primaryKey);
+  }
+  return mutationPartFor(parts, model, ref);
 }
 
 export function mutationCoversFace(ref: MutationRef): boolean {
@@ -61,14 +101,26 @@ export function isMutationForegroundPart(file: string): boolean {
   return /(?:Eye[LR]|Jaw|LowerTeeth|Hair|Hat|Feature|Beard|Mustache)(?:\.png)?$/i.test(file);
 }
 
+export function mutationReplacementFor(
+  ref: MutationRef,
+  part: Pick<MutationPart, "replaces">,
+): MutationReplacement | undefined {
+  if (part.replaces) return part.replaces;
+  const slot = slotOfRef(ref);
+  if (slot === "head") return "head";
+  if (slot === "arm") return "armF";
+  if (slot === "armB") return "armB";
+  if (slot === "body") return "body";
+  return undefined;
+}
+
 export function matchesMutationReplacement(
   file: string,
   replacement: MutationReplacement,
 ): boolean {
-  return replacement === "body"
-    ? /Body(?:\.png)?$/i.test(file)
-    : replacement === "armF"
-      ? /ArmF(?:\.png)?$/i.test(file)
-      : /(?:Head|UpperTeeth|Scar)(?:\.png)?$/i.test(file)
-        && !isMutationForegroundPart(file);
+  if (replacement === "body") return /Body(?:\.png)?$/i.test(file);
+  if (replacement === "armF") return /ArmF(?:\.png)?$/i.test(file);
+  if (replacement === "armB") return /ArmB(?:\.png)?$/i.test(file);
+  return /(?:Head|UpperTeeth|Scar)(?:\.png)?$/i.test(file)
+    && !isMutationForegroundPart(file);
 }

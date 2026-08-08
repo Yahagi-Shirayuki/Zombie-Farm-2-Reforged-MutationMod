@@ -13,16 +13,17 @@ import { depth, screenToGrid, tileCenter } from "../iso";
 import { setFootprint } from "../depthSort";
 import { findEscape, findPath } from "../pathfind";
 import { OwnedZombie } from "./types";
-import { slotOfRef } from "./mutations";
 import {
   isMutationForegroundPart,
   matchesMutationReplacement,
   mutationCoversFace,
   mutationRefsForRendering,
-  mutationPartFor,
+  mutationPartForFacing,
   mutationPartZIndex,
+  mutationReplacementFor,
   type MutationReplacement,
 } from "./mutationVisual";
+import type { MutationRef } from "./mutations";
 import {
   BRUTE_EYEBALL_SCALE,
   DEFAULT_ZOMBIE_EYE_TINT,
@@ -91,6 +92,11 @@ export class ZombieUnit {
   private footFBaseY = 0;
   private footBBaseY = 0;
   private arms: { sp: Sprite; baseRotation: number }[] = [];
+  private armReplaceable: Pick<Record<MutationReplacement, Sprite[]>, "armF" | "armB"> = { armF: [], armB: [] };
+  private mutationArmSprites: { ref: MutationRef; sp: Sprite }[] = [];
+  private mutationArmAssets: GameAssets | null = null;
+  private mutationArmModel: ZombieModel | null = null;
+  private mutationArmSwap: boolean | null = null;
   private renderScale = 1;
 
   private wx = 0;
@@ -211,7 +217,12 @@ export class ZombieUnit {
     this.footF = this.footB = undefined as unknown as Sprite;
     this.root.sortableChildren = true;
     this.neck = { x: m.neck.x, y: m.neck.y };
-    const replaceable: Record<MutationReplacement, Sprite[]> = { body: [], armF: [], head: [] };
+    const replaceable: Record<MutationReplacement, Sprite[]> = { body: [], armF: [], armB: [], head: [] };
+    this.armReplaceable = { armF: replaceable.armF, armB: replaceable.armB };
+    this.mutationArmSprites = [];
+    this.mutationArmAssets = assets;
+    this.mutationArmModel = m;
+    this.mutationArmSwap = this.facing < 0;
     const headForeground: Sprite[] = [];
 
     for (const p of m.parts) {
@@ -227,6 +238,7 @@ export class ZombieUnit {
       this.root.addChild(sp);
       if (matchesMutationReplacement(p.file, "body")) replaceable.body.push(sp);
       if (matchesMutationReplacement(p.file, "armF")) replaceable.armF.push(sp);
+      if (matchesMutationReplacement(p.file, "armB")) replaceable.armB.push(sp);
       if (p.group === "head" && matchesMutationReplacement(p.file, "head")) {
         replaceable.head.push(sp);
       }
@@ -291,6 +303,11 @@ export class ZombieUnit {
     this.headParts = [];
     this.eyeParts = [];
     this.arms = [];
+    this.armReplaceable = { armF: [], armB: [] };
+    this.mutationArmSprites = [];
+    this.mutationArmAssets = null;
+    this.mutationArmModel = null;
+    this.mutationArmSwap = null;
     this.specialHeadFx = null; // its container was a child, destroyed above
     this.fertilizeCloud.clear(); // buildFarmEffects redraws it
     const closed = this.eyesClosed;
@@ -332,7 +349,7 @@ export class ZombieUnit {
   ) {
     const neck = model.neck;
     for (const ref of mutationRefsForRendering(assets.zombies, this.data.key, mask, mutationIds)) {
-      const mp = mutationPartFor(assets.mutationParts, model, ref);
+      const mp = mutationPartForFacing(assets.mutationParts, model, ref, this.facing < 0);
       if (!mp) continue;
       const tex = assets.zombiePartTex[mp.file];
       if (!tex) continue;
@@ -341,8 +358,7 @@ export class ZombieUnit {
       const px = mp.ox + (mp.headRel ? neck.x : 0);
       const py = -mp.oy + (mp.headRel ? neck.y : 0);
       sp.position.set(px, py);
-      const replacement: MutationReplacement | undefined =
-        mp.replaces ?? (slotOfRef(ref) === "head" ? "head" : undefined);
+      const replacement: MutationReplacement | undefined = mutationReplacementFor(ref, mp);
       if (replacement) {
         for (const basePart of replaceable[replacement]) basePart.visible = false;
         if (replacement === "head") {
@@ -361,12 +377,48 @@ export class ZombieUnit {
         this.headParts.push({ sp, bx: px, by: py }); // tilts with the head-nod
       } else {
         sp.zIndex = mp.z; // arms/body/collar keep their authored layering
-        if (replacement === "armF") {
+        if (replacement === "armF" || replacement === "armB") {
           this.arms.push({ sp, baseRotation: sp.rotation });
+          this.mutationArmSprites.push({ ref, sp });
         }
       }
       this.parts.push(sp);
     }
+  }
+
+  private syncMutationArmFacing() {
+    const assets = this.mutationArmAssets;
+    const model = this.mutationArmModel;
+    const swap = this.facing < 0;
+    if (!assets || !model || this.mutationArmSwap === swap) return;
+
+    for (const base of this.armReplaceable.armF) base.visible = true;
+    for (const base of this.armReplaceable.armB) base.visible = true;
+    const hidden = new Set<"armF" | "armB">();
+
+    for (const entry of this.mutationArmSprites) {
+      const part = mutationPartForFacing(assets.mutationParts, model, entry.ref, swap);
+      const texture = part ? assets.zombiePartTex[part.file] : undefined;
+      if (!part || !texture) {
+        entry.sp.visible = false;
+        continue;
+      }
+      entry.sp.visible = true;
+      entry.sp.texture = texture;
+      entry.sp.anchor.set(part.ax, part.ay);
+      entry.sp.position.set(
+        part.ox + (part.headRel ? model.neck.x : 0),
+        -part.oy + (part.headRel ? model.neck.y : 0),
+      );
+      entry.sp.zIndex = part.z;
+      const replacement = mutationReplacementFor(entry.ref, part);
+      if (replacement === "armF" || replacement === "armB") hidden.add(replacement);
+    }
+
+    for (const replacement of hidden) {
+      for (const basePart of this.armReplaceable[replacement]) basePart.visible = false;
+    }
+    this.mutationArmSwap = swap;
   }
 
   setSelected(on: boolean) {
@@ -577,6 +629,7 @@ export class ZombieUnit {
       }
     }
     this.setEyesClosed(this.sleeping && this.path.length === 0);
+    this.syncMutationArmFacing();
     this.tilt(dt, walking);
     this.legs(walking, dt);
     this.poseArms(walking, dt);

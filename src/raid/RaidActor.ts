@@ -4,13 +4,14 @@
 // The scene positions it and tells it whether it's moving each frame.
 import { Container, Sprite } from "pixi.js";
 import { GameAssets, ZombieModel } from "../assets";
-import { slotOfRef } from "../zombie/mutations";
+import { slotOfRef, type MutationRef } from "../zombie/mutations";
 import {
   isMutationForegroundPart,
   matchesMutationReplacement,
   mutationRefsForRendering,
-  mutationPartFor,
+  mutationPartForFacing,
   mutationCoversFace,
+  mutationReplacementFor,
   mutationPartZIndex,
   type MutationReplacement,
 } from "../zombie/mutationVisual";
@@ -92,6 +93,11 @@ export class RaidActor {
   private footFBaseY = 0;
   private footBBaseY = 0;
   private arms: Sprite[] = []; // ArmF/ArmB sprites, for the activated wind-up pose
+  private armReplaceable: Pick<Record<MutationReplacement, Sprite[]>, "armF" | "armB"> = { armF: [], armB: [] };
+  private mutationArmSprites: { ref: MutationRef; sp: Sprite }[] = [];
+  private mutationArmAssets: GameAssets | null = null;
+  private mutationArmModel: ZombieModel | null = null;
+  private mutationArmSwap: boolean | null = null;
   private renderScale = MODEL_BASE;
   /** Art faces LEFT at facing +1; zombies attack rightward so they default to -1. */
   private facing = -1;
@@ -149,8 +155,13 @@ export class RaidActor {
   ) {
     const m: ZombieModel =
       assets.zombieModels[key] ?? assets.zombieModels["ZombieActorRegularTier1"];
+    this.armReplaceable = { armF: [], armB: [] };
+    this.mutationArmSprites = [];
+    this.mutationArmAssets = assets;
+    this.mutationArmModel = m;
+    this.mutationArmSwap = null;
     const mutationParts = mutationRefsForRendering(assets.zombies, key, mutation, mutationIds).flatMap((ref) => {
-      const part = mutationPartFor(assets.mutationParts, m, ref);
+      const part = mutationPartForFacing(assets.mutationParts, m, ref, this.facing < 0);
       const texture = part ? assets.zombiePartTex[part.file] : undefined;
       return part && texture ? [{ ref, part, texture }] : [];
     });
@@ -158,13 +169,8 @@ export class RaidActor {
     // after its replacement has resolved, so incomplete assets cannot remove it.
     const replacements = new Set<MutationReplacement>();
     for (const { ref, part } of mutationParts) {
-      if (part.replaces) replacements.add(part.replaces);
-      else {
-        const slot = slotOfRef(ref);
-        if (slot === "head") replacements.add("head");
-        else if (slot === "arm") replacements.add("armF");
-        else if (slot === "body") replacements.add("body");
-      }
+      const replacement = mutationReplacementFor(ref, part);
+      if (replacement) replacements.add(replacement);
     }
     // A head mutation that carries its own face (the pumpkin) takes the zombie's
     // eyes and jaw with the skull, instead of leaving them in front of it.
@@ -178,7 +184,6 @@ export class RaidActor {
     this.neck = { x: m.neck.x, y: m.neck.y };
 
     for (const p of m.parts) {
-      if (replacements.has("armF") && /ArmF$/i.test(p.file)) continue;
       if (replacements.has("body") && /Body$/i.test(p.file)) continue;
       if (
         replacements.has("head")
@@ -197,6 +202,8 @@ export class RaidActor {
         : p.z;
       if (p.tint) sp.tint = zombiePartTint(p.file, tint, group);
       this.root.addChild(sp);
+      if (matchesMutationReplacement(p.file, "armF")) this.armReplaceable.armF.push(sp);
+      if (matchesMutationReplacement(p.file, "armB")) this.armReplaceable.armB.push(sp);
       if (p.group === "head") {
         this.headParts.push({ sp, bx: p.px, by: p.py });
         if (/Eye[LR](?:\.png)?$/i.test(p.file)) {
@@ -238,10 +245,15 @@ export class RaidActor {
         this.headParts.push({ sp, bx: px, by: py });
       } else {
         sp.zIndex = mutationPartZIndex(ref, mp.group, mp.z);
-        if (slotOfRef(ref) === "arm") this.arms.push(sp);
+        const replacement = mutationReplacementFor(ref, mp);
+        if (replacement === "armF" || replacement === "armB" || slotOfRef(ref) === "arm") {
+          this.arms.push(sp);
+          if (replacement === "armF" || replacement === "armB") this.mutationArmSprites.push({ ref, sp });
+        }
       }
       this.root.addChild(sp);
     }
+    this.syncMutationArmFacing();
     // Headless models have no feet â€” guard the walk animation.
     const headFxKind = specialHeadFxKind(key, mutation);
     if (headFxKind) {
@@ -257,6 +269,42 @@ export class RaidActor {
   setFacingFromDelta(dx: number) {
     if (dx > 0.01) this.facing = -1;
     else if (dx < -0.01) this.facing = 1;
+    this.syncMutationArmFacing();
+  }
+
+  private syncMutationArmFacing() {
+    const assets = this.mutationArmAssets;
+    const model = this.mutationArmModel;
+    const swap = this.facing < 0;
+    if (!assets || !model || this.mutationArmSwap === swap) return;
+
+    for (const base of this.armReplaceable.armF) base.visible = true;
+    for (const base of this.armReplaceable.armB) base.visible = true;
+    const hidden = new Set<"armF" | "armB">();
+
+    for (const entry of this.mutationArmSprites) {
+      const part = mutationPartForFacing(assets.mutationParts, model, entry.ref, swap);
+      const texture = part ? assets.zombiePartTex[part.file] : undefined;
+      if (!part || !texture) {
+        entry.sp.visible = false;
+        continue;
+      }
+      entry.sp.visible = true;
+      entry.sp.texture = texture;
+      entry.sp.anchor.set(part.ax, part.ay);
+      entry.sp.position.set(
+        part.ox + (part.headRel ? model.neck.x : 0),
+        -part.oy + (part.headRel ? model.neck.y : 0),
+      );
+      entry.sp.zIndex = mutationPartZIndex(entry.ref, part.group, part.z);
+      const replacement = mutationReplacementFor(entry.ref, part);
+      if (replacement === "armF" || replacement === "armB") hidden.add(replacement);
+    }
+
+    for (const replacement of hidden) {
+      for (const basePart of this.armReplaceable[replacement]) basePart.visible = false;
+    }
+    this.mutationArmSwap = swap;
   }
 
 /** Pose combat and movement each frame. Priority is activated-move wind-up,

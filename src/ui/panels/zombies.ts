@@ -12,7 +12,7 @@ import { onFirstVisible } from "../onFirstVisible";
 import type { AlmanacEntryView, MenuCard, ZombieInfo } from "../hudTypes";
 import { zombieSellValue } from "../../economy";
 import { MAX_ZOMBIE_NAME_LENGTH, RosterEntry } from "../../zombie/types";
-import { mutationBonus } from "../../zombie/mutations";
+import { mutationBonus, SLOTS } from "../../zombie/mutations";
 import {
   STATS, veterancy, STAT_TILE, VALUE_FILL, VALUE_END, ABILITY_FRAME, MUTATION_FRAME,
   ABILITY_POOL, unitAbilityAt, TIER_BOSS, MAX_ABILITY_TIER, wisToFocusBonus,
@@ -197,7 +197,7 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   const mutations = mutationEntries(info);
   const mutHdr = document.createElement("div");
   mutHdr.className = "zsec-h";
-  mutHdr.textContent = mutations.length > 1 ? `Mutations (${mutations.length}/5)` : "Mutation";
+  mutHdr.textContent = mutations.length > 1 ? `Mutations (${mutations.length}/${SLOTS.length})` : "Mutation";
   const mutRow = document.createElement("div");
   mutRow.className = "zrow zmuts";
   for (const mutation of mutations) {

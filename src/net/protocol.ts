@@ -140,6 +140,7 @@ export interface RosterUnitProjection {
   id: string;
   key: string;
   mutation: number;
+  mutationIds?: string[];
   invasions: number;
   stored: boolean;
   lockedByRaid?: string;

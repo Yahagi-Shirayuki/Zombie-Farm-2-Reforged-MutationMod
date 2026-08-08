@@ -16,10 +16,11 @@ function makePot(rng = 0) {
 }
 
 const snap = (key: string, extra: Partial<{
-  mutation: number; tier: number; isBaseClass: boolean; group: string; isSpecial: boolean;
+  mutation: number; mutationIds: string[]; tier: number; isBaseClass: boolean; group: string; isSpecial: boolean;
 }> = {}) => ({
   key,
   mutation: extra.mutation ?? 0,
+  mutationIds: extra.mutationIds,
   tier: extra.tier,
   isBaseClass: extra.isBaseClass,
   group: extra.group,
@@ -170,5 +171,23 @@ describe("mutation inheritance on collect", () => {
     pot.start(snap("A", { mutation: 1 }), snap("B", { mutation: 8 }), false); // head + arm
     finish(POT_DURATION_MS + 1);
     expect(pot.collect()!.mutation).toBe(9);
+  });
+
+  it("preserves modded mutation ids from both parents", () => {
+    const { pot, finish } = makePot();
+    pot.start(
+      snap("A", { mutationIds: ["corn_arm"] }),
+      snap("B", { mutationIds: ["apple_head"] }),
+      false,
+    );
+    expect(pot.serialize()).toMatchObject({
+      mutationIdsA: ["corn_arm"],
+      mutationIdsB: ["apple_head"],
+    });
+    finish(POT_DURATION_MS + 1);
+    expect(pot.collect()).toMatchObject({
+      mutation: 0,
+      mutationIds: ["apple_head", "corn_arm"],
+    });
   });
 });

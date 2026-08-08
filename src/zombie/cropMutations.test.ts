@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cropMutationBits, resolveCropMutations, plotsTouch } from "./cropMutations";
+import { CROP_MUTATIONS, cropMutationBits, resolveCropMutationSet, resolveCropMutations, plotsTouch } from "./cropMutations";
 
 describe("crop-adjacency mutations", () => {
   it("touches all eight lattice neighbours and not the plot itself", () => {
@@ -73,6 +73,56 @@ describe("crop-adjacency mutations", () => {
     })).toBe(8192 | 64);
   });
 
+  it("lets one crop grow a paired front and back arm in the same harvest pass", () => {
+    expect(CROP_MUTATIONS.corn).toEqual(["corn_head", "corn_arm"]);
+
+    const fresh = resolveCropMutationSet(0, [], ["corn"], { guaranteed: true, random: () => 0 });
+    expect(fresh.ids).toContain("corn_arm");
+    expect(fresh.ids).toContain("corn_arm_b");
+    expect(fresh.ids).toContain("corn_head");
+
+    const frontArm = resolveCropMutationSet(8, [], ["corn"], { guaranteed: true, random: () => 0 });
+    expect(frontArm.mask).toBe(8);
+    expect(frontArm.ids).toContain("corn_arm_b");
+    expect(frontArm.ids).not.toContain("corn_arm");
+
+    const vanilla = resolveCropMutationSet(0, [], ["celery"], { guaranteed: true, random: () => 0 });
+    expect(vanilla.mask).toBe(64);
+    expect(vanilla.ids).toContain("celery_b");
+  });
+
+  it("does not grow an orphaned back arm without a front arm", () => {
+    const crops = { back_only: "corn_arm_b" };
+    expect(resolveCropMutationSet(0, [], ["back_only"], { crops, guaranteed: true }))
+      .toEqual({ mask: 0, ids: [] });
+  });
+
+  it("halves the paired back-arm chance when it matches the occupied front arm", () => {
+    const crops = { corn: "corn_arm", celery: "celery" };
+
+    const matchingRolls = [0.1, 0.2];
+    expect(resolveCropMutationSet(0, ["corn_arm"], ["corn"], {
+      crops,
+      random: () => matchingRolls.shift()!,
+    }).ids).toEqual(["corn_arm"]);
+
+    const differentRolls = [0.1, 0.2];
+    expect(resolveCropMutationSet(0, ["corn_arm"], ["celery"], {
+      crops,
+      random: () => differentRolls.shift()!,
+    })).toEqual({ mask: 0, ids: ["corn_arm", "celery_b"] });
+  });
+
+  it("can mix front and back arms from different successful arm crops", () => {
+    const crops = { corn: "corn_arm", celery: "celery" };
+    const rolls = [0.1, 0.2, 0.2, 0.2];
+
+    expect(resolveCropMutationSet(0, [], ["corn", "celery"], {
+      crops,
+      random: () => rolls.shift()!,
+    })).toEqual({ mask: 0, ids: ["corn_arm", "celery_b"] });
+  });
+
   it("makes every eligible crop mutation guaranteed with the monolith", () => {
     expect(resolveCropMutations(0, ["dragon_fruit"], {
       guaranteed: true,
@@ -85,6 +135,7 @@ describe("crop -> mutation wiring", () => {
   it("names mutations by key, resolving to the bit they persist as", () => {
     expect(cropMutationBits("tomato")).toEqual([1]);
     expect(cropMutationBits("pumpking")).toEqual([8192]);
+    expect(cropMutationBits("corn")).toEqual([]);
     expect(cropMutationBits("eyebiscus")).toEqual([4]); // the Tier-4 variant's shared bit
     expect(cropMutationBits("grass")).toEqual([]); // a crop that grows nothing
   });

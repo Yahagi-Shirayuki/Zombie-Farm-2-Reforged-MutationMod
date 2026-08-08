@@ -1,7 +1,7 @@
 ﻿import { describe, it, expect } from "vitest";
 import {
   addMutationRef, applyBodyTypeRestriction, bitGrowable, canReceive, canReceiveRef, combineMasks, HEADLESS_FORBIDDEN_MASK,
-  HEADLESS_HEAD_MASK, mutationBonus, mutationLabel, SLOT_MASK,
+  HEADLESS_HEAD_MASK, mutationBonus, mutationLabel, SLOTS, SLOT_MASK,
   ALL_MUTATIONS_MASK, bitOf, combineMutationSets, MODDED_MUTATIONS, mutationOf, MUTATION_LIST,
   resolveMutationBit, resolveMutationRef, sanitizeMutationMask, slotOfRef, statEffectsOf, type MutationStats,
 } from "./mutations";
@@ -72,7 +72,7 @@ describe("headless restriction â€” no head or hair/eye mutations", () => {
 describe("Pumpking â€” grown only on the headless family, worn by anyone", () => {
 
   it("pays the head slot's best attack bonus", () => {
-    expect(mutationBonus(PUMPKING)).toEqual({ str: 3, con: 0, dex: 0, wis: 0 });
+    expect(mutationBonus(PUMPKING)).toEqual({ str: 3, con: 2, dex: 0, wis: -2 });
     expect(mutationLabel(PUMPKING)).toBe("Pumpking");
   });
 
@@ -153,13 +153,36 @@ describe("mutation catalog", () => {
     expect(() => bitOf("cornhead")).toThrow(/unknown vanilla mutation/);
   });
 
+  it("exposes a sixth back-arm slot for paired arm mutations", () => {
+    expect(SLOTS).toEqual(["head", "hair_eye", "arm", "armB", "body", "neck"]);
+    expect(SLOT_MASK.armB).toBe(0);
+  });
+
   it("keeps local modded mutations as string ids instead of bit slots", () => {
     expect(MODDED_MUTATIONS.corn_head.slot).toBe("head");
     expect(resolveMutationBit("corn_head")).toBeNull();
     expect(resolveMutationRef("corn_head")).toBe("corn_head");
     expect(slotOfRef("corn_head")).toBe("head");
+    expect(resolveMutationBit("corn_arm")).toBeNull();
+    expect(resolveMutationBit("corn_arm_b")).toBeNull();
+    expect(resolveMutationRef("corn_arm")).toBe("corn_arm");
+    expect(resolveMutationRef("corn_arm_b")).toBe("corn_arm_b");
+    expect(resolveMutationRef("turnip_b")).toBe("turnip_b");
+    expect(MODDED_MUTATIONS.turnip_b).toMatchObject({
+      key: "turnip_b",
+      name: "Turnip-Arm (secondary)",
+      slot: "armB",
+      stats: mutationOf(bitOf("turnip"))?.stats,
+    });
+    expect(MODDED_MUTATIONS.corn_arm_b).toMatchObject({
+      key: "corn_arm_b",
+      name: "Corned Arms (secondary)",
+      slot: "armB",
+      stats: MODDED_MUTATIONS.corn_arm.stats,
+    });
     expect(mutationBonus(0, ["corn_head"])).toEqual({ str: 2, con: 3, dex: -1, wis: 0 });
     expect(mutationLabel(0, ["corn_head"])).toBe("Corned head");
+    expect(mutationLabel(0, ["corn_arm_b"])).toBe("Corned Arms (secondary)");
     expect(combineMutationSets(TOMATO, [], 0, ["corn_head"]).ids).toEqual(["corn_head"]);
   });
 
@@ -209,9 +232,9 @@ describe("mutation catalog", () => {
 });
 
 describe("mutation stats", () => {
-  // A mutation names any mix of str/dex/con, and a negative is a real penalty. None
-  // of ZF2's fourteen use one, so these work from explicit specs â€” that is what
-  // statEffectsOf is for, and it is the same function the catalog goes through.
+  // A mutation names any mix of str/dex/con, and a negative is a real penalty. These
+  // work from explicit specs because that is what statEffectsOf consumes from the
+  // catalog.
   const spec = (stats: MutationStats) => ({ stats });
 
   it("lists only the stats a mutation actually moves, in str/dex/con order", () => {
@@ -235,21 +258,19 @@ describe("mutation stats", () => {
 
   it("sums the shipped catalog's bonuses across slots and stats", () => {
     expect(mutationBonus(0)).toEqual({ str: 0, con: 0, dex: 0, wis: 0 });
-    expect(mutationBonus(DRAGON)).toEqual({ str: 4, con: 0, dex: 0, wis: 0 }); // dragon arm
-    // garlic head (+3 str) + carrot eyes (+1 dex) + lima bean body (+3 con)
-    expect(mutationBonus(GARLIC | CARROT | LIMABEAN)).toEqual({ str: 3, con: 3, dex: 1, wis: 0 });
-    // tomato (+1 str) and dragon (+4 str) land on the same stat and add up.
-    expect(mutationBonus(TOMATO | DRAGON)).toEqual({ str: 5, con: 0, dex: 0, wis: 0 });
+    expect(mutationBonus(DRAGON)).toEqual({ str: 5, con: -3, dex: 2, wis: 0 }); // dragon arm
+    // garlic head + carrot eyes + lima bean body combine their signed effects.
+    expect(mutationBonus(GARLIC | CARROT | LIMABEAN)).toEqual({ str: 6, con: 4, dex: -3, wis: 1 });
+    // tomato and dragon land on the same stats and add up.
+    expect(mutationBonus(TOMATO | DRAGON)).toEqual({ str: 6, con: -2, dex: 2, wis: 0 });
   });
 
-  it("keeps every shipped mutation a pure gain", () => {
-    // Not a rule of the system â€” penalties are supported â€” but a change to any of
-    // ZF2's own fourteen should be deliberate rather than a typo'd minus sign.
+  it("keeps every shipped mutation effect non-zero", () => {
     for (const def of MUTATION_LIST.slice(0, 14)) {
       const effects = statEffectsOf(def);
       expect(effects.length, `${def.key} affects no stat`).toBeGreaterThan(0);
       for (const e of effects) {
-        expect(e.amount, `${def.key} ${e.stat}`).toBeGreaterThan(0);
+        expect(e.amount, `${def.key} ${e.stat}`).not.toBe(0);
       }
     }
   });

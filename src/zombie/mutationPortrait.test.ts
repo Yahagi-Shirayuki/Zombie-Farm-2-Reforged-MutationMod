@@ -10,6 +10,7 @@ afterEach(() => vi.unstubAllGlobals());
 const model: ZombieModel = {
   name: "Test", neck: { x: 2, y: -20 }, scale: 1, color: [100, 120, 140],
   parts: [
+    { file: "baseArmB", group: "root", px: -8, py: -25, ax: 1, ay: 0.5, z: 1, tint: true },
     { file: "baseBody", group: "root", px: 0, py: -20, ax: 0.5, ay: 0.5, z: 3, tint: true },
     { file: "baseArmF", group: "root", px: 8, py: -25, ax: 1, ay: 0.5, z: 7, tint: true },
     { file: "defaultHead", group: "head", px: 2, py: -30, ax: 0.5, ay: 0.5, z: 4, tint: true },
@@ -23,14 +24,15 @@ const model: ZombieModel = {
 const assets = {
   zombieModels: { test: model, ZombieActorRegularTier1: model },
   zombiePartTex: {
-    baseBody: Texture.EMPTY, baseArmF: Texture.EMPTY, defaultHead: Texture.EMPTY,
+    baseArmB: Texture.EMPTY, baseBody: Texture.EMPTY, baseArmF: Texture.EMPTY, defaultHead: Texture.EMPTY,
     defaultEyeL: Texture.EMPTY, defaultJaw: Texture.EMPTY, defaultLowerTeeth: Texture.EMPTY,
     gnomeFeature: Texture.EMPTY,
-    tomato: Texture.EMPTY, turnip: Texture.EMPTY, lima: Texture.EMPTY, "apple_head.png": Texture.EMPTY,
+    tomato: Texture.EMPTY, turnip: Texture.EMPTY, lima: Texture.EMPTY, backArm: Texture.EMPTY, "apple_head.png": Texture.EMPTY,
   },
   mutationParts: {
     "1": { file: "tomato", group: "head", headRel: true, ox: 1, oy: 4, ax: 0.5, ay: 0.5, z: 4 },
     "8": { file: "turnip", group: "root", headRel: false, ox: 8, oy: 25, ax: 1, ay: 0.5, z: 8, replaces: "armF" },
+    corn_arm: { file: "backArm", group: "root", headRel: false, ox: 4, oy: 29, ax: 1, ay: 0.5, z: 8, replaces: "armF" },
     "1024": { file: "lima", group: "root", headRel: false, ox: 0, oy: 20, ax: 0.5, ay: 0.5, z: 4, replaces: "body" },
     apple_head: { file: "apple_head.png", group: "head", headRel: false, ox: 2, oy: 30, ax: 0.5, ay: 0.5, z: 4, replaces: "head" },
   },
@@ -73,7 +75,7 @@ describe("mutation-aware zombie portraits", () => {
     }[];
 
     expect(children.map((child) => child.label)).toEqual([
-      "baseBody", "baseArmF", "defaultHead", "defaultEyeL", "defaultJaw",
+      "baseArmB", "baseBody", "baseArmF", "defaultHead", "defaultEyeL", "defaultJaw",
       "defaultLowerTeeth", "gnomeFeature", "tomato", "turnip", "lima",
     ]);
     expect(children.find((child) => child.label === "baseBody")?.visible).toBe(false);
@@ -88,6 +90,17 @@ describe("mutation-aware zombie portraits", () => {
     }
   });
 
+  it("can replace the base back arm in portraits", () => {
+    const rig = buildZombiePortraitRig(assets, "test", 0, undefined, ["corn_arm_b"]);
+    const children = rig.children as unknown as {
+      label: string;
+      visible: boolean;
+    }[];
+
+    expect(children.map((child) => child.label)).toContain("backArm");
+    expect(children.find((child) => child.label === "baseArmB")?.visible).toBe(false);
+    expect(children.find((child) => child.label === "baseArmF")?.visible).toBe(true);
+  });
   it("renders modded mutation ids with their loose PNG texture keys", () => {
     const rig = buildZombiePortraitRig(assets, "test", 0, undefined, ["apple_head"]);
     const children = rig.children as unknown as {

@@ -7,8 +7,8 @@
 // capped by MAX_MASK_BITS.
 //
 // Rules:
-//   * One mutation per SLOT (head / hair_eye / arm / body / neck).
-//   * Max 5 visible mutations (one per slot).
+//   * One mutation per SLOT (head / hair_eye / arm / armB / body / neck).
+//   * Max 6 visible mutations (one per slot).
 //   * Stat bonuses map: power/attack -> str, life -> con, speed -> dex, focus -> wis.
 // ---------------------------------------------------------------------------
 
@@ -17,8 +17,8 @@ import {
   maskIntersect, maskUnion, maskWithout,
 } from "./mutationMask";
 
-export type Slot = "head" | "hair_eye" | "arm" | "body" | "neck";
-export const SLOTS: Slot[] = ["head", "hair_eye", "arm", "body", "neck"];
+export type Slot = "head" | "hair_eye" | "arm" | "armB" | "body" | "neck";
+export const SLOTS: Slot[] = ["head", "hair_eye", "arm", "armB", "body", "neck"];
 
 export type Stat = "str" | "con" | "dex" | "wis";
 export type MutationKey = string;
@@ -69,8 +69,10 @@ const CATALOG: readonly MutationSpec[] = [
   { key: "dragon", name: "Dragon-arm", slot: "arm", stats: { str: 5, dex: 2, con: -3 } },
   { key: "pumpking", name: "Pumpking", slot: "head", stats: { str: 3, con: 2, wis: -2 } },
 ];
-// modded mutations
-export const MODDED_MUTATIONS: Readonly<Record<MutationKey, ModdedMutationDef>> = Object.freeze({
+// Authored modded mutations. Back-arm twins are derived below for every arm-slot
+// entry, so mod content only has to name and tune the primary arm once.
+const AUTHORED_MODDED_MUTATIONS: Readonly<Record<MutationKey, ModdedMutationDef>> = Object.freeze({
+  carrot_arm: { modded: true, key: "carrot_arm", name: "carrot-armed", slot: "arm", stats: { dex: 1 } },
   turnip_eye: { modded: true, key: "turnip_eye", name: "Turnip-eyed", slot: "hair_eye", stats: { dex: 3, str: -1 } },
   turnip_head: { modded: true, key: "turnip_head", name: "Turnip-head", slot: "head", stats: { str: 2, con: 2, dex: -1 } },
   bread_neck: { modded: true, key: "bread_neck", name: "Bread neck", slot: "neck", stats: { con: 4, dex: -1 } },
@@ -82,6 +84,37 @@ export const MODDED_MUTATIONS: Readonly<Record<MutationKey, ModdedMutationDef>> 
   spineapple_body: { modded: true, key: "spineapple_body", name: "Spine-ap-body", slot: "body", stats: { str: 3, con: 3, dex: 1, wis: -2 } },
   bloodberry_hair: { modded: true, key: "bloodberry_hair", name: "Bloody-hairy", slot: "hair_eye", stats: { str: 4, con: 2, wis: 1, dex: -2 } },
   skellyberry_body: { modded: true, key: "skellyberry_body", name: "Skelly-belly", slot: "body", stats: { con: 5, str: 3, dex: -2 } },
+});
+
+export const SECONDARY_ARM_SUFFIX = "_b";
+
+export function secondaryArmMutationKey(key: MutationKey): MutationKey {
+  return `${key}${SECONDARY_ARM_SUFFIX}`;
+}
+
+function derivedSecondaryArmMutations(
+  vanilla: readonly MutationSpec[],
+  authored: Readonly<Record<MutationKey, ModdedMutationDef>>,
+): Record<MutationKey, ModdedMutationDef> {
+  const out: Record<MutationKey, ModdedMutationDef> = {};
+  for (const def of [...vanilla, ...Object.values(authored)]) {
+    if (def.slot !== "arm") continue;
+    const key = secondaryArmMutationKey(def.key);
+    if (authored[key]) continue;
+    out[key] = {
+      modded: true,
+      key,
+      name: `${def.name} (secondary)`,
+      slot: "armB",
+      stats: { ...def.stats },
+    };
+  }
+  return out;
+}
+
+export const MODDED_MUTATIONS: Readonly<Record<MutationKey, ModdedMutationDef>> = Object.freeze({
+  ...AUTHORED_MODDED_MUTATIONS,
+  ...derivedSecondaryArmMutations(CATALOG, AUTHORED_MODDED_MUTATIONS),
 });
 
 export const ALL_MODDED_MUTATION_IDS: readonly string[] = Object.freeze(Object.keys(MODDED_MUTATIONS));
@@ -134,7 +167,7 @@ export const ALL_BITS: number[] = MUTATION_LIST.map((def) => def.bit);
 export const ALL_MUTATIONS_MASK: number = ALL_BITS.reduce(maskUnion, 0);
 
 export const SLOT_MASK: Record<Slot, number> = (() => {
-  const m: Record<Slot, number> = { head: 0, hair_eye: 0, arm: 0, body: 0, neck: 0 };
+  const m: Record<Slot, number> = { head: 0, hair_eye: 0, arm: 0, armB: 0, body: 0, neck: 0 };
   for (const def of MUTATION_LIST) m[def.slot] = maskUnion(m[def.slot], def.bit);
   return m;
 })();
@@ -231,7 +264,7 @@ export function isFullyMutated(mask: number, mutationIds?: unknown): boolean {
   return occupiedMutationSlots(mask, mutationIds).size === SLOTS.length;
 }
 
-export const HEADLESS_SLOTS: ReadonlySet<Slot> = new Set<Slot>(["body", "arm", "neck"]);
+export const HEADLESS_SLOTS: ReadonlySet<Slot> = new Set<Slot>(["body", "arm", "armB", "neck"]);
 export const HEADLESS_HEAD_MASK = MUTATIONS_BY_KEY.pumpking.bit;
 export const HEADLESS_FORBIDDEN_MASK =
   maskWithout(maskUnion(SLOT_MASK.head, SLOT_MASK.hair_eye), HEADLESS_HEAD_MASK);

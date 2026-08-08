@@ -96,7 +96,7 @@
   "icon": "stex0010.png"
  },
  {
-  "key": "candycorn",
+  "key": "corn",
   "name": "Corn",
   "cost": 60,
   "sell": 79,
@@ -211,7 +211,7 @@
   "growMs": 86400000,
   "stage1": "limabean_stage1.png",
   "stage2": "limabean_stage2.png",
-  "level": 33,
+  "level": 20,
   "xp": 6,
   "icon": "stex0014.png"
  },

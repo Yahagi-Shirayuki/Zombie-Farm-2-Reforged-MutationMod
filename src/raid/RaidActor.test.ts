@@ -29,9 +29,11 @@ function assets(): GameAssets {
       defaultJaw: Texture.EMPTY,
       defaultArmF: Texture.EMPTY,
       turnipArm: Texture.EMPTY,
+      backArm: Texture.EMPTY,
     },
     mutationParts: {
-      "8": { file: "turnipArm", group: "root", headRel: false, ox: 0, oy: 28, ax: 1, ay: 0.28, z: 8 },
+      turnip: { file: "turnipArm", group: "root", headRel: false, ox: 0, oy: 28, ax: 1, ay: 0.28, z: 8, replaces: "armF" },
+      corn_arm: { file: "backArm", group: "root", headRel: false, ox: 9, oy: 29, ax: 1, ay: 0.25, z: 8, replaces: "armF" },
     },
   } as unknown as GameAssets;
 }
@@ -53,15 +55,43 @@ describe("RaidActor mutation rendering", () => {
 
   it("replaces the normal front arm and animates the mutation arm", () => {
     const actor = new RaidActor(assets(), "test", 8);
-    const root = (actor as unknown as { root: { children: unknown[] } }).root;
+    const root = (actor as unknown as { root: { children: { visible: boolean; texture: unknown }[] } }).root;
     const arms = (actor as unknown as { arms: { rotation: number }[] }).arms;
 
-    // Back arm + body + eyes + mutation arm, plus the actor's placeholder feet.
-    expect(root.children).toHaveLength(8);
-    expect(arms).toHaveLength(2);
+    // Both base arms stay in the rig so a later facing flip can show the other one.
+    expect(root.children).toHaveLength(9);
+    expect(arms).toHaveLength(3);
+    expect(root.children.filter((child) => child.visible === false)).toHaveLength(1);
 
     actor.poseArms(1, false, false, 0, 0);
     expect(arms.every((arm) => arm.rotation === -2.5)).toBe(true);
+  });
+
+  it("replaces the normal back arm and animates the mutation arm", () => {
+    const actor = new RaidActor(assets(), "test", 0, "", undefined, ["corn_arm_b"]);
+    const root = (actor as unknown as { root: { children: { visible: boolean }[] } }).root;
+    const arms = (actor as unknown as { arms: { rotation: number }[] }).arms;
+
+    expect(root.children).toHaveLength(9);
+    expect(arms).toHaveLength(3);
+    expect(root.children.filter((child) => child.visible === false)).toHaveLength(1);
+
+    actor.poseArms(1, false, false, 0, 0);
+    expect(arms.every((arm) => arm.rotation === -2.5)).toBe(true);
+  });
+
+  it("swaps front/back mutation arms when facing flips", () => {
+    const actor = new RaidActor(assets(), "test", 0, "", undefined, ["corn_arm_b"]);
+    const root = (actor as unknown as { root: { children: { visible: boolean }[] } }).root;
+    const baseArmB = root.children[0];
+    const baseArmF = root.children[5];
+
+    expect(baseArmB.visible).toBe(true);
+    expect(baseArmF.visible).toBe(false);
+
+    actor.setFacingFromDelta(-1);
+    expect(baseArmB.visible).toBe(false);
+    expect(baseArmF.visible).toBe(true);
   });
 
   it("squashes its eyes only while actively focusing", () => {

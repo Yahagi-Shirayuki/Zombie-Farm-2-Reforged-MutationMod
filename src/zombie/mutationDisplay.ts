@@ -20,7 +20,7 @@
 // every one of them is written signed.
 import { BASE } from "../base";
 import {
-  mutationBonus, mutationsOf, statEffectsOf,
+  mutationBonus, mutationsOf, SECONDARY_ARM_SUFFIX, statEffectsOf,
   type MutationRef, type ResolvedMutationDef, type Slot, type Stat,
 } from "./mutations";
 import { STATS, displayStat, wisToFocusBonus } from "./traits";
@@ -51,6 +51,7 @@ export const MUTATION_ICON: Record<string, string> = {
   dragon: iconFile("dragonfruit"), 
   pumpking: iconFile("pumpking"),
   //modded icon
+  carrot_arm: iconFile("carrot"),
   turnip_eye: iconFile("turnip"), 
   turnip_head: iconFile("turnip"), 
   apple_head: iconFile("apple"), 
@@ -91,7 +92,8 @@ export const MUTATION_VARIANTS: Record<string, Record<string, MutationVariant>> 
 const SLOT_LABELS: Record<Slot, string> = {
   head: "Head",
   hair_eye: "Hair & Eyes",
-  arm: "Arm",
+  arm: "Front Arm",
+  armB: "Back Arm",
   body: "Body",
   neck: "Neck",
 };
@@ -102,6 +104,14 @@ const STAT_LABELS: Record<Stat, string> = {
   con: STATS.find((s) => s.key === "con")!.label,
   wis: STATS.find((s) => s.key === "focus")!.label,
 };
+
+function iconForMutationKey(key: string): string {
+  if (MUTATION_ICON[key]) return MUTATION_ICON[key];
+  if (key.endsWith(SECONDARY_ARM_SUFFIX)) {
+    return MUTATION_ICON[key.slice(0, -SECONDARY_ARM_SUFFIX.length)] ?? placeholderIcon;
+  }
+  return placeholderIcon;
+}
 
 /** What one mutation does to one stat, in the units the tiles show. */
 export interface MutationCardEffect {
@@ -191,7 +201,7 @@ export function mutationEntriesFrom(
       ref: "bit" in def ? def.bit : def.key,
       bit: "bit" in def ? def.bit : undefined,
       partKey: variant?.part ?? def.key,
-      icon: variant?.icon ?? MUTATION_ICON[def.key] ?? placeholderIcon,
+      icon: variant?.icon ?? iconForMutationKey(def.key),
       name: variant?.name ?? def.name,
       slotLabel: SLOT_LABELS[def.slot],
       effects,
@@ -224,7 +234,5 @@ export function mutationNames(key: string, mask: number, mutationIds?: readonly 
   const variants = MUTATION_VARIANTS[key];
   return mutationsOf(mask, mutationIds).map((def) => variants?.[def.key]?.name ?? def.name);
 }
-
-
 
 

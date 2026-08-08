@@ -26,8 +26,8 @@ import {
   activeBonusHeadId, farmerGold, farmerHeadHasEffect, farmerHeadXp, farmerZombieGrowMs,
 } from "../../../src/farmer";
 import { dropsEpicBossToken } from "../../../src/epicBoss/tokens";
-import { combineMasks } from "../../../src/zombie/mutations";
-import { resolveCropMutations, plotsTouch } from "../../../src/zombie/cropMutations";
+import { combineMutationSets } from "../../../src/zombie/mutations";
+import { resolveCropMutationSet, plotsTouch } from "../../../src/zombie/cropMutations";
 import { createCombineRandom, isCombinePromotion, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
 import { harvestXp, plowXp } from "../../../src/farmRewards";
 import { questSubjectMatches } from "../../../src/quest/matching";
@@ -348,12 +348,19 @@ function rewardHarvest(
     }
     const id = makeId();
     const rule = zombieRuleByKey.get(key);
-    const mutation = resolveCropMutations(zombieDefaultMutation(key), mutationCropKeys, {
+    const mutations = resolveCropMutationSet(zombieDefaultMutation(key), [], mutationCropKeys, {
       guaranteed: hasMutationMonolith(state),
       headless: rule?.group === "Headless",
       random,
     });
-    state.roster.push({ id, key, mutation, invasions: 0, stored: active >= cap.army });
+    state.roster.push({
+      id,
+      key,
+      mutation: mutations.mask,
+      ...(mutations.ids.length ? { mutationIds: mutations.ids } : {}),
+      invasions: 0,
+      stored: active >= cap.army,
+    });
     created.push(id);
     state.balance.xp += harvestXp(zombieCropEcon(key)?.xp ?? 0, hasPlowingMonolith(state));
     return {
@@ -363,7 +370,7 @@ function rewardHarvest(
         subject: zombieNames.get(key) ?? key,
         // A crop-adjacency mutation makes this unit the Market mutant's equal, so the
         // "Harvest a Tomato Zombie" objective counts a home-grown Tomatohead too.
-        aliases: unitSubjectAliases(zombieNames.get(key) ?? key, mutation, mutantSubjects),
+        aliases: unitSubjectAliases(zombieNames.get(key) ?? key, mutations.mask, mutantSubjects),
       },
     };
   }
@@ -931,16 +938,28 @@ function applyOne(
       // headless child then drops the head/hair-eye bits it cannot wear — the client
       // strips them in makeOwned, so storing them here would diverge (e.g. a
       // carrot-eyed slot-2 parent giving a Party Zombie eyes it can't show).
-      const mutation = legalMutation(
-        resultKey, combineMasks(a.mutation, b.mutation, isHeadlessZombie(resultKey))
+      const mutations = combineMutationSets(
+        a.mutation,
+        a.mutationIds,
+        b.mutation,
+        b.mutationIds,
+        isHeadlessZombie(resultKey),
       );
+      const mutation = legalMutation(resultKey, mutations.mask);
       state.roster = state.roster.filter((u) => u.id !== a.id && u.id !== b.id);
       if (command.potId && state.potSlots?.[command.potId]) {
         const remaining = { ...state.potSlots };
         delete remaining[command.potId];
         state.potSlots = remaining;
       }
-      state.roster.push({ id, key: resultKey, mutation, invasions: 0, stored });
+      state.roster.push({
+        id,
+        key: resultKey,
+        mutation,
+        ...(mutations.ids.length ? { mutationIds: mutations.ids } : {}),
+        invasions: 0,
+        stored,
+      });
       created.push(id);
       if (!reserved) events.push(combinerCombined(a, b));
       // The harvest notification (the "Combine for a <silver>" quests) is only
