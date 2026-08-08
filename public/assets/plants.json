@@ -452,5 +452,17 @@
   "level": 7,
   "xp": 1,
   "icon": "melon_icon.png"
+ },
+ {
+  "key": "pomegranite",
+  "name": "Pomegranite",
+  "cost": 220,
+  "sell": 310,
+  "growMs": 86400000,
+  "stage1": "pomegranite_stage1.png",
+  "stage2": "pomegranite_stage2.png",
+  "level": 33,
+  "xp": 1,
+  "icon": "pome_icon.png"
  }
 ]
