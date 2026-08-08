@@ -41,6 +41,7 @@ const DAY_NIGHT_KEY = "zf2r.dayNight";
 const FRIEND_SORT_KEY = "zf2r.friendSort";
 const ZOMBIE_SORT_KEY = "zf2r.zombieSort";
 const HAZARD_TIP_KEY = "zf2r.seenHazardTip";
+const RAID_TIP_KEY = "zf2r.seenRaidTip."; // + raid id
 const BODY_COLOR_KEY = "zf2r.zombieBodyColor";
 const SHOW_MUTATIONS_KEY = "zf2r.showZombieMutations";
 
@@ -173,6 +174,29 @@ export function hasSeenHazardTip(): boolean {
 export function markHazardTipSeen(): void {
   try {
     localStorage.setItem(HAZARD_TIP_KEY, "1");
+  } catch {
+    /* preference is optional */
+  }
+}
+
+/** Whether Tim's one-off briefing for a particular invasion has been given yet. Some
+ *  raids run on a rule the battlefield never states — the Pirates' Scallywag mirrors
+ *  whatever attack speed you bring, so a fast army is answered by a fast enemy — and
+ *  the game only ever admitted it in the DEFEAT text, after the lesson had already
+ *  cost a fight. Stored per raid id, and device-local for the same reason as the
+ *  hazard tip: it is a hint about how to play, not account progression, so a browser
+ *  that cannot write storage simply hears Tim out again. */
+export function hasSeenRaidTip(raidId: number): boolean {
+  try {
+    return localStorage.getItem(RAID_TIP_KEY + raidId) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markRaidTipSeen(raidId: number): void {
+  try {
+    localStorage.setItem(RAID_TIP_KEY + raidId, "1");
   } catch {
     /* preference is optional */
   }

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { FARM_BG_DENSITY, type FarmBackground } from "./prefs";
 import { pickPiece, surroundingsTheme, themeObjectFiles } from "./surroundings";
 
 const TERRAINS = ["grass", "dirt", "snow", "stone", "sand", "water"];
@@ -42,6 +43,41 @@ describe("surroundingsTheme", () => {
         expect(shipped.has(p.file), `${t}: ${p.file}`).toBe(true);
       }
       expect(SHIPPED_BACKDROPS.has(theme.background), theme.background).toBe(true);
+    }
+  });
+
+  it("keeps the built environments far sparser than the natural ones", () => {
+    // Urban and Lunar are man-made: at forest density their pieces read as an
+    // installation. Their LUSHEST setting must land near the natural themes'
+    // sparsest, so assert against the real FARM_BG_DENSITY numbers rather than a
+    // bare constant — a change to either side should fail here.
+    const at = (t: string, bg: FarmBackground) =>
+      (surroundingsTheme(t).density ?? 1) * FARM_BG_DENSITY[bg];
+    for (const built of ["stone", "water"]) {
+      for (const natural of ["grass", "dirt", "snow", "sand"]) {
+        expect(at(built, "deep-forest"), `${built} vs ${natural}`)
+          .toBeLessThan(at(natural, "woodland"));
+        expect(at(built, "deep-forest")).toBeCloseTo(at(natural, "light-meadow"), 1);
+      }
+    }
+  });
+
+  it("weights the far band toward trees only where the big pieces ARE trees", () => {
+    for (const natural of ["grass", "dirt", "snow", "sand"]) {
+      expect(surroundingsTheme(natural).treeShare ?? 0.5, natural).toBeGreaterThan(0.5);
+    }
+    for (const built of ["stone", "water"]) {
+      expect(surroundingsTheme(built).treeShare ?? 0.5, built).toBe(0.5);
+    }
+  });
+
+  it("keeps both scatter knobs in range", () => {
+    for (const t of TERRAINS) {
+      const { density = 1, treeShare = 0.5 } = surroundingsTheme(t);
+      expect(density).toBeGreaterThan(0);
+      expect(density).toBeLessThanOrEqual(1);
+      expect(treeShare).toBeGreaterThan(0);
+      expect(treeShare).toBeLessThanOrEqual(1);
     }
   });
 

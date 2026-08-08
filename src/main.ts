@@ -56,8 +56,10 @@ import {
   DEFAULT_FARM_BACKGROUND, getFarmBackground, isFarmBackground, setFarmBackground,
   FARM_BG_DENSITY, type FarmBackground, getDayNightMode, setDayNightMode,
   isLocalNight, type DayNightMode, hasSeenHazardTip, markHazardTipSeen,
+  hasSeenRaidTip, markRaidTipSeen,
   zombieAppearancePrefs, setZombieBodyColorMode, setShowZombieMutations,
 } from "./prefs";
+import { raidTip } from "./raid/raidTips";
 import { BASE } from "./base";
 import { TutorialController } from "./tutorial/TutorialController";
 import { reconcileTutorialCompletion, TutStep, TUTORIAL_ZOMBIE_KEY } from "./tutorial/steps";
@@ -443,8 +445,12 @@ async function main() {
     const STEP = 2;
     // Farm Background setting scales the tree count: Deep Forest = full, Woodland
     // ~half, Light Meadow ~a tenth. Same seed, so the sparser sets are subsets of
-    // the denser ones and switching just thins/thickens the same forest.
-    const accept = 0.34 * FARM_BG_DENSITY[displayedFarmBackground];
+    // the denser ones and switching just thins/thickens the same forest. The theme
+    // scales it again — a paved lot or an airless moon stays sparse at every
+    // setting (surroundings.ts `density`).
+    const accept = 0.34 * FARM_BG_DENSITY[displayedFarmBackground] *
+      (surroundings.density ?? 1);
+    const treeShare = surroundings.treeShare ?? 0.5;
     for (let v = vMin; v <= vMax; v += STEP) {
       for (let u = uMin; u <= uMax; u += STEP) {
         const ju = u + (rnd() - 0.5) * STEP * 1.3; // jitter off the lattice
@@ -457,11 +463,11 @@ async function main() {
         // off the farm + its clearing margin.
         if (wx < boundL - HW || wx > boundR + HW || wy < treeTop || wy > boundB + HH) continue;
         if (d < MARGIN) continue;
-        // Even woodland fill: half trees / half shrubs (shrubs only near the clearing
-        // edge; full-height trees farther out). `accept` sets how much of the lattice
-        // is populated per the Farm Background setting.
+        // Woodland fill: the far band is `treeShare` trees and the rest props, and
+        // everything nearer the clearing edge is a prop. `accept` sets how much of
+        // the lattice is populated at all.
         if (r1 >= accept) continue;
-        const isTree = d >= 4.5 && r2 < 0.5;
+        const isTree = d >= 4.5 && r2 < treeShare;
         // Piece choice is hashed off the lattice point, not drawn from `rnd`: the
         // draws left also set the SIZE, so sharing one would tie every big piece to
         // the same object. Sizes are multiples of the piece's NATIVE object scale,
@@ -3499,6 +3505,15 @@ async function main() {
         `right off the field, or block the way forward.\n${verb} one to damage it — ` +
         "keep at it and it'll go away!"
       );
+    }
+    // Some invasions run on a rule nothing on the battlefield states — the Pirates'
+    // Scallywag mirrors whatever attack speed you bring it. Tim gives that warning
+    // once, before the first attempt, instead of the game only admitting it in the
+    // defeat text after the fight has already been paid for.
+    const tip = raidTip(raidId);
+    if (tip && !hasSeenRaidTip(raidId)) {
+      markRaidTipSeen(raidId);
+      await hud.timSays(tip);
     }
     pauseFarmJobs();
     raidActive = true;

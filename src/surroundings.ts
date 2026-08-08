@@ -39,11 +39,36 @@ export interface SurroundingsTheme {
    * surface — including at night, when the darkness overlay dims both equally.
    */
   filler: number;
+  /**
+   * Multiplier on how much of the scatter lattice this theme populates, on top of
+   * the player's Farm Background setting. Default 1 = as dense as the temperate
+   * forest. A forest wants to be thick; a paved lot or an airless moon does not,
+   * and at woodland density their man-made pieces read as clutter rather than
+   * landscape — so those themes dial the whole ring down (see URBAN/LUNAR).
+   */
+  density?: number;
+  /**
+   * Fraction of the far band drawn from `trees` rather than `props` (default 0.5).
+   * Themes whose big pieces are actual trees carry a higher share: a treeline is
+   * what makes the surroundings read as landscape, and the props are dressing
+   * scattered through it. Themes whose "trees" are street lights or rocket wrecks
+   * stay at the even split — more of those would read as an installation.
+   */
+  treeShare?: number;
 }
 
 /** Repeat a piece `n` times so the scatter picks it that much more often. */
 const rep = (n: number, piece: SceneryPiece): SceneryPiece[] =>
   Array.from({ length: n }, () => piece);
+
+/**
+ * Theme `density` for the built environments (Urban, Lunar). A street-light grid
+ * or a field of rocket wrecks at forest density reads as an installation, not as
+ * land the farm happens to sit on — both want to feel EMPTY. This is set so their
+ * lushest Farm Background setting lands near the SPARSEST setting of the natural
+ * themes: 0.12 x Deep Forest (1) ≈ Light Meadow (0.1). See FARM_BG_DENSITY.
+ */
+const SPARSE_THEME_DENSITY = 0.12;
 
 // The temperate default: the original four scenery images, at the scales that
 // reproduce the pre-theme look exactly.
@@ -57,6 +82,7 @@ const GRASS: SurroundingsTheme = {
   ],
   background: "farm_background.png",
   filler: 0x67bb4e,
+  treeShare: 0.7,
 };
 
 // "Sandy Ground" (terrain key `dirt`): a tropical island cove. Palms and bamboo
@@ -102,6 +128,7 @@ const SANDY: SurroundingsTheme = {
   ],
   background: "farm_background_dirt.png",
   filler: 0xe6cc91,
+  treeShare: 0.7,
 };
 
 // "Snowy Ground": a frozen clearing in an evergreen forest.
@@ -126,9 +153,11 @@ const SNOWY: SurroundingsTheme = {
   ],
   background: "farm_background_snow.png",
   filler: 0xe7f1fa,
+  treeShare: 0.75,
 };
 
-// "Urban Ground": the farm as a lot in a paved-over city block.
+// "Urban Ground": the farm as a lot in a paved-over city block. Deliberately the
+// emptiest theme alongside LUNAR — see `density`.
 const URBAN: SurroundingsTheme = {
   key: "stone",
   trees: [
@@ -141,14 +170,13 @@ const URBAN: SurroundingsTheme = {
     ...rep(2, { file: "barrelNormal.png", scale: 1 }),
     ...rep(2, { file: "hazardFence.png", scale: 0.8 }),
     { file: "toxicDrum.png", scale: 0.8 },
-    { file: "postalMailBox.png", scale: 1 },
-    { file: "mailboxNormal.png", scale: 1 },
     { file: "hotdogCart.png", scale: 0.85 },
     { file: "bike.png", scale: 0.9 },
     { file: "rocks.png", scale: 0.9 },
   ],
   background: "farm_background_stone.png",
   filler: 0x9fa3a7,
+  density: SPARSE_THEME_DENSITY,
 };
 
 // "Dead Ground": parched wasteland — bare trees, cacti, and old graves.
@@ -177,6 +205,7 @@ const DEAD: SurroundingsTheme = {
   ],
   background: "farm_background_sand.png",
   filler: 0xbda553,
+  treeShare: 0.65,
 };
 
 // "Lunar Ground": cratered regolith, wrecked hardware, nothing alive.
@@ -199,6 +228,7 @@ const LUNAR: SurroundingsTheme = {
   ],
   background: "farm_background_water.png",
   filler: 0x9195a5,
+  density: SPARSE_THEME_DENSITY,
 };
 
 const THEMES: Record<string, SurroundingsTheme> = {
