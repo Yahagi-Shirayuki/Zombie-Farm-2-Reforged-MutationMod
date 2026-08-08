@@ -660,11 +660,11 @@ describe("protocol v3 API", () => {
     });
     expect(locked).toMatchObject({
       status: 403,
-      body: { error: "locked", level: 25, unlockLevel: 32 },
+      body: { error: "locked", level: 25, unlockLevel: 42 },
     });
 
     const session = await signIn();
-    await grantBalance(session, { gold: 400, brains: 1_000, xp: 61_000 });
+    await grantBalance(session, { gold: 400, brains: 1_000, xp: 165_000 });
     const boot = (await call<any>("POST", "/bootstrap", session.token, {})).body;
     const grown = await call<any>("POST", "/commands", session.token,
       commandBody(boot, "batch-epic-zombie", 1, [
