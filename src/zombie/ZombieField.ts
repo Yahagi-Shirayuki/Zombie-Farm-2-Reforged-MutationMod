@@ -8,7 +8,7 @@ import { Field } from "../Field";
 import { GameState } from "../GameState";
 import { OwnedZombieSave, ZombiePotSave } from "../save/schema";
 import { findEscape } from "../pathfind";
-import { addMutation, type MutationSet } from "./mutations";
+import { addMutationRef, type MutationSet } from "./mutations";
 import { makeOwned, normalizeZombieName, OwnedZombie, RosterEntry } from "./types";
 import { ZombieUnit } from "./ZombieUnit";
 import { ZombiePot } from "./ZombiePot";
@@ -478,12 +478,15 @@ export class ZombieField {
     // Built through makeOwned exactly as collectCombine does, so the preview can
     // never advertise a mutation the collected unit won't have â€” a headless child
     // has its head/hair-eye bits stripped there (no carrot-eyed Party Zombie).
+    const mutations = def.mutation
+      ? addMutationRef({ mask: result.mutation, ids: result.mutationIds ?? [] }, def.mutation)
+      : { mask: result.mutation, ids: result.mutationIds ?? [] };
     const child = makeOwned(
       "preview", def, 0, 0, 0,
-      def.mutation ? addMutation(result.mutation, def.mutation) : result.mutation,
+      mutations.mask,
       result.color,
       undefined,
-      result.mutationIds,
+      mutations.ids,
     );
     return { key: child.key, name: def.name, mutation: child.mutation, mutationIds: child.mutationIds, color: child.color };
   }
@@ -560,8 +563,10 @@ export class ZombieField {
     if (pending) this.collectedPots.set(targetPotId, pending);
     const def = this.resolve(result.key);
     if (!def) return abandon();
-    const mutation = def.mutation ? addMutation(result.mutation, def.mutation) : result.mutation;
-    const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutation, result.color, undefined, result.mutationIds);
+    const mutations = def.mutation
+      ? addMutationRef({ mask: result.mutation, ids: result.mutationIds ?? [] }, def.mutation)
+      : { mask: result.mutation, ids: result.mutationIds ?? [] };
+    const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutations.mask, result.color, undefined, mutations.ids);
     // A combine result is granted via onCombineCollect (server validates it against the
     // two parents), NOT the generic onGrant â€” so suppress the latter while adding.
     this.combining = true;
@@ -953,7 +958,3 @@ export class ZombieField {
     this.syncCount();
   }
 }
-
-
-
-

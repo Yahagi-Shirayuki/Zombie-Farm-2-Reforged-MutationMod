@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import type { GameAssets, ZombieDef } from "../assets";
 import type { Field } from "../Field";
 import { GameState } from "../GameState";
@@ -150,6 +150,25 @@ describe("ZombieField combine save migration", () => {
     expect(zombies.combinePreview("pot")).toMatchObject({ key: headless.key, mutation: 8 });
     // ...and the collected unit agrees with what the preview showed.
     expect(zombies.collectCombine(0, 0, "pot")?.mutation).toBe(8);
+  });
+
+  it("does not stack a species vanilla mutation onto an inherited modded mutation in the same slot", () => {
+    const state = new GameState();
+    const def = {
+      key: "mutant", name: "Mutant Zombie", group: "Regular", tier: 1, mutation: 1,
+      category: "mutant", className: "Green", classColor: "#00ff00", str: 1, dex: 1, con: 1, focus: 1,
+    } as ZombieDef;
+    const field = renderableField();
+    const zombies = new ZombieField(renderableAssets(def.key), field, state, (key) => key === def.key ? def : undefined);
+    zombies.restorePots({ pot: {
+      parentAId: "a", parentBId: "b", keyA: def.key, keyB: def.key,
+      maskA: 0, mutationIdsA: ["corn_head"], maskB: 0, startedAt: 0, finishAt: 0,
+    } });
+
+    expect(zombies.combinePreview("pot")).toMatchObject({ mutation: 0, mutationIds: ["corn_head"] });
+    const child = zombies.collectCombine(0, 0, "pot");
+    expect(child?.mutation).toBe(0);
+    expect(child?.mutationIds).toEqual(["corn_head"]);
   });
 
   it("puts the job back when the collection cannot be handed to the server", () => {

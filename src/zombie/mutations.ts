@@ -71,7 +71,7 @@ const CATALOG: readonly MutationSpec[] = [
 ];
 // modded mutations
 export const MODDED_MUTATIONS: Readonly<Record<MutationKey, ModdedMutationDef>> = Object.freeze({
-  turnip_eye: { modded: true, key: "turnip_eye", name: "Turnip-eyed", slot: "hair_eye", stats: { wis: 2, dex: 1, con: -1 } },
+  turnip_eye: { modded: true, key: "turnip_eye", name: "Turnip-eyed", slot: "hair_eye", stats: { dex: 3, str: -1 } },
   turnip_head: { modded: true, key: "turnip_head", name: "Turnip-head", slot: "head", stats: { str: 2, con: 2, dex: -1 } },
   bread_neck: { modded: true, key: "bread_neck", name: "Bread neck", slot: "neck", stats: { con: 4, dex: -1 } },
   apple_head: { modded: true, key: "apple_head", name: "Red-delicious Head", slot: "head", stats: { str: 2, dex: 2, wis: 1, con: -1 } },
@@ -284,9 +284,14 @@ export function canReceive(mask: number, bit: number, isHeadless = false): boole
 export function canReceiveRef(mask: number, mutationIds: unknown, ref: MutationRef, isHeadless = false): boolean {
   const resolved = resolveMutationRef(ref);
   if (resolved === null) return false;
-  if (typeof resolved === "number") return canReceive(mask, resolved, isHeadless);
-  if (!refAllowed(resolved, isHeadless)) return false;
   const ids = normalizeMutationIds(mutationIds);
+  if (typeof resolved === "number") {
+    if (!bitAllowed(resolved, isHeadless)) return false;
+    if (maskHas(mask, resolved)) return true;
+    const slot = slotOf(resolved);
+    return slot !== null && !occupiedMutationSlots(mask, ids).has(slot);
+  }
+  if (!refAllowed(resolved, isHeadless)) return false;
   if (ids.includes(resolved)) return true;
   const slot = MODDED_MUTATIONS[resolved].slot;
   return !occupiedMutationSlots(mask, ids).has(slot);
@@ -304,11 +309,9 @@ export interface MutationSet {
 export function addMutationRef(set: MutationSet, ref: MutationRef, isHeadless = false): MutationSet {
   const resolved = resolveMutationRef(ref);
   if (resolved === null) return set;
-  if (typeof resolved === "number") {
-    return { mask: addMutation(set.mask, resolved, isHeadless), ids: applyBodyTypeIdRestriction(set.ids, isHeadless) };
-  }
   const ids = applyBodyTypeIdRestriction(set.ids, isHeadless);
   if (!canReceiveRef(set.mask, ids, resolved, isHeadless)) return { mask: set.mask, ids };
+  if (typeof resolved === "number") return { mask: maskUnion(set.mask, resolved), ids };
   return ids.includes(resolved) ? { mask: set.mask, ids } : { mask: set.mask, ids: [...ids, resolved] };
 }
 

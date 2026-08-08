@@ -53,9 +53,9 @@ export const MUTATION_ICON: Record<string, string> = {
   //modded icon
   turnip_eye: iconFile("turnip"), 
   turnip_head: iconFile("turnip"), 
-  bread_neck: placeholderIcon,
   apple_head: iconFile("apple"), 
   melon_head: iconFile("melon"), 
+  bread_neck: iconFile("bread"), 
   sampaguita_hair: placeholderIcon,
   corn_head: placeholderIcon, 
   corn_arm: placeholderIcon, 

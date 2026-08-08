@@ -1,6 +1,6 @@
 ﻿import { describe, it, expect } from "vitest";
 import {
-  applyBodyTypeRestriction, bitGrowable, canReceive, combineMasks, HEADLESS_FORBIDDEN_MASK,
+  addMutationRef, applyBodyTypeRestriction, bitGrowable, canReceive, canReceiveRef, combineMasks, HEADLESS_FORBIDDEN_MASK,
   HEADLESS_HEAD_MASK, mutationBonus, mutationLabel, SLOT_MASK,
   ALL_MUTATIONS_MASK, bitOf, combineMutationSets, MODDED_MUTATIONS, mutationOf, MUTATION_LIST,
   resolveMutationBit, resolveMutationRef, sanitizeMutationMask, slotOfRef, statEffectsOf, type MutationStats,
@@ -162,6 +162,19 @@ describe("mutation catalog", () => {
     expect(mutationLabel(0, ["corn_head"])).toBe("Corned head");
     expect(combineMutationSets(TOMATO, [], 0, ["corn_head"]).ids).toEqual(["corn_head"]);
   });
+
+  it("prevents vanilla and modded mutations from sharing the same slot", () => {
+    expect(canReceiveRef(0, ["corn_head"], TOMATO)).toBe(false);
+    expect(addMutationRef({ mask: 0, ids: ["corn_head"] }, TOMATO))
+      .toEqual({ mask: 0, ids: ["corn_head"] });
+
+    expect(canReceiveRef(TOMATO, [], "corn_head")).toBe(false);
+    expect(addMutationRef({ mask: TOMATO, ids: [] }, "corn_head"))
+      .toEqual({ mask: TOMATO, ids: [] });
+
+    expect(addMutationRef({ mask: CARROT, ids: ["corn_head"] }, TURNIP))
+      .toEqual({ mask: CARROT | TURNIP, ids: ["corn_head"] });
+  });
   it("resolves an unknown name to nothing rather than to a neighbouring bit", () => {
     // A typo in cropMutations.ts or in a data file must cost that entry its mutation,
     // never land it on someone else's.
@@ -241,4 +254,3 @@ describe("mutation stats", () => {
     }
   });
 });
-
