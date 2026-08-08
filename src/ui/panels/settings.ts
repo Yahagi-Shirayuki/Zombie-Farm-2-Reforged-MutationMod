@@ -457,14 +457,37 @@ export function openSettings(hud: Hud): void {
   panel.append(version);
 }
 
-// Developer menu: hidden from normal play, opened only via the invisible hotspot
-// beside the nameplate. Holds the Night-lighting toggle,
-// level/gold/brains overrides, and the per-tier raid ability unlocks.
+// Local Farm tools: hidden from normal play, opened only via the invisible hotspot
+// beside the nameplate. Holds time skips, resource grants, lighting, progression
+// overrides, and the per-tier raid ability unlocks.
 export function openDevMenu(hud: Hud): void {
-  const { panel } = openModal({ host: hud.el, title: "Developer" });
+  const { panel } = openModal({ host: hud.el, title: "Local Farm Tools" });
+  if (hud.playMode !== "local") {
+    const locked = document.createElement("div");
+    locked.className = "set-note";
+    locked.textContent = "These tools are only available on Local Farm.";
+    panel.append(locked);
+    return;
+  }
 
   const row = (label: string, on: boolean, set: (v: boolean) => void) =>
     settingRow(label, on, set);
+
+  const buttonGrid = (buttons: { label: string; run: () => void }[]) => {
+    const wrap = document.createElement("div");
+    wrap.className = "dev-raid-btns";
+    for (const item of buttons) {
+      const b = document.createElement("button");
+      b.className = "dev-btn";
+      b.textContent = item.label;
+      b.onclick = () => {
+        item.run();
+        hud.update();
+      };
+      wrap.appendChild(b);
+    }
+    return wrap;
+  };
 
   // Developer number field: label + numeric input applied on change.
   const numRow = (label: string, value: number, apply: (n: number) => void) => {
@@ -491,6 +514,23 @@ export function openDevMenu(hud: Hud): void {
   const nightRow = row("Night", hud.getNight?.() ?? false, (v) =>
     hud.onSetNight?.(v)
   );
+
+  const grantsStatus = document.createElement("div");
+  grantsStatus.className = "dev-status";
+  grantsStatus.textContent = "Quick resource grants:";
+  const grants = buttonGrid([
+    { label: "+10,000 Gold", run: () => hud.state.addGold(10_000, "local-tools") },
+    { label: "+25 Brains", run: () => hud.state.addBrains(25, "local-tools") },
+    { label: "+200 XP", run: () => hud.state.addXp(200, "local-tools") },
+  ]);
+
+  const skipStatus = document.createElement("div");
+  skipStatus.className = "dev-status";
+  skipStatus.textContent = "Skip Local Farm timers:";
+  const skips = buttonGrid([
+    { label: "+1 Hour", run: () => { hud.onSkipTime?.(60); } },
+    { label: "+1 Day", run: () => { hud.onSkipTime?.(24 * 60); } },
+  ]);
 
   // Dev: beat a tier boss once — each win unlocks the NEXT still-locked ability of
   // that tier across the roster (not the whole tier at once).
@@ -522,6 +562,10 @@ export function openDevMenu(hud: Hud): void {
   raidWrap.append(raidStatus, raidBtns);
 
   panel.append(
+    grantsStatus,
+    grants,
+    skipStatus,
+    skips,
     nightRow,
     numRow("Level", hud.state.level, (n) => hud.state.setLevel(n)),
     numRow("Gold", hud.state.gold, (n) => hud.state.setGold(n)),

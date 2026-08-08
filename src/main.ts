@@ -70,7 +70,6 @@ import {
 import {
   appendHarvestTarget, harvestTargetKey, sampleStrokeSegment, type HarvestTarget,
 } from "./harvestStroke";
-import { installDevCheats } from "./devCheats";
 import { mutationMarketDescription } from "./zombie/statDisplay";
 import {
   combineSubject, combineSubjectAliases, mutantSubjectIndex, unitQuestSubjects,
@@ -122,6 +121,94 @@ function downloadSaveFile(raw: string, name: string): void {
   link.download = `zombie-farm-${name}-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function skipLocalFarmTime(playMode: PlayMode, saves: SaveManager, minutes: number): boolean {
+  if (playMode !== "local") {
+    console.warn("Time skip is only available on Local Farm.");
+    return false;
+  }
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    console.warn("Time skip expects a positive number of minutes.");
+    return false;
+  }
+
+  const save = saves.serialize();
+  const skipMs = minutes * 60 * 1000;
+
+  function shiftTimestamps(value: unknown, isRoot = false): void {
+    if (!value || typeof value !== "object") return;
+
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (
+        !(isRoot && key === "savedAt") &&
+        typeof child === "number" &&
+        (key.endsWith("At") || key.endsWith("Until") || key === "savedAt")
+      ) {
+        (value as Record<string, unknown>)[key] = child - skipMs;
+        continue;
+      }
+
+      shiftTimestamps(child);
+    }
+  }
+
+  shiftTimestamps(save, true);
+  save.savedAt = Date.now();
+
+  if (!saves.importLocal(JSON.stringify(save))) {
+    console.warn("Time skip could not write the Local Farm save.");
+    return false;
+  }
+
+  saves.suspend();
+  console.log(`Skipped ahead ${minutes} minutes.`);
+  location.reload();
+  return true;
+}
+
+function installLocalFarmHotkeys(playMode: PlayMode, state: GameState, saves: SaveManager): void {
+  if (playMode !== "local") return;
+
+  window.addEventListener("keydown", (event: KeyboardEvent) => {
+    if (event.repeat) return;
+
+    const target = event.target;
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement
+    ) {
+      return;
+    }
+
+    switch (event.code) {
+      case "KeyG":
+        state.addGold(10_000, "local-cheat-hotkey");
+        console.log("Local Farm grant: +10000 gold");
+        break;
+
+      case "KeyH":
+        state.addBrains(25, "local-cheat-hotkey");
+        console.log("Local Farm grant: +25 brains");
+        break;
+
+      case "KeyJ":
+        saves.flush();
+        skipLocalFarmTime(playMode, saves, 60);
+        break;
+
+      case "KeyK":
+        saves.flush();
+        skipLocalFarmTime(playMode, saves, 24 * 60);
+        break;
+
+      case "KeyL":
+        state.addXp(200, "local-cheat-hotkey");
+        console.log("Local Farm grant: +200 XP");
+        break;
+    }
+  });
 }
 
 async function main() {
@@ -4890,7 +4977,8 @@ async function main() {
   });
   window.addEventListener("focus", () => advanceFarmJobsToNow(true));
 
-  installDevCheats({ playMode, state, saves: saveManager });
+  hud.onSkipTime = (minutes) => skipLocalFarmTime(playMode, saveManager, minutes);
+  installLocalFarmHotkeys(playMode, state, saveManager);
 
   // Live game-state handle + mutation helpers for local testing (instant raids,
   // boost grants, zombie spawning, placement, combine, raid wins). DEV BUILDS
@@ -4954,6 +5042,12 @@ async function main() {
       reset: () => tutorial.clearPersisted(),
       steps: TutStep,
     } };
+  if (playMode === "local") {
+    (window as unknown as { ZF?: Record<string, unknown> }).ZF = {
+      ...((window as unknown as { ZF?: Record<string, unknown> }).ZF ?? {}),
+      skipTime: (minutes: number) => skipLocalFarmTime(playMode, saveManager, minutes),
+    };
+  }
   // eslint-disable-next-line no-console
   console.log(`field ${field.w}x${field.h} ready`);
 

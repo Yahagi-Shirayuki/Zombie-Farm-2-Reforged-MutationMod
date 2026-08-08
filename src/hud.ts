@@ -566,13 +566,10 @@ export class Hud {
 
     const spacer = document.createElement("div");
     spacer.className = "spacer";
-    // Invisible developer hotspot: a transparent button tucked just to the left of
-    // the nameplate. Clicking it opens the (otherwise hidden) Developer menu.
-    // DEV BUILDS ONLY: `import.meta.env.DEV` is statically false in production, so
-    // Vite tree-shakes this branch (and the openDevMenu it references) out of the
-    // shipped bundle. The dev menu is a convenience, never a security boundary —
-    // gameplay authority is being moved server-side — but it must not ship.
-    const devHot = import.meta.env.DEV ? document.createElement("button") : null;
+    // Invisible Local Farm tools hotspot: a transparent button tucked just to the
+    // left of the nameplate. It opens offline-only helpers for players who want to
+    // skip the original game's waiting curve.
+    const devHot = this.playMode === "local" ? document.createElement("button") : null;
     if (devHot) {
       devHot.className = "devhot";
       devHot.title = ""; // stays invisible / unlabelled
@@ -1514,8 +1511,10 @@ export class Hud {
 
   /** Current night-lighting state (set by main; null = feature absent). */
   getNight: (() => boolean) | null = null;
-  /** Toggle the night lighting layer (dev-only). */
+  /** Toggle the night lighting layer from the Local Farm tools menu. */
   onSetNight: ((on: boolean) => void) | null = null;
+  /** Skip Local Farm save timers forward by the given number of minutes. */
+  onSkipTime: ((minutes: number) => boolean) | null = null;
   /** Player-facing lighting mode. Auto follows the device's local clock. */
   getDayNightMode: (() => DayNightMode) | null = null;
   onSetDayNightMode: ((mode: DayNightMode) => void) | null = null;
@@ -5619,7 +5618,6 @@ export class Hud {
     this.nameEl.textContent = acct?.name || "Zombie Farmer";
   }
 }
-
 
 
 

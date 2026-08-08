@@ -20,6 +20,29 @@ combat numbers) with new "Reforged" additions (the online/social layer).
 **Nothing to install — the game is live at <https://zombiefarmreforged.com>.**
 Choose **Local Farm** on the title screen to play without an account.
 
+## Local Farm quicktest tools
+
+This fork intentionally allows Local Farm players to speed through waits and test
+resources. These tools are offline-only: they do not run on Online Farm, and they
+do not grant anything through the server.
+
+Open the hidden **Local Farm Tools** menu by clicking the invisible hotspot just
+left of the top nameplate. It includes resource grants, one-hour/day time skips,
+night lighting, exact Level/Gold/Brains overrides, and raid ability unlock helpers.
+
+Keyboard shortcuts also work while playing Local Farm, as long as a text field is
+not focused:
+
+| Key | Action |
+|---|---|
+| `G` | Grant 10,000 gold |
+| `H` | Grant 25 brains |
+| `L` | Grant 200 XP |
+| `J` | Skip Local Farm timers ahead 1 hour |
+| `K` | Skip Local Farm timers ahead 1 day |
+
+The browser console also exposes `ZF.skipTime(minutes)` on Local Farm.
+
 ## Quick start (run it yourself)
 
 You need [Node.js](https://nodejs.org) 18 or newer, and nothing else. Every game
@@ -175,7 +198,7 @@ must also update [SECURITY.md](SECURITY.md) and [server/README.md](server/README
 - **Installable PWA**: a web app manifest (`public/manifest.webmanifest`), maskable/Apple icons, and a `vite-plugin-pwa` service worker. The app shell, boot script, and title art are precached; `/assets` art and audio are cached `CacheFirst` on first fetch, while release-sensitive JSON catalogs use `NetworkFirst` with an offline fallback. Local Farm warms up progressively rather than downloading ~88 MB at install. Readiness copy distinguishes Local Farm's progressively cached assets from Online Farm's connectivity requirement. Update prompts immediately show installation progress and reload only after the new service worker confirms it has taken control, preventing a slow iOS activation from reopening the old cached build. The service worker is build-only; there is none in `npm run dev`.
 - A one-time **"Play Fullscreen?"** offer on mobile after the boot overlay is dismissed (`src/ui/panels/fullscreenPrompt.ts`), skipped when already fullscreen or running installed/standalone. Settings also has a Fullscreen row and an `F` hotkey.
 - **Diagnostics** (`src/diagnostics.ts`): uncaught errors and unhandled rejections are captured into a 20-entry ring buffer in `localStorage`, and Settings → Diagnostics copies a pasteable report (build id, browser, farm mode, captured stacks) for bug reports. It is **local-only and sends nothing anywhere** — deliberately, so Local Farm's no-network guarantee holds. Builds carry their commit SHA (`BUILD_ID`) and ship sourcemaps so those stacks are readable.
-- Music, sound effects, and farm ambience are enabled by default and can be toggled independently in Settings. An optional **Mute When Unfocused** setting silences all channels while the game tab or window is in the background. The mandatory first-run tutorial uses real farm actions: plow, plant a zombie, buy and use Insta-Grow, harvest, then raid. Developer controls (a separate menu opened by an invisible hotspot beside the nameplate) support testing.
+- Music, sound effects, and farm ambience are enabled by default and can be toggled independently in Settings. An optional **Mute When Unfocused** setting silences all channels while the game tab or window is in the background. The mandatory first-run tutorial uses real farm actions: plow, plant a zombie, buy and use Insta-Grow, harvest, then raid. Local Farm tools (a separate menu opened by an invisible hotspot beside the nameplate) support offline resource grants, time skips, and testing.
 - The right-side **Farmer's Guide** is a responsive, chapter-based in-game knowledge base covering Local and Online saves, core farming and combat mechanics, social/community help, the open-source repository, and contributor acknowledgements.
 - **Farm background** setting: foliage density choices (Deep Forest / Woodland / Light Meadow) persisted in `src/prefs.ts`. This changes the density of decorative surrounding foliage — distinct from ground/climate skins, which change the farm's tile terrain.
 - **Zombie appearance** settings (`src/prefs.ts`, applied by `displayedAppearance` in `src/zombie/appearance.ts`): **Zombie Colour** picks between the inherited skin a Zombie Pot child was born with and its own species' colour, and **Show Mutations** hides crop mutation art. Both are device-local display choices — the unit keeps its mask, tint, and stat bonuses — and both apply everywhere a zombie is drawn: the farm, invasions, portraits, cards, the Mausoleum and the Black Market.
@@ -185,8 +208,9 @@ must also update [SECURITY.md](SECURITY.md) and [server/README.md](server/README
 - Versioned, isolated persistence: complete Local Farm saves with a last-known-good backup and JSON export/import; server-authoritative Online Farm state with a per-account read-only snapshot, presentation cache, and durable command outbox.
 - Automated Vitest suites exist for both client (`npm test`) and server (economy, loot, combat stats/prediction, mutations, Zombie Pot, ability unlocking, raid catalog/ordering, friend logic, and the server-side friend-visit save projection). Coverage is incomplete; the GitHub Pages deploy is gated by the client suite, and the Worker deploy is gated by migration validation, the server suite, and typechecking.
 
-`window.ZF` exposes debug handles including app, world, field, farmer, zombies, state, HUD,
-jobs, audio, save manager, quests, quest bus, raids, and helper functions (e.g. `ZF.runRaid`, which uses the retained headless resolver).
+Development builds expose full `window.ZF` debug handles including app, world, field,
+farmer, zombies, state, HUD, jobs, audio, save manager, quests, quest bus, raids, and
+helper functions such as `ZF.runRaid`. All Local Farm builds expose `ZF.skipTime(minutes)`.
 
 ## Current Gaps
 
