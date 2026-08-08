@@ -3,8 +3,8 @@ import type { SaveManager } from "./save/SaveManager";
 
 export interface DevCheatContext {
   playMode: string;
-  state: Pick<GameState, "addGold" | "addBrains">;
-  saves: Pick<SaveManager, "flush">;
+  state: Pick<GameState, "addGold" | "addBrains" | "addXp">;
+  saves: Pick<SaveManager, "flush" | "serialize" | "importLocal" | "suspend">;
 }
 
 export type DevCheatInstaller = (ctx: DevCheatContext) => void;
@@ -21,3 +21,4 @@ export function installDevCheats(ctx: DevCheatContext): void {
     .then((module) => module.installLocalDevCheats(ctx))
     .catch((error) => console.warn("[dev-cheats] local cheat module failed", error));
 }
+
