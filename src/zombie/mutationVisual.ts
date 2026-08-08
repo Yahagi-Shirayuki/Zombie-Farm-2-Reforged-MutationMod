@@ -1,5 +1,5 @@
 import type { MutationPart, ZombieDef, ZombieModel } from "../assets";
-import { bitOf, bitsOf, mutationOf } from "./mutations";
+import { bitOf, bitsOf, mutationOf, slotOf } from "./mutations";
 
 export type MutationReplacement = "body" | "armF" | "head";
 
@@ -53,7 +53,7 @@ export function mutationPartZIndex(
   group: "head" | "root",
   authoredZ: number,
 ): number {
-  if (bit === CARROT_MUTATION_BIT) return EYE_MUTATION_FOREGROUND_Z;
+  if (slotOf(bit) === "hair_eye") return EYE_MUTATION_FOREGROUND_Z;
   if (group === "head") return 4.5;
   return authoredZ;
 }

@@ -20,9 +20,11 @@
 
 // Type-only where the import IS a type: prefs -> rosterSort -> here drags this module
 // into the Worker's compile graph, and the server tsconfig runs verbatimModuleSyntax.
-import { STATS, displayStat, veterancyMultiplier, veterancy, ABILITY_POOL, type StatMeta } from "./traits";
+import {
+  STATS, displayResolvedStat, veterancyMultiplier, veterancy, ABILITY_POOL, type StatMeta,
+} from "./traits";
 import { ABILITY_KIND, ABILITY_COMBAT, activeAbilities, type AbilityCombatEffect } from "./abilities";
-import { mutationBonus } from "./mutations";
+import { mutationBonus, type Stat } from "./mutations";
 
 /** The minimum a zombie must carry to resolve its displayed stats. */
 export interface StatSource {
@@ -92,6 +94,30 @@ export function abilityStatMult(key: string, stat: StatMeta["key"]): number {
 function rawStat(z: StatSource, stat: StatMeta["key"]): number {
   return stat === "str" ? z.str : stat === "dex" ? z.dex : stat === "con" ? z.con : z.focus;
 }
+function mutationStatFor(stat: StatMeta["key"]): Stat {
+  return stat === "focus" ? "wis" : stat;
+}
+
+export type StatTone = "boosted" | "debuffed" | "overcharged" | "";
+
+export function statTone(base: number, total: number): StatTone {
+  if (total < base) return "debuffed";
+  if (total > base * 2) return "overcharged";
+  if (total > base) return "boosted";
+  return "";
+}
+
+export function displayStatTones(
+  z: StatSource,
+  abilityUnlocked: (key: string) => boolean,
+): Record<StatMeta["key"], StatTone> {
+  const out = {} as Record<StatMeta["key"], StatTone>;
+  for (const meta of STATS) {
+    const bd = statBreakdown(z, meta.key, abilityUnlocked);
+    out[meta.key] = statTone(bd.base, bd.total);
+  }
+  return out;
+}
 
 /** Full breakdown for one stat: base, every applied modifier (incl. +0 ones so the
  *  player sees the slot exists), and the normalized total the tile displays. */
@@ -101,30 +127,31 @@ export function statBreakdown(
   abilityUnlocked: (key: string) => boolean
 ): StatBreakdown {
   const raw = rawStat(z, stat); // already includes the mutation bonus (makeOwned)
-  const mut = stat === "focus" ? 0 : mutationBonus(z.mutation)[stat as "str" | "con" | "dex"];
+  const mut = mutationBonus(z.mutation)[mutationStatFor(stat)] ?? 0;
   const baseRaw = raw - mut;
   const v = veterancyMultiplier(z.invasions);
   const abilities = selfStatAbilities(z, abilityUnlocked);
 
   // Mutations are the LAST link of the source's stat chain (see buildPlayerUnits), so
   // the percentage modifiers compound on the UNMUTATED stat and the flat mutation bonus
-  // lands on top — multiplying it by veterancy here would overstate the card vs combat.
+  // lands on top; multiplying it by veterancy here would overstate the card vs combat.
   let effective = baseRaw * v;
   for (const k of abilities) effective *= abilityStatMult(k, stat);
-  effective += stat === "focus" ? 0 : mut;
+  effective += mut;
+  const show = (value: number) => displayResolvedStat(stat, value);
 
   const lines: StatModifierLine[] = [];
-  // Mutation — additive; shown in display units (e.g. "+13"). Focus can't be mutated,
-  // so it never gets a mutation line. Shown even at +0 to reveal the slot exists.
-  if (stat !== "focus") {
-    const delta = displayStat(stat, raw) - displayStat(stat, baseRaw);
+  // Mutation: additive; shown in display units (e.g. "+13"). Non-focus stats show
+  // the line even at +0 to reveal the slot exists; Focus shows it when wis moves it.
+  if (stat !== "focus" || mut !== 0) {
+    const delta = show(raw) - show(baseRaw);
     lines.push({ label: "Mutation", amount: `${delta >= 0 ? "+" : ""}${delta}`, zero: mut === 0 });
   }
   // Each self stat-ability, in tier order, with its actual contribution to THIS stat.
   for (const k of abilities) {
     const mult = abilityStatMult(k, stat);
     const without = mult === 0 ? effective : (effective - mut) / mult + mut;
-    const delta = displayStat(stat, effective) - displayStat(stat, without);
+    const delta = show(effective) - show(without);
     lines.push({
       label: ABILITY_POOL[k]?.label ?? k,
       amount: `${delta >= 0 ? "+" : ""}${delta}`,
@@ -133,14 +160,14 @@ export function statBreakdown(
   }
   // Veterancy — always applicable to every stat; +0 at Newbie is still shown.
   const withoutVeterancy = v === 0 ? effective : (effective - mut) / v + mut;
-  const veterancyDelta = displayStat(stat, effective) - displayStat(stat, withoutVeterancy);
+  const veterancyDelta = show(effective) - show(withoutVeterancy);
   lines.push({
     label: `Veterancy (${veterancy(z.invasions)})`,
     amount: `${veterancyDelta >= 0 ? "+" : ""}${veterancyDelta}`,
     zero: veterancyDelta === 0,
   });
 
-  return { base: displayStat(stat, baseRaw), total: displayStat(stat, effective), lines };
+  return { base: show(baseRaw), total: show(effective), lines };
 }
 
 // ---------------------------------------------------------------------------
@@ -159,10 +186,11 @@ export interface BaseStats {
   str: number;
   dex: number;
   con: number;
+  focus?: number;
 }
 
 export interface MutationDisplayGain {
-  stat: "str" | "dex" | "con";
+  stat: StatMeta["key"];
   label: string; // "Damage" / "Speed" / "Life" — matches the stat tiles
   delta: number; // in displayed units, e.g. 23
 }
@@ -184,15 +212,16 @@ export function mutationDisplayGains(base: BaseStats, mask: number): MutationDis
  *  penalty must survive normalization with its sign intact, not read as a bonus. */
 export function statDisplayGains(
   base: BaseStats,
-  bonus: Record<"str" | "dex" | "con", number>,
+  bonus: Partial<Record<Stat, number>>,
 ): MutationDisplayGain[] {
   const gains: MutationDisplayGain[] = [];
   for (const meta of STATS) {
-    if (meta.key === "focus") continue; // focus is never mutated
     const stat = meta.key;
-    const raw = bonus[stat];
+    const mutationStat = mutationStatFor(stat);
+    const raw = bonus[mutationStat];
     if (!raw) continue;
-    const delta = displayStat(stat, base[stat] + raw) - displayStat(stat, base[stat]);
+    const baseRaw = base[stat] ?? 0;
+    const delta = displayResolvedStat(stat, baseRaw + raw) - displayResolvedStat(stat, baseRaw);
     if (delta) gains.push({ stat, label: meta.label, delta });
   }
   return gains;

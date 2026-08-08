@@ -30,7 +30,7 @@ export interface OwnedZombie {
   /** Optional inherited body tint. Combined zombies mix their parents' colors;
    *  ordinary zombies leave this undefined and use the model catalog color. */
   color?: [number, number, number];
-  /** Mutation BITMASK (see mutations.ts). 0 = unmutated. Persisted; str/dex/con
+  /** Mutation BITMASK (see mutations.ts). 0 = unmutated. Persisted; str/dex/con/focus
    *  below already INCLUDE the mutation stat bonuses (derived at build time). */
   mutation: number;
   str: number;
@@ -81,7 +81,7 @@ export function makeOwned(
     str: (def.str ?? 1) + bonus.str,
     dex: (def.dex ?? 1) + bonus.dex,
     con: (def.con ?? 1) + bonus.con,
-    focus: def.focus ?? 0,
+    focus: (def.focus ?? 0) + bonus.wis,
     invasions,
     col,
     row,

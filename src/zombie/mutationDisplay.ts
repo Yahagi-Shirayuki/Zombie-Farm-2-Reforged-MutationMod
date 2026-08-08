@@ -31,6 +31,7 @@ import { STATS, displayStat } from "./traits";
 // its rig head placed in the same flask.
 const MI = BASE + "assets/ui/mutation/";
 const iconFile = (name: string) => `${MI}icon_mutation_${name}.png`;
+const placeholderIcon = iconFile("placeholder");
 
 /** mutation KEY (mutations.ts) -> its authored icon. Three names differ from ours:
  *  cauli/dragon are the game's cauliflower/dragonfruit, pumpking is the composed one. */
@@ -40,6 +41,10 @@ export const MUTATION_ICON: Record<string, string> = {
   celery: iconFile("celery"), broccoli: iconFile("broccoli"), garlic: iconFile("garlic"),
   cauli: iconFile("cauliflower"), limabean: iconFile("limabean"), flytrap: iconFile("flytrap"),
   dragon: iconFile("dragonfruit"), pumpking: iconFile("pumpking"),
+  turnip_eye: placeholderIcon, turnip_head: placeholderIcon, bread_neck: placeholderIcon,
+  apple_head: placeholderIcon, melon_head: placeholderIcon, sampaguita_hair: placeholderIcon,
+  corn_head: placeholderIcon, corn_arm: placeholderIcon, spineapple_body: placeholderIcon,
+  bloodberry_hair: placeholderIcon, skellyberry_body: placeholderIcon,
 };
 
 /** One species' replacement art and name for a mutation it shares with others. */
@@ -78,6 +83,7 @@ const STAT_LABELS: Record<Stat, string> = {
   str: STATS.find((s) => s.key === "str")!.label,
   dex: STATS.find((s) => s.key === "dex")!.label,
   con: STATS.find((s) => s.key === "con")!.label,
+  wis: STATS.find((s) => s.key === "focus")!.label,
 };
 
 /** What one mutation does to one stat, in the units the tiles show. */
@@ -108,6 +114,7 @@ export interface MutationSource {
   str: number;
   dex: number;
   con: number;
+  focus?: number;
   mutation: number; // bitmask
 }
 
@@ -122,6 +129,7 @@ export function mutationEntries(z: MutationSource): MutationCardEntry[] {
     str: z.str - bonus.str,
     dex: z.dex - bonus.dex,
     con: z.con - bonus.con,
+    wis: (z.focus ?? 0) - bonus.wis,
   }, MUTATION_VARIANTS[z.key]);
 }
 
@@ -131,19 +139,21 @@ export function mutationEntries(z: MutationSource): MutationCardEntry[] {
  *  multi-stat or penalty-carrying mutation before one ships. */
 export function mutationEntriesFrom(
   defs: readonly MutationDef[],
-  base: Record<Stat, number>,
+  base: Partial<Record<Stat, number>> & Record<"str" | "dex" | "con", number>,
   variants?: Record<string, MutationVariant>,
 ): MutationCardEntry[] {
-  const applied: Record<Stat, number> = { str: 0, dex: 0, con: 0 };
+  const applied: Record<Stat, number> = { str: 0, dex: 0, con: 0, wis: 0 };
 
   return defs.map((def) => {
     // One row per stat this mutation moves. Each is measured by stepping THROUGH the
     // rounding boundary the tile uses, so a mutation that gives and takes reports both
     // halves at the same fidelity as a single-stat one.
     const effects = statEffectsOf(def).map((effect) => {
-      const before = displayStat(effect.stat, base[effect.stat] + applied[effect.stat]);
+      const rawBase = base[effect.stat] ?? 0;
+      const displayKey = effect.stat === "wis" ? "focus" : effect.stat;
+      const before = displayStat(displayKey, rawBase + applied[effect.stat]);
       applied[effect.stat] += effect.amount;
-      const after = displayStat(effect.stat, base[effect.stat] + applied[effect.stat]);
+      const after = displayStat(displayKey, rawBase + applied[effect.stat]);
       return {
         stat: effect.stat,
         statLabel: STAT_LABELS[effect.stat],

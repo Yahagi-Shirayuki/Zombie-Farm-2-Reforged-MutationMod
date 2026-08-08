@@ -80,6 +80,23 @@ export function displayStat(key: StatMeta["key"], raw: number): number {
   if (max === null) return Math.round(raw);
   return Math.round((raw / max) * 100);
 }
+export const MIN_RESOLVED_DISPLAY_STAT = 5;
+
+/** Raw floor that displays as at least MIN_RESOLVED_DISPLAY_STAT for every stat. */
+export function minimumResolvedRawStat(key: StatMeta["key"]): number {
+  const max = statDisplayMax(key);
+  return max === null ? MIN_RESOLVED_DISPLAY_STAT : (max * MIN_RESOLVED_DISPLAY_STAT) / 100;
+}
+
+/** Clamp the fully-resolved raw stat before it becomes display or combat behavior. */
+export function clampResolvedRawStat(key: StatMeta["key"], raw: number): number {
+  return Math.max(minimumResolvedRawStat(key), raw);
+}
+
+/** Display a fully-resolved stat after applying the minimum stat floor. */
+export function displayResolvedStat(key: StatMeta["key"], raw: number): number {
+  return displayStat(key, clampResolvedRawStat(key, raw));
+}
 
 export interface AbilityMeta {
   label: string;

@@ -467,15 +467,15 @@ describe("buildPlayerUnits — a mutation penalty cannot invert a zombie", () =>
 
   it("never produces a negative stat", () => {
     const u = buildPlayerUnits(crippled({ str: -6, dex: -3, con: -4 }))[0];
-    expect(u.str).toBe(0);
-    expect(u.dex).toBe(0);
-    expect(u.con).toBe(0);
+    expect(u.str).toBeCloseTo(1.166);
+    expect(u.dex).toBeCloseTo(0.22);
+    expect(u.con).toBeCloseTo(1.485);
   });
 
   it("leaves it alive and harmless rather than healing what it hits", () => {
     // The real hazard: a negative str would make every swing ADD hp to the enemy.
     const u = buildPlayerUnits(crippled({ str: -6 }))[0];
-    expect(u.str).toBe(0);
+    expect(u.str).toBeCloseTo(1.166);
     expect(u.maxHp).toBeGreaterThan(0); // still a body on the field
     expect(u.attackCooldownMs).toBeGreaterThan(0);
     expect(Number.isFinite(u.attackCooldownMs)).toBe(true);
@@ -486,7 +486,7 @@ describe("buildPlayerUnits — a mutation penalty cannot invert a zombie", () =>
     const u = buildPlayerUnits(crippled({ dex: -5 }))[0];
     const healthy = buildPlayerUnits(crippled({}))[0];
     expect(u.attackCooldownMs).toBeGreaterThan(healthy.attackCooldownMs);
-    expect(u.attackCooldownMs).toBe(20_000); // 2s ÷ the 0.1 dex floor
+    expect(u.attackCooldownMs).toBeCloseTo(9090.909); // 2s / the raw stat that displays as 5 Speed
   });
 
   it("does not change a zombie whose stats are all positive", () => {

@@ -5141,7 +5141,10 @@ export class Hud {
       st.className = "army-st";
       // Normalized 0–100 bars with all bonuses folded in: P(ower)/S(peed)/L(ife),
       // matching the detail card's tiles (see statDisplay.displayTotals).
-      st.textContent = `P${z.dispPower} S${z.dispSpeed} L${z.dispLife}`;
+      st.innerHTML =
+        `<span class="army-stat${z.dispTonePower ? ` ${z.dispTonePower}` : ""}">P${z.dispPower}</span> ` +
+        `<span class="army-stat${z.dispToneSpeed ? ` ${z.dispToneSpeed}` : ""}">S${z.dispSpeed}</span> ` +
+        `<span class="army-stat${z.dispToneLife ? ` ${z.dispToneLife}` : ""}">L${z.dispLife}</span>`;
       const tick = document.createElement("span");
       tick.className = "tick"; // order number, filled in by refresh()
       card.append(tick, por, nm, ty, st);

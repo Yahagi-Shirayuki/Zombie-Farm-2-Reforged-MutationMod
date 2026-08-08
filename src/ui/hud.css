@@ -646,7 +646,10 @@
   background-size: auto 100%, auto 100%; image-rendering: pixelated;
   color: #eaffd8; font-weight: 800; font-size: 14px; text-shadow: 0 1px 1px #000; }
 /* a stat boosted by a mutation renders green */
-#hud .zstat-val.boosted { color: #67e83f; text-shadow: 0 1px 1px #000, 0 0 4px rgba(103,232,63,.5); }
+#hud .zstat-val.boosted, #hud .army-stat.boosted { color: #67e83f; text-shadow: 0 1px 1px #000, 0 0 4px rgba(103,232,63,.5); }
+#hud .army-stat { color: inherit; }
+#hud .zstat-val.debuffed, #hud .army-stat.debuffed { color: #f21111; text-shadow: 0 1px 1px #000, 0 0 4px rgba(242,17,17,.45); }
+#hud .zstat-val.overcharged, #hud .army-stat.overcharged { color: #f2e711; text-shadow: 0 1px 1px #000, 0 0 4px rgba(242,231,17,.5); }
 /* an ability cell: real icon inside the game's brown frame */
 #hud .zabils { gap: 8px; }
 #hud .zabil { width: 40px; height: 40px; padding: 0; border: none; cursor: pointer;

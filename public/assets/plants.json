@@ -428,5 +428,29 @@
   "xp": 1,
   "seasonal": true,
   "icon": "stex0046.png"
+ },
+ {
+  "key": "reddelicious",
+  "name": "Red Delicious Apple",
+  "cost": 125,
+  "sell": 175,
+  "growMs": 43200000,
+  "stage1": "reddelicious_stage1.png",
+  "stage2": "reddelicious_stage2.png",
+  "level": 6,
+  "xp": 1,
+  "icon": "reddelicious_icon.png"
+ },
+ {
+  "key": "felonmelon",
+  "name": "Felon-melon",
+  "cost": 165,
+  "sell": 218,
+  "growMs": 43200000,
+  "stage1": "felonmelon_stage1.png",
+  "stage2": "felonmelon_stage2.png",
+  "level": 7,
+  "xp": 1,
+  "icon": "melon_icon.png"
  }
 ]

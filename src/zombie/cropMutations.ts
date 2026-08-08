@@ -18,7 +18,7 @@ export const CROP_MUTATIONS: CropMutationTable = {
   onion: "onion",
   carrot: "carrot",
   eyebiscus: "carrot",
-  turnip: "turnip",
+  turnip: ["turnip", "turnip_head", "turnip_eye"],
   potato: "potato",
   coffee: "coffee",
   celery: "celery",
@@ -29,6 +29,14 @@ export const CROP_MUTATIONS: CropMutationTable = {
   lima_beans: "limabean",
   venus_flytrap: "flytrap",
   dragon_fruit: "dragon",
+  breadfruit: "bread_neck",
+  sampaguita: "sampaguita_hair",
+  candycorn: ["corn_head", "corn_arm"],
+  Spineapple: "spineapple_body",
+  Bloodberry: "bloodberry_hair",
+  skellyberry: "skellyberry_body",
+  reddelicious: "apple_head",
+  felonmelon: "melon_head",
   // Grows on the headless family ONLY (bitGrowable): a zombie that already has a head
   // never grows a pumpkin, however many are planted beside it. It can still inherit
   // one in the Zombie Pot — that is the only route to a Regular wearing it.

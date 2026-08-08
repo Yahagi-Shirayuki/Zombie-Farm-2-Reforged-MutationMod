@@ -18,7 +18,7 @@ import {
   ABILITY_POOL, unitAbilityAt, TIER_BOSS, MAX_ABILITY_TIER,
 } from "../../zombie/traits";
 import { mutationEntries, mutationTipText } from "../../zombie/mutationDisplay";
-import { statBreakdown } from "../../zombie/statDisplay";
+import { statBreakdown, statTone } from "../../zombie/statDisplay";
 import { classTierRank } from "../../zombie/taxonomy";
 import { ZOMBIE_SORTS, isZombieSort, sortZombies, type ZombieSort } from "../../zombie/rosterSort";
 import { getZombieSort, setZombieSort } from "../../prefs";
@@ -161,17 +161,17 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   // (mutation + veterancy + the zombie's own passive stat abilities); hovering opens
   // the per-modifier breakdown. See zombie/statDisplay.statBreakdown.
   const abilityUnlocked = (k: string) => hud.state.abilityUnlocked(k);
-  // Which stats a mutation is boosting — those tiles render green (permanent species bonus).
-  const mutBonus = mutationBonus(info.mutation);
+  // Stats render by their resolved total vs base: green for above-base, red for below,
+  // yellow for extreme above-base values.
   for (const s of STATS) {
     const bd = statBreakdown(info, s.key, abilityUnlocked);
-    const boosted = ((mutBonus as Record<string, number>)[s.key] ?? 0) > 0;
+    const tone = statTone(bd.base, bd.total);
     const cell = document.createElement("button");
     cell.className = "zstat";
     cell.innerHTML =
       `<span class="zstat-tile" style="background-image:url(${STAT_TILE})">` +
       `<img src="${s.icon}" alt=""></span>` +
-      `<span class="zstat-val${boosted ? " boosted" : ""}" style="background-image:url(${VALUE_END}),url(${VALUE_FILL})">` +
+      `<span class="zstat-val${tone ? ` ${tone}` : ""}" style="background-image:url(${VALUE_END}),url(${VALUE_FILL})">` +
       `${bd.total}</span>`;
     cell.onclick = (e) => {
       e.stopPropagation();
@@ -398,7 +398,7 @@ export function openCatalogZombieCard(hud: Hud, card: MenuCard) {
     str: (zombie.str + bonus.str) * hud.state.farmerZombieStrengthMult(),
     dex: zombie.dex + bonus.dex,
     con: (zombie.con + bonus.con) * hud.state.farmerZombieLifeMult(),
-    focus: zombie.focus, mutation: zombie.mutation, invasions: 0,
+    focus: (zombie.focus ?? 0) + bonus.wis, mutation: zombie.mutation, invasions: 0,
     portrait: card.portrait,
   };
   const { panel } = openModal({

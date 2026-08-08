@@ -32,6 +32,7 @@
 // lineup-depth band (1.0/0.85/0.7/0.55; enemies ×1.0). See combatStats.lineupDamageBand.
 import type { BossActionChoice, BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidOutcome } from "./types";
 import { ACTIVATED_ABILITY, activatedKeyFor, teamAbilitiesIn } from "../zombie/abilities";
+import { clampResolvedRawStat } from "../zombie/traits";
 import {
   ALIEN_LASER_DAMAGE,
   applyDamage,
@@ -921,9 +922,9 @@ export class BattleSim {
       const lifeCarriers = statCarriers + (p.group === "Headless" ? fortitude : 0);
       const oldMaxHp = p.maxHp;
       const oldCooldown = p.cooldownMs;
-      const str = stats.baseStr + stats.strPerCarrier * statCarriers;
-      const dex = stats.baseDex + stats.dexPerCarrier * statCarriers;
-      const con = stats.baseCon + stats.conPerCarrier * lifeCarriers;
+      const str = clampResolvedRawStat("str", stats.baseStr + stats.strPerCarrier * statCarriers);
+      const dex = clampResolvedRawStat("dex", stats.baseDex + stats.dexPerCarrier * statCarriers);
+      const con = clampResolvedRawStat("con", stats.baseCon + stats.conPerCarrier * lifeCarriers);
       p.maxHp = Math.max(1, Math.round(deriveMaxHp(con)));
       p.hp = Math.max(0, Math.min(p.maxHp, p.hp + (p.maxHp - oldMaxHp)));
       p.power = str * POWER_PER_STR;

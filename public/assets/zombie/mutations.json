@@ -116,7 +116,7 @@
   "file": "flytrapCollar",
   "group": "root",
   "headRel": false,
-  "ox": 0.0,
+  "ox": 0,
   "oy": 12,
   "ax": 0.5,
   "ay": 0.9,
@@ -163,5 +163,122 @@
   "ay": 0.75,
   "z": 3,
   "replaces": "body"
+ },
+ "corn_head": {
+  "file": "corn_head.png",
+  "group": "head",
+  "headRel": false,
+  "ox": 11,
+  "oy": 35,
+  "ax": 0.73,
+  "ay": 0.7,
+  "z": 3,
+  "replaces": "head"
+ },
+ "turnip_head": {
+  "file": "turnip_head.png",
+  "group": "head",
+  "headRel": false,
+  "ox": 14,
+  "oy": 40,
+  "ax": 0.73,
+  "ay": 0.7,
+  "z": 4,
+  "replaces": "head"
+ },
+ "bread_neck": {
+  "file": "bread_neck.png",
+  "group": "root",
+  "headRel": false,
+  "ox": 30,
+  "oy": 36,
+  "ax": 0.73,
+  "ay": 0.7,
+  "z": 3
+ },
+ "bloodberry_hair": {
+  "file": "bloodberry_hair.png",
+  "group": "head",
+  "headRel": true,
+  "ox": 8,
+  "oy": 9,
+  "ax": 0.73,
+  "ay": 0.7,
+  "z": 7
+ },
+ "skellyberry_body": {
+  "file": "skellyberry_body.png",
+  "group": "root",
+  "headRel": false,
+  "ox": 35,
+  "oy": 20,
+  "ax": 0.73,
+  "ay": 0.7,
+  "z": 1,
+  "replaces": "body"
+ },
+ "spineapple_body": {
+  "file": "spine_body.png",
+  "group": "root",
+  "headRel": false,
+  "ox": 42,
+  "oy": 34,
+  "ax": 0.73,
+  "ay": 0.7,
+  "z": 1,
+  "replaces": "body"
+ },
+ "corn_arm": {
+  "file": "corn_arm.png",
+  "group": "root",
+  "headRel": false,
+  "ox": 14,
+  "oy": 20,
+  "ax": 1,
+  "ay": 0.4,
+  "z": 8,
+  "replaces": "armF"
+ },
+ "turnip_eye": {
+  "file": "turnip_eye.png",
+  "group": "head",
+  "headRel": true,
+  "ox": -14,
+  "oy": 5,
+  "ax": 0,
+  "ay": 1,
+  "z": 8
+ },
+ "sampaguita_hair": {
+  "file": "flower_hair.png",
+  "group": "head",
+  "headRel": true,
+  "ox": 6,
+  "oy": 18,
+  "ax": 0.73,
+  "ay": 0.7,
+  "z": 7
+ },
+ "apple_head": {
+  "file": "apple_head.png",
+  "group": "head",
+  "headRel": false,
+  "ox": 14,
+  "oy": 48,
+  "ax": 0.73,
+  "ay": 0.7,
+  "z": 4,
+  "replaces": "head"
+ },
+ "melon_head": {
+  "file": "melon_head.png",
+  "group": "head",
+  "headRel": false,
+  "ox": 23,
+  "oy": 38,
+  "ax": 0.73,
+  "ay": 0.7,
+  "z": 4,
+  "replaces": "head"
  }
 }

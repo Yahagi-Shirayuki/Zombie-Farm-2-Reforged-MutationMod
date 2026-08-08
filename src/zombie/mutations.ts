@@ -10,7 +10,7 @@
 //     alone would permit two head mutations at once (Tomato|Onion); that state
 //     is ILLEGAL and every write here refuses it.
 //   * Max 5 mutations (one per slot).
-//   * Stat bonuses map: power/attack -> str, life -> con, speed -> dex.
+//   * Stat bonuses map: power/attack -> str, life -> con, speed -> dex, focus -> wis.
 //
 // Acquisition: grow a zombie beside mutation-bearing crops, buy a pre-mutated
 // Market zombie, or combine two zombies in the Zombie Pot.
@@ -39,7 +39,7 @@ import {
 export type Slot = "head" | "hair_eye" | "arm" | "body" | "neck";
 export const SLOTS: Slot[] = ["head", "hair_eye", "arm", "body", "neck"];
 
-export type Stat = "str" | "con" | "dex";
+export type Stat = "str" | "con" | "dex" | "wis";
 
 /** A mutation's stable string id — the name to use in code and in mutations.json. */
 export type MutationKey = string;
@@ -49,7 +49,7 @@ export type MutationKey = string;
  *  (and any external data keyed by bit) keep resolving through one path. */
 export type MutationRef = MutationKey | number;
 
-/** What a mutation does to a zombie's stats. Any combination of str/con/dex, and a
+/** What a mutation does to a zombie's stats. Any combination of str/con/dex/wis, and a
  *  NEGATIVE value is a real penalty — a mutation may trade one stat for another. An
  *  absent stat is untouched (not zero: the difference matters to the card, which only
  *  lists the stats a mutation actually moves). */
@@ -76,7 +76,7 @@ export function statEffectsOf(def: Pick<MutationDef, "stats">): { stat: Stat; am
     .map((stat) => ({ stat, amount: def.stats[stat]! }));
 }
 
-const STAT_ORDER: Stat[] = ["str", "dex", "con"];
+const STAT_ORDER: Stat[] = ["str", "dex", "con", "wis"];
 
 // The authored catalog, in BIT ORDER. Entry N owns bit 2^N.
 //
@@ -115,6 +115,17 @@ const CATALOG: readonly MutationSpec[] = [
   // (MUTATION_CATALOG_CORRECTED.md §"Legacy / crop-adjacency-only", report §11), so its
   // bonus is ours to choose: +3 attack, matching Garlichead — the best the head slot pays.
   { key: "pumpking", name: "Pumpking", slot: "head", stats: { str: 3 } },
+  { key: "turnip_eye", name: "Turnip-eyed", slot: "hair_eye", stats: { wis: 2, dex: 1, con: -1 } },
+  { key: "turnip_head", name: "Turnip-head", slot: "head", stats: { str: 2, con: 2, dex: -1 } },
+  { key: "bread_neck", name: "Bread neck", slot: "neck", stats: { con: 4, dex: -1 } },
+  { key: "apple_head", name: "Red-delicious Head", slot: "head", stats: { str: 2, dex: 2, wis: 1, con: -1 } },
+  { key: "melon_head", name: "Felon-Headon", slot: "head", stats: { con: 5, dex: -2 } },
+  { key: "sampaguita_hair", name: "Sampaguita hair", slot: "hair_eye", stats: { wis: 3, dex: 2, str: -1 } },
+  { key: "corn_head", name: "Corned head", slot: "head", stats: { con: 3, str: 2, dex: -1 } },
+  { key: "corn_arm", name: "Corned Arms", slot: "arm", stats: { str: 4, con: 1, dex: -1 } },
+  { key: "spineapple_body", name: "Spine-ap-body", slot: "body", stats: { str: 3, con: 3, dex: 1, wis: -2 } },
+  { key: "bloodberry_hair", name: "Bloody-hairy", slot: "hair_eye", stats: { str: 4, con: 2, wis: 1, dex: -2 } },
+  { key: "skellyberry_body", name: "Skelly-belly", slot: "body", stats: { con: 5, str: 3, dex: -2 } },
 ];
 
 // The order that has already shipped. A row inserted, removed, or moved in CATALOG
@@ -354,8 +365,8 @@ export function mutationLabel(mask: number): string {
  *  and opposite places (makeOwned bakes it in, buildPlayerUnits subtracts it to
  *  recover the species' raw stat). Clamping at one end and not the other would make
  *  the two disagree — the floor belongs where a stat becomes combat behaviour. */
-export function mutationBonus(mask: number): { str: number; con: number; dex: number } {
-  const b = { str: 0, con: 0, dex: 0 };
+export function mutationBonus(mask: number): Record<Stat, number> {
+  const b: Record<Stat, number> = { str: 0, con: 0, dex: 0, wis: 0 };
   for (const m of mutationsOf(mask)) {
     for (const { stat, amount } of statEffectsOf(m)) b[stat] += amount;
   }

@@ -31,7 +31,7 @@ import {
   seededRandom,
 } from "./RaidCatalog";
 import { ABILITY_TIER, ABILITY_POOL } from "../zombie/traits";
-import { displayTotals } from "../zombie/statDisplay";
+import { displayStatTones, displayTotals, type StatTone } from "../zombie/statDisplay";
 import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidOutcome, RaidStage } from "./types";
 import { rollLootTier } from "./LootTable";
 import { rollBrainDropWithPity, nextBrainDryStreak } from "./brainDrops";
@@ -90,6 +90,9 @@ export interface RaidPartyZombie {
   dispPower: number;
   dispSpeed: number;
   dispLife: number;
+  dispTonePower: StatTone;
+  dispToneSpeed: StatTone;
+  dispToneLife: StatTone;
 }
 
 export interface RaidPartyView {
@@ -290,6 +293,7 @@ export class RaidManager {
     const harvestOrdered: RaidPartyZombie[] = this.deployed()
       .map((z) => {
         const disp = displayTotals(z, abilityUnlocked);
+        const tones = displayStatTones(z, abilityUnlocked);
         return {
           id: z.id,
           key: z.key,
@@ -306,6 +310,9 @@ export class RaidManager {
           dispPower: disp.str,
           dispSpeed: disp.dex,
           dispLife: disp.con,
+          dispTonePower: tones.str,
+          dispToneSpeed: tones.dex,
+          dispToneLife: tones.con,
         };
       });
     const eligible = orderPartyRoster(harvestOrdered, this.state.raidAttackOrder);

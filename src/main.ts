@@ -70,6 +70,7 @@ import {
 import {
   appendHarvestTarget, harvestTargetKey, sampleStrokeSegment, type HarvestTarget,
 } from "./harvestStroke";
+import { installDevCheats } from "./devCheats";
 import { mutationMarketDescription } from "./zombie/statDisplay";
 import {
   combineSubject, combineSubjectAliases, mutantSubjectIndex, unitQuestSubjects,
@@ -4884,6 +4885,8 @@ async function main() {
     saveManager.flushCritical();
   });
   window.addEventListener("focus", () => advanceFarmJobsToNow(true));
+
+  installDevCheats({ playMode, state, saves: saveManager });
 
   // Live game-state handle + mutation helpers for local testing (instant raids,
   // boost grants, zombie spawning, placement, combine, raid wins). DEV BUILDS

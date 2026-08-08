@@ -190,7 +190,7 @@ describe("a mutation that trades one stat for another", () => {
 
   it("sells itself honestly on the Market card", () => {
     const gains = statDisplayGains(base, { str: 0, dex: -2, con: 8 });
-    expect(describeMutationGains(gains)).toContain("-45 Speed");
+    expect(describeMutationGains(gains)).toContain("-40 Speed");
     expect(describeMutationGains(gains)).toContain("+27 Life");
     // The penalty is not silently dropped, and not written as though it were a gain.
     expect(describeMutationGains(gains)).not.toContain("+-");
