@@ -877,7 +877,11 @@
 #hud .rd-meta { font-size: 12px; opacity: .9; }
 #hud .rd-intro { font-size: 12.5px; line-height: 1.35; opacity: .92; white-space: pre-wrap;
   max-height: 16vh; overflow: auto; margin: 0; }
-#hud .rd-rewards { display: flex; flex-wrap: wrap; gap: 5px; }
+#hud .rd-drops { display: flex; flex-direction: column; gap: 4px; }
+#hud .rd-drop { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; }
+#hud .rd-drop-k { flex: 0 0 auto; font-weight: 800; color: #ffcf5a; }
+#hud .rd-drop-v { display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+  min-width: 0; opacity: .92; overflow-wrap: anywhere; }
 #hud .rd-chip { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px;
   background: #24160a; border: 1px solid rgba(255,255,255,.12); max-width: 100%;
   box-sizing: border-box; overflow-wrap: anywhere; }
@@ -1088,7 +1092,9 @@
   font-weight: 700; font-size: 17px; color: #48300f; text-shadow: 0 1px 0 rgba(255,255,255,.4); }
 #hud .mkt-cur span { display: flex; align-items: center; gap: 4px; }
 #hud .mkt-cur img { height: 21px; }
-/* Brains the market is holding for uncollected sales, beside the player's own total. */
+/* Both market wallets sit on one row; a post is priced in either. */
+#hud .bm-bg .mkt-cur { flex-wrap: wrap; row-gap: 4px; }
+/* What the market is holding for uncollected sales, beside the matching total. */
 #hud .mkt-cur .bm-held { font-size: 12px; font-weight: 700; color: #8ad14a;
   background: rgba(138,209,74,.14); border-radius: 7px; padding: 2px 7px; margin-left: -10px; }
 #hud .mkt-tabs { display: flex; gap: 7px; justify-content: center; margin-bottom: 7px; }
@@ -1275,6 +1281,11 @@
   padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow: auto; color: #49300f; }
 #hud .bm-compose h3 { margin: 0; text-align: center; }
 #hud .bm-compose label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 700; }
+/* Amount and currency read as one control: the number takes the slack, the picker
+   stays only as wide as "Brains". */
+#hud .bm-price-row { display: flex; gap: 6px; }
+#hud .bm-price-row input { flex: 1 1 auto; min-width: 0; }
+#hud .bm-price-row select { flex: 0 0 auto; }
 #hud .bm-mutation-choices { max-height: 132px; overflow: auto; padding: 5px;
   border: 1px solid #b98b4a; border-radius: 6px; background: rgba(255,248,230,.72); }
 #hud .bm-mutation-choices[hidden] { display: none; }

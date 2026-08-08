@@ -338,8 +338,11 @@ export interface GameAssets {
   raidAttacks: Record<string, AttackDef>; // attack name -> definition
   drops: Record<string, DropDef>; // loot item name -> icon + brains/gold flags
   objects: Record<string, Texture>; // object sprite filename -> texture
-  background: Texture; // green-hills + sky backdrop behind the farm
-  scenery: Texture[]; // decorative foliage [tree, shrub, shrub, bush] for the grass
+  background: Texture; // green-hills + sky backdrop behind the farm (the grass default)
+  // Per-climate backdrop repaints, keyed by filename. Loaded lazily by
+  // ensureBackgroundTexture when a ground skin is applied; seeded with the grass one.
+  backgrounds: Record<string, Texture>;
+  scenery: Record<string, Texture>; // dedicated temperate foliage art, filename -> texture
   upgrades: UpgradeData; // Market "Upgrade" tab: farm-size expansions + ground skins
 }
 
@@ -722,23 +725,41 @@ export async function loadAssets(): Promise<GameAssets> {
   // plain DOM <img>, so browsing does not pay any Pixi/texture cost.
   const objects: Record<string, Texture> = {};
 
-  // The static hills-and-sky backdrop that sits behind the farm.
+  // The static hills-and-sky backdrop that sits behind the farm. Only the grass
+  // one is preloaded; the other climates' repaints load when their skin is applied.
   const background = (await Assets.load(BASE + "assets/farm_background.png")) as Texture;
+  const backgrounds: Record<string, Texture> = { "farm_background.png": background };
 
-  // Decorative foliage (tree + shrubs + bush) scattered on the grass around the
-  // farm. Order matters: index 0 is the tall tree, 1..3 are shrubs/bushes.
-  const scenery = await mapConcurrent(
-    ["tree.png", "shrub1.png", "shrub2.png", "shrub3.png"],
+  // Dedicated foliage art (tree + shrubs + bush) for the temperate surroundings —
+  // the only scenery that isn't drawn from the placeable-object library. Preloaded
+  // because it dresses the default (grass) farm every player starts on.
+  const sceneryFiles = ["tree.png", "shrub1.png", "shrub2.png", "shrub3.png"];
+  const sceneryTex = await mapConcurrent(
+    sceneryFiles,
     STARTUP_ASSET_CONCURRENCY,
     (f) => Assets.load(`${BASE}assets/scenery/${f}`) as Promise<Texture>,
   );
+  const scenery: Record<string, Texture> = {};
+  sceneryFiles.forEach((f, i) => { scenery[f] = sceneryTex[i]; });
 
   return {
     field, groundIndex, rig, ground, player, farmer, pets, soil, crop, cropTop, cropIcon,
     invasionBubble,
     zombieModels, enemyModels, zombiePartTex, mutationParts, plants, zombies, placeables, boosts, quests,
-    raids, enemyStats, raidAttacks, drops, objects, background, scenery, upgrades,
+    raids, enemyStats, raidAttacks, drops, objects, background, backgrounds, scenery, upgrades,
   };
+}
+
+/** Lazily load (and cache) one of the per-climate hills-and-sky backdrops. The
+ *  variants are all the same dimensions as the base art, so a swap needs no re-fit. */
+export async function ensureBackgroundTexture(
+  assets: GameAssets,
+  file: string
+): Promise<Texture> {
+  if (!assets.backgrounds[file]) {
+    assets.backgrounds[file] = await Assets.load(`${BASE}assets/${file}`);
+  }
+  return assets.backgrounds[file];
 }
 
 /** Path to a raid image (boss portrait, stage background) under /assets/raids/. */

@@ -133,7 +133,7 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   // Deferred until on screen — "My Zombies" stacks one of these cards per owned unit.
   if (hud.zombieMutationPortraitOf) {
     onFirstVisible(port, () => {
-      void hud.zombieMutationPortraitOf?.(info.key, info.mutation, info.color)
+      void hud.zombieMutationPortraitOf?.(info.key, info.mutation, info.color, () => port.isConnected)
         .then((portrait) => {
           if (port.isConnected) port.style.backgroundImage = `url(${portrait})`;
         })
@@ -446,7 +446,7 @@ export function buildRosterCard(hud: Hud, z: RosterEntry, onClick: () => void): 
   // once, and each render is a blocking GPU readback.
   if (hud.zombieMutationPortraitOf) {
     onFirstVisible(pim, () => {
-      void hud.zombieMutationPortraitOf?.(z.key, z.mutation, z.color)
+      void hud.zombieMutationPortraitOf?.(z.key, z.mutation, z.color, () => pim.isConnected)
         .then((mutated) => { if (pim.isConnected) pim.src = mutated; })
         .catch(() => { /* retain the static species portrait */ });
     });

@@ -737,3 +737,224 @@ describe("Black Market", () => {
     expect(attempts.map((result) => result.status).sort()).toEqual([200, 409]);
   });
 });
+
+// A post carries its own currency, so every side of it — the escrow, the settlement and
+// the payout — has to move the same one. These cover the gold half of that, and check
+// the brains wallet stays untouched throughout (the bug a shared column would cause).
+describe("Black Market gold pricing", () => {
+  it("escrows, settles and pays out a gold sale without touching brains", async () => {
+    const seller = await signIn(uniqueSub("market-gold-seller"));
+    const buyer = await signIn(uniqueSub("market-gold-buyer"));
+    await grantBalance(buyer, { gold: 9_000, brains: 4 });
+    await grantBalance(seller, { gold: 100, brains: 4 });
+    const unitId = `market-gold-unit-${crypto.randomUUID()}`;
+    await grantRoster(seller, [{ id: unitId, key: "ZombieActorRegularTier1", mutation: 4, invasions: 2 }]);
+
+    const sellerBefore = await bootstrap(seller);
+    const created = await call<any>("POST", "/black-market/orders", seller.token, {
+      operationId: operation("gold-create"), expectedAccountVersion: sellerBefore.accountVersion,
+      kind: "SELL_ZOMBIE", unitId, price: 7_500, currency: "GOLD",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    // `priceBrains` is the legacy mirror: same number, so a client cached from before
+    // gold posts still renders one.
+    expect(created.body.order).toMatchObject({
+      kind: "SELL_ZOMBIE", price: 7_500, currency: "GOLD", priceBrains: 7_500,
+    });
+
+    const buyerBefore = await bootstrap(buyer);
+    const fulfilled = await call<any>("POST", `/black-market/orders/${created.body.order.id}/fulfill`, buyer.token, {
+      operationId: operation("gold-fulfill"), expectedAccountVersion: buyerBefore.accountVersion,
+    });
+    expect(fulfilled.status, JSON.stringify(fulfilled.body)).toBe(200);
+
+    const buyerAfter = await bootstrap(buyer);
+    expect(buyerAfter.gameplay.balance.gold).toBe(buyerBefore.gameplay.balance.gold - 7_500);
+    expect(buyerAfter.gameplay.balance.brains).toBe(buyerBefore.gameplay.balance.brains);
+    // The seller is paid by their own collect, and it is GOLD that waits for them.
+    expect((await bootstrap(seller)).gameplay.balance.gold).toBe(sellerBefore.gameplay.balance.gold);
+    const summary = await call<any>("GET", "/black-market/summary", seller.token);
+    expect(summary.body).toMatchObject({ heldGold: 7_500, heldBrains: 0 });
+    const card = await call<any>("GET", "/black-market/fulfillments", seller.token);
+    expect(card.body.fulfillments).toEqual([
+      expect.objectContaining({ price: 7_500, currency: "GOLD", awaitingPayout: true }),
+    ]);
+
+    const paid = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, seller.token, {});
+    expect(paid.status, JSON.stringify(paid.body)).toBe(200);
+    expect(paid.body.goldPaid).toBe(7_500);
+    expect(paid.body.brainsPaid).toBeUndefined();
+    const sellerAfter = await bootstrap(seller);
+    expect(sellerAfter.gameplay.balance.gold).toBe(sellerBefore.gameplay.balance.gold + 7_500);
+    expect(sellerAfter.gameplay.balance.brains).toBe(sellerBefore.gameplay.balance.brains);
+    // Collecting again pays nothing more.
+    const repeat = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, seller.token, {});
+    expect(repeat).toMatchObject({ status: 200, body: { ok: true, alreadyCollected: true } });
+    expect(repeat.body.goldPaid).toBeUndefined();
+    expect((await bootstrap(seller)).gameplay.balance.gold)
+      .toBe(sellerBefore.gameplay.balance.gold + 7_500);
+
+    // The ledger reports the trade in its own currency, and keeps the two apart.
+    const history = await call<any>("GET", "/black-market/history", seller.token);
+    expect(history.body.stats.sold).toMatchObject({
+      count: 1, gold: 7_500, brains: 0,
+      best: null,
+      bestGold: { zombieKey: "ZombieActorRegularTier1", price: 7_500, currency: "GOLD", mutation: 4 },
+    });
+    expect(history.body.entries[0]).toMatchObject({ earned: true, price: 7_500, currency: "GOLD" });
+    const buyerHistory = await call<any>("GET", "/black-market/history", buyer.token);
+    expect(buyerHistory.body.stats.bought).toMatchObject({ count: 1, gold: 7_500, brains: 0 });
+  });
+
+  it("escrows a gold request, refunds it in gold, and pays a filler in gold", async () => {
+    const requester = await signIn(uniqueSub("market-gold-requester"));
+    const filler = await signIn(uniqueSub("market-gold-filler"));
+    await grantBalance(requester, { gold: 20_000 });
+    await grantBalance(filler, { gold: 50 });
+    const offeredId = `market-gold-offer-${crypto.randomUUID()}`;
+    await grantRoster(filler, [{ id: offeredId, key: "ZombieActorRegularTier1" }]);
+
+    // Cancelled: the escrowed gold comes back to the wallet it left.
+    const before = await bootstrap(requester);
+    const scrapped = await call<any>("POST", "/black-market/orders", requester.token, {
+      operationId: operation("gold-request-cancelled"), expectedAccountVersion: before.accountVersion,
+      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated: false,
+      price: 3_000, currency: "GOLD",
+    });
+    expect(scrapped.status, JSON.stringify(scrapped.body)).toBe(200);
+    expect((await bootstrap(requester)).gameplay.balance.gold)
+      .toBe(before.gameplay.balance.gold - 3_000);
+    const cancelled = await call<any>("POST", `/black-market/orders/${scrapped.body.order.id}/cancel`, requester.token, {
+      operationId: operation("gold-request-cancel"),
+      expectedAccountVersion: (await bootstrap(requester)).accountVersion,
+    });
+    expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200);
+    expect((await bootstrap(requester)).gameplay.balance.gold).toBe(before.gameplay.balance.gold);
+
+    // Filled: the fulfiller is paid inside the settlement batch, in gold.
+    const posting = await bootstrap(requester);
+    const created = await call<any>("POST", "/black-market/orders", requester.token, {
+      operationId: operation("gold-request"), expectedAccountVersion: posting.accountVersion,
+      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated: false,
+      price: 4_200, currency: "GOLD",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+
+    const fillerBefore = await bootstrap(filler);
+    const filled = await call<any>("POST", `/black-market/orders/${created.body.order.id}/fulfill`, filler.token, {
+      operationId: operation("gold-fill"), expectedAccountVersion: fillerBefore.accountVersion,
+      unitId: offeredId,
+    });
+    expect(filled.status, JSON.stringify(filled.body)).toBe(200);
+    const fillerAfter = await bootstrap(filler);
+    expect(fillerAfter.gameplay.balance.gold).toBe(fillerBefore.gameplay.balance.gold + 4_200);
+    expect(fillerAfter.gameplay.balance.brains).toBe(fillerBefore.gameplay.balance.brains);
+    expect(fillerAfter.gameplay.roster).toHaveLength(0);
+
+    const collected = await call<any>("POST", `/black-market/orders/${created.body.order.id}/collect`, requester.token, {});
+    expect(collected.status, JSON.stringify(collected.body)).toBe(200);
+    expect(collected.body.claimed).toMatchObject({ zombieKey: "ZombieActorRegularTier1" });
+  });
+
+  it("checks the gold wallet, not the brains one, before escrowing a gold request", async () => {
+    const poor = await signIn(uniqueSub("market-gold-poor"));
+    // Plenty of brains, nowhere near enough gold: the old code would have let this pass.
+    await grantBalance(poor, { gold: 10, brains: 5_000 });
+    const before = await bootstrap(poor);
+    const refused = await call<any>("POST", "/black-market/orders", poor.token, {
+      operationId: operation("gold-broke"), expectedAccountVersion: before.accountVersion,
+      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated: false,
+      price: 1_000, currency: "GOLD",
+    });
+    expect(refused).toMatchObject({ status: 409, body: { error: "insufficient_gold" } });
+    expect((await bootstrap(poor)).gameplay.balance.brains).toBe(before.gameplay.balance.brains);
+  });
+
+  it("refuses a buyer who cannot afford a gold sale, and never moves their brains", async () => {
+    const seller = await signIn(uniqueSub("market-gold-rich-seller"));
+    const buyer = await signIn(uniqueSub("market-gold-broke-buyer"));
+    await grantBalance(buyer, { gold: 100, brains: 5_000 });
+    const unitId = `market-gold-pricey-${crypto.randomUUID()}`;
+    await grantRoster(seller, [{ id: unitId, key: "ZombieActorRegularTier1" }]);
+    const sellerBefore = await bootstrap(seller);
+    const created = await call<any>("POST", "/black-market/orders", seller.token, {
+      operationId: operation("gold-pricey"), expectedAccountVersion: sellerBefore.accountVersion,
+      kind: "SELL_ZOMBIE", unitId, price: 900_000, currency: "GOLD",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+
+    const buyerBefore = await bootstrap(buyer);
+    const refused = await call<any>("POST", `/black-market/orders/${created.body.order.id}/fulfill`, buyer.token, {
+      operationId: operation("gold-pricey-buy"), expectedAccountVersion: buyerBefore.accountVersion,
+    });
+    expect(refused).toMatchObject({ status: 409, body: { error: "insufficient_gold" } });
+    const buyerAfter = await bootstrap(buyer);
+    expect(buyerAfter.gameplay.balance.brains).toBe(buyerBefore.gameplay.balance.brains);
+    expect(buyerAfter.gameplay.balance.gold).toBe(buyerBefore.gameplay.balance.gold);
+  });
+
+  it("accepts any price from 1 to 10,000,000 and nothing outside it", async () => {
+    const poster = await signIn(uniqueSub("market-gold-range"));
+    await grantBalance(poster, { gold: 100_000_000 });
+    const post = async (label: string, price: unknown, currency = "GOLD") => {
+      const state = await bootstrap(poster);
+      return call<any>("POST", "/black-market/orders", poster.token, {
+        operationId: operation(label), expectedAccountVersion: state.accountVersion,
+        kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated: false,
+        price, currency,
+      });
+    };
+
+    expect((await post("range-min", 1)).status).toBe(200);
+    expect((await post("range-max", 10_000_000)).status).toBe(200);
+    expect(await post("range-over", 10_000_001)).toMatchObject({
+      status: 400, body: { error: "bad_market_order" },
+    });
+    expect(await post("range-zero", 0)).toMatchObject({ status: 400 });
+    expect(await post("range-fraction", 1.5)).toMatchObject({ status: 400 });
+    // A currency the market does not have is a clean 400, never a silent fallback to
+    // whichever wallet happens to be first.
+    expect(await post("range-currency", 5, "DOUBLOONS")).toMatchObject({
+      status: 400, body: { error: "bad_market_order" },
+    });
+  });
+
+  it("browses one currency at a time, and defaults an old client's post to brains", async () => {
+    const seller = await signIn(uniqueSub("market-currency-browse"));
+    const goldUnit = `market-browse-gold-${crypto.randomUUID()}`;
+    const brainUnit = `market-browse-brains-${crypto.randomUUID()}`;
+    const legacyUnit = `market-browse-legacy-${crypto.randomUUID()}`;
+    await grantRoster(seller, [
+      { id: goldUnit, key: "ZombieActorRegularTier1" },
+      { id: brainUnit, key: "ZombieActorGirlTier1" },
+      { id: legacyUnit, key: "ZombieActorGardenTier1" },
+    ]);
+    const posts = [
+      { label: "browse-gold", unitId: goldUnit, body: { price: 1_200, currency: "GOLD" } },
+      { label: "browse-brains", unitId: brainUnit, body: { price: 3, currency: "BRAINS" } },
+      // No currency at all: exactly what a client cached from before gold sends.
+      { label: "browse-legacy", unitId: legacyUnit, body: { priceBrains: 2 } },
+    ];
+    for (const post of posts) {
+      const state = await bootstrap(seller);
+      const created = await call<any>("POST", "/black-market/orders", seller.token, {
+        operationId: operation(post.label), expectedAccountVersion: state.accountVersion,
+        kind: "SELL_ZOMBIE", unitId: post.unitId, ...post.body,
+      });
+      expect(created.status, JSON.stringify(created.body)).toBe(200);
+    }
+
+    const browse = async (params: string) => {
+      const result = await call<any>("GET",
+        `/black-market/orders?kind=SELL_ZOMBIE&mine=true${params}`, seller.token);
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      return (result.body.orders as Array<{ zombieKey: string }>)
+        .map((order) => order.zombieKey).sort();
+    };
+
+    expect(await browse("&currency=GOLD")).toEqual(["ZombieActorRegularTier1"]);
+    expect(await browse("&currency=BRAINS"))
+      .toEqual(["ZombieActorGardenTier1", "ZombieActorGirlTier1"]);
+    expect(await browse("")).toHaveLength(3);
+  });
+});

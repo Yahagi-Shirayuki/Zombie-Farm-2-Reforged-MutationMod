@@ -179,12 +179,17 @@ the README in the same change.
 
 ### Black Market (server-authoritative trading)
 
-- Buy/sell-zombie orders escrow the counter-value on the server: a buy order escrows the brain
+- Buy/sell-zombie orders escrow the counter-value on the server: a buy order escrows the asking
   price, a sell order escrows the zombie (with its mutation/veterancy snapshot).
+- A post is priced in **gold or brains** (`currency`, migration `0045`), chosen at creation and
+  fixed for its lifetime. The currency is read from the stored order on every later step, never
+  from the fulfiller's request, so escrow, settlement, payout and refund all move the same wallet
+  and no request can redirect a payment to the cheaper one. An unrecognised currency is a 400, not
+  a fallback; an absent one means brains, which is what every pre-`0045` post was.
 - Order creation enforces a cap of 10 simultaneously-open orders and 50 per UTC day, price bounds
-  (`1 … 1,000,000` brains), and a request fingerprint so a retried create is idempotent. Both caps
-  are checked twice — pre-flight, and again in the insert's `WHERE` clause so a race cannot exceed
-  them.
+  (`1 … 10,000,000`, enforced in the Worker and again by a column CHECK), and a request fingerprint
+  so a retried create is idempotent. Both caps are checked twice — pre-flight, and again in the
+  insert's `WHERE` clause so a race cannot exceed them.
 - Buy orders may demand **specific mutations** (`mutation_required`, migration `0030`): a 13-bit
   mask, legal only on `BUY_ZOMBIE` with `mutated: true`, validated bit-by-bit. Every anatomical
   slot in the mask must be satisfied; bits within one slot are OR-alternatives; unrequested extra

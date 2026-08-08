@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  BACK_ARM_SCALE,
+  BACK_ARM_TINT,
+  backArmPlacement,
   EYE_MUTATION_FOREGROUND_Z,
   matchesMutationReplacement,
   mutationBitsForRendering,
@@ -34,10 +37,12 @@ describe("mutation visual replacements", () => {
     expect(matchesMutationReplacement("flytrapCollar", "body")).toBe(false);
   });
 
-  it("replaces only the front arm", () => {
+  it("replaces the whole arm pair, front and back", () => {
+    // A Celery-arms zombie grows the crop on BOTH sides, so neither base arm stays.
     expect(matchesMutationReplacement("defaultArmF", "armF")).toBe(true);
     expect(matchesMutationReplacement("diverArmF", "armF")).toBe(true);
-    expect(matchesMutationReplacement("defaultArmB", "armF")).toBe(false);
+    expect(matchesMutationReplacement("defaultArmB", "armF")).toBe(true);
+    expect(matchesMutationReplacement("diverArmB", "armF")).toBe(true);
     expect(matchesMutationReplacement("dragonArm", "armF")).toBe(false);
   });
 
@@ -51,6 +56,51 @@ describe("mutation visual replacements", () => {
     expect(matchesMutationReplacement("gnomeFeature", "head")).toBe(false);
     expect(matchesMutationReplacement("barbarianHair", "head")).toBe(false);
     expect(matchesMutationReplacement("defaultBody", "head")).toBe(false);
+  });
+});
+
+describe("mirrored back arm", () => {
+  const model = {
+    parts: [
+      { file: "defaultArmB", px: -3, py: -25, ax: 0.93, ay: 0.24, z: 0 },
+      { file: "defaultBody", px: 10, py: -13, ax: 0.63, ay: 0.66, z: 3 },
+      { file: "defaultArmF", px: 9, py: -28, ax: 0.93, ay: 0.28, z: 7 },
+    ],
+  } as unknown as Parameters<typeof backArmPlacement>[0];
+  const turnip = { ox: 0, oy: 28, ax: 1, ay: 0.28 };
+
+  it("shifts the authored front offset by the rig's own front-to-back delta", () => {
+    // Authored against the FRONT shoulder; the copy has to land on the back one.
+    expect(backArmPlacement(model, turnip)).toEqual({
+      x: -12, // 0 + (-3 - 9)
+      y: -25, // -28 + (-25 - -28)
+      ax: 1, // anchors follow, so it still pivots at the joint
+      ay: 0.24, // 0.28 + (0.24 - 0.28)
+      z: 0, // behind the body, where the base back arm sat
+      scale: BACK_ARM_SCALE,
+      tint: BACK_ARM_TINT,
+    });
+  });
+
+  it("draws no back copy on a rig that has no back arm", () => {
+    // Every named special is built from whole-body art with no arm parts at all —
+    // a mirrored arm there would float behind the body attached to nothing.
+    const armless = { parts: [{ file: "Head.png", px: 0, py: 0, ax: 0.5, ay: 0.5, z: 4 }] };
+    expect(backArmPlacement(armless as never, turnip)).toBeUndefined();
+  });
+
+  it("places a back copy on every shipped model, since all of them have both arms", () => {
+    const models = zombieModels as unknown as Record<string, { parts: { file: string }[] }>;
+    for (const [key, model] of Object.entries(models)) {
+      expect(backArmPlacement(model as never, turnip), `${key} has no back arm`).toBeDefined();
+    }
+  });
+
+  it("reproduces the depth cue the base rigs bake into their own back arm", () => {
+    // defaultArmB is drawn smaller (27x14 vs 32x17) and ~6% darker than defaultArmF.
+    // Crop arms ship one texture, so the copy has to fake the same recession.
+    expect(BACK_ARM_SCALE).toBeLessThan(1);
+    expect(BACK_ARM_TINT).toBeLessThan(0xffffff);
   });
 });
 

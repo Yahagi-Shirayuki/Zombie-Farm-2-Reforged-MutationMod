@@ -350,6 +350,7 @@ export interface SimUnit {
   laserTimerMs: number; // automatic walking-laser cadence
   laserFxSeq: number; // increments when a walking laser fires (renderer trigger)
   laserTargetId: string | null; // target of the most recent walking laser
+  explodeFxSeq: number; // increments on the tick this unit blows itself up (renderer trigger)
   abilityRollSeq: number; // replay-safe proc sequence (Block/Stun/Double Strike)
   usedAbilities: string[]; // one-use activated abilities already consumed
   resurrectUsed: boolean; // one-use automatic Resurrect latch
@@ -556,6 +557,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     laserTimerMs: laserInterval(abilities, u.attackCooldownMs),
     laserFxSeq: 0,
     laserTargetId: null,
+    explodeFxSeq: 0,
     abilityRollSeq: 0,
     usedAbilities: [],
     resurrectUsed: false,
@@ -825,7 +827,14 @@ export class BattleSim {
   }
 
   /** A player unit is READY for an activated move when it's alive, in the thick of
-   *  the fight, off cooldown, and not already charging one. */
+   *  the fight, off cooldown, and not already charging one.
+   *
+   *  A SUICIDE move (Explode) reads "in the thick of the fight" as position alone —
+   *  the same test the button's own display window uses — rather than demanding an
+   *  enemy be standing there this instant. It is a fuse the player lights on their own
+   *  timing: waiting for a target defeats the purpose, and `state` flips out of "fight"
+   *  in every gap between one enemy dying and the next walking on, which made the one
+   *  move you most want to pre-time the one move you could not. */
   private readyToActivate(p: SimUnit, key: string): boolean {
     if (p.usedAbilities.includes(key)) return false;
     if (key === "attachMini") {
@@ -834,11 +843,15 @@ export class BattleSim {
         (p.state === "waiting" || p.state === "charging") && !!this.availableMini()
       );
     }
+    // Strictly a WIDENING for suicide moves: everything that could be lit before still
+    // can, plus the standing-in-position-with-nothing-to-hit case.
+    const engaged = p.state === "fight" ||
+      (!!ACTIVATED_ABILITY[key]?.suicide && this.inAttackPosition(p));
     return (
       p.alive &&
       p.team === "player" &&
       p.abilities.includes(key) &&
-      p.state === "fight" &&
+      engaged &&
       !p.windupKey &&
       p.abilityCdMs <= 0
     );
@@ -974,8 +987,15 @@ export class BattleSim {
   }
 
   /** Advance a charging zombie; on completion deliver the payoff blow. While it
-   *  charges it makes no normal attacks (the wind-up is the trade-off). */
-  private stepWindup(p: SimUnit, foe: SimUnit, dtMs: number) {
+   *  charges it makes no normal attacks (the wind-up is the trade-off) — the
+   *  else-branch in the advance step is the only place `tryAttack` runs, so a unit
+   *  holding a `windupKey` cannot land an ordinary swing at all.
+   *
+   *  `foe` is null when a suicide fuse burns down with nothing in front of the zombie.
+   *  That is not an error case: the blast still goes off on schedule, and an area hit
+   *  over an empty field simply damages nobody. Only a single-target payoff needs a
+   *  target, and no suicide move has one. */
+  private stepWindup(p: SimUnit, foe: SimUnit | null, dtMs: number) {
     p.windupMs -= dtMs;
     if (p.windupMs > 0) return;
     const key = p.windupKey!;
@@ -989,7 +1009,7 @@ export class BattleSim {
         if (ab.stunMs) e.stunMs = Math.max(e.stunMs, ab.stunMs);
         this.playerDamage += dmg;
       }
-    } else {
+    } else if (foe) {
       this.dealDamage(foe, dmg, true);
       if (ab.stunMs) foe.stunMs = Math.max(foe.stunMs, ab.stunMs);
       this.playerDamage += dmg;
@@ -1000,6 +1020,13 @@ export class BattleSim {
     p.windupMs = 0;
     // `useOnce` was already spent at activate() — a cancelled charge must not refund it.
     p.timerMs = this.cycleMs(p, null); // resume normal attacks after a beat
+    // Explode is a SUICIDE move: the zombie goes up with the blast and is a casualty of
+    // the raid (Smalls are the only carriers and `tryResurrect` refuses Smalls, so this
+    // is final). Killed AFTER the payoff so the blast it just delivered still counts.
+    if (ab.suicide) {
+      p.explodeFxSeq++;
+      this.dealDamage(p, p.hp, false);
+    }
   }
 
   /** Dismount a Mini Buddy at the line. The shipped ram stuns the enemy for two
@@ -1600,7 +1627,12 @@ export class BattleSim {
             else this.tryAttack(p, foe, dtMs);
           } else {
             p.state = "advance";
-            p.timerMs = this.cycleMs(p, null);
+            // A lit Explode fuse burns down wherever the zombie is and whether or not
+            // anything is standing in front of it — that is the whole point of being
+            // able to light it early. Every OTHER wind-up is a swing at a specific foe,
+            // so it still waits for one (the bash family keeps its charge held).
+            if (ACTIVATED_ABILITY[p.windupKey ?? ""]?.suicide) this.stepWindup(p, null, dtMs);
+            else p.timerMs = this.cycleMs(p, null);
           }
         }
       }

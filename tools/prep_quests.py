@@ -143,6 +143,46 @@ def load_plist(path):
     return plistlib.load(io.BytesIO(raw))
 
 
+# ---- Epic ladder rescale -------------------------------------------------
+# Every Epic Boss event now runs 20 levels instead of 40 (see
+# tools/prep_all_epic_bosses.py MAX_LEVEL: ZF2 only ever authored 20 HP multipliers, so
+# levels 21-40 were a copy of level 20 and added grind rather than difficulty). The
+# quests that gate each event's prizes were authored against the 40-rung ladder, so a
+# "Defeat Loco Locust Level 40" objective would now be unreachable and every milestone
+# above 20 would sit off the end of the ladder.
+#
+# Each threshold is therefore halved, rounded up: 5 -> 3, 10 -> 5, 15 -> 8, 20 -> 10,
+# 25 -> 13, 30 -> 15, 35 -> 18, 40 -> 20. That keeps every quest, keeps their order, and
+# keeps each prize at the same FRACTION of its ladder as before. The top prize is
+# unaffected in difficulty: old level 40 and new level 20 are the same 107x fight.
+#
+# Dr. Groundhog's 1xxx quests are excluded — its ladder was authored at 20 rungs and its
+# thresholds already sit on it. (Note 10000/10011 are Mystical Mamba, NOT Groundhog: the
+# range test below is deliberate, a `startswith("1")` check silently skips them.)
+EPIC_LADDER_SCALE = (20, 40)  # new rungs, old rungs
+EPIC_DEFEAT_NOTIFICATION = "kEpicStageEnemyDefeatedNotification"
+
+
+def rescale_epic_ladder(out):
+    """Halve every Epic Boss level threshold that was authored for a 40-rung ladder."""
+    new_max, old_max = EPIC_LADDER_SCALE
+    for qid, quest in out.items():
+        if 1000 <= int(qid) < 2000:  # Dr. Groundhog: already a 20-rung ladder
+            continue
+        for r in quest.get("requirements", []):
+            if r.get("notificationID") != EPIC_DEFEAT_NOTIFICATION:
+                continue
+            old = int(r["notificationObject"])
+            new = -(-old * new_max // old_max)
+            if new == old:
+                continue
+            r["notificationObject"] = str(new)
+            r["text"] = re.sub(rf"\b{old}\b", str(new), r["text"])
+            for field in ("title", "messageComplete", "tip"):
+                if field in quest:
+                    quest[field] = re.sub(rf"(?i)(level\s+){old}\b", rf"\g<1>{new}", quest[field])
+
+
 def main():
     os.makedirs(UI, exist_ok=True)
     quests = load_plist(os.path.join(APP, "Quests.plist"))
@@ -222,13 +262,15 @@ def main():
     # and named prize rigs survived, so restore the unambiguous milestone rewards.
     # Skunkarella likewise names Madame Zombie as its epic prize even though only
     # the earlier Diva collection quest survived in Quests.plist.
+    # Levels are the 20-rung ladder's (see EPIC_LADDER_SCALE) — the shipped 40-rung
+    # thresholds these came from were 40, 10, 5, 40, 5, 40.
     recovered_epic_rewards = [
-        (5011, 40, "Madame Zombie", "ZombieActorMadame", "questicon_skunkarella.png"),
-        (8000, 10, "Brock Coley", "ZombieActorBrockColey", "questicon_rockyrhino.png"),
-        (9000, 5, "Proto Zombie", "ZombieActorProto", "questicon_generallarvaelus.png"),
-        (9011, 40, "Zombug", "ZombieActorZombug", "questicon_generallarvaelus.png"),
-        (10000, 5, "Zomdini", "ZombieActorZomdini", "questicon_mysticalmamba.png"),
-        (10011, 40, "Zomtar", "ZombieActorZomtar", "questicon_mysticalmamba.png"),
+        (5011, 20, "Madame Zombie", "ZombieActorMadame", "questicon_skunkarella.png"),
+        (8000, 5, "Brock Coley", "ZombieActorBrockColey", "questicon_rockyrhino.png"),
+        (9000, 3, "Proto Zombie", "ZombieActorProto", "questicon_generallarvaelus.png"),
+        (9011, 20, "Zombug", "ZombieActorZombug", "questicon_generallarvaelus.png"),
+        (10000, 3, "Zomdini", "ZombieActorZomdini", "questicon_mysticalmamba.png"),
+        (10011, 20, "Zomtar", "ZombieActorZomtar", "questicon_mysticalmamba.png"),
     ]
     for qid, level, name, key, sprite in recovered_epic_rewards:
         add_quest(str(qid), {
@@ -260,6 +302,8 @@ def main():
     }
     for qid, key in epic_reward_keys.items():
         out[qid]["rewardItemKey"] = key
+
+    rescale_epic_ladder(out)
 
     for boss_dir, icon in [
         ("skunkarella", "questicon_skunkarella.png"),

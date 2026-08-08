@@ -199,6 +199,40 @@ def rebalance_mutant(key, entry):
     return True
 
 
+# ---- Named-special stat overrides ----------------------------------------
+# The named specials take their combat stats straight from ZF2's Zombies.json.
+# These entries overwrite a stat AFTER that read, for the cases where the shipped
+# numbers make an event ladder pay out backwards.
+#
+# Admiral Zombie is the only one so far. It is Bully Frog's TOP prize (quest 3011,
+# the final level of the ladder), and it shipped as a strictly worse Captain Zombie
+# (quest 3000, the first prize): identical 21 str / 38.5 con, but dex 2 against the
+# Captain's 2.65, so climbing the whole ladder bought a zombie that deals 24% LESS
+# damage than the one you got at the bottom of it. It is the only epic ladder in the
+# game whose omega prize is a downgrade. The Admiral now edges the Captain on both
+# axes it can be compared on — a little faster and a little tougher.
+SPECIAL_STAT_REBALANCE = {
+    # key: {stat: value}
+    "ZombieActorAdmiral": {"dex": 2.9, "con": 40.5},  # Captain: dex 2.65, con 38.5
+}
+
+
+def rebalance_special_stats(key, entry):
+    """Overwrite a named special's combat stats from SPECIAL_STAT_REBALANCE, in place.
+
+    Returns True if the zombie is rebalanced, False if it is not in the table.
+    Must run AFTER the source unitStats read, since it overrides it.
+    """
+    row = SPECIAL_STAT_REBALANCE.get(key)
+    if row is None:
+        return False
+    unknown = set(row) - {"str", "dex", "con", "focus"}
+    if unknown:
+        raise ValueError(f"{key}: unknown stat override {sorted(unknown)}")
+    entry.update(row)
+    return True
+
+
 def rebalance_crop(key, entry):
     """Overwrite one plants.json entry's economy from CROP_REBALANCE, in place.
 

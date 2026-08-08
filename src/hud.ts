@@ -38,7 +38,8 @@ import { fillPartySelection, orderPartyRoster } from "./raid/partySelection";
 import { otherPlayMode, playModeDestinationLabel, type PlayMode } from "./playMode";
 import type { UpdateCheckResult } from "./updateCheck";
 import type {
-  BlackMarketFulfillmentView, BlackMarketHistoryResponse, BlackMarketListResponse,
+  BlackMarketCurrency, BlackMarketFulfillmentView, BlackMarketHistoryResponse,
+  BlackMarketListResponse,
   BlackMarketMutationResponse, BlackMarketOrderKind, BlackMarketOrderView, ClaimedUnit,
   FriendActivity, GiftReward,
 } from "./net/protocol";
@@ -206,6 +207,27 @@ const ACTIVITY_LABEL: Record<FriendActivity, string> = {
   week: "seen this week",
   away: "seen a while",
 };
+
+/** The Black Market prices each post in one currency, chosen by whoever created it, so
+ *  every amount it shows has to carry which one it is. These three are the whole of it:
+ *  the coin art, the wording ("500 gold" / "5 brains"), and the max the form accepts. */
+const MARKET_COIN: Record<BlackMarketCurrency, string> = {
+  BRAINS: "topbar_brain_icon.png",
+  GOLD: "topbar_money_icon.png",
+};
+const MARKET_MAX_PRICE = 10_000_000;
+function marketPrice(amount: number, currency: BlackMarketCurrency): string {
+  if (currency === "GOLD") return `${amount.toLocaleString()} gold`;
+  return `${amount.toLocaleString()} brain${amount === 1 ? "" : "s"}`;
+}
+
+/** A 0..1 chance as a short percentage. Drop rates run from 0.8% to ~15%, so keep enough
+ *  precision at the low end to tell 0.8% from 1% without printing "6.30%" at the high end. */
+function pctOdds(chance: number): string {
+  const v = Math.max(0, chance) * 100;
+  const s = v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2);
+  return `${s.includes(".") ? s.replace(/\.?0+$/, "") : s}%`;
+}
 
 /** Player-facing wording for what a gift paid out ("a brain 🧠", "300 gold 💰"). */
 function giftRewardLabel(reward: GiftReward): string {
@@ -1299,8 +1321,16 @@ export class Hud {
   getAlmanac: (() => AlmanacEntryView[]) | null = null;
   /** Portrait image URL for a zombie type key (per-type composite). */
   zombiePortraitOf: ((key: string) => string) | null = null;
-  /** Render one owned zombie with its complete individual mutation mask. */
-  zombieMutationPortraitOf: ((key: string, mutation: number, color?: [number, number, number]) => Promise<string>) | null = null;
+  /** Render one owned zombie with its complete individual mutation mask. `wanted`
+   *  reports whether the tile that asked still needs it: each render blocks the main
+   *  thread on a GPU readback, and they are queued one per frame, so a panel the
+   *  player closes mid-burst must not keep paying for portraits nobody can see. */
+  zombieMutationPortraitOf: ((
+    key: string,
+    mutation: number,
+    color?: [number, number, number],
+    wanted?: () => boolean,
+  ) => Promise<string>) | null = null;
   /** Take a deployed zombie off the farm (into the Mausoleum). */
   onZombieStore: ((id: string) => void | Promise<void>) | null = null;
   /** Change an owned zombie's individual display name. */
@@ -1333,22 +1363,25 @@ export class Hud {
   zombieCostsBrains: ((key: string) => boolean) | null = null;
   getBlackMarketOrders: ((query: {
     kind: BlackMarketOrderKind; zombieClass?: string; zombieGroup?: string;
+    currency?: BlackMarketCurrency;
     sort?: "newest" | "price_asc" | "price_desc"; mine?: boolean;
   }) => Promise<BlackMarketListResponse>) | null = null;
   onCreateBlackMarketOrder: ((input:
-    | { kind: "SELL_ZOMBIE"; unitId: string; priceBrains: number }
-    | { kind: "BUY_ZOMBIE"; zombieKey: string; mutated: boolean; mutationRequired?: number; priceBrains: number }
+    | { kind: "SELL_ZOMBIE"; unitId: string; price: number; currency: BlackMarketCurrency }
+    | { kind: "BUY_ZOMBIE"; zombieKey: string; mutated: boolean; mutationRequired?: number;
+        price: number; currency: BlackMarketCurrency }
   ) => Promise<BlackMarketMutationResponse>) | null = null;
   onCancelBlackMarketOrder: ((orderId: string) => Promise<BlackMarketMutationResponse>) | null = null;
   onFulfillBlackMarketOrder: ((order: BlackMarketOrderView, unitId?: string) => Promise<BlackMarketMutationResponse>) | null = null;
   /** The caller's settled-but-uncollected trades (both sides). */
   getBlackMarketFulfillments: (() => Promise<BlackMarketFulfillmentView[]>) | null = null;
   /** Collect one settled trade: takes delivery of the zombie it owes (returning the
-   *  unit that landed) and the brains the market held for it, and acknowledges it.
+   *  unit that landed) and the payment the market held for it, and acknowledges it.
+   *  `paid` is that payment, in the post's own currency (0 when there was none).
    *  Rejects with `no_room` when a delivery has nowhere to go. */
   onCollectBlackMarketOrder:
     ((orderId: string, awaitingClaim: boolean) =>
-      Promise<{ claimed: ClaimedUnit | null; brainsPaid: number }>) | null = null;
+      Promise<{ claimed: ClaimedUnit | null; paid: number }>) | null = null;
   /** Completed-trade ledger (both roles) + lifetime aggregates. */
   getBlackMarketHistory: (() => Promise<BlackMarketHistoryResponse>) | null = null;
   /** The speed-grow (Insta-Grow) boost + a live owned-count getter, for the
@@ -2183,7 +2216,7 @@ export class Hud {
       if (z.portrait) portrait.style.backgroundImage = `url(${z.portrait})`;
       if (this.zombieMutationPortraitOf) {
         onFirstVisible(portrait, () => {
-          void this.zombieMutationPortraitOf?.(z.key, z.mutation, z.color)
+          void this.zombieMutationPortraitOf?.(z.key, z.mutation, z.color, () => portrait.isConnected)
             .then((image) => { if (portrait.isConnected) portrait.style.backgroundImage = `url(${image})`; })
             .catch(() => { /* retain the static species portrait */ });
         });
@@ -2856,17 +2889,27 @@ export class Hud {
     close.onclick = () => bg.remove();
     const balance = document.createElement("div");
     balance.className = "mkt-cur";
-    // Brains the market is holding: settled sales this player has not collected yet.
-    // Shown beside their own balance so the money is visibly SOMEWHERE while it waits.
-    let heldBrains = 0;
+    // What the market is holding: settled sales this player has not collected yet, per
+    // currency. Shown beside the matching balance so the money is visibly SOMEWHERE
+    // while it waits.
+    const held: Record<BlackMarketCurrency, number> = { BRAINS: 0, GOLD: 0 };
     const refreshBalance = () => {
-      balance.innerHTML = `<span><img src="${UI("topbar_brain_icon.png")}">${this.state.brains}</span>`;
-      if (heldBrains <= 0) return;
-      const held = document.createElement("span");
-      held.className = "bm-held";
-      held.textContent = `+${heldBrains} held`;
-      held.title = "Brains your settled sales are holding. Collect them above.";
-      balance.appendChild(held);
+      balance.replaceChildren();
+      // Both wallets are always shown: a post can be priced in either, so "can I afford
+      // this?" is a question about whichever one the listing in front of them uses.
+      for (const currency of ["GOLD", "BRAINS"] as const) {
+        const span = document.createElement("span");
+        const coin = document.createElement("img");
+        coin.src = UI(MARKET_COIN[currency]);
+        span.append(coin, (currency === "GOLD" ? this.state.gold : this.state.brains).toLocaleString());
+        balance.appendChild(span);
+        if (held[currency] <= 0) continue;
+        const waiting = document.createElement("span");
+        waiting.className = "bm-held";
+        waiting.textContent = `+${held[currency].toLocaleString()} held`;
+        waiting.title = `${currency === "GOLD" ? "Gold" : "Brains"} your settled sales are holding. Collect them above.`;
+        balance.appendChild(waiting);
+      }
     };
     refreshBalance();
 
@@ -2906,6 +2949,12 @@ export class Hud {
     for (const option of BLACK_MARKET_GROUP_FILTERS) {
       classFilter.append(new Option(option.label, option.value));
     }
+    // Prices in gold and prices in brains are not comparable, so "Lowest price" over a
+    // mixed board would be meaningless — this narrows it to one currency.
+    const currencyFilter = document.createElement("select");
+    currencyFilter.setAttribute("aria-label", "Currency filter");
+    currencyFilter.append(new Option("Gold & brains", ""), new Option("Gold only", "GOLD"),
+      new Option("Brains only", "BRAINS"));
     const sort = document.createElement("select");
     sort.setAttribute("aria-label", "Sort orders");
     sort.append(new Option("Newest", "newest"), new Option("Lowest price", "price_asc"),
@@ -2917,7 +2966,7 @@ export class Hud {
     const refresh = document.createElement("button");
     refresh.className = "prof-btn play";
     refresh.textContent = "Refresh";
-    toolbar.append(categoryFilter, classFilter, sort, mineLabel, refresh);
+    toolbar.append(categoryFilter, classFilter, currencyFilter, sort, mineLabel, refresh);
 
     // Fulfilled posts awaiting collection. The trade already settled server-side
     // (brains/zombie landed when the counterparty accepted); this strip is where
@@ -2976,10 +3025,22 @@ export class Hud {
     });
     mutationLabelEl.append(mutationMode, mutationChoices);
     const priceLabel = document.createElement("label");
-    priceLabel.append("Price in brains");
+    const priceCaption = document.createElement("span");
+    priceLabel.appendChild(priceCaption);
+    const priceRow = document.createElement("div");
+    priceRow.className = "bm-price-row";
     const price = document.createElement("input");
-    price.type = "number"; price.min = "1"; price.max = "1000000"; price.step = "1";
-    priceLabel.appendChild(price);
+    price.type = "number"; price.min = "1"; price.max = String(MARKET_MAX_PRICE); price.step = "1";
+    // Gold first, and the default: it is the currency players actually hold in quantity,
+    // and the one this ceiling is scaled for. Brains posts stay available for anyone
+    // who wants to trade in the scarce currency instead.
+    const currencyPicker = document.createElement("select");
+    currencyPicker.setAttribute("aria-label", "Price currency");
+    currencyPicker.append(new Option("Gold", "GOLD"), new Option("Brains", "BRAINS"));
+    priceRow.append(price, currencyPicker);
+    priceLabel.appendChild(priceRow);
+    const composeCurrency = (): BlackMarketCurrency =>
+      currencyPicker.value === "BRAINS" ? "BRAINS" : "GOLD";
     const escrowNote = document.createElement("div");
     escrowNote.className = "bm-meta";
     const submit = document.createElement("button");
@@ -3031,6 +3092,7 @@ export class Hud {
       const missingMutation = !selling && mutationMode.value === "specific" &&
         selectedMutationMask() === 0;
       mutationChoices.hidden = selling || mutationMode.value !== "specific";
+      priceCaption.textContent = composeCurrency() === "GOLD" ? "Price in gold" : "Price in brains";
       escrowNote.textContent = selling
         ? "This zombie leaves your roster while the post is open."
         : purchaseLock?.label ??
@@ -3038,7 +3100,7 @@ export class Hud {
             ? "Select at least one specific mutation."
             : mutationMode.value === "specific"
               ? "Same-slot choices are alternatives; choices in different slots are all required."
-              : "The full brain offer is removed while the request is open.");
+              : `The full ${composeCurrency() === "GOLD" ? "gold" : "brain"} offer is removed while the request is open.`);
       escrowNote.classList.toggle("bm-lock", !!purchaseLock || missingMutation);
       submit.disabled = !asset.value || !!purchaseLock || missingMutation || !this.socialOnline?.();
     };
@@ -3086,13 +3148,21 @@ export class Hud {
       if (!bg.isConnected) return;
       fulfillStrip.replaceChildren();
       fulfillStrip.hidden = !rows.length;
-      heldBrains = rows.reduce((total, row) => total + (row.awaitingPayout ? row.priceBrains : 0), 0);
+      for (const currency of ["GOLD", "BRAINS"] as const) {
+        held[currency] = rows.reduce((total, row) =>
+          total + (row.awaitingPayout && row.currency === currency ? row.price : 0), 0);
+      }
       refreshBalance();
       if (!rows.length) return;
+      // A player can be owed both currencies at once, so the headline names whichever
+      // is actually waiting rather than assuming one.
+      const waiting = (["GOLD", "BRAINS"] as const)
+        .filter((currency) => held[currency] > 0)
+        .map((currency) => marketPrice(held[currency], currency));
       const header = document.createElement("div");
       header.className = "bm-fulfill-title";
-      header.textContent = heldBrains
-        ? `Trades settled! The market is holding ${heldBrains} brains for you — collect them.`
+      header.textContent = waiting.length
+        ? `Trades settled! The market is holding ${waiting.join(" and ")} for you — collect it.`
         : rows.some((row) => row.awaitingClaim)
           ? "Trades settled! Collect to take delivery."
           : "Your posts went through! Collect to dismiss.";
@@ -3118,7 +3188,8 @@ export class Hud {
         // species portrait and say nothing about mutations.
         if (entry.mutation !== undefined && this.zombieMutationPortraitOf) {
           onFirstVisible(portrait, () => {
-            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!, entry.color)
+            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!, entry.color,
+              () => card.isConnected)
               .then((source) => { if (card.isConnected) portrait.src = source; })
               .catch(() => { /* retain the static species portrait */ });
           });
@@ -3144,8 +3215,8 @@ export class Hud {
         const room = this.canTakeZombieDelivery?.() ?? true;
         meta.textContent = sold
           ? `Bought by ${entry.fulfilledBy} · ${when}\n${paying
-            ? `The market is holding ${entry.priceBrains} brains — collect to bank them.`
-            : "The brains are already in your balance."}`
+            ? `The market is holding ${marketPrice(entry.price, entry.currency)} — collect to bank it.`
+            : `${entry.currency === "GOLD" ? "The gold is" : "The brains are"} already in your balance.`}`
           : claiming
             ? `From ${entry.fulfilledBy} · ${when}\n${room
               ? "Waiting for you — collect to bring it home."
@@ -3153,10 +3224,10 @@ export class Hud {
             : `Delivered by ${entry.fulfilledBy} · ${when}\nThe zombie is already on your farm.`;
         const cost = document.createElement("div");
         cost.className = "bm-price";
-        cost.append(String(entry.priceBrains));
-        const brain = document.createElement("img");
-        brain.src = UI("topbar_brain_icon.png");
-        cost.appendChild(brain);
+        cost.append(entry.price.toLocaleString());
+        const coin = document.createElement("img");
+        coin.src = UI(MARKET_COIN[entry.currency]);
+        cost.appendChild(coin);
         body.append(name, traits, meta, cost);
         const action = document.createElement("button");
         action.textContent = "Collect";
@@ -3167,12 +3238,13 @@ export class Hud {
             const claimed = result?.claimed ?? null;
             card.remove();
             if (!rail.childElementCount) fulfillStrip.hidden = true;
-            heldBrains = Math.max(0, heldBrains - (result?.brainsPaid ?? 0));
+            held[entry.currency] = Math.max(0, held[entry.currency] - (result?.paid ?? 0));
             refreshBalance();
+            const coinEmoji = entry.currency === "GOLD" ? "💰" : "🧠";
             this.showToast(sold
-              ? result?.brainsPaid
-                ? `Cha-ching! ${result.brainsPaid} brains collected — ${zombieName} sold to ${entry.fulfilledBy}. 🧠`
-                : `Cha-ching! ${zombieName} sold to ${entry.fulfilledBy} for ${entry.priceBrains} brains. 🧠`
+              ? result?.paid
+                ? `Cha-ching! ${marketPrice(result.paid, entry.currency)} collected — ${zombieName} sold to ${entry.fulfilledBy}. ${coinEmoji}`
+                : `Cha-ching! ${zombieName} sold to ${entry.fulfilledBy} for ${marketPrice(entry.price, entry.currency)}. ${coinEmoji}`
               : claimed?.stored
                 ? `${zombieName} is resting in your Mausoleum — deploy it when there's room. 🧟`
                 : `${zombieName} has joined your horde! 🧟`);
@@ -3216,9 +3288,20 @@ export class Hud {
         statsRow.appendChild(chip);
       };
       const { sold, bought, mostTraded } = result.stats;
-      stat(`🧟 Sold ${sold.count} · earned ${sold.brains} 🧠`);
-      stat(`🛒 Bought ${bought.count} · spent ${bought.brains} 🧠`);
-      if (sold.best) stat(`🏆 Best sale: ${nameOf(sold.best.zombieKey)} for ${sold.best.priceBrains} 🧠`);
+      // Gold and brains never sum, so each total lists whichever currencies it actually
+      // contains — a brains-only trader's chips read exactly as they did before gold.
+      const earnings = (totals: { brains: number; gold: number }) => {
+        const parts: string[] = [];
+        if (totals.gold) parts.push(`${totals.gold.toLocaleString()} 💰`);
+        if (totals.brains || !totals.gold) parts.push(`${totals.brains.toLocaleString()} 🧠`);
+        return parts.join(" · ");
+      };
+      stat(`🧟 Sold ${sold.count} · earned ${earnings(sold)}`);
+      stat(`🛒 Bought ${bought.count} · spent ${earnings(bought)}`);
+      for (const best of [sold.best, sold.bestGold]) {
+        if (!best) continue;
+        stat(`🏆 Best sale: ${nameOf(best.zombieKey)} for ${best.price.toLocaleString()} ${best.currency === "GOLD" ? "💰" : "🧠"}`);
+      }
       if (mostTraded) stat(`⭐ Most traded: ${nameOf(mostTraded.zombieKey)} ×${mostTraded.count}`);
       historyView.appendChild(statsRow);
 
@@ -3239,7 +3322,8 @@ export class Hud {
         portrait.src = this.zombiePortraitOf?.(entry.zombieKey) ?? cardFor(entry.zombieKey)?.portrait ?? "";
         if (entry.mutation && this.zombieMutationPortraitOf) {
           onFirstVisible(portrait, () => {
-            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!, entry.color)
+            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!, entry.color,
+              () => row.isConnected)
               .then((source) => { if (row.isConnected) portrait.src = source; })
               .catch(() => { /* retain the static species portrait */ });
           });
@@ -3265,10 +3349,10 @@ export class Hud {
         body.append(title, detail);
         const delta = document.createElement("div");
         delta.className = entry.earned ? "bm-ledger-gain" : "bm-ledger-loss";
-        delta.append(`${entry.earned ? "+" : "−"}${entry.priceBrains}`);
-        const brain = document.createElement("img");
-        brain.src = UI("topbar_brain_icon.png");
-        delta.appendChild(brain);
+        delta.append(`${entry.earned ? "+" : "−"}${entry.price.toLocaleString()}`);
+        const coin = document.createElement("img");
+        coin.src = UI(MARKET_COIN[entry.currency]);
+        delta.appendChild(coin);
         row.append(portrait, body, delta);
         ledger.appendChild(row);
       }
@@ -3285,6 +3369,7 @@ export class Hud {
         const result = await this.getBlackMarketOrders({
           kind, zombieClass: categoryFilter.value || undefined,
           zombieGroup: classFilter.value || undefined,
+          currency: (currencyFilter.value || undefined) as BlackMarketCurrency | undefined,
           sort: sort.value as "newest" | "price_asc" | "price_desc", mine: mine.checked,
         });
         if (generation !== renderGeneration || !bg.isConnected) return;
@@ -3304,7 +3389,10 @@ export class Hud {
           // therefore deliberately retain the neutral species portrait.
           if (order.kind === "SELL_ZOMBIE" && this.zombieMutationPortraitOf) {
             onFirstVisible(portrait, () => {
-              void this.zombieMutationPortraitOf?.(order.zombieKey, order.mutation ?? 0, order.color)
+              void this.zombieMutationPortraitOf?.(order.zombieKey, order.mutation ?? 0, order.color,
+                // A refreshed board or a closed panel both retire this card, and both
+                // happen constantly here (every filter, sort and trade rebuilds the list).
+                () => generation === renderGeneration && marketCard.isConnected)
                 .then((source) => {
                   if (generation === renderGeneration && marketCard.isConnected) portrait.src = source;
                 })
@@ -3324,8 +3412,8 @@ export class Hud {
               : "No"}${order.invasions ? ` · ${veterancy(order.invasions)}` : ""}`;
           meta.textContent = `${mutationText}\n${order.mine ? "Your post" : order.creatorName}`;
           const cost = document.createElement("div"); cost.className = "bm-price";
-          cost.append(String(order.priceBrains));
-          const brain = document.createElement("img"); brain.src = UI("topbar_brain_icon.png"); cost.appendChild(brain);
+          cost.append(order.price.toLocaleString());
+          const coin = document.createElement("img"); coin.src = UI(MARKET_COIN[order.currency]); cost.appendChild(coin);
           body.append(name, meta, cost); marketCard.append(portrait, body);
           // Filled in for other players' listings: inspecting one offers the trade.
           let inspectLock: string | undefined;
@@ -3335,7 +3423,7 @@ export class Hud {
             action.className = "cancel"; action.textContent = "Cancel Post";
             action.onclick = async (event) => {
               event.stopPropagation();
-              if (!await this.confirmInGame("Cancel this post?", "The escrowed zombie or brains will be returned.", "Cancel Post")) return;
+              if (!await this.confirmInGame("Cancel this post?", "The escrowed zombie or payment will be returned.", "Cancel Post")) return;
               action.disabled = true;
               try {
                 await this.onCancelBlackMarketOrder?.(order.id);
@@ -3367,7 +3455,8 @@ export class Hud {
             const completeTrade = async (rowAction?: HTMLButtonElement) => {
               if (purchaseLock) { this.showToast(purchaseLock.label); return; }
               let unitId: string | undefined;
-              let detail = `Spend ${order.priceBrains} brains for this zombie?`;
+              const asking = marketPrice(order.price, order.currency);
+              let detail = `Spend ${asking} for this zombie?`;
               // Buying with nowhere to put it is allowed — the zombie waits on the
               // Collect card rather than being forced somewhere — but say so up front
               // instead of letting it look like the purchase went nowhere.
@@ -3377,7 +3466,7 @@ export class Hud {
               if (order.kind === "BUY_ZOMBIE") {
                 const match = await this.chooseBlackMarketZombie(order);
                 if (!match) { this.showToast("You do not own a matching available zombie."); return; }
-                unitId = match.id; detail = `Trade ${match.name} for ${order.priceBrains} brains?`;
+                unitId = match.id; detail = `Trade ${match.name} for ${asking}?`;
               }
               if (!await this.confirmInGame("Complete this trade?", detail, "Trade")) return;
               if (rowAction) rowAction.disabled = true;
@@ -3386,8 +3475,8 @@ export class Hud {
                 refreshBalance();
                 const zombieName = cardFor(order.zombieKey)?.name ?? order.zombieKey;
                 this.showToast(order.kind === "SELL_ZOMBIE"
-                  ? `Bought ${zombieName} for ${order.priceBrains} brains — collect it above! 🧟`
-                  : `Sold your ${zombieName} for ${order.priceBrains} brains! 🧠`);
+                  ? `Bought ${zombieName} for ${asking} — collect it above! 🧟`
+                  : `Sold your ${zombieName} for ${asking}! ${order.currency === "GOLD" ? "💰" : "🧠"}`);
                 await renderOrders();
                 // The purchase now waits as a collectable delivery, so surface its card
                 // straight away rather than at the next time the panel opens.
@@ -3395,8 +3484,8 @@ export class Hud {
               }
               catch (error) {
                 const code = error instanceof Error ? error.message : "";
-                if (code.startsWith("insufficient_brains"))
-                  this.showToast(`You need ${order.priceBrains} brains to buy this zombie.`);
+                if (code.startsWith("insufficient_brains") || code.startsWith("insufficient_gold"))
+                  this.showToast(`You need ${asking} to buy this zombie.`);
                 else if (code.startsWith("black_market_level_locked"))
                   this.showToast("Reach the required level before purchasing this zombie.");
                 else if (code.startsWith("counterparty_busy"))
@@ -3441,23 +3530,28 @@ export class Hud {
     salesTab.onclick = () => { composing = false; viewingHistory = false; kind = "SELL_ZOMBIE"; setTabs(); void renderOrders(); };
     historyTab.onclick = () => { composing = false; viewingHistory = true; setTabs(); void renderHistory(); };
     composeTab.onclick = () => { composing = true; setTabs(); };
-    for (const control of [categoryFilter, classFilter, sort, mine]) control.onchange = () => void renderOrders();
+    for (const control of [categoryFilter, classFilter, currencyFilter, sort, mine]) control.onchange = () => void renderOrders();
     refresh.onclick = () => { void renderOrders(); void renderFulfillments(); };
     composeKind.onchange = updateCompose;
     asset.onchange = refreshComposeStatus;
+    currencyPicker.onchange = refreshComposeStatus;
     mutationMode.onchange = refreshComposeStatus;
     for (const input of mutationChecks) input.onchange = refreshComposeStatus;
     submit.onclick = async () => {
-      const priceBrains = Number(price.value);
-      if (!Number.isSafeInteger(priceBrains) || priceBrains < 1 || priceBrains > 1_000_000) {
-        this.showToast("Enter a whole brain price between 1 and 1,000,000."); return;
+      const amount = Number(price.value);
+      const currency = composeCurrency();
+      if (!Number.isSafeInteger(amount) || amount < 1 || amount > MARKET_MAX_PRICE) {
+        this.showToast(`Enter a whole ${currency === "GOLD" ? "gold" : "brain"} price between 1 and ${MARKET_MAX_PRICE.toLocaleString()}.`);
+        return;
       }
       const selling = composeKind.value === "SELL_ZOMBIE";
       if (!selling) {
         const purchaseLock = purchaseLockFor(asset.value);
         if (purchaseLock) { this.showToast(purchaseLock.label); return; }
       }
-      const warning = selling ? "The selected zombie will be held in escrow." : `${priceBrains} brains will be held in escrow.`;
+      const warning = selling
+        ? "The selected zombie will be held in escrow."
+        : `${marketPrice(amount, currency)} will be held in escrow.`;
       if (!await this.confirmInGame("Create Black Market post?", warning, "Create Post")) return;
       submit.disabled = true;
       try {
@@ -3465,13 +3559,14 @@ export class Hud {
           ? selectedMutationMask()
           : undefined;
         await this.onCreateBlackMarketOrder?.(selling
-          ? { kind: "SELL_ZOMBIE", unitId: asset.value, priceBrains }
+          ? { kind: "SELL_ZOMBIE", unitId: asset.value, price: amount, currency }
           : {
               kind: "BUY_ZOMBIE",
               zombieKey: asset.value,
               mutated: mutationMode.value !== "false",
               ...(mutationRequired ? { mutationRequired } : {}),
-              priceBrains,
+              price: amount,
+              currency,
             });
         // Land the player back on the board the new post just joined, so on a
         // compact layout the post they created is what they see next.
@@ -3492,6 +3587,8 @@ export class Hud {
           this.showToast("You have reached today's limit of 50 Black Market posts.");
         else if (code.startsWith("insufficient_brains"))
           this.showToast("You do not have enough brains for that request.");
+        else if (code.startsWith("insufficient_gold"))
+          this.showToast("You do not have enough gold for that request.");
         else if (code.startsWith("black_market_level_locked"))
           this.showToast("Reach the required level before requesting this zombie.");
         else this.showToast("Could not create that post. Refresh and try again.");
@@ -3535,7 +3632,7 @@ export class Hud {
         row.appendChild(buildZombieCard(this, rosterInfo(this, zombie), modal.panel));
         const choose = document.createElement("button");
         choose.className = "zbtn sell";
-        choose.textContent = `Sell this zombie for ${order.priceBrains} brains`;
+        choose.textContent = `Sell this zombie for ${marketPrice(order.price, order.currency)}`;
         choose.onclick = () => finish(zombie);
         row.appendChild(choose);
         list.appendChild(row);
@@ -3578,7 +3675,7 @@ export class Hud {
     panel.appendChild(buildZombieCard(this, info, panel));
     const note = document.createElement("div");
     note.className = lockLabel ? "bm-lock" : "bm-meta";
-    note.textContent = lockLabel ?? `${order.priceBrains} brains · ${order.creatorName}`;
+    note.textContent = lockLabel ?? `${marketPrice(order.price, order.currency)} · ${order.creatorName}`;
     panel.appendChild(note);
     if (!order.mine && trade) {
       const action = document.createElement("button");
@@ -4531,7 +4628,7 @@ export class Hud {
       // Only the tiles the player scrolls to pay for a portrait: the picker lists the
       // whole roster (farm + Mausoleum) but shows about a fifth of it at a time.
       onFirstVisible(el, () => {
-        void this.zombieMutationPortraitOf?.(key, mutation, color)
+        void this.zombieMutationPortraitOf?.(key, mutation, color, () => el.isConnected)
           .then((portrait) => {
             if (el.isConnected) el.style.backgroundImage = `url(${portrait})`;
           })
@@ -4921,13 +5018,44 @@ export class Hud {
             : `${c.introText}`)
         : c.introText;
 
+      // What a win here is actually worth, in numbers: the brain odds, this raid's own
+      // rare zombie, and the boosts on its loot table. The old one-of-each-tier item
+      // preview is gone — a list of decorations told the player nothing about which
+      // invasion to pick. NOTE: the brain/zombie pity floors stay unmentioned by design.
       const rewards = document.createElement("div");
-      rewards.className = "rd-rewards";
-      for (const r of c.rewardPreview.slice(0, 6)) {
-        const chip = document.createElement("span");
-        chip.className = "rd-chip";
-        chip.textContent = r;
-        rewards.appendChild(chip);
+      rewards.className = "rd-drops";
+      const dropRow = (label: string): HTMLElement => {
+        const row = document.createElement("div");
+        row.className = "rd-drop";
+        const k = document.createElement("span");
+        k.className = "rd-drop-k";
+        k.textContent = label;
+        const v = document.createElement("span");
+        v.className = "rd-drop-v";
+        row.append(k, v);
+        rewards.appendChild(row);
+        return v;
+      };
+
+      const tiers = c.brainOdds.tiers
+        .map((t) => `${t.amount} ${t.amount === 1 ? "brain" : "brains"} ${pctOdds(t.chance)}`)
+        .join(" · ");
+      dropRow("Brains").textContent =
+        `${pctOdds(c.brainOdds.chance)} per boss win (${tiers})`;
+      if (c.zombieDrop) {
+        dropRow(c.zombieDrop.name).textContent =
+          `${pctOdds(c.zombieDrop.rate)} per win · Golden Dice raise it`;
+      }
+      const boostVal = dropRow("Boosts");
+      if (!c.boostDrops.length) {
+        boostVal.textContent = "None";
+      } else {
+        for (const b of c.boostDrops) {
+          const chip = document.createElement("span");
+          chip.className = "rd-chip";
+          chip.textContent = b.qty > 1 ? `${b.name} ×${b.qty}` : b.name;
+          boostVal.appendChild(chip);
+        }
       }
 
       const st = this.getRaidStatus
@@ -5126,7 +5254,7 @@ export class Hud {
       if (z.portrait) por.style.backgroundImage = `url(${z.portrait})`;
       if (this.zombieMutationPortraitOf) {
         onFirstVisible(por, () => {
-          void this.zombieMutationPortraitOf?.(z.key, z.mutation, z.color)
+          void this.zombieMutationPortraitOf?.(z.key, z.mutation, z.color, () => por.isConnected)
             .then((image) => { if (por.isConnected) por.style.backgroundImage = `url(${image})`; })
             .catch(() => { /* retain the static species portrait */ });
         });
@@ -5329,7 +5457,8 @@ export class Hud {
       portrait.alt = "";
       if (this.zombieMutationPortraitOf) {
         onFirstVisible(portrait, () => {
-          void this.zombieMutationPortraitOf?.(zombie.key, zombie.mutation, zombie.color)
+          void this.zombieMutationPortraitOf?.(zombie.key, zombie.mutation, zombie.color,
+            () => portrait.isConnected)
             .then((image) => { if (portrait.isConnected) portrait.src = image; })
             .catch(() => { /* retain the static species portrait */ });
         });

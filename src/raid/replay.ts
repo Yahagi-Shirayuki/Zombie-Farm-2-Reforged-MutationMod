@@ -77,7 +77,24 @@ import type { RaidOutcome } from "./types";
 // finish died on `illegal_ability` — a player-reported bug on exactly the Silver Small's
 // two explosion buttons. Same cost as v15: an invasion in flight at deploy time settles
 // as stale_ruleset and pays nothing.
-export const RAID_RULESET_VERSION = 18;
+// 19: Explode / Explode Ver.2 now KILL the zombie that uses them. The blast still lands
+// first (full 10× area hit and 3 s stun), then the performer is dealt its remaining Life
+// and joins the raid's losses — a real price for the army's biggest single hit, and what
+// "the zombie explodes" should have meant all along. Only Smalls carry the move and
+// `tryResurrect` refuses Smalls, so the death is final. This changes who is standing for
+// the rest of the fight, so a v18 client and a v19 Worker diverge from the first tap
+// onward. Same cost as v15: an invasion in flight at deploy time settles as
+// stale_ruleset and pays nothing.
+// 20: Explode is a FUSE, not a swing. It can now be lit by any zombie that has reached
+// the combat zone — no enemy has to be standing in front of it — and once lit the charge
+// keeps burning down and detonates on schedule even into an empty field. Before this the
+// gate was `state === "fight"`, which flips off in every gap between one enemy dying and
+// the next walking on, so the move you most want to pre-time was the one you could not.
+// Both halves move the client/server agreement: a tap that a v19 Worker REFUSES as
+// `illegal_ability` a v20 client accepts, and a charge a v19 Worker freezes a v20 client
+// pays off. Same cost as v15: an invasion in flight at deploy time settles as
+// stale_ruleset and pays nothing.
+export const RAID_RULESET_VERSION = 20;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

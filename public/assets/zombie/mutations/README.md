@@ -55,6 +55,13 @@ running the asset pipeline. (See `looseMutationPath` in `src/assets.ts`.)
   `headRel`) or `"root"` (arms, bodies, collars — authored z, no tilt).
 - `replaces` hides the base silhouette part underneath: `"head"`, `"armF"` or
   `"body"`. Omit it for an overlay. A head-slot mutation replaces `"head"` by default.
+- `"armF"` names the arm SLOT, and a crop arm claims the whole pair: the base front
+  **and** back arms are hidden, and the art is drawn twice — once where you authored
+  it, once mirrored onto the back shoulder. Author the offsets against the FRONT arm
+  only; the copy is shifted by the model's own ArmF→ArmB delta and drawn slightly
+  smaller and dimmer, the same depth cue the base rigs bake into their own back arm.
+  A rig with no back arm (the named specials have no arm parts at all) gets the front
+  copy alone.
 - Art that fails to load is warned about in the console and skipped — the zombie keeps
   its own body part rather than losing it, so a typo costs one attachment, not a rig.
 - JSON has no comments. Do not put `//` in this file's siblings.

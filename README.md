@@ -195,7 +195,7 @@ Qualifiers: *implemented*, *partially implemented*, *placeholder*, *disabled*, *
 - **Raids (partially implemented / fidelity approximation):** the ladder, live combat, boosts, and permanent casualties ship, but combat still needs status/focus polish and per-raid balance tuning. Boss **summon** reinforcements, the faithful **carrotWall/junkWall** blockers, the Circus **trapeze carried-grab**, and the **Beach crab** carry-off are wired — the crab and trapeze are client-only tap-to-rescue minigames the server does not simulate (see the concession note under Online and social). The **Lawyers cars** grab has no shipped sprite and is not wired. Note that a ground-crossing obstacle/grab hazard previously listed here as "disabled pending visual work" was **not a base-game mechanic** — it was fabricated during development and has now been removed from the code entirely.
 - **Market/upgrades (partially implemented):** Farm Size and ground/climate skins work; authored **TMX map loading is missing**.
 - **Quests (partially implemented):** the farm loop, raids/invasions, Zombie Pot, and every Epic Boss emit live events. Recovered Epic quest chains are selected for the active boss; some late bosses have incomplete or missing shipped quest data. Social, photo/camera, and seasonal quest classes remain dormant. A quest whose reward is a **zombie** is still deferred server-side (`completeQuest` records the completion but grants no unit), so those rewards only actually land on a Local Farm; currency and item rewards are granted authoritatively.
-- **Epic Bosses (eight recovered bosses):** Market → Epic Boss offers Dr. Groundhog, Loco Locust, Bully Frog, Foul Owl, Skunkarella, Rocky Rhino, General Larvaelus, and Mystical Mamba as repeatable 14-day runs. Dr. Groundhog costs 5 brains and unlocks at **player level 24**; the other seven cost 10 brains and unlock at **level 32** (server-enforced). All use 30-second manual-focus fights, permanent casualties, retained damage, crop-harvested fight tokens (or 1 brain per attempt), scaling brain/gold victory rewards, namespaced loot, pets, and deterministic online replay. The first five use exact authored combat strips; EPB 8-10 use static recovered art until their missing atlas metadata can be reconstructed. See `docs/EPIC_BOSS_MECHANICS.md`.
+- **Epic Bosses (eight recovered bosses):** Market → Epic Boss offers Dr. Groundhog, Loco Locust, Bully Frog, Foul Owl, Skunkarella, Rocky Rhino, General Larvaelus, and Mystical Mamba as repeatable 14-day runs. Dr. Groundhog costs 5 brains, the other seven cost 10, and each unlocks at its own player level — **24 / 28 / 30 / 32 / 34 / 38 / 40 / 42**, ordered by how strong its prize zombies are (Groundhog first, Loco Locust's Vagabond last), server-enforced. Every event runs **20 levels**, the full length of the authored HP curve, and boss **attack power ramps with the unlock level** (40 DPS at Dr. Groundhog up to 120 at Loco Locust) so later events demand a real front-line tank instead of more attempts. All use 30-second manual-focus fights, permanent casualties, retained damage, crop-harvested fight tokens (or 1 brain per attempt), scaling brain/gold victory rewards, namespaced loot, pets, and deterministic online replay. The first five use exact authored combat strips; EPB 8-10 use static recovered art until their missing atlas metadata can be reconstructed. See `docs/EPIC_BOSS_MECHANICS.md`.
 - **Settings toggle — Sprites (placeholder):** the **ZF2 Sprites** switch persists a preference (`src/prefs.ts`) but does nothing yet. It needs a ZF1 art pack and a runtime swap keyed off `getSpriteSet()`.
 - **QoL/UI (missing):** Received item cards/reveal/use flow and fuller settings controls are missing. The Farmer's Guide now provides the first in-game help pages, with more detailed topics still to come.
 - **Assets (partially wired):** raid particle FX and raid/combat audio (per-stage BGM + attack-keyed strike SFX) are wired, but most other particles/VFX, title/loading/news/social promo art, most localization/fonts, many terrain tiles, and many stage assets are extracted but not wired. Specific unwired audio: `enrageBGM`, `locolocustbanjo`, `rockyrhinogong`, `taiko`, `resurrect`, `parrot`, `rain`.
@@ -400,7 +400,13 @@ python tools/prep_pets.py
 python tools/prep_enemies.py
 python tools/prep_upgrades.py
 python tools/prep_epic_bosses.py
+python tools/prep_backgrounds.py
 ```
+
+`tools/prep_backgrounds.py` is the odd one out: it takes no source-app input. It
+recolours the hand-made `public/assets/farm_background.png` into one horizon per
+ground skin (`farm_background_<terrain>.png`), so a beach farm doesn't sit in front
+of temperate green hills. See `src/surroundings.ts`.
 
 `tools/extract_zf1_ipa.py` extracts the **original Zombie Farm 1** app bundle — decoding Apple
 CgBI "crushed" PNGs to portable PNGs and bucketing plists and art by category. It writes to an
@@ -438,6 +444,7 @@ export round-trips the same schema the runtime reads.
 | `src/prefs.ts` | Persisted user preferences (audio, foliage, sprite set, edition) |
 | `src/base.ts` | `BASE_URL` prefixing for all runtime asset URLs — never hardcode `/assets/...` |
 | `src/iso.ts`, `src/depthSort.ts`, `src/lighting.ts`, `src/cropTop.ts` | Isometric projection, draw-order toposort, night lighting, crop overhang fix |
+| `src/surroundings.ts` | Per-ground-skin scenery ring, horizon backdrop, and viewport filler |
 | `src/economy.ts`, `src/farmRewards.ts` | Prices, payouts, and reward math |
 | `server/` | Cloudflare Worker + D1 backend: saves, friends, gifting, visits, raid verification |
 | `tools/` | Source extraction and public asset/data generation |

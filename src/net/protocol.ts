@@ -290,6 +290,9 @@ export interface PresentationRequest {
 
 export type BlackMarketOrderKind = "BUY_ZOMBIE" | "SELL_ZOMBIE";
 export type BlackMarketOrderStatus = "OPEN" | "FULFILLED" | "CANCELLED";
+/** What a post is priced in. Chosen per post by whoever created it, and fixed for the
+ *  life of that post — escrow, settlement and payout all move the same currency. */
+export type BlackMarketCurrency = "BRAINS" | "GOLD";
 
 export interface BlackMarketOrderView {
   id: string;
@@ -305,6 +308,11 @@ export interface BlackMarketOrderView {
    *  rather than a stock member of the species. SELL_ZOMBIE only; absent means the
    *  catalog colour. */
   color?: [number, number, number];
+  /** The asking price, in `currency`. */
+  price: number;
+  currency: BlackMarketCurrency;
+  /** @deprecated Mirror of `price`, kept so a client cached from before gold posts
+   *  existed still renders a number. Read `price` + `currency`. */
   priceBrains: number;
   status: BlackMarketOrderStatus;
   createdAt: number;
@@ -317,10 +325,11 @@ export interface BlackMarketSummary {
   postsToday: number;
   activeLimit: 10;
   dailyLimit: 50;
-  /** Brains the market is holding for this account: sales that settled while they were
-   *  away and have not been collected yet. Optional — an older deployed Worker omits
-   *  it, and the panel simply shows no held total. */
+  /** Currency the market is holding for this account: sales that settled while they were
+   *  away and have not been collected yet, split by what they were priced in. Optional —
+   *  an older deployed Worker omits them, and the panel simply shows no held total. */
   heldBrains?: number;
+  heldGold?: number;
   serverTime: number;
 }
 
@@ -338,7 +347,7 @@ export interface BlackMarketMutationResponse {
 
 /** One of the caller's own orders that a counterparty fulfilled and the caller has
  * not yet collected. Collecting is what hands over what the trade owes them: the
- * zombie (`awaitingClaim`) and/or the brains the market is holding for a sale
+ * zombie (`awaitingClaim`) and/or the payment the market is holding for a sale
  * (`awaitingPayout`). With neither flag the card is a pure notice. */
 export interface BlackMarketFulfillmentView {
   id: string;
@@ -353,6 +362,9 @@ export interface BlackMarketFulfillmentView {
   /** The traded unit's body tint. Absent on trades settled before it was recorded
    *  (migration 0041), and on any unit that never had one. */
   color?: [number, number, number];
+  price: number;
+  currency: BlackMarketCurrency;
+  /** @deprecated Mirror of `price`; see BlackMarketOrderView. */
   priceBrains: number;
   createdAt: number;
   fulfilledAt: number;
@@ -363,9 +375,9 @@ export interface BlackMarketFulfillmentView {
    *  refused while their farm and Mausoleum are both full. Absent on the pure
    *  brains-earned card an older Worker is the only source of. */
   awaitingClaim?: boolean;
-  /** This card owes the viewer `priceBrains`: their sale settled and the market is
-   *  holding the payment until they collect it (migration 0043). Absent on a card
-   *  whose brains already landed — including every trade older than that change. */
+  /** This card owes the viewer `price` in `currency`: their sale settled and the market
+   *  is holding the payment until they collect it (migration 0043). Absent on a card
+   *  whose payment already landed — including every trade older than that change. */
   awaitingPayout?: boolean;
 }
 
@@ -389,9 +401,11 @@ export interface BlackMarketCollectResponse {
   /** Set when this collect took delivery of a zombie, so the client knows to refresh
    *  its authoritative roster (and can say where the unit landed). */
   claimed?: ClaimedUnit;
-  /** Brains this collect actually paid out of the market (a settled sale). Absent when
-   *  there were none to pay — including a repeat collect, which pays nothing. */
+  /** Currency this collect actually paid out of the market (a settled sale), in whichever
+   *  the sale was priced in. Absent when there was none to pay — including a repeat
+   *  collect, which pays nothing. */
   brainsPaid?: number;
+  goldPaid?: number;
   /** The account's authoritative balance, echoed so collecting shows the brains the
    *  trade already paid. Settlement credits them when the OTHER player fulfils the
    *  order, so without this the creator's client keeps a stale balance until its next
@@ -407,7 +421,7 @@ export interface BlackMarketHistoryEntry {
   kind: BlackMarketOrderKind;
   /** True when the caller created the post; false when they fulfilled it. */
   mine: boolean;
-  /** True when the caller received the brains (they sold a zombie either via
+  /** True when the caller received the payment (they sold a zombie either via
    * their own sale post or by filling someone's request). */
   earned: boolean;
   zombieKey: string;
@@ -418,6 +432,9 @@ export interface BlackMarketHistoryEntry {
   /** The delivered unit's body tint. Absent on trades that predate migration 0041
    *  and on units that never had one. */
   color?: [number, number, number];
+  price: number;
+  currency: BlackMarketCurrency;
+  /** @deprecated Mirror of `price`; see BlackMarketOrderView. */
   priceBrains: number;
   /** Display name of the other party in the trade. */
   counterparty: string;
@@ -426,13 +443,28 @@ export interface BlackMarketHistoryEntry {
 
 /** Lifetime aggregates over ALL of the caller's completed trades (not just the
  * page of entries returned alongside). */
+export interface BlackMarketBestSale {
+  zombieKey: string;
+  price: number;
+  currency: BlackMarketCurrency;
+  /** @deprecated Mirror of `price`; see BlackMarketOrderView. */
+  priceBrains: number;
+  mutation: number | null;
+}
+
 export interface BlackMarketTradeStats {
   sold: {
     count: number;
     brains: number;
-    best: { zombieKey: string; priceBrains: number; mutation: number | null } | null;
+    gold: number;
+    /** Biggest single sale in each currency. Two amounts in different currencies are
+     *  not comparable, so there is no single "best trade" to report — `best` is the
+     *  brains one (the only kind that existed before gold posts) and `bestGold` its
+     *  counterpart. Either is null when they have never earned that currency here. */
+    best: BlackMarketBestSale | null;
+    bestGold: BlackMarketBestSale | null;
   };
-  bought: { count: number; brains: number };
+  bought: { count: number; brains: number; gold: number };
   mostTraded: { zombieKey: string; count: number } | null;
 }
 

@@ -51,19 +51,24 @@ export interface EpicBossCurrencyReward {
  *
  * Post-brainflation-revert brain schedule (a single brain is now ~10x more valuable, so
  * epic runs hand them out sparingly instead of every level):
- *   - +1 brain on every 5th level cleared (5, 10, 15, 20, 25, 30, 35, 40).
- *   - +1 BONUS brain at the boss's top tier(s): levels 30/35/40 on a full 40-level
- *     ladder, or level 20 for the short-ladder Dr. Groundhog (maxLevel 20).
+ *   - +1 brain on every 5th level cleared (5, 10, 15, 20).
+ *   - +1 BONUS brain on the boss's FINAL level, so finishing a ladder pays 2.
  *   - Non-milestone levels award no brains.
+ *
+ * Every ladder is 20 rungs now (see EpicBossDef.maxLevel), so a full clear pays 5 brains
+ * whichever event it is. The old 40-rung bosses paid 11, but 6 of those brains sat on
+ * levels 21-40 — rungs that reused level 20's HP multiplier, so they were 20 extra fights
+ * at an unchanging difficulty. The per-fight rate is untouched; there are simply no
+ * padding rungs left to farm. `maxLevel` still parameterises the bonus rather than being
+ * hardcoded to 20, so a future longer event pays its bonus at its own top.
  *
  * Gold is deliberately UNCHANGED from the pre-revert curve (`round(level/4) * 100` per
  * cleared level) — gold is not being rescaled, so the epic run's gold economy is
  * untouched by the brain change.
  */
-export const epicBossCurrencyReward = (level: number, maxLevel = 40): EpicBossCurrencyReward => {
+export const epicBossCurrencyReward = (level: number, maxLevel = 20): EpicBossCurrencyReward => {
   const gold = Math.max(1, Math.round(level / 4)) * 100;
   let brains = level % 5 === 0 ? 1 : 0;
-  const topTierBonus = maxLevel <= 20 ? level === maxLevel : level === 30 || level === 35 || level === 40;
-  if (brains > 0 && topTierBonus) brains += 1;
+  if (brains > 0 && level === maxLevel) brains += 1;
   return { brains, gold };
 };

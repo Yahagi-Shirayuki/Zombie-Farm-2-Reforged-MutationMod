@@ -3,6 +3,7 @@
 // the live combat sim (BattleSim); instant resolution (CombatEngine) is retained
 // only as a test/dev utility. No side effects — RaidManager applies these.
 import type { RaidDef, RaidStage } from "./types";
+import { raidBoostBundle } from "./lootBundles";
 
 /** Minimum army to launch an invasion (Help.json: "at least 8, best with 16"). */
 export const MIN_ARMY = 8;
@@ -100,9 +101,25 @@ export function raidTier(raid: RaidDef): number {
   return raid.id >= 1 && raid.id <= 4 ? raid.id : 0;
 }
 
-/** A first-of-each-tier reward preview for the select screen. */
-export function rewardPreview(raid: RaidDef): string[] {
-  return raid.loot.map((tier) => tier[0]).filter(Boolean);
+/** The boosts this raid's loot table can hand over, in tier order, each with the
+ *  quantity ONE drop pays (`raidBoostBundle` — Insta-Grow drops ten at a time). Loot
+ *  names are matched against the boost catalog, so the farm objects filling the rest
+ *  of the table stay out, and a boost listed in two tiers is only named once. */
+export function boostDrops(
+  raid: RaidDef,
+  boosts: readonly { key: string; name: string }[]
+): { key: string; name: string; qty: number }[] {
+  const seen = new Set<string>();
+  const out: { key: string; name: string; qty: number }[] = [];
+  for (const tier of raid.loot) {
+    for (const name of tier) {
+      const boost = boosts.find((b) => b.name === name);
+      if (!boost || seen.has(boost.key)) continue;
+      seen.add(boost.key);
+      out.push({ key: boost.key, name: boost.name, qty: raidBoostBundle(boost.key) });
+    }
+  }
+  return out;
 }
 
 /** Win gold, report-faithful. The wiki base is "Gold, *no casualties*" and the

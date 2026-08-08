@@ -6,6 +6,7 @@ import { Container, Sprite } from "pixi.js";
 import { GameAssets, ZombieModel } from "../assets";
 import { slotOf } from "../zombie/mutations";
 import {
+  backArmPlacement,
   isMutationForegroundPart,
   matchesMutationReplacement,
   mutationBitsForRendering,
@@ -150,8 +151,9 @@ export class RaidActor {
       const texture = part ? assets.zombiePartTex[part.file] : undefined;
       return part && texture ? [{ bit, part, texture }] : [];
     });
-    // Crop arms occupy the authored ArmF slot. Only suppress the base front arm
-    // after its replacement has resolved, so incomplete assets cannot remove it.
+    // Crop arms occupy the authored arm slot — BOTH arms, front and back. Only
+    // suppress the base pair after the replacement has resolved, so an incomplete
+    // asset cannot remove it.
     const replacements = new Set<MutationReplacement>();
     for (const { bit, part } of mutationParts) {
       if (part.replaces) replacements.add(part.replaces);
@@ -174,7 +176,7 @@ export class RaidActor {
     this.neck = { x: m.neck.x, y: m.neck.y };
 
     for (const p of m.parts) {
-      if (replacements.has("armF") && /ArmF$/i.test(p.file)) continue;
+      if (replacements.has("armF") && matchesMutationReplacement(p.file, "armF")) continue;
       if (replacements.has("body") && /Body$/i.test(p.file)) continue;
       if (
         replacements.has("head")
@@ -229,12 +231,26 @@ export class RaidActor {
       const px = mp.ox + (mp.headRel ? m.neck.x : 0);
       const py = -mp.oy + (mp.headRel ? m.neck.y : 0);
       sp.position.set(px, py);
+      sp.zIndex = mutationPartZIndex(bit, mp.group, mp.z);
       if (mp.group === "head") {
-        sp.zIndex = mutationPartZIndex(bit, mp.group, mp.z);
         this.headParts.push({ sp, bx: px, by: py });
-      } else {
-        sp.zIndex = mutationPartZIndex(bit, mp.group, mp.z);
-        if (slotOf(bit) === "arm") this.arms.push(sp);
+      } else if (mp.replaces === "armF" || (!mp.replaces && slotOf(bit) === "arm")) {
+        // A crop arm claims BOTH arms. The back copy is registered FIRST so `arms`
+        // keeps the back/front alternation the base rig gives it (defaultArmB is
+        // authored before defaultArmF) — the walk sway and the scratch flail read
+        // that order by index parity.
+        const at = backArmPlacement(m, mp);
+        if (at) {
+          const back = new Sprite(tex);
+          back.anchor.set(at.ax, at.ay);
+          back.position.set(at.x, at.y);
+          back.scale.set(at.scale);
+          back.tint = at.tint;
+          back.zIndex = at.z;
+          this.root.addChild(back);
+          this.arms.push(back);
+        }
+        this.arms.push(sp);
       }
       this.root.addChild(sp);
     }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BRAIN_PITY_AMOUNT,
   BRAIN_PITY_INVASIONS,
+  brainDropChance,
   brainDropTable,
   nextBrainDryStreak,
   rollBrainDrop,
@@ -15,6 +16,16 @@ describe("invasion brain drops", () => {
       { amount: 3, chance: 0.04 },
       { amount: 1, chance: 0.1 },
     ]);
+  });
+
+  it("reports the any-brains chance the invasion card shows", () => {
+    // Every tier must miss for a win to pay nothing: 1 - .98 * .96 * .9.
+    expect(brainDropChance(20)).toBeCloseTo(1 - 0.98 * 0.96 * 0.9, 12);
+    // Level scaling carries through — a low-level raid pays less often.
+    expect(brainDropChance(5)).toBeLessThan(brainDropChance(20));
+    // Never negative, never past certainty.
+    expect(brainDropChance(0)).toBeGreaterThan(0);
+    expect(brainDropChance(100)).toBeLessThan(1);
   });
 
   it("rolls rarest-first and awards at most one tier", () => {

@@ -1,6 +1,9 @@
 import type { MutationPart, ZombieDef, ZombieModel } from "../assets";
 import { bitOf, bitsOf, mutationOf } from "./mutations";
 
+/** The base silhouette a mutation takes over. `"armF"` is the authored NAME of the
+ *  arm slot (it is what mutations.json and every mod write) — a crop arm claims the
+ *  whole pair, front and back. See backArmPlacement. */
 export type MutationReplacement = "body" | "armF" | "head";
 
 const CARROT_MUTATION_BIT = bitOf("carrot");
@@ -84,7 +87,10 @@ export function isMutationForegroundPart(file: string): boolean {
   return /(?:Eye[LR]|Jaw|LowerTeeth|Hair|Hat|Feature|Beard|Mustache)(?:\.png)?$/i.test(file);
 }
 
-/** True when a base-model part should be hidden by a replacement mutation. */
+/** True when a base-model part should be hidden by a replacement mutation.
+ *
+ * The arm slot covers BOTH arms: a Celery-arms zombie (the name is plural for a
+ * reason) grows the crop on each side, so the base front AND back arms give way. */
 export function matchesMutationReplacement(
   file: string,
   replacement: MutationReplacement,
@@ -92,7 +98,54 @@ export function matchesMutationReplacement(
   return replacement === "body"
     ? /Body(?:\.png)?$/i.test(file)
     : replacement === "armF"
-      ? /ArmF(?:\.png)?$/i.test(file)
+      ? /Arm[FB](?:\.png)?$/i.test(file)
       : /(?:Head|UpperTeeth|Scar)(?:\.png)?$/i.test(file)
         && !isMutationForegroundPart(file);
+}
+
+/** Depth cue the base rigs bake into their own back arm: it is drawn SMALLER and
+ *  DIMMER than the front one (defaultArmB is 27x14 against defaultArmF's 32x17, and
+ *  ~6% darker in the atlas). Crop arms ship a single texture, so the mirrored copy
+ *  reproduces that cue from the front art rather than needing its own drawing. */
+export const BACK_ARM_SCALE = 0.84;
+export const BACK_ARM_TINT = 0xf0f0f0;
+
+export interface BackArmPlacement {
+  x: number;
+  y: number;
+  ax: number;
+  ay: number;
+  z: number;
+  scale: number;
+  tint: number;
+}
+
+/**
+ * Where a crop arm's mirrored BACK copy sits on this model, or undefined when the
+ * rig has no back arm to mirror onto.
+ *
+ * Derived from the model's OWN ArmF/ArmB pair rather than a hardcoded offset, for
+ * two reasons: the copy lands on the real back shoulder whatever a rig does with
+ * its arms, and a rig with no arm parts at all (every named special) gets no back
+ * copy instead of one floating behind its body.
+ */
+export function backArmPlacement(
+  model: Pick<ZombieModel, "parts">,
+  part: Pick<MutationPart, "ox" | "oy" | "ax" | "ay">,
+): BackArmPlacement | undefined {
+  const front = model.parts.find((p) => /ArmF(?:\.png)?$/i.test(p.file));
+  const back = model.parts.find((p) => /ArmB(?:\.png)?$/i.test(p.file));
+  if (!front || !back) return undefined;
+  // The authored mutation offset is tuned against the FRONT shoulder; shifting it by
+  // the rig's own front->back delta puts the copy on the back shoulder. Anchors move
+  // with it so the sprite still pivots (and scales) about the joint, not the claw.
+  return {
+    x: part.ox + (back.px - front.px),
+    y: -part.oy + (back.py - front.py),
+    ax: part.ax + (back.ax - front.ax),
+    ay: part.ay + (back.ay - front.ay),
+    z: back.z,
+    scale: BACK_ARM_SCALE,
+    tint: BACK_ARM_TINT,
+  };
 }

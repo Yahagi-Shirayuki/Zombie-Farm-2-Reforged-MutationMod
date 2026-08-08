@@ -20,6 +20,13 @@ export function brainDropTable(recommendedLevel: number) {
   }));
 }
 
+/** Chance (0..1) that a brain-eligible win pays ANY brains. The tiers above are rolled
+ *  independently, rarest first, and the first hit ends the roll — so the odds of walking
+ *  away empty-handed are the product of every tier's miss. Display only. */
+export function brainDropChance(recommendedLevel: number): number {
+  return 1 - brainDropTable(recommendedLevel).reduce((miss, tier) => miss * (1 - tier.chance), 1);
+}
+
 export function rollBrainDrop(recommendedLevel: number, random: () => number = Math.random): number {
   for (const tier of brainDropTable(recommendedLevel)) {
     if (random() < tier.chance) return tier.amount;

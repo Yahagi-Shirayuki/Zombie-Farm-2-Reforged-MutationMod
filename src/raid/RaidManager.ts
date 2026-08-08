@@ -27,16 +27,21 @@ import {
   power,
   raidTier,
   resolveStageWave,
-  rewardPreview,
+  boostDrops,
   seededRandom,
 } from "./RaidCatalog";
 import { ABILITY_TIER, ABILITY_POOL } from "../zombie/traits";
 import { displayTotals } from "../zombie/statDisplay";
 import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidOutcome, RaidStage } from "./types";
 import { rollLootTier } from "./LootTable";
-import { rollBrainDropWithPity, nextBrainDryStreak } from "./brainDrops";
+import { rollBrainDropWithPity, nextBrainDryStreak, brainDropChance, brainDropTable } from "./brainDrops";
 import { orderPartyRoster } from "./partySelection";
-import { rollRaidZombieDropWithPity, nextRaidZombieDryWins, hasRaidZombieDrop } from "./zombieDrops";
+import {
+  rollRaidZombieDropWithPity,
+  nextRaidZombieDryWins,
+  hasRaidZombieDrop,
+  RAID_ZOMBIE_DROPS,
+} from "./zombieDrops";
 import { raidBoostBundle } from "./lootBundles";
 
 /** Real grab-hazard art per raid id. Circus = the trapeze girl (extracted from the
@@ -65,7 +70,15 @@ export interface RaidCardView {
   /** XP actually on offer from this card: the enemy's `xp` if never cleared, else 0
    *  — XP is a one-time first-clear bonus (`firstTimeBeatingEnemy`). */
   firstClearXp: number;
-  rewardPreview: string[];
+  /** Brain payout odds for a boss win here: the chance of ANY brains, plus the
+   *  per-stack tiers behind it. The silent dry-streak floor is not represented — it
+   *  must stay invisible (see brainDrops.ts). */
+  brainOdds: { chance: number; tiers: { amount: number; chance: number }[] };
+  /** The rare zombie only this raid drops, at its base (no Golden Dice) chance.
+   *  null for the raids that have none. */
+  zombieDrop: { name: string; rate: number } | null;
+  /** Boosts on this raid's loot table, with the quantity one drop pays. */
+  boostDrops: { key: string; name: string; qty: number }[];
   introText: string;
   seasonal: boolean;
   unlocked: boolean; // level met AND playable
@@ -268,7 +281,14 @@ export class RaidManager {
         unlockLevel: r.unlockLevel,
         xp: r.xp,
         firstClearXp: this.state.hasClearedRaid(String(r.id)) ? 0 : r.xp,
-        rewardPreview: rewardPreview(r),
+        brainOdds: {
+          chance: brainDropChance(r.recommendedLevel),
+          tiers: brainDropTable(r.recommendedLevel),
+        },
+        zombieDrop: RAID_ZOMBIE_DROPS[r.id]
+          ? { name: RAID_ZOMBIE_DROPS[r.id].name, rate: RAID_ZOMBIE_DROPS[r.id].rate }
+          : null,
+        boostDrops: boostDrops(r, this.assets.boosts),
         introText: r.introText.replace(/\\n/g, "\n"),
         seasonal: r.seasonal,
         unlocked: isUnlocked(r, level),

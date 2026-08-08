@@ -6,8 +6,8 @@
 //
 // Animation: the head group rocks back/forth, the legs step while moving, and the
 // whole rig translates along its path.
-import { Container, Graphics, Sprite } from "pixi.js";
-import { GameAssets, ZombieModel } from "../assets";
+import { Container, Graphics, Sprite, Texture } from "pixi.js";
+import { GameAssets, MutationPart, ZombieModel } from "../assets";
 import { Field } from "../Field";
 import { depth, screenToGrid, tileCenter } from "../iso";
 import { setFootprint } from "../depthSort";
@@ -15,6 +15,7 @@ import { findEscape, findPath } from "../pathfind";
 import { OwnedZombie } from "./types";
 import { slotOf } from "./mutations";
 import {
+  backArmPlacement,
   isMutationForegroundPart,
   matchesMutationReplacement,
   mutationCoversFace,
@@ -359,11 +360,36 @@ export class ZombieUnit {
       } else {
         sp.zIndex = mp.z; // arms/body/collar keep their authored layering
         if (replacement === "armF") {
+          // A crop arm claims BOTH arms, so mirror it onto the back shoulder too.
+          // Pushed back-first, which keeps `arms` in the same back/front order the
+          // base rig produces (defaultArmB is authored before defaultArmF).
+          const back = this.addBackArm(model, mp, tex);
+          if (back) this.arms.push({ sp: back, baseRotation: back.rotation });
           this.arms.push({ sp, baseRotation: sp.rotation });
         }
       }
       this.parts.push(sp);
     }
+  }
+
+  /** The back-shoulder copy of a crop arm, or undefined on a rig with no back arm
+   *  (the named specials carry no arm parts at all). */
+  private addBackArm(
+    model: ZombieModel,
+    mp: MutationPart,
+    tex: Texture,
+  ): Sprite | undefined {
+    const at = backArmPlacement(model, mp);
+    if (!at) return undefined;
+    const sp = new Sprite(tex);
+    sp.anchor.set(at.ax, at.ay);
+    sp.position.set(at.x, at.y);
+    sp.scale.set(at.scale);
+    sp.tint = at.tint;
+    sp.zIndex = at.z;
+    this.root.addChild(sp);
+    this.parts.push(sp);
+    return sp;
   }
 
   setSelected(on: boolean) {

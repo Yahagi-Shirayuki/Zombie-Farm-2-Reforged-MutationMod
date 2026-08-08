@@ -52,4 +52,8 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0041_roster_color.sql'),
   ('0042_service_state.sql'),
   ('0043_black_market_brain_payout.sql'),
-  ('0044_black_market_mutation_width.sql');
+  ('0044_black_market_mutation_width.sql'),
+  ('0045_black_market_gold.sql'),
+  -- Data repair only (clamps in-flight Epic Boss runs to the 20-rung ladder); a fresh
+  -- database has no rows to repair, so baselining it is a no-op.
+  ('0046_epic_boss_twenty_level_ladder.sql');

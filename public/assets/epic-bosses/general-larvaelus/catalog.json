@@ -28,36 +28,16 @@
     64,
     74,
     88,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
     107
   ],
-  "maxLevel": 40,
+  "maxLevel": 20,
   "music": "music.wav",
   "punchSfx": "punch.wav",
   "introText": "General Larvaelus is here",
   "successText": "You beat General Larvaelus. They'll be back stronger than before!",
   "failedText": "General Larvaelus beat you",
   "unitStats": {
-    "str": 2,
+    "str": 3.2,
     "dex": 2,
     "con": 20,
     "attacks": [
@@ -144,37 +124,40 @@
   ],
   "loot": [
     {
-      "level": 10,
+      "level": 5,
       "name": "General Larvaelus' Banner",
       "sprite": "EPB_9_Banner.png",
       "tile": "generalLarvaelusBanner"
     },
     {
-      "level": 20,
+      "level": 10,
       "name": "General Larvaelus' Blue Portal",
       "sprite": "EPB_9Teleporter_A.png",
       "tile": "generalLarvaelusTeleporterA"
     },
     {
-      "level": 30,
+      "level": 15,
       "name": "General Larvaelus' Red Portal",
       "sprite": "EPB_9Teleporter_B.png",
       "tile": "generalLarvaelusTeleporterB"
     },
     {
-      "level": 35,
+      "level": 18,
       "name": "General Larvaelus' Portal",
       "sprite": "teleporter_default.png",
       "tile": "teleporter"
     },
     {
-      "level": 40,
+      "level": 20,
       "name": "Tame Larva",
       "sprite": "generalLarvaelusPet_default.png",
       "stageActor": "generalLarvaelusPetActor"
     }
   ],
-  "questIds": ["9000", "9011"],
+  "questIds": [
+    "9000",
+    "9011"
+  ],
   "portrait": "portrait.png",
   "lootIcon": "loot-icon.png",
   "questIcon": "quest-icon.png",

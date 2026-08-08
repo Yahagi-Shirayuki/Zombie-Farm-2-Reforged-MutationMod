@@ -45,7 +45,7 @@
     ],
     "con": 20,
     "dex": 2,
-    "str": 2
+    "str": 2.0
   },
   "animations": {
     "idle": {

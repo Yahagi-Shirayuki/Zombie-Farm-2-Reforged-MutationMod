@@ -223,6 +223,10 @@ export class Field {
   // Current ground/climate skin (a ground_index terrain key). The whole farm's
   // terrain tiles use this; changed by a Market → Upgrade → Ground purchase.
   climate = "grass";
+  // Fired after the skin actually changes — including when a save load applies a
+  // stored one. main uses it to re-theme everything OUTSIDE the farm (the scenery
+  // ring, the hills backdrop, the viewport filler) to match. See surroundings.ts.
+  onClimateChange: ((terrain: string) => void) | null = null;
 
   private ground: Sprite[][] = [];
   private plots = new Map<string, Plot>(); // key "oc,or"
@@ -303,6 +307,7 @@ export class Field {
         this.fit(sp, ground[file], col, row, 1);
       }
     }
+    this.onClimateChange?.(terrain);
   }
 
   /** Grow the ground grid to at least nw x nh tiles (never shrinks). Only the

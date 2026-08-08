@@ -16,6 +16,7 @@ import { RaidActor } from "./RaidActor";
 import { EnemyActor, type EnemyAttackPose } from "./EnemyActor";
 import { ParticleField, ParticleConfig } from "./Particles";
 import { ABILITY_POOL } from "../zombie/traits";
+import { ACTIVATED_ABILITY } from "../zombie/abilities";
 import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidLevelAsset, RaidOutcome } from "./types";
 import { RAID_MAX_INPUTS, RAID_TICK_MS, type RaidReplayInput } from "./replay";
 import {
@@ -94,6 +95,44 @@ export interface RaidSceneParams {
 const SMASH_KEYS = new Set(["bash", "bashV2"]);
 const SMASH_GROW = 0.4;
 const SMASH_SLAM_S = 0.18;
+
+// Explode / Explode Ver.2 — the one move that costs the player the zombie performing
+// it (BattleSim.stepWindup). It has to LOOK like it: a full-screen-ish fireball with a
+// shockwave that outruns it, a burst of sparks, a lingering smoke column, and a short
+// shake of the battlefield layers. Radii are in unscaled field pixels — everything is
+// multiplied by sizeScale() at draw time so it reads the same on a phone.
+const BLAST_LIFE_S = 0.85; // fireball + shockwave lifetime
+const BLAST_BALL_R = 132; // fireball radius at full swell
+const BLAST_RING_R = 260; // how far the shockwave ring races out
+const BLAST_SHAKE_S = 0.45;
+const BLAST_SHAKE_PX = 11;
+const FUSE_SPARK_S = 0.11; // spark cadence while the fuse burns down
+// Sparks thrown by the blast: a fast omnidirectional additive burst that falls under
+// gravity and shrinks to embers. Authored here rather than as a particles/*.json
+// because it has no ZF2R original to copy — the source never destroyed its exploder.
+const BLAST_SPARKS: ParticleConfig = {
+  maxParticles: 110,
+  angle: 90, angleVariance: 180,
+  speed: 300, speedVariance: 170,
+  gravityx: 0, gravityy: -520, // cocos y-UP: negative pulls the sparks down-screen
+  particleLifespan: 0.75, particleLifespanVariance: 0.35,
+  startParticleSize: 30, finishParticleSize: 3,
+  sourcePositionVariancex: 14, sourcePositionVariancey: 12,
+  startColorRed: 1, startColorGreen: 0.74, startColorBlue: 0.26, startColorAlpha: 1,
+  finishColorAlpha: 0,
+  rotatePerSecond: 0,
+  blendFuncDestination: 1, // additive — reads as fire, not as dust
+};
+// The same sparks, tiny and slow: the fuse fizzing while the zombie charges.
+const FUSE_SPARKS: ParticleConfig = {
+  ...BLAST_SPARKS,
+  maxParticles: 6,
+  speed: 90, speedVariance: 50,
+  gravityy: -260,
+  particleLifespan: 0.35, particleLifespanVariance: 0.15,
+  startParticleSize: 14, finishParticleSize: 2,
+  startColorRed: 1, startColorGreen: 0.86, startColorBlue: 0.42,
+};
 // Keep the T3/T4 Regular-zombie laser combat active while its beam presentation
 // is temporarily hidden. Flip this back on when the visual is ready to ship.
 const SHOW_REGULAR_ZOMBIE_LASERS = false;
@@ -320,7 +359,6 @@ interface Token {
   base: number; // half-width for the bars
   hpCenterX: number; // visual center of the actor in token-local coordinates
   topY: number; // y of the sprite top (negative), for the hp bar
-  pulse: number; // hit lunge, decays to 0
   atkCount: number; // basic hits landed; advances this zombie's bite/scratch alternation
   deathAnim: number; // seconds since death (-1 while alive); drives the fade+poof
   emerged: boolean; // has this token appeared on-field yet (for the spawn puff)
@@ -339,6 +377,8 @@ interface Token {
   healCastSeq: number; // last heal cast rendered for this Garden zombie
   healPose: number; // seconds remaining in the arms-overhead healing pose
   laserFxSeq: number; // last automatic laser event rendered for this unit
+  explodeFxSeq: number; // last self-destruct blast rendered for this unit
+  fuseT: number; // seconds accumulated toward the next Explode wind-up spark
 }
 
 async function loadTex(url: string): Promise<Texture | null> {
@@ -435,6 +475,8 @@ export class RaidScene {
   private fxLayer = new Container(); // transient effects (death poofs) above the field
   private fx: { g: Graphics; t: number; life: number; color: number }[] = [];
   private laserFx: { g: Graphics; t: number; life: number }[] = [];
+  private blastFx: { g: Graphics; t: number; scale: number }[] = [];
+  private shakeT = 0; // seconds left in the blast shake (0 = still)
   private brainLayer = new Container();
   private brainTex: Texture | null = null;
   private brainDrop = 0;
@@ -1056,10 +1098,11 @@ export class RaidScene {
     }
     return {
       root, actor, enemyActor, frameActor, epicActor, epicAnim: epicActor ? epicAnim : undefined,
-      hp, charge, base, hpCenterX, topY, pulse: 0, atkCount: 0,
+      hp, charge, base, hpCenterX, topY, atkCount: 0,
       deathAnim: -1, emerged: false, hpKey: -1, chargeKey: -1,
       smashSlam: -1, wasSmashWindup: 0, actorBaseScale, actorBaseY,
       healFxSeq: 0, healCastSeq: 0, healPose: 0, laserFxSeq: 0,
+      explodeFxSeq: 0, fuseT: 0,
     };
   }
 
@@ -1494,13 +1537,14 @@ export class RaidScene {
       }
 
       if (u.alive) {
-        // Normal zombies stay at a stable size; only enemies retain the compact hit
-        // pulse. Smash still scales the actor rig itself below as part of the move.
-        const pulseScale = u.team === "enemy" ? 1 + 0.16 * tok.pulse : 1;
+        // Every unit holds a stable size. Enemies used to swell 16% on each swing, but
+        // the rigs already lunge into their attacks and the impact dust already marks
+        // the hit, so the extra breathing only made them read as rubbery. Smash still
+        // scales the actor rig itself below — that one IS the move.
         // A wall shrinks as it's whittled down (ground truth ZFFightWall.damage: setScale),
         // to a 0.5 floor at 0 HP — a clear "keep hitting it" cue.
         const wallShrink = u.isWall ? 0.5 + 0.5 * Math.max(0, u.hp / u.maxHp) : 1;
-        tok.root.scale.set(pulseScale * szs * wallShrink);
+        tok.root.scale.set(szs * wallShrink);
         tok.root.alpha = 1;
       } else {
         // On death: puff a dust cloud once, then fade + settle out over DEATH_FADE
@@ -1521,12 +1565,18 @@ export class RaidScene {
         }
         tok.deathAnim += dtSec;
         const k = Math.min(1, tok.deathAnim / DEATH_FADE);
-        const pulseScale = u.team === "enemy" ? 1 + 0.16 * tok.pulse : 1;
-        tok.root.scale.set(pulseScale * (1 - 0.28 * k) * szs);
+        tok.root.scale.set((1 - 0.28 * k) * szs);
         tok.root.alpha = 1 - k;
         tok.root.y = sy + k * 7 * szs; // slight settle downward
       }
 
+      // Self-destruct: the blast is centred on the zombie's body, not its feet, so the
+      // fireball swallows it. Fires on the tick the sim killed it, before the death
+      // fade has moved the token anywhere.
+      if (u.explodeFxSeq > tok.explodeFxSeq) {
+        tok.explodeFxSeq = u.explodeFxSeq;
+        this.spawnExplosion(sx, sy + tok.topY * 0.5 * szs);
+      }
       if (u.healFxSeq > tok.healFxSeq) {
         tok.healFxSeq = u.healFxSeq;
         if (this.healCfg) this.particles.burst(this.healCfg, sx, sy + tok.topY * 0.45 * szs, 0.55);
@@ -1549,6 +1599,18 @@ export class RaidScene {
       const visualWindupMs = visualCountdown(u.windupMs, visualLeadMs, RAID_TICK_MS);
       const visualAttackMs = visualCountdown(u.timerMs, visualLeadMs, RAID_TICK_MS);
       const windup = u.windupKey ? 1 - visualWindupMs / Math.max(1, u.windupTotal) : 0;
+      // Fuse: while an Explode charge runs down, throw off sparks on a cadence that
+      // tightens as it fills — the zombie is visibly building to something, rather than
+      // just standing there with its arms up not attacking.
+      if (u.alive && ACTIVATED_ABILITY[u.windupKey ?? ""]?.suicide) {
+        tok.fuseT += dtSec;
+        if (tok.fuseT >= FUSE_SPARK_S * (1 - 0.55 * Math.max(0, Math.min(1, windup)))) {
+          tok.fuseT = 0;
+          this.particles.burst(FUSE_SPARKS, sx, sy + tok.topY * 0.85 * szs, 1);
+        }
+      } else if (tok.fuseT !== 0) {
+        tok.fuseT = 0;
+      }
       // The simulation advances at a fixed 50 ms cadence while rendering can run
       // faster. Use the velocity retained by the last simulation tick, rather than
       // comparing positions each render frame: the latter alternated moving/stopped
@@ -2046,7 +2108,67 @@ export class RaidScene {
     this.fx.push({ g, t: 0, life: 0.45, color });
   }
 
+  /** The Explode payoff: a big, loud, unmistakable fireball centred on the zombie that
+   *  just sacrificed itself. Four layers land at once — sparks and smoke through the
+   *  particle field, the fireball + shockwave as one additive Graphics, and a shake of
+   *  the combat layers — because any one of them alone reads as another dust puff. */
+  private spawnExplosion(x: number, y: number) {
+    const g = new Graphics();
+    g.position.set(x, y);
+    g.blendMode = "add"; // fire glows through whatever it overlaps
+    this.fxLayer.addChild(g);
+    this.blastFx.push({ g, t: 0, scale: this.sizeScale() });
+    this.particles.burst(BLAST_SPARKS, x, y, 1);
+    if (this.smokeCfg) this.particles.burst(this.smokeCfg, x, y, 1.6);
+    this.shakeT = BLAST_SHAKE_S;
+  }
+
+  /** Offset the combat layers (not the HUD, and not the stage art behind them) by a
+   *  decaying random jitter. Written only while a shake is live, and zeroed once, so
+   *  a still battlefield costs nothing. */
+  private stepShake(dtSec: number) {
+    if (this.shakeT <= 0) return;
+    this.shakeT = Math.max(0, this.shakeT - dtSec);
+    const k = this.shakeT / BLAST_SHAKE_S; // 1 → 0
+    const amp = BLAST_SHAKE_PX * this.sizeScale() * k * k;
+    const dx = amp * (Math.random() * 2 - 1);
+    const dy = amp * 0.6 * (Math.random() * 2 - 1);
+    for (const layer of [
+      this.tokenLayer, this.projLayer, this.fxLayer, this.particles.container,
+      this.brainLayer, this.grabLayer, this.crabLayer,
+    ]) {
+      layer.position.set(dx, dy);
+    }
+  }
+
+  private stepBlasts(dtSec: number) {
+    for (const b of this.blastFx) {
+      b.t += dtSec;
+      const k = Math.min(1, b.t / BLAST_LIFE_S);
+      const s = b.scale;
+      // Shockwave: outruns the fireball, thinning and fading as it goes.
+      const ringK = 1 - (1 - k) ** 2.2; // ease out hard — fastest at the instant of the blast
+      const ringR = (26 + BLAST_RING_R * ringK) * s;
+      const ringW = Math.max(1, 18 * (1 - k) ** 1.4) * s;
+      // Fireball: swells over the first 45% of the life, then collapses into the smoke.
+      const ballK = Math.min(1, k / 0.45);
+      const ballR = (24 + BLAST_BALL_R * (1 - (1 - ballK) ** 2)) * s;
+      const ballA = k < 0.45 ? 1 : Math.max(0, 1 - (k - 0.45) / 0.55) ** 1.3;
+      const coreA = Math.max(0, 1 - k / 0.28); // white-hot centre, gone almost at once
+      b.g.clear()
+        .circle(0, 0, ringR).stroke({ width: ringW, color: 0xffd489, alpha: (1 - k) ** 2 * 0.8 })
+        .circle(0, 0, ballR).fill({ color: 0xff6a12, alpha: 0.5 * ballA })
+        .circle(0, -8 * s * ballK, ballR * 0.7).fill({ color: 0xffb02e, alpha: 0.6 * ballA })
+        .circle(0, -14 * s * ballK, ballR * 0.42).fill({ color: 0xfff3c4, alpha: 0.85 * coreA });
+    }
+    if (this.blastFx.some((b) => b.t >= BLAST_LIFE_S)) {
+      for (const b of this.blastFx) if (b.t >= BLAST_LIFE_S) b.g.destroy();
+      this.blastFx = this.blastFx.filter((b) => b.t < BLAST_LIFE_S);
+    }
+  }
+
   private stepFx(dtSec: number) {
+    this.stepBlasts(dtSec);
     for (const e of this.fx) {
       e.t += dtSec;
       const k = Math.min(1, e.t / e.life);
@@ -2232,8 +2354,8 @@ export class RaidScene {
   update(dtSec: number) {
     const dtMs = Math.min(dtSec * 1000, 250);
     this.phaseT += dtMs;
-    for (const t of this.tokens.values()) t.pulse = Math.max(0, t.pulse - dtSec * 6);
     this.stepFx(dtSec);
+    this.stepShake(dtSec);
     this.stepBrainDrops(dtSec);
     this.particles.update(dtSec);
 
@@ -2308,7 +2430,6 @@ export class RaidScene {
                 strike = { unit: u, attackName };
               }
               if (t) {
-                t.pulse = 1;
                 t.atkCount++; // next basic swing uses the other animation and cue
                 // A small dust burst at the point of impact (victim's mid-body).
                 if (this.bashCfg && u.alive) {

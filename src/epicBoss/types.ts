@@ -25,6 +25,10 @@ export interface EpicBossDef {
   encounterMs: number;
   baseHp: number;
   multipliers: number[];
+  /** Rungs in this event's ladder. Every boss runs 20, which is exactly as many HP
+   *  multipliers as ZF2 ever authored (EpicBossHP.json): the seven bosses that used
+   *  to advertise 40 were padding levels 21-40 with a copy of level 20's multiplier,
+   *  so the back half of those ladders was 20 more fights at an unchanging 107x. */
   maxLevel: number;
   introText: string;
   successText: string;

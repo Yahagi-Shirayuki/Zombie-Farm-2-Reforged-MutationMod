@@ -86,6 +86,37 @@ describe("mutation-aware zombie portraits", () => {
       expect(child?.zIndex).toBeGreaterThan(mutationZ);
     }
   });
+
+  it("shows a crop arm on both arms, hiding the base pair behind it", () => {
+    // The card has to match the farm and battlefield rigs: one crop arm each side.
+    const twoArmed: ZombieModel = {
+      ...model,
+      parts: [
+        { file: "baseArmB", group: "root", px: -4, py: -22, ax: 1, ay: 0.45, z: 0, tint: true },
+        ...model.parts,
+      ],
+    };
+    const twoArmedAssets = {
+      ...assets,
+      zombieModels: { ...assets.zombieModels, twoArmed },
+      zombiePartTex: { ...assets.zombiePartTex, baseArmB: Texture.EMPTY },
+    } as unknown as GameAssets;
+
+    const rig = buildZombiePortraitRig(twoArmedAssets, "twoArmed", 8);
+    const children = rig.children as unknown as {
+      label: string; visible: boolean; zIndex: number; x: number; scale: { x: number };
+    }[];
+
+    expect(children.filter((child) => child.label === "turnip")).toHaveLength(2);
+    for (const label of ["baseArmB", "baseArmF"]) {
+      expect(children.find((child) => child.label === label)?.visible).toBe(false);
+    }
+    const [front, back] = children.filter((child) => child.label === "turnip");
+    expect(front.zIndex).toBe(8);
+    expect(back.zIndex).toBe(0); // behind the body, where the base back arm sat
+    expect(back.x).toBe(-4); // 8 + (-4 - 8): the rig's own front-to-back delta
+    expect(back.scale.x).toBeLessThan(front.scale.x);
+  });
 });
 
 // Each extraction blocks the main thread on a GPU readback (~30ms), and the panels
@@ -141,6 +172,52 @@ describe("portrait extraction scheduling", () => {
 
     expect(overlapped).toBe(false);
     expect(renderer.extract.base64).toHaveBeenCalledTimes(4);
+  });
+
+  // The Black Market lists other players' zombies, so every portrait on it is a cold
+  // extraction; leaving the panel mid-burst used to keep spending ~30ms frames on
+  // tiles that no longer existed, which reads as a lag spike on the farm behind it.
+  it("drops queued portraits once every tile waiting on them has gone", async () => {
+    stubOpaqueDecode();
+    const renderer = fakeRenderer(async () => "data:image/png;base64,ok");
+    const portraits = new MutationPortraits(renderer, assets);
+    let onScreen = true;
+
+    const requests = [0, 1, 8, 1024].map((mask) =>
+      portraits.get("test", mask, undefined, () => onScreen).catch(() => "dropped"));
+    onScreen = false; // the panel closes before the queue drains
+    const results = await Promise.all(requests);
+
+    expect(results).toEqual(["dropped", "dropped", "dropped", "dropped"]);
+    expect(renderer.extract.base64).not.toHaveBeenCalled();
+  });
+
+  it("keeps a portrait a second, still-visible tile is waiting on", async () => {
+    stubOpaqueDecode();
+    const renderer = fakeRenderer(async () => "data:image/png;base64,ok");
+    const portraits = new MutationPortraits(renderer, assets);
+
+    // Same zombie in a panel that closes and one that stays (e.g. the Mausoleum grid
+    // behind the market): the shared extraction has to survive for the survivor.
+    const closing = portraits.get("test", 1, undefined, () => false);
+    const staying = portraits.get("test", 1, undefined, () => true);
+
+    await expect(staying).resolves.toBe("data:image/png;base64,ok");
+    await expect(closing).resolves.toBe("data:image/png;base64,ok");
+  });
+
+  it("re-extracts an abandoned portrait later instead of writing it off", async () => {
+    stubOpaqueDecode();
+    const renderer = fakeRenderer(async () => "data:image/png;base64,ok");
+    const portraits = new MutationPortraits(renderer, assets);
+
+    // Abandoning must not spend the key's retry attempts, or a player who closes a
+    // panel quickly enough, twice, would never see that zombie's portrait again.
+    for (let attempt = 0; attempt < MAX_PORTRAIT_ATTEMPTS + 2; attempt++) {
+      await expect(portraits.get("test", 1, undefined, () => false)).rejects.toThrow();
+    }
+
+    await expect(portraits.get("test", 1)).resolves.toBe("data:image/png;base64,ok");
   });
 
   it("gives up on a portrait that keeps failing instead of retrying it forever", async () => {

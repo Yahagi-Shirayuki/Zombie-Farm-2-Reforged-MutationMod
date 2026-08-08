@@ -269,3 +269,26 @@ wrangler d1 execute zombiefarm --remote --json --command \
   "SELECT COUNT(*) AS suspect FROM black_market_orders \
    WHERE status='FULFILLED' AND payout_at IS NULL AND closed_at < <deploy_epoch_ms>"
 ```
+
+### Applying migration `0045_black_market_gold`
+
+Adds `black_market_orders.currency` and widens the price CHECK to 10,000,000, so a post
+can be priced in gold. **Migrate first, then deploy** — the safe order, and unlike 0043
+there is no window to sweep afterwards:
+
+* Migration before Worker: every existing row backfills to `'BRAINS'`, which is what it
+  was, and the old Worker keeps inserting brains posts (it never names the column, so the
+  DEFAULT applies). Nothing behaves differently until the new Worker is live.
+* Worker before migration: the new code names `currency` in its INSERT, so every post
+  500s until the migration lands. Same failure shape as 0043.
+
+The migration is a table REBUILD, and `black_market_receipts` cascades from the table it
+drops — it is written in 0044's order (receipts dropped first) for that reason, and
+rehearsed against real SQLite in `test/migration0045.test.ts`. After applying, the
+receipts ledger must be intact and every pre-existing post must read as brains:
+
+```sh
+wrangler d1 execute zombiefarm --remote --json --command \
+  "SELECT (SELECT COUNT(*) FROM black_market_receipts) AS receipts, \
+          (SELECT COUNT(*) FROM black_market_orders WHERE currency NOT IN ('BRAINS','GOLD')) AS bad_currency"
+```

@@ -2,6 +2,7 @@ import { Container, Rectangle, Sprite, type Renderer } from "pixi.js";
 import type { GameAssets, ZombieModel } from "../assets";
 import { slotOf } from "./mutations";
 import {
+  backArmPlacement,
   isMutationForegroundPart,
   matchesMutationReplacement,
   mutationCoversFace,
@@ -108,6 +109,21 @@ export function buildZombiePortraitRig(
     }
     sprite.zIndex = mutationPartZIndex(bit, part.group, part.z);
     root.addChild(sprite);
+    // A crop arm claims BOTH arms, so the card shows the same mirrored pair the
+    // farm and battlefield rigs assemble.
+    if (replacement === "armF") {
+      const at = backArmPlacement(model, part);
+      if (at) {
+        const back = new Sprite(texture);
+        back.label = part.file;
+        back.anchor.set(at.ax, at.ay);
+        back.position.set(at.x, at.y);
+        back.scale.set(at.scale);
+        back.tint = at.tint;
+        back.zIndex = at.z;
+        root.addChild(back);
+      }
+    }
   }
 
   root.scale.set(model.scale ?? 1);
@@ -120,6 +136,12 @@ export function buildZombiePortraitRig(
  *  tap — so without a ceiling a single zombie whose textures never loaded re-pays
  *  that cost on every interaction, forever. */
 export const MAX_PORTRAIT_ATTEMPTS = 2;
+
+/** Marks an extraction that was dropped before it ran because every tile waiting on
+ *  it had left the DOM. Callers already fall back to the static species portrait on
+ *  any rejection, so nothing has to special-case it; the cache checks for it so an
+ *  abandoned request does not spend one of the key's retry attempts. */
+const ABANDONED = "portrait request was abandoned";
 
 /** Hand the main thread back between extractions. Each one blocks on a GPU→CPU
  *  readback, so a panel that asks for fifty at once used to run them as a single
@@ -140,26 +162,61 @@ export class MutationPortraits {
   private failures = new Map<string, number>();
   /** Tail of the extraction chain — see enqueue(). */
   private queue: Promise<unknown> = Promise.resolve();
+  /** Liveness tests for the tiles still waiting on an in-flight extraction, per cache
+   *  key. One entry per requester, because several panels (or several tiles of one
+   *  panel) can be waiting on the same portrait. */
+  private wanted = new Map<string, (() => boolean)[]>();
 
   constructor(private renderer: Renderer, private assets: GameAssets) {}
 
-  get(key: string, mutation: number, color?: [number, number, number]): Promise<string> {
+  /**
+   * The portrait for one key/mask/colour, extracted at most once.
+   *
+   * `wanted` reports whether the tile that asked for it is still on screen. A queued
+   * extraction runs one per frame and blocks the main thread for ~30ms, so a panel
+   * the player closes mid-burst used to keep paying for portraits nobody could see —
+   * on the farm behind it, that reads as a lag spike *after* leaving the panel. The
+   * test is checked at the moment the request reaches the head of the queue, so work
+   * already started still finishes.
+   */
+  get(
+    key: string,
+    mutation: number,
+    color?: [number, number, number],
+    wanted?: () => boolean,
+  ): Promise<string> {
     // Normalize through the display prefs BEFORE the cache key is formed: a portrait
     // is cached by what it will look like, so flipping "show mutations" or the body
     // colour mode addresses a different entry instead of returning a stale one.
     ({ mutation, color } = displayedAppearance(mutation, color));
     const cacheKey = `${key}|${mutation}|${color?.join(",") ?? "default"}`;
     const existing = this.cache.get(cacheKey);
-    if (existing) return existing;
+    if (existing) {
+      // A later requester adopts the in-flight extraction, so its liveness test joins
+      // the others: the work survives as long as ANY tile waiting on it does.
+      if (wanted) this.wanted.get(cacheKey)?.push(wanted);
+      return existing;
+    }
     if ((this.failures.get(cacheKey) ?? 0) >= MAX_PORTRAIT_ATTEMPTS) {
       return Promise.reject(new Error(`portrait extraction gave up for ${cacheKey}`));
     }
-    const pending = this.enqueue(() => this.extract(key, mutation, color)).catch((error) => {
+    const watchers = wanted ? [wanted] : [];
+    this.wanted.set(cacheKey, watchers);
+    const pending = this.enqueue(() => {
+      if (watchers.length && !watchers.some((live) => live())) throw new Error(ABANDONED);
+      return this.extract(key, mutation, color);
+    }).catch((error) => {
       this.cache.delete(cacheKey);
-      this.failures.set(cacheKey, (this.failures.get(cacheKey) ?? 0) + 1);
+      // Abandoning is not failing: the extraction never ran, so it must not count
+      // against the two attempts this portrait gets before it is written off.
+      if (!(error instanceof Error && error.message === ABANDONED)) {
+        this.failures.set(cacheKey, (this.failures.get(cacheKey) ?? 0) + 1);
+      }
       throw error;
     });
     this.cache.set(cacheKey, pending);
+    // Settled either way, the watchers have nothing left to answer for.
+    void pending.then(() => this.wanted.delete(cacheKey), () => this.wanted.delete(cacheKey));
     return pending;
   }
 

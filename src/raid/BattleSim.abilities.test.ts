@@ -145,6 +145,108 @@ describe("activated ability display window", () => {
     for (let i = 0; i < 200 && presence(sim, "explode") && !sim.finished; i++) sim.step(50);
     expect(presence(sim, "explode")).toBe(false);
   });
+
+  // Explode is a suicide move (ruleset 19): the payoff lands, then the performer goes
+  // up with it. It is the army's biggest single hit and it costs a zombie.
+  it("kills the zombie that explodes, but only after its blast has landed", () => {
+    const imp = unit({
+      id: "imp", sourceKey: "ZombieActorSmallTier3", group: "Small", team: "player",
+      abilities: ["explode"], attackCooldownMs: 600,
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", hp: 1e6, maxHp: 1e6,
+    });
+    const sim = new BattleSim([imp], [enemy], null, true);
+    const p = sim.units.find((u) => u.id === "imp")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    p.state = "fight";
+    e.state = "hold";
+    expect(sim.activate("explode")).toBe(true);
+
+    const hpBefore = e.hp;
+    (sim as any).stepWindup(p, e, 1e6); // run the wind-up straight to its payoff
+    expect(e.hp).toBe(hpBefore - p.damage * 10); // the full 10× blast still connected
+    expect(e.stunMs).toBe(3000);
+    expect(p.alive).toBe(false); // ...and took the exploder with it
+    expect(p.explodeFxSeq).toBe(1); // renderer trigger for the fireball
+    expect(sim.outcome().losses).toContain("imp");
+  });
+
+  // Explode is a fuse the player lights on their own timing (ruleset 20). Standing in
+  // the combat zone is enough — an enemy does not have to be in front of the zombie at
+  // the moment of the tap, nor at the moment of the blast.
+  it("can be lit, and still detonates, with nothing in front of the zombie", () => {
+    const imp = unit({
+      id: "imp", sourceKey: "ZombieActorSmallTier3", group: "Small", team: "player",
+      abilities: ["explode"], attackCooldownMs: 600,
+    });
+    // Two enemies: the second is queued behind the first, so downing the first opens a
+    // real gap in which the army is in position with nothing to swing at.
+    const first = unit({ id: "e1", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
+    const next = unit({
+      id: "e2", sourceKey: "FarmStageActorFarmhand", team: "enemy", hp: 1e6, maxHp: 1e6,
+    });
+    const sim = new BattleSim([imp], [first, next], null, true);
+    const p = sim.units.find((u) => u.id === "imp")!;
+    const e1 = sim.units.find((u) => u.id === "e1")!;
+    for (let i = 0; i < 600 && p.state !== "fight"; i++) sim.step(50);
+    expect(p.state).toBe("fight");
+
+    (sim as any).dealDamage(e1, e1.hp, true); // front enemy down; the next has not walked on
+    sim.step(50);
+    expect(p.state).toBe("advance"); // in position, but not engaged
+    expect(sim.activate("explode")).toBe(true); // ...and the fuse lights anyway
+
+    // The charge keeps burning while the field in front is empty, and pays off on time.
+    const charge = p.windupTotal;
+    for (let elapsed = 0; elapsed <= charge + 100 && p.alive; elapsed += 50) sim.step(50);
+    expect(p.alive).toBe(false);
+    expect(p.explodeFxSeq).toBe(1);
+  });
+
+  it("detonates into an empty field without a target", () => {
+    const imp = unit({
+      id: "imp", sourceKey: "ZombieActorSmallTier3", group: "Small", team: "player",
+      abilities: ["explode"], attackCooldownMs: 600,
+    });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
+    const sim = new BattleSim([imp], [enemy], null, true);
+    const p = sim.units.find((u) => u.id === "imp")!;
+    p.state = "fight";
+    expect(sim.activate("explode")).toBe(true);
+
+    // The payoff with no foe at all: the area hit sweeps an empty field, hurts nobody,
+    // and still takes the exploder with it. Nothing here may throw on the null target.
+    expect(() => (sim as any).stepWindup(p, null, 1e6)).not.toThrow();
+    expect(p.alive).toBe(false);
+    expect(p.explodeFxSeq).toBe(1);
+    expect(sim.outcome().playerDamage).toBe(0);
+  });
+
+  it("lands no ordinary attacks while the explosion charges", () => {
+    const imp = unit({
+      id: "imp", sourceKey: "ZombieActorSmallTier3", group: "Small", team: "player",
+      abilities: ["explode"], attackCooldownMs: 600,
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", hp: 1e6, maxHp: 1e6,
+    });
+    const sim = new BattleSim([imp], [enemy], null, true);
+    const p = sim.units.find((u) => u.id === "imp")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    for (let i = 0; i < 400 && !sim.activate("explode"); i++) sim.step(50);
+    expect(p.windupKey).toBe("explode");
+
+    // Step most of the way through the charge; the enemy must not lose a single point
+    // of Life until the blast itself arrives.
+    const hpAtCommit = e.hp;
+    const charge = p.windupTotal;
+    for (let elapsed = 0; elapsed < charge - 100; elapsed += 50) {
+      sim.step(50);
+      expect(e.hp).toBe(hpAtCommit);
+    }
+    expect(p.windupKey).toBe("explode"); // still charging, still not swinging
+  });
 });
 
 describe("finished combat input", () => {

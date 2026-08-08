@@ -51,14 +51,24 @@ describe("RaidActor mutation rendering", () => {
       .toBeGreaterThan(actor.getSizingBounds().height);
   });
 
-  it("replaces the normal front arm and animates the mutation arm", () => {
+  it("replaces BOTH base arms and animates the mirrored mutation pair", () => {
     const actor = new RaidActor(assets(), "test", 8);
     const root = (actor as unknown as { root: { children: unknown[] } }).root;
-    const arms = (actor as unknown as { arms: { rotation: number }[] }).arms;
+    const arms = (actor as unknown as {
+      arms: { rotation: number; zIndex: number; x: number; scale: { x: number } }[];
+    }).arms;
 
-    // Back arm + body + eyes + mutation arm, plus the actor's placeholder feet.
+    // Body + eyes + jaw + the mutation's front and back arms, plus placeholder feet.
     expect(root.children).toHaveLength(8);
     expect(arms).toHaveLength(2);
+
+    // Registered back-first, matching the order the base rig produces — the walk
+    // sway and the scratch flail tell the two apart by index parity.
+    const [back, front] = arms;
+    expect(back.zIndex).toBe(0); // behind the body, where defaultArmB sat
+    expect(front.zIndex).toBe(8);
+    expect(back.x).toBe(-12); // the rig's own front-to-back shoulder delta
+    expect(back.scale.x).toBeLessThan(front.scale.x); // recedes, like the base back arm
 
     actor.poseArms(1, false, false, 0, 0);
     expect(arms.every((arm) => arm.rotation === -2.5)).toBe(true);

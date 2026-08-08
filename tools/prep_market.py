@@ -27,8 +27,9 @@ import re
 import sys
 
 from reforge_economy import (
-    CROP_REBALANCE, MUTANT_CLASS_REBALANCE, MUTANT_REBALANCE,
+    CROP_REBALANCE, MUTANT_CLASS_REBALANCE, MUTANT_REBALANCE, SPECIAL_STAT_REBALANCE,
     brain_price, rebalance_crop, rebalance_mutant, rebalance_mutant_class,
+    rebalance_special_stats,
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -213,6 +214,9 @@ def main():
             "mutation": 0, "tier": stats["tier"], "specialSprite": sprite,
             "rewardOnly": reward_only,
         }
+        # Applied after the source unitStats read, for the same reason the crop and
+        # mutant rebalances are: the join above would otherwise revert it.
+        rebalance_special_stats(key, data)
         if row: row.update(data)
         else: zombies.append(data)
     for z in zombies:
@@ -301,6 +305,13 @@ def main():
             z["level"] = 20
             z["brainsNeeded"] = True
             z["rewardOnly"] = False
+
+    unknown_specials = set(SPECIAL_STAT_REBALANCE) - {z["key"] for z in zombies}
+    if unknown_specials:
+        # A renamed key would otherwise silently leave that special on its ZF2 stats.
+        print("ERROR special stat rebalance keys not in zombies.json:",
+              *sorted(unknown_specials), sep="\n  ")
+        sys.exit(1)
 
     unknown_mutants = (set(MUTANT_REBALANCE) | set(MUTANT_CLASS_REBALANCE)) - {z["key"] for z in zombies}
     if unknown_mutants:

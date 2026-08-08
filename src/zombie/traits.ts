@@ -36,7 +36,10 @@ export interface StatMeta {
 // Descriptions are verbatim from the game binary.
 export const STATS: StatMeta[] = [
   { key: "str", label: "Damage", desc: "How much damage the zombie inflicts.", icon: `${ZD}stat_damage.png` },
-  { key: "dex", label: "Speed", desc: "How fast the zombie is.", icon: `${ZD}stat_speed.png` },
+  // Speed's shipped line ("How fast the zombie is") hides half of what dex does: it
+  // sets BOTH the advance speed and the attack interval (deriveAttackIntervalMs), so a
+  // high-Speed zombie swings more often as well as walking sooner. Spelled out here.
+  { key: "dex", label: "Speed", desc: "How fast the zombie moves and how quickly it attacks.", icon: `${ZD}stat_speed.png` },
   { key: "con", label: "Life", desc: "How much damage the zombie can take.", icon: `${ZD}stat_life.png` },
   { key: "focus", label: "Focus", desc: "How distracted the zombie is.", icon: `${ZD}stat_focus.png` },
 ];
@@ -91,7 +94,9 @@ export interface AbilityMeta {
 // The full 22-ability pool, keyed by its ability_*.png basename. Labels and
 // descriptions are the strings shipped in ZF2R. Effects summarize the behavior
 // recovered from ZF2R's ARMv7 methods and authored Attacks.json; they deliberately
-// do not describe the reimplementation's current approximations.
+// do not describe the reimplementation's current approximations. The one exception is
+// a deliberate DIVERGENCE that costs the player something: Explode now destroys the
+// zombie that uses it, so both explosion rows say so — a price the card must quote.
 export const ABILITY_POOL: Record<string, AbilityMeta> = {
   // ---- Tier 1 (mostly passive stat buffs; the buff IS the display name) ----
   buffAllStats: { label: "+5% All Stats", effect: "+5% All Stats", desc: "Zombie is a little stronger", icon: `${AB}ability_buffAllStats.png` },
@@ -108,14 +113,14 @@ export const ABILITY_POOL: Record<string, AbilityMeta> = {
   // ---- Tier 3 ----
   laserBeam: { label: "Laser Beam", effect: "Automatic shots for 10% Power", desc: "Shoot a laser beam while you're walking!", icon: `${AB}ability_laserBeam.png` },
   stun: { label: "Random Stun", effect: "4% chance to stun for 1 second", desc: "Small chance to stun your target", icon: `${AB}ability_stun.png` },
-  explode: { label: "Explode", effect: "One 10× area hit and 3-second stun", desc: "Zombie will explode and stun the enemy (use when fighting)", icon: `${AB}ability_explode.png` },
+  explode: { label: "Explode", effect: "One 10× area hit and 3-second stun; the zombie is destroyed", desc: "Zombie will explode and stun the enemy (use when fighting)", icon: `${AB}ability_explode.png` },
   bash: { label: "Bash", effect: "2.75× attack; 10-second recharge", desc: "Bashes the enemy when activated (use when fighting)", icon: `${AB}ability_bash.png` },
   turboSpeed: { label: "Turbo Walking Speed", effect: "2× walking speed", desc: "Zombie walks twice as fast", icon: `${AB}ability_turboSpeed.png` },
   ressurect: { label: "Resurrect", effect: "Revives one non-mini zombie once", desc: "Resurrect any zombie once", icon: `${AB}ability_ressurect.png` },
   // ---- Tier 4 (the ".Ver.2" upgrades of earlier abilities) ----
   zomBeam: { label: "Laser Beam Ver.2", effect: "Automatic laser at 2× the base firing rate", desc: "New and improved", icon: `${AB}ability_zomBeam.png` },
   doubleStrike: { label: "Double Strike", effect: "29% chance of a bonus strike", desc: "Small chance to hit twice", icon: `${AB}ability_doubleStrike.png` },
-  explodeV2: { label: "Explode Ver.2", effect: "One 10× area hit and 3-second stun; hits bosses", desc: "Can hit and stun the boss (use when fighting)", icon: `${AB}ability_explodeV2.png` },
+  explodeV2: { label: "Explode Ver.2", effect: "One 10× area hit and 3-second stun; hits bosses; the zombie is destroyed", desc: "Can hit and stun the boss (use when fighting)", icon: `${AB}ability_explodeV2.png` },
   bashV2: { label: "Smash", effect: "1.8× attack and 1-second stun; 10-second recharge", desc: "Smashes the enemy when activated (use when fighting)", icon: `${AB}ability_bashV2.png` },
   block: { label: "Block", effect: "9% chance to block an attack", desc: "Small chance to block any attack", icon: `${AB}ability_block.png` },
   healAOE: { label: "Heal All", effect: "50% Power to all injured zombies every 20 seconds", desc: "Heal all zombies every once in awhile", icon: `${AB}ability_healAOE.png` },

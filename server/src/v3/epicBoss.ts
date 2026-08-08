@@ -49,6 +49,30 @@ const parse = <T>(value: string | null | undefined, fallback: T): T => {
   try { return value ? JSON.parse(value) as T : fallback; } catch { return fallback; }
 };
 
+/** Pull a stored run down onto the ladder it is actually on.
+ *
+ *  The seven 40-rung events were cut to 20 (levels 21-40 were padding — every one of
+ *  them reused level 20's HP multiplier), so a run that was mid-flight across the
+ *  deploy can hold a level the boss no longer has. Migration 0046 repairs the stored
+ *  rows; this is the read-time twin, covering rows written between the deploy and the
+ *  migration, and any row a rollback re-raises.
+ *
+ *  Clamping is strictly in the player's favour and costs them nothing: level 20 and
+ *  level 40 are the same 107x fight, so `max_hp` is unchanged, but a run left above
+ *  the top would display as "25/20", would never match the retuned top-prize quest
+ *  (which now fires on level 20), and would be marked complete on its next win with
+ *  the omega zombie unclaimable. Clamped, that win IS the level-20 win: it grants the
+ *  prize and pays the top-tier bonus brain. Completed runs are left alone — their
+ *  ladder is already over and their prizes already paid. */
+const clampRun = <T extends RunRow | null>(row: T, cap?: number): T => {
+  if (!row || row.completed_at) return row;
+  const max = cap ?? defFor(row.boss_id)?.maxLevel;
+  if (!max || row.level <= max) return row;
+  const level = max;
+  const maxHp = epicBossHp(defFor(row.boss_id)!, level);
+  return { ...row, level, max_hp: maxHp, current_hp: Math.max(1, Math.min(row.current_hp, maxHp)) };
+};
+
 export const projectRun = (row: RunRow | null): EpicBossProjection | null => row ? ({
   runId: row.run_id, bossId: row.boss_id, activatedAt: row.activated_at,
   expiresAt: row.expires_at, level: row.level, maxHp: row.max_hp,
@@ -61,7 +85,7 @@ export const projectRun = (row: RunRow | null): EpicBossProjection | null => row
 
 export async function readRun(db: D1Database, accountId: string): Promise<EpicBossProjection | null> {
   return projectRun(await db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id = ?")
-    .bind(accountId).first<RunRow>());
+    .bind(accountId).first<RunRow>().then(clampRun));
 }
 
 export async function activate(
@@ -72,7 +96,7 @@ export async function activate(
   const [balance, current] = await Promise.all([
     db.prepare("SELECT gold, brains, xp FROM balances WHERE account_id = ?").bind(accountId)
       .first<{ gold: number; brains: number; xp: number }>(),
-    db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id = ?").bind(accountId).first<RunRow>(),
+    db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id = ?").bind(accountId).first<RunRow>().then(clampRun),
   ]);
   if (!balance) return { status: 409, body: { error: "state_conflict" } };
   if (current?.run_id === activationId) return { status: 200, body: { event: projectRun(current), balance } };
@@ -115,7 +139,7 @@ export async function end(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   if (typeof runId !== "string" || !runId) return { status: 400, body: { error: "bad_request" } };
   const run = await db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id=?")
-    .bind(accountId).first<RunRow>();
+    .bind(accountId).first<RunRow>().then(clampRun);
   if (!run || run.run_id !== runId) return { status: 409, body: { error: "inactive" } };
   // Repeating a successfully-ended request is harmless and returns the same run.
   if (run.completed_at || run.expires_at <= now) {
@@ -157,7 +181,7 @@ export async function start(
   if (!ids.length || ids.length > ARMY_CAP || ids.length !== (orderedUnitIds as unknown[]).length ||
       new Set(ids).size !== ids.length) return { status: 400, body: { error: "bad_roster" } };
   const [row, raid, epic, roster, balance, coreRow, raidState] = await Promise.all([
-    db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id=?").bind(accountId).first<RunRow>(),
+    db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id=?").bind(accountId).first<RunRow>().then(clampRun),
     db.prepare("SELECT id FROM raid_sessions_v3 WHERE account_id=? AND finished_at IS NULL").bind(accountId).first<{ id: string }>(),
     db.prepare("SELECT * FROM epic_boss_sessions_v3 WHERE account_id=? AND finished_at IS NULL").bind(accountId).first<SessionRow>(),
     db.prepare(`SELECT unit_id,zombie_key,mutation,invasions FROM roster_v3 WHERE account_id=? AND stored=0 AND locked_by_raid IS NULL
@@ -264,9 +288,14 @@ export async function finish(
     return { status: 409, body: { error: "expired" } };
   }
   const pinnedRun = await db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id=? AND run_id=?")
-    .bind(accountId, session.run_id).first<RunRow>();
+    .bind(accountId, session.run_id).first<RunRow>().then(clampRun);
   const def = pinnedRun ? defFor(pinnedRun.boss_id) : null;
   if (!def) return { status: 409, body: { error: "unknown_boss" } };
+  // A fight opened before the 40 -> 20 ladder cut pinned the old level into its session
+  // row. `clampRun` has just pulled the run down to the new top, so the equality check
+  // below would read the untouched session as stale and refuse a fight the player has
+  // already won. Clamp the session the same way — it is the same boss at the same HP.
+  if (session.level > def.maxLevel) session.level = def.maxLevel;
   const locked = parse<string[]>(session.roster_json, []);
   const pacedTick = Math.floor((now - session.started_at) / 50) + 40;
   if (Number(body.finalTick) > pacedTick) return { status: 422, body: { error: "future_finish" } };
@@ -299,7 +328,7 @@ export async function finish(
   const escapedRoster = verified.retreated
     ? locked.filter((id) => !losses.includes(id) && !survivors.includes(id)) : [];
   const [run, balance, coreRow, questRow, objectRow, rosterCounts, raidState] = await Promise.all([
-    db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id=? AND run_id=?").bind(accountId, session.run_id).first<RunRow>(),
+    db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id=? AND run_id=?").bind(accountId, session.run_id).first<RunRow>().then(clampRun),
     db.prepare("SELECT gold,brains,xp,claimed_level FROM balances WHERE account_id=?").bind(accountId).first<{gold:number;brains:number;xp:number;claimed_level:number}>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id=?").bind(accountId).first<{current_json:string}>(),
     db.prepare("SELECT version,current_json FROM quest_documents_v3 WHERE account_id=?").bind(accountId).first<{version:number;current_json:string}>(),

@@ -5,7 +5,8 @@ import { snapPlowOrigin } from "./plowSelection";
 // blocks — no 'unsafe-eval'). Side-effect import; must run before `new Application()`.
 // pixi.js lists ./lib/unsafe-eval/init.* under "sideEffects", so it survives bundling.
 import "pixi.js/unsafe-eval";
-import { loadAssets, ensureObjectTexture, ensureObjectTextures, objectSpriteFiles, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
+import { loadAssets, ensureBackgroundTexture, ensureObjectTexture, ensureObjectTextures, objectSpriteFiles, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
+import { pickPiece, type SceneryPiece, surroundingsTheme, themeObjectFiles } from "./surroundings";
 import { MAX_ZOMBIE_POTS, noRoomForAnother } from "./placementLimit";
 import { Field, CARROT, CropConfig, PLOT } from "./Field";
 import { Actor } from "./Actor";
@@ -165,7 +166,9 @@ async function main() {
   boot?.progress(0.35); // signed in — start filling the plate bar
   const app = new Application();
   await app.init({
-    background: "#67bb4e", // grass green around the farm, matching the backdrop hills
+    // Viewport filler beyond the backdrop: the grass-green of the default hills.
+    // Re-set per ground skin by applySurroundings (see surroundings.ts).
+    background: "#67bb4e",
     resizeTo: window,
     antialias: false,
     resolution: Math.min(window.devicePixelRatio || 1, 2),
@@ -186,7 +189,8 @@ async function main() {
   const hud = new Hud(state, audio, playMode);
   hud.setPlayStatus(playMode, playMode === "online" ? "reconnecting" : "synced");
   const mutationPortraits = new MutationPortraits(app.renderer, assets);
-  hud.zombieMutationPortraitOf = (key, mutation, color) => mutationPortraits.get(key, mutation, color);
+  hud.zombieMutationPortraitOf = (key, mutation, color, wanted) =>
+    mutationPortraits.get(key, mutation, color, wanted);
   hud.setFarmerCatalog(assets.farmer);
   hud.setPetCatalog(assets.pets);
   // Give Android/browser Back an in-app dismissal layer. One guard entry keeps the
@@ -385,7 +389,7 @@ async function main() {
   // Fertilize leaf FX draw above crops/actors (below night so they dim at dusk).
   world.addChild(field.fxLayer);
 
-  // Decorative foliage on the grass AROUND the farm — never on a farm tile. It's
+  // Decorative scenery on the land AROUND the farm — never on a farm tile. It's
   // added to the depth-sorted entity layer (zIndex = grid depth) so trees south of
   // the farm draw in front of it and northern ones behind, matching placed trees.
   // Purely visual: not registered in the tile grid, so it blocks nothing.
@@ -394,13 +398,31 @@ async function main() {
   // (old foliage would otherwise end up sitting ON the newly-added farm tiles). We
   // track the sprites and regenerate them against the current bounds. The RNG is
   // seeded per field size so a given farm size always yields the same stable layout.
+  //
+  // WHAT gets scattered comes from the applied ground skin (see surroundings.ts):
+  // grass keeps the temperate trees/shrubs, the sandy skin gets palms and a
+  // shipwrecked pirate's cargo, and so on.
   let foliage: Sprite[] = [];
   // A visit may display the friend's selection, but must never overwrite this
   // device's own preference in localStorage.
   let displayedFarmBackground: FarmBackground = getFarmBackground();
+  let surroundings = surroundingsTheme(field.climate);
+  // Bumped by every build so a texture load that finishes after a later rebuild
+  // (or a theme switch) resolves into a no-op instead of a duplicate ring.
+  let foliageGeneration = 0;
   const buildFoliage = () => {
+    const generation = ++foliageGeneration;
     for (const s of foliage) { s.parent?.removeChild(s); s.destroy(); }
     foliage = [];
+    // Theme pieces are ordinary object art, which loads lazily. Draw with whatever
+    // is already resident, and rebuild once the rest of this theme's art arrives.
+    const missing = themeObjectFiles(surroundings).filter((f) => !assets.objects[f]);
+    if (missing.length) {
+      void Promise.all(missing.map((f) => ensureObjectTexture(assets, f).catch(() => null)))
+        .then(() => { if (generation === foliageGeneration) buildFoliage(); });
+    }
+    const pieceTexture = (p: SceneryPiece): Texture | null =>
+      (p.scenery ? assets.scenery[p.file] : assets.objects[p.file]) ?? null;
     const objScale = TILE_W / assets.field.tileW;
     let seed = 20240706 ^ (field.w << 8) ^ field.h;
     const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
@@ -440,8 +462,15 @@ async function main() {
         // is populated per the Farm Background setting.
         if (r1 >= accept) continue;
         const isTree = d >= 4.5 && r2 < 0.5;
-        const tex = isTree ? assets.scenery[0] : assets.scenery[1 + Math.floor(r3 * 3)];
-        const s = objScale * (isTree ? 0.7 + r3 * 0.28 : 0.55 + r3 * 0.3);
+        // Piece choice is hashed off the lattice point, not drawn from `rnd`: the
+        // draws left also set the SIZE, so sharing one would tie every big piece to
+        // the same object. Sizes are multiples of the piece's NATIVE object scale,
+        // so a scenery palm matches a placed one exactly.
+        const piece = pickPiece(isTree ? surroundings.trees : surroundings.props, u, v);
+        const tex = pieceTexture(piece);
+        if (!tex) continue; // theme art still loading — the rebuild above fills it in
+        const s = objScale * (piece.scale ?? 1) *
+          (isTree ? 0.85 + r3 * 0.30 : 0.80 + r3 * 0.35);
         const sp = new Sprite(tex);
         sp.anchor.set(0.5, 1);
         sp.scale.set(s);
@@ -555,11 +584,12 @@ async function main() {
     actor.setLanternVisible(on);
     lanternInner.visible = on;
     lanternOuter.visible = on;
-    // Leave the viewport FILLER (the area beyond the hills backdrop) the daytime
-    // hill/grass green in both modes — it's the exact colour of the backdrop hills
-    // (sampled 0x67bb4e). At night the NightLayer's dark overlay covers the whole
-    // screen, so it darkens this filler by the SAME amount as the hills; they read
-    // as one continuous surface instead of the hills floating over a near-black void.
+    // Leave the viewport FILLER (the area beyond the hills backdrop) at its daytime
+    // colour in both modes — it's the exact mid-hill colour of the current skin's
+    // backdrop (surroundings.ts `filler`). At night the NightLayer's dark overlay
+    // covers the whole screen, so it darkens this filler by the SAME amount as the
+    // hills; they read as one continuous surface instead of the hills floating over
+    // a near-black void.
   };
   let dayNightMode: DayNightMode = getDayNightMode();
   const syncEnvironment = () => {
@@ -639,6 +669,28 @@ async function main() {
     buildFoliage();
   };
   syncWorldToFarm();
+
+  // Re-dress everything OUTSIDE the farm to match the applied ground skin: the
+  // scatter of trees/props, the hills-and-sky backdrop, and the viewport filler
+  // beyond it. The filler must stay the backdrop's own mid-hill colour so the two
+  // read as one surface — at night the darkness overlay dims both by the same
+  // amount, and any mismatch shows up as the hills floating over a void.
+  const applySurroundings = (terrain: string) => {
+    const theme = surroundingsTheme(terrain);
+    if (theme === surroundings) return;
+    surroundings = theme;
+    buildFoliage();
+    app.renderer.background.color = theme.filler;
+    void ensureBackgroundTexture(assets, theme.background).then((tex) => {
+      if (surroundings !== theme) return; // skin changed again while loading
+      background.texture = tex;
+    }).catch((e) => console.warn(`[surroundings] backdrop ${theme.background} failed`, e));
+  };
+  // Fires for a Market purchase, re-applying an owned skin, AND a save load
+  // restoring one. Wired after the first world sync so a callback can never run
+  // before the backdrop/bounds/foliage it re-dresses exist.
+  field.onClimateChange = applySurroundings;
+  applySurroundings(field.climate);
 
   const minSceneZoom = () => Math.max(
     MIN_ZOOM,
@@ -2931,24 +2983,27 @@ async function main() {
   hud.onCollectBlackMarketOrder = async (orderId, awaitingClaim) => {
     // A card that owes this account a zombie mints it here, so that side needs the
     // same writer preparation as any other external mutation. A pure acknowledgment
-    // (the brains-earned card) still does not.
+    // (the payment-earned card) still does not.
     if (awaitingClaim) await economy?.prepareExternalMutation();
-    // The BALANCE has to move on screen either way: a sale's brains are PAID OUT by
-    // this call (the market held them until now), and a filled request's were credited
+    // The BALANCE has to move on screen either way: a sale's payment is PAID OUT by
+    // this call (the market held it until now), and a filled request's was credited
     // at settlement — an event this client never observed. Without adopting a fresh
     // balance neither shows up until the next bootstrap or command batch.
     const result = await api.collectBlackMarketOrder(orderId);
+    // Exactly one of these is set, by the post's own currency; the panel already knows
+    // which coin the card was priced in, so it only needs the amount.
+    const paid = result.brainsPaid ?? result.goldPaid ?? 0;
     // A claimed zombie arrives as a roster row this client has never seen, and a payout
     // bumps the account version server-side (it moves real currency). Both need the
     // authoritative refresh rather than the cheap balance adopt: adopting a balance
     // alone would leave this client's expectedAccountVersion one behind, so its very
     // next command batch would 409 into a conflict rebase.
-    if (result.claimed || result.brainsPaid) await economy?.refreshAuthoritative();
+    if (result.claimed || paid) await economy?.refreshAuthoritative();
     // Remain compatible while the manually deployed Worker rolls forward: an older
     // one omits the balance, so pay for a second round-trip only in that case.
     else if (result.balance) economy?.adoptExternalBalance(result.balance);
     else await economy?.refreshAuthoritative();
-    return { claimed: result.claimed ?? null, brainsPaid: result.brainsPaid ?? 0 };
+    return { claimed: result.claimed ?? null, paid };
   };
   hud.getBlackMarketHistory = () => api.blackMarketHistory();
   hud.refreshFriends = async () => {
@@ -3077,10 +3132,20 @@ async function main() {
         : `${zombies} Black Market zombies are waiting for you! Visit the market to collect. 🧟`);
       else {
         // Name the money when the market is holding some: this toast used to promise a
-        // "collect" that only dismissed a notice, because the brains had already landed.
-        const brains = rows.reduce((total, row) => total + (row.awaitingPayout ? row.priceBrains : 0), 0);
-        hud.showToast(brains
-          ? `${brains} brains from your Black Market sales are waiting! Visit the market to collect. 💰`
+        // "collect" that only dismissed a notice, because the payment had already landed.
+        // Sales can be priced in either currency, so both are named when both are owed.
+        const owed = (["GOLD", "BRAINS"] as const)
+          .map((currency) => ({
+            currency,
+            amount: rows.reduce((total, row) =>
+              total + (row.awaitingPayout && row.currency === currency ? row.price : 0), 0),
+          }))
+          .filter((entry) => entry.amount > 0)
+          .map((entry) => entry.currency === "GOLD"
+            ? `${entry.amount.toLocaleString()} gold`
+            : `${entry.amount.toLocaleString()} brain${entry.amount === 1 ? "" : "s"}`);
+        hud.showToast(owed.length
+          ? `${owed.join(" and ")} from your Black Market sales are waiting! Visit the market to collect. 💰`
           : n === 1
             ? "One of your Black Market posts was fulfilled! Visit the market to collect. 💰"
             : `${n} of your Black Market posts were fulfilled! Visit the market to collect. 💰`);

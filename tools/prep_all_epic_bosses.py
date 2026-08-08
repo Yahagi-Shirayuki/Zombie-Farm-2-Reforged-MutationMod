@@ -40,7 +40,16 @@ QUEST_ICONS = {
     4: "Icon_Quest_FoulOwl.png",
     5: "questIcon_EP_Boss7.png",
 }
-MAX_LEVELS = {1: 20, 2: 40, 3: 40, 4: 40, 5: 40}
+# Every event runs 20 levels, which is exactly as many HP multipliers as ZF2 authored
+# (EpicBossHP.json LevelMultiplier). The bosses that used to advertise 40 were getting
+# levels 21-40 padded with a copy of level 20's multiplier by multipliers() below, so the
+# back half of those ladders was 20 more fights that never got any harder. Loot and quest
+# thresholds are halved to match (see prep_quests.py EPIC_LADDER_SCALE).
+MAX_LEVEL = 20
+# What the 40-rung bosses used to advertise. Only used to rescale the loot/quest
+# thresholds that were authored against it.
+SOURCE_MAX_LEVEL = 40
+MAX_LEVELS = {1: MAX_LEVEL, 2: MAX_LEVEL, 3: MAX_LEVEL, 4: MAX_LEVEL, 5: MAX_LEVEL}
 QUEST_IDS = {
     1: ["1000", "1001", "1002", "1003", "1010", "1011"],
     2: ["2000", "2001", "2002", "2003", "2004", "2005", "2006", "2010", "2011"],
@@ -51,15 +60,15 @@ QUEST_IDS = {
     5: ["5000", "5011"],
 }
 SKUNK_LOOT = [
-    {"level": 5, "name": "Skunkarella's Perfume", "tile": "perfumeVat", "sprite": "Perfume_Vat.png"},
-    {"level": 10, "name": "Skunkarella's Scarecrow", "tile": "fashionableScarecrow", "sprite": "Fashionable_Scarecrow.png"},
-    {"level": 15, "name": "Skunkarella's Mirror", "tile": "evilMirror", "sprite": "Fancy_Evil_Mirror.png"},
-    {"level": 20, "name": "Skunkarella's Gravestone", "tile": "bedazzledGravestone", "sprite": "blingn_Gravestone.png"},
-    {"level": 25, "name": "Skunkarella's Fountain", "tile": "fancyFountain", "sprite": "fancyChocoFountain_default.png"},
-    {"level": 30, "name": "Skunkarella's Gazebo", "tile": "crystalGazebo", "sprite": "Crystal_Gazebo.png"},
-    {"level": 35, "name": "Skunkarella's Car", "tile": "diamondCar", "sprite": "Diamond_Car.png"},
-    {"level": 37, "name": "Skunkarella's Home", "tile": "jewelHome", "sprite": "Jewel_Home.png"},
-    {"level": 39, "name": "Tame Skunk", "stageActor": "skunkPetActor", "sprite": "skunkPet_default.png"},
+    {"level": 3, "name": "Skunkarella's Perfume", "tile": "perfumeVat", "sprite": "Perfume_Vat.png"},
+    {"level": 5, "name": "Skunkarella's Scarecrow", "tile": "fashionableScarecrow", "sprite": "Fashionable_Scarecrow.png"},
+    {"level": 8, "name": "Skunkarella's Mirror", "tile": "evilMirror", "sprite": "Fancy_Evil_Mirror.png"},
+    {"level": 10, "name": "Skunkarella's Gravestone", "tile": "bedazzledGravestone", "sprite": "blingn_Gravestone.png"},
+    {"level": 13, "name": "Skunkarella's Fountain", "tile": "fancyFountain", "sprite": "fancyChocoFountain_default.png"},
+    {"level": 15, "name": "Skunkarella's Gazebo", "tile": "crystalGazebo", "sprite": "Crystal_Gazebo.png"},
+    {"level": 18, "name": "Skunkarella's Car", "tile": "diamondCar", "sprite": "Diamond_Car.png"},
+    {"level": 19, "name": "Skunkarella's Home", "tile": "jewelHome", "sprite": "Jewel_Home.png"},
+    {"level": 20, "name": "Tame Skunk", "stageActor": "skunkPetActor", "sprite": "skunkPet_default.png"},
 ]
 
 LATE_BOSSES = [
@@ -75,11 +84,11 @@ LATE_BOSSES = [
                     "Rocky_Beetle_MarketIcons.png", "rockyRhinoPet_default.png",
                     "rockyRhinoPet_default.plist", "rockyrhinogong.mp3"],
         "loot": [
-            (10, "Rocky Rhino's Banner", "rockyRhinosBanner", "EPB8_BANNER1.png", None),
-            (20, "Rocky Rhino's Cave", "rockyRhinosCave", "EPB8_CAVE.png", None),
-            (30, "Rocky Rhino's Gong", "rockyRhinosGong", "ROCKY_RHINO_GONG.png", None),
-            (35, "Rocky Rhino's Sculpture", "rockyRhinosSculpture", "Rocky_Beetle.png", None),
-            (40, "Tame Rhino", None, "rockyRhinoPet_default.png", "rockyRhinoPetActor"),
+            (5, "Rocky Rhino's Banner", "rockyRhinosBanner", "EPB8_BANNER1.png", None),
+            (10, "Rocky Rhino's Cave", "rockyRhinosCave", "EPB8_CAVE.png", None),
+            (15, "Rocky Rhino's Gong", "rockyRhinosGong", "ROCKY_RHINO_GONG.png", None),
+            (18, "Rocky Rhino's Sculpture", "rockyRhinosSculpture", "Rocky_Beetle.png", None),
+            (20, "Tame Rhino", None, "rockyRhinoPet_default.png", "rockyRhinoPetActor"),
         ],
     },
     {
@@ -94,11 +103,11 @@ LATE_BOSSES = [
                     "Icon_MarketItems_EPB9_B_TELEPORTER.png", "Icon_MarketItems_EPB9_MAIN_TELEPORTER.png",
                     "generalLarvaelusPet_default.png", "generalLarvaelusPet_default.plist"],
         "loot": [
-            (10, "General Larvaelus' Banner", "generalLarvaelusBanner", "EPB_9_Banner.png", None),
-            (20, "General Larvaelus' Blue Portal", "generalLarvaelusTeleporterA", "EPB_9Teleporter_A.png", None),
-            (30, "General Larvaelus' Red Portal", "generalLarvaelusTeleporterB", "EPB_9Teleporter_B.png", None),
-            (35, "General Larvaelus' Portal", "teleporter", "teleporter_default.png", None),
-            (40, "Tame Larva", None, "generalLarvaelusPet_default.png", "generalLarvaelusPetActor"),
+            (5, "General Larvaelus' Banner", "generalLarvaelusBanner", "EPB_9_Banner.png", None),
+            (10, "General Larvaelus' Blue Portal", "generalLarvaelusTeleporterA", "EPB_9Teleporter_A.png", None),
+            (15, "General Larvaelus' Red Portal", "generalLarvaelusTeleporterB", "EPB_9Teleporter_B.png", None),
+            (18, "General Larvaelus' Portal", "teleporter", "teleporter_default.png", None),
+            (20, "Tame Larva", None, "generalLarvaelusPet_default.png", "generalLarvaelusPetActor"),
         ],
     },
     {
@@ -113,9 +122,9 @@ LATE_BOSSES = [
                     "ZOMTAR_EPB10_default.png", "ZOMTAR_EPB10_default.plist",
                     "ZOMTAR_PARTICLE.plist", "tameMamba_default.png", "tameMamba_default.plist"],
         "loot": [
-            (15, "Mystical Mamba Banner", "mysticalMambaBanner", "EPB_10_BANNER.png", None),
-            (30, "Mystical Mamba's Wish Machine", "mysticalMambasWishMachineLeft", "zomtarMachine_default.png", None),
-            (40, "Tame Mamba", None, "tameMamba_default.png", "tameMamba"),
+            (8, "Mystical Mamba Banner", "mysticalMambaBanner", "EPB_10_BANNER.png", None),
+            (15, "Mystical Mamba's Wish Machine", "mysticalMambasWishMachineLeft", "zomtarMachine_default.png", None),
+            (20, "Tame Mamba", None, "tameMamba_default.png", "tameMamba"),
         ],
     },
 ]
@@ -165,7 +174,91 @@ def copy(out: Path, source: str, target: str | None = None) -> str | None:
 
 
 def multipliers(raw: list[float], max_level: int) -> list[float]:
+    """The HP curve for a `max_level`-rung ladder.
+
+    The padding branch is kept for a hypothetical ladder longer than the authored
+    curve, but no boss uses it any more: MAX_LEVEL is the authored length, so every
+    ladder is now a straight truncation and the flat 107x tail is gone.
+    """
     return raw[:max_level] + [raw[-1]] * max(0, max_level - len(raw))
+
+
+# ---- Per-boss damage ramp -------------------------------------------------
+# Every epic boss shipped dealing exactly 40 DPS (str 2 / dex 2, or Skunkarella's
+# str 1 / dex 4 — the same rate with faster, smaller hits), at every level of every
+# ladder. Boss HP scales, boss damage never did, so the eight events were identical
+# in threat and differed only in how many attempts they took.
+#
+# HP is the wrong difficulty knob here: a fight is capped at 30 s and damage carries
+# over between attempts, so more HP buys only more attempts, and each attempt costs a
+# harvest token or a brain. That is grind, not difficulty. Incoming damage is the one
+# lever that raises the bar without adding a single attempt.
+#
+# So damage ramps with the boss's unlock level (see src/epicBoss/catalog.ts
+# EPIC_BOSS_UNLOCK_LEVELS). `dex` is deliberately untouched — it is each boss's
+# hit-rhythm character, and Skunkarella's fast small hits are its signature.
+#
+# CALIBRATION: measured in BattleSim with the fight PLAYED CORRECTLY (brain bubbles
+# released), not modelled. Two properties break any closed-form estimate:
+#   * only a handful of zombies are engaged at once, so a 20-strong army does not bring
+#     20 zombies' worth of damage and incoming damage concentrates on the front slot;
+#   * a level takes many attempts and damage carries over, so nearly every attempt runs
+#     the full 30 s. Casualties are permanent and a full clear is 40+ attempts, so a boss
+#     that can kill the front unit kills one PER ATTEMPT, not one per level.
+# The ramp is therefore tuned by "how many of the 30 obtainable specials survive 30 s in
+# the front slot", which narrows smoothly:
+#
+#   Dr. Groundhog      x1.00  str 2.00  dex 2   40 DPS   28/30 front-liners safe
+#   Bully Frog         x1.20  str 2.40  dex 2   48 DPS   26/30
+#   Rocky Rhino        x1.40  str 2.80  dex 2   56 DPS   26/30
+#   General Larvaelus  x1.60  str 3.20  dex 2   64 DPS   23/30
+#   Mystical Mamba     x1.80  str 3.60  dex 2   72 DPS   21/30
+#   Foul Owl           x2.00  str 4.00  dex 2   80 DPS   21/30
+#   Skunkarella        x2.25  str 2.25  dex 4   90 DPS   18/30  (from its str 1 base, NOT 2)
+#   Loco Locust        x2.50  str 5.00  dex 2  100 DPS   15/30
+#
+# The cap is x2.5 on purpose. At x3 the top boss's own top prize (Vagabond Zombie, 2835 HP)
+# can no longer tank its own event, which is perverse; at x2.5 every event's signature prize
+# stays a legal front-liner, the Market-bought Headless wall (Bombie, 3267 HP) answers the
+# whole ladder, and the thin damage-dealers (Zomtar/Zombug 1575, Zomdini 1260) cannot hold
+# the line from General Larvaelus onward. src/epicBoss/combat.test.ts pins all of that and
+# asserts x3 WOULD kill Vagabond, so raising the ramp fails loudly instead of silently.
+EPIC_BOSS_DAMAGE = {
+    1: 2.0,    # Dr. Groundhog     x1.00 (unchanged)
+    2: 5.0,    # Loco Locust       x2.50
+    3: 2.4,    # Bully Frog        x1.20
+    4: 4.0,    # Foul Owl          x2.00
+    5: 2.25,   # Skunkarella       x2.25 of its str 1 base
+    8: 2.8,    # Rocky Rhino       x1.40
+    9: 3.2,    # General Larvaelus x1.60
+    10: 3.6,   # Mystical Mamba    x1.80
+}
+
+
+def ramp_damage(unit_stats: dict, source_id: int) -> dict:
+    """Apply this boss's authored attack power from EPIC_BOSS_DAMAGE.
+
+    Returns a copy — the caller's source dict is left alone. Raises if the boss has
+    no entry, so a newly added event has to make a deliberate difficulty choice
+    rather than silently inheriting the flat 40 DPS every boss used to share.
+    """
+    if source_id not in EPIC_BOSS_DAMAGE:
+        raise SystemExit(f"epic boss {source_id} has no EPIC_BOSS_DAMAGE entry")
+    return {**unit_stats, "str": EPIC_BOSS_DAMAGE[source_id]}
+
+
+def scale_loot_levels(loot: list[dict], source_id: int) -> list[dict]:
+    """Move a boss's loot thresholds onto the 20-rung ladder.
+
+    Dr. Groundhog (source 1) was authored at 20 and is returned untouched. Every other
+    shipped boss placed its loot across 40 rungs, so each threshold is halved (rounded
+    up) — the same transform prep_quests.py applies to that boss's quest levels, which
+    keeps a prize and the quest that announces it on the same rung.
+    """
+    if source_id == 1:
+        return loot
+    return [{**item, "level": -(-int(item["level"]) * MAX_LEVEL // SOURCE_MAX_LEVEL)}
+            for item in loot]
 
 
 def common_catalog(source_id: int, slug: str, name: str, max_level: int,
@@ -209,7 +302,9 @@ def prepare_authored(boss: dict, hp: dict, params: dict) -> None:
         (boss["bossSpriteSheeetData"], "source-sheet.plist"),
     ]
     copied = [x for source, target in mappings if (x := copy(out, source, target))]
-    loot = SKUNK_LOOT if source_id == 5 else boss.get("loot", [])
+    # SKUNK_LOOT is already authored on the 20-rung scale; the source loot of the other
+    # 40-rung bosses is not, so scale it the same way the quest thresholds are scaled.
+    loot = SKUNK_LOOT if source_id == 5 else scale_loot_levels(boss.get("loot", []), source_id)
     for item in loot:
         if item.get("sprite"):
             copied_name = copy(out, item["sprite"])
@@ -229,7 +324,8 @@ def prepare_authored(boss: dict, hp: dict, params: dict) -> None:
     catalog = common_catalog(source_id, slug, boss["bossName"], MAX_LEVELS[source_id], hp, params)
     catalog.update({
         "introText": boss["introText"], "successText": boss["invasionSuccessText"],
-        "failedText": boss["invasionFailedText"], "unitStats": boss["UnitStats"],
+        "failedText": boss["invasionFailedText"],
+        "unitStats": ramp_damage(boss["UnitStats"], source_id),
         "animations": animations, "levelAssets": layers, "loot": loot,
         "questIds": QUEST_IDS[source_id],
         "portrait": "portrait.png", "lootIcon": "loot-icon.png", "questIcon": "quest-icon.png",
@@ -269,13 +365,14 @@ def prepare_late(boss: dict, hp: dict, params: dict) -> None:
     loot = [{"level": level, "name": name, "sprite": sprite,
              **({"tile": tile} if tile else {}), **({"stageActor": actor} if actor else {})}
             for level, name, tile, sprite, actor in boss["loot"]]
-    catalog = common_catalog(boss["sourceId"], boss["id"], boss["name"], 40, hp, params)
+    catalog = common_catalog(boss["sourceId"], boss["id"], boss["name"], MAX_LEVEL, hp, params)
     catalog.update({
         "introText": f"{boss['name']} is here",
         "successText": f"You beat {boss['name']}. They'll be back stronger than before!",
         "failedText": f"{boss['name']} beat you",
-        "unitStats": {"str": 2, "dex": 2, "con": 20,
-                      "attacks": [{"name": "EpicBossAttack", "frequency": 100}]},
+        "unitStats": ramp_damage(
+            {"str": 2, "dex": 2, "con": 20,
+             "attacks": [{"name": "EpicBossAttack", "frequency": 100}]}, boss["sourceId"]),
         "animations": {}, "levelAssets": layers, "loot": loot, "questIds": boss["questIds"],
         "portrait": "portrait.png", "lootIcon": "loot-icon.png", "questIcon": "quest-icon.png",
         "bossTexture": "boss.png", "reconstructed": True, "copied": sorted(set(copied)),

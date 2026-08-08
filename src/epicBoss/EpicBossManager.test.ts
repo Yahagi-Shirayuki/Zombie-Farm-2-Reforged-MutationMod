@@ -77,3 +77,43 @@ describe("Dr. Groundhog event", () => {
     expect(manager.end(active)?.tokenCount).toBe(0);
   });
 });
+
+describe("runs saved above the ladder (40 -> 20 rung cut)", () => {
+  const boss = epicBossById("loco-locust")!;
+
+  it("pulls an in-flight run down to the last rung, at the same HP", () => {
+    const manager = new EpicBossManager(boss, () => 1_000);
+    // A run mid-flight at level 25 when the ladder was shortened to 20.
+    const stale = { ...manager.activate("run"), level: 25, maxHp: 214_000, currentHp: 214_000 };
+    const run = manager.normalize(stale)!;
+    expect(run.level).toBe(20);
+    // Levels 20-40 all shared the top HP tier, so the fight is unchanged.
+    expect(run.maxHp).toBe(epicBossHp(boss, 25));
+    expect(run.currentHp).toBe(run.maxHp);
+  });
+
+  it("keeps the damage already dealt to the boss it is part-way through", () => {
+    const manager = new EpicBossManager(boss, () => 1_000);
+    const stale = { ...manager.activate("run"), level: 33, maxHp: 214_000, currentHp: 90_000 };
+    expect(manager.normalize(stale)?.currentHp).toBe(90_000);
+  });
+
+  it("lets that run's next win claim the top prize instead of ending unrewarded", () => {
+    const manager = new EpicBossManager(boss, () => 1_000);
+    const stale = { ...manager.activate("run"), level: 25, maxHp: 214_000, currentHp: 214_000 };
+    const gate = manager.start(stale, ["z1"]);
+    expect(gate.ok).toBe(true);
+    if (!gate.ok) return;
+    const result = manager.finish(gate.run, gate.run.currentHp, true);
+    // Level 20 is what the retuned top-prize quest listens for — an unclamped run would
+    // have reported 25 here, completed, and never granted Vagabond Zombie.
+    expect(result.defeatedLevel).toBe(20);
+    expect(result.completed).toBe(true);
+  });
+
+  it("leaves a completed run's recorded level alone", () => {
+    const manager = new EpicBossManager(boss, () => 1_000);
+    const done = { ...manager.activate("run"), level: 40, completedAt: 900 };
+    expect(manager.normalize(done)?.level).toBe(40);
+  });
+});

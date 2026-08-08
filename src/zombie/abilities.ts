@@ -62,6 +62,11 @@ export interface ActivatedAbility {
   useOnce?: boolean;
   /** Whether an area attack is allowed to damage the boss. */
   hitBoss?: boolean;
+  /** The move destroys its own performer (Explode). A suicide move is a FUSE rather
+   *  than a swing, which changes three things in BattleSim: it can be lit from the
+   *  combat zone with no enemy in front, its wind-up keeps burning down while the
+   *  zombie has no target, and it detonates on schedule even into an empty field. */
+  suicide?: boolean;
 }
 
 export const ACTIVATED_ABILITY: Record<string, ActivatedAbility> = {
@@ -75,11 +80,12 @@ export const ACTIVATED_ABILITY: Record<string, ActivatedAbility> = {
   },
   explode: {
     speedMultiplier: 6, damageTiming: 1,
-    damageFactor: 10, aoe: true, stunMs: 3000, cooldownMs: 0, useOnce: true,
+    damageFactor: 10, aoe: true, stunMs: 3000, cooldownMs: 0, useOnce: true, suicide: true,
   },
   explodeV2: {
     speedMultiplier: 6, damageTiming: 1,
-    damageFactor: 10, aoe: true, stunMs: 3000, cooldownMs: 0, useOnce: true, hitBoss: true,
+    damageFactor: 10, aoe: true, stunMs: 3000, cooldownMs: 0, useOnce: true, suicide: true,
+    hitBoss: true,
   },
   // Mini Buddy is state-driven in BattleSim: mount before deployment, 4× walk,
   // ram-stun, then deploy both units. The generic hit fields are unused.

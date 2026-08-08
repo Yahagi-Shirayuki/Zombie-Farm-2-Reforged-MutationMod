@@ -16,6 +16,7 @@ import {
   type CommandBatchRequest,
   type CommandBatchResponse,
   type BlackMarketCollectResponse,
+  type BlackMarketCurrency,
   type BlackMarketFulfillmentsResponse,
   type BlackMarketHistoryResponse,
   type BlackMarketListResponse,
@@ -435,6 +436,9 @@ export const blackMarketOrders = (query: {
   zombieClass?: string;
   /** Body family — the toolbar's "class" (Regular/Female/Large/Garden/Headless/Small). */
   zombieGroup?: string;
+  /** Narrow the board to posts priced in one currency; the price sorts only compare
+   *  within one. Omitted means both. */
+  currency?: BlackMarketCurrency;
   sort?: "newest" | "price_asc" | "price_desc";
   mine?: boolean;
   cursor?: string;
@@ -442,6 +446,7 @@ export const blackMarketOrders = (query: {
   const params = new URLSearchParams({ kind: query.kind });
   if (query.zombieClass) params.set("zombieClass", query.zombieClass);
   if (query.zombieGroup) params.set("zombieGroup", query.zombieGroup);
+  if (query.currency) params.set("currency", query.currency);
   if (query.sort) params.set("sort", query.sort);
   if (query.mine) params.set("mine", "true");
   if (query.cursor) params.set("cursor", query.cursor);
@@ -450,10 +455,13 @@ export const blackMarketOrders = (query: {
 
 export const blackMarketSummary = () => req<BlackMarketSummary>("GET", "/black-market/summary");
 
+// `price` is denominated in `currency`; the Worker defaults an omitted currency to
+// BRAINS, which is what every post created before gold pricing was.
 export const createBlackMarketOrder = (body:
-  | { operationId: string; expectedAccountVersion: number; kind: "SELL_ZOMBIE"; unitId: string; priceBrains: number }
+  | { operationId: string; expectedAccountVersion: number; kind: "SELL_ZOMBIE"; unitId: string;
+      price: number; currency: BlackMarketCurrency }
   | { operationId: string; expectedAccountVersion: number; kind: "BUY_ZOMBIE"; zombieKey: string;
-      mutated: boolean; mutationRequired?: number; priceBrains: number }
+      mutated: boolean; mutationRequired?: number; price: number; currency: BlackMarketCurrency }
 ) => req<BlackMarketMutationResponse>("POST", "/black-market/orders", body);
 
 export const cancelBlackMarketOrder = (id: string, operationId: string, expectedAccountVersion: number) =>

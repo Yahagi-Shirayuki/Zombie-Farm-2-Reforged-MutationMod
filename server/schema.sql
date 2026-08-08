@@ -586,8 +586,8 @@ CREATE TABLE IF NOT EXISTS audit_events_v3 (
   created_at  INTEGER NOT NULL
 );
 
--- Asynchronous cross-account zombie/brain exchange. Assets represented by an OPEN
--- row are escrowed: sell zombies are absent from roster_v3 and buy-order brains have
+-- Asynchronous cross-account zombie/currency exchange. Assets represented by an OPEN
+-- row are escrowed: sell zombies are absent from roster_v3 and a buy order's payment has
 -- already been deducted from balances.
 CREATE TABLE IF NOT EXISTS black_market_orders (
   id TEXT PRIMARY KEY,
@@ -603,7 +603,13 @@ CREATE TABLE IF NOT EXISTS black_market_orders (
     mutation_required > 0
     AND kind='BUY_ZOMBIE'
   )),
-  price_brains INTEGER NOT NULL CHECK (price_brains BETWEEN 1 AND 1000000),
+  -- THE PRICE, denominated in `currency` below — a gold post stores its gold here. The
+  -- brains in the name is historical (migration 0045 added the currency; renaming the
+  -- column would have broken migration 0044's SQL, which names it).
+  price_brains INTEGER NOT NULL CHECK (price_brains BETWEEN 1 AND 10000000),
+  -- What the price is paid in. Every row that existed before migration 0045 is 'BRAINS',
+  -- which is also the default, so an old post keeps behaving exactly as it did.
+  currency TEXT NOT NULL DEFAULT 'BRAINS' CHECK (currency IN ('BRAINS', 'GOLD')),
   status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'FULFILLED', 'CANCELLED')),
   created_day INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
@@ -613,6 +619,8 @@ CREATE TABLE IF NOT EXISTS black_market_orders (
   source_unit_id TEXT,
   escrow_mutation INTEGER,
   escrow_invasions INTEGER,
+  -- The escrowed payment of a BUY_ZOMBIE post, in the row's `currency` — same historical
+  -- name, same meaning as price_brains above.
   escrow_brains INTEGER NOT NULL DEFAULT 0,
   -- The escrowed zombie's body tint, so a cancel hands back the same-looking unit
   -- and a buyer receives the one they saw listed (migration 0041).
@@ -631,7 +639,7 @@ CREATE TABLE IF NOT EXISTS black_market_orders (
   -- owed; delivered_unit_id records which unit it became.
   claimed_at INTEGER,
   delivered_unit_id TEXT,
-  -- Payout of the traded brains. A SALE's brains are held by the market after
+  -- Payout of the traded currency. A SALE's payment is held by the market after
   -- settlement and credited to its creator when they collect; a filled REQUEST pays
   -- its fulfiller inside the fulfil batch and is stamped there. NULL on a FULFILLED
   -- sale means the market is still holding them (migration 0043).
