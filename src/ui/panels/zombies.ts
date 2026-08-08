@@ -1,8 +1,8 @@
-// The Zombies menu (right bar) and the zombie inspect-card cluster, extracted
+﻿// The Zombies menu (right bar) and the zombie inspect-card cluster, extracted
 // from the Hud class: these functions take the Hud instance and render into it,
 // exactly as the former methods did. The menu now has two tabs:
-//   • My Zombies — the owned roster, every unit as its full inspect card.
-//   • Zombie Almanac — the collection: one entry per obtainable species, shown
+//   â€¢ My Zombies â€” the owned roster, every unit as its full inspect card.
+//   â€¢ Zombie Almanac â€” the collection: one entry per obtainable species, shown
 //     as a silhouette until one has been obtained (any acquisition counts).
 // The inspect-card builders are also used by the Mausoleum grid and the Black
 // Market listing views, which stay in hud.ts and import them from here.
@@ -130,10 +130,10 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   port.style.backgroundImage = `url(${info.portrait})`;
   // Use the static catalog portrait immediately, then replace it with the cached
   // individual rig once its mutation-aware render is available.
-  // Deferred until on screen — "My Zombies" stacks one of these cards per owned unit.
+  // Deferred until on screen â€” "My Zombies" stacks one of these cards per owned unit.
   if (hud.zombieMutationPortraitOf) {
     onFirstVisible(port, () => {
-      void hud.zombieMutationPortraitOf?.(info.key, info.mutation, info.color)
+      void hud.zombieMutationPortraitOf?.(info.key, info.mutation, info.color, info.mutationIds)
         .then((portrait) => {
           if (port.isConnected) port.style.backgroundImage = `url(${portrait})`;
         })
@@ -157,7 +157,7 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   statsHdr.textContent = "Stats";
   const statsRow = document.createElement("div");
   statsRow.className = "zrow zstats";
-  // Each tile shows the stat's 0–100 bar with EVERY always-on bonus folded in
+  // Each tile shows the stat's 0â€“100 bar with EVERY always-on bonus folded in
   // (mutation + veterancy + the zombie's own passive stat abilities); hovering opens
   // the per-modifier breakdown. See zombie/statDisplay.statBreakdown.
   const abilityUnlocked = (k: string) => hud.state.abilityUnlocked(k);
@@ -175,7 +175,7 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
       `${bd.total}</span>`;
     cell.onclick = (e) => {
       e.stopPropagation();
-      // desc, then Base → each modifier (dim if +0) → Total, as aligned rows.
+      // desc, then Base â†’ each modifier (dim if +0) â†’ Total, as aligned rows.
       const rows = [`<span class="zbd-row"><span>Base</span><span>${bd.base}</span></span>`]
         .concat(
           bd.lines.map(
@@ -192,7 +192,7 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
 
   // ---- mutations: one framed icon per mutation this zombie carries ----
   // Only the boosted (green) stat tiles used to hint at these, which never said WHICH
-  // mutations they were — the thing you need before pairing the zombie in the Pot.
+  // mutations they were â€” the thing you need before pairing the zombie in the Pot.
   // Unmutated zombies (most of them) show no section at all rather than an empty row.
   const mutations = mutationEntries(info);
   const mutHdr = document.createElement("div");
@@ -244,7 +244,7 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
       };
     } else {
       cell.className = "zabil locked";
-      cell.innerHTML = `<span class="zlock">🔒</span>`;
+      cell.innerHTML = `<span class="zlock">ðŸ”’</span>`;
       const boss = TIER_BOSS[t];
       cell.onclick = (e) => {
         e.stopPropagation();
@@ -337,7 +337,7 @@ function openZombieSellChoices(hud: Hud, info: ZombieInfo, value: number, refres
 }
 
 // Confirmation window for selling a zombie. Names the unit, shows the gold it
-// fetches, and warns that the sale is permanent — so a valuable zombie is not
+// fetches, and warns that the sale is permanent â€” so a valuable zombie is not
 // sold by a single stray tap. Confirm sells; Cancel backs out to the roster.
 function confirmSellZombie(hud: Hud, info: ZombieInfo, value: number, refresh?: () => void) {
   const { panel, close } = openModal({ host: hud.el, panelClass: "confirm-panel", title: "Sell this zombie?" });
@@ -353,7 +353,7 @@ function confirmSellZombie(hud: Hud, info: ZombieInfo, value: number, refresh?: 
   msg.append(zombieName, ` (${info.typeName}) for `, valueText, "?", document.createElement("br"));
   const warning = document.createElement("span");
   warning.className = "confirm-warn";
-  warning.textContent = "This is permanent — the zombie is gone for good.";
+  warning.textContent = "This is permanent â€” the zombie is gone for good.";
   msg.appendChild(warning);
 
   const btns = document.createElement("div");
@@ -377,13 +377,13 @@ function confirmSellZombie(hud: Hud, info: ZombieInfo, value: number, refresh?: 
   panel.append(por, msg, btns);
 }
 
-/** Preview the inspect card for a catalog species the player does not own yet —
+/** Preview the inspect card for a catalog species the player does not own yet â€”
  *  opened by the magnifier on a Market or plant-menu gravestone so its stats and
  *  abilities can be read BEFORE buying. Same card the roster and Black Market
  *  listings use, built from catalog data: no veterancy (nothing has fought yet),
  *  and any guaranteed catalog mutation folded in exactly as the unit dug up will
  *  carry it. Stats include the player's own farmer bonuses, matching the Black
- *  Market's inspect — the numbers are what THIS farm would field.
+ *  Market's inspect â€” the numbers are what THIS farm would field.
  *
  *  Only the mutation blurb is printed under the card. Price, grow time and the
  *  unlock gate are on the gravestone the magnifier was tapped on, and repeating
@@ -391,14 +391,14 @@ function confirmSellZombie(hud: Hud, info: ZombieInfo, value: number, refresh?: 
 export function openCatalogZombieCard(hud: Hud, card: MenuCard) {
   const zombie = card.zombie;
   if (!zombie) return;
-  const bonus = mutationBonus(zombie.mutation);
+  const bonus = mutationBonus(zombie.mutation, zombie.mutationIds);
   const info: ZombieInfo = {
     name: card.name, typeName: card.name, key: card.cfg.key,
     group: zombie.group, className: zombie.className, classColor: zombie.classColor,
     str: (zombie.str + bonus.str) * hud.state.farmerZombieStrengthMult(),
     dex: zombie.dex + bonus.dex,
     con: (zombie.con + bonus.con) * hud.state.farmerZombieLifeMult(),
-    focus: (zombie.focus ?? 0) + bonus.wis, mutation: zombie.mutation, invasions: 0,
+    focus: (zombie.focus ?? 0) + bonus.wis, mutation: zombie.mutation, mutationIds: zombie.mutationIds, invasions: 0,
     portrait: card.portrait,
   };
   const { panel } = openModal({
@@ -446,7 +446,7 @@ export function buildRosterCard(hud: Hud, z: RosterEntry, onClick: () => void): 
   // once, and each render is a blocking GPU readback.
   if (hud.zombieMutationPortraitOf) {
     onFirstVisible(pim, () => {
-      void hud.zombieMutationPortraitOf?.(z.key, z.mutation, z.color)
+      void hud.zombieMutationPortraitOf?.(z.key, z.mutation, z.color, z.mutationIds)
         .then((mutated) => { if (pim.isConnected) pim.src = mutated; })
         .catch(() => { /* retain the static species portrait */ });
     });
@@ -467,7 +467,7 @@ export type ZombiesPanelTab = "roster" | "almanac";
 
 // The "Zombies" tab (right bar): "My Zombies" lists every owned zombie as its
 // full inspect card (the same one shown when tapping a zombie); the "Zombie
-// Almanac" is the species collection, in three groups — Normal, Special, Epic.
+// Almanac" is the species collection, in three groups â€” Normal, Special, Epic.
 export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster") {
   // position:relative host (zl-panel) for card tooltips
   const { panel, close } = openModal({
@@ -517,7 +517,7 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
     title.textContent = "Your Zombies";
     const cnt = document.createElement("span");
     cnt.className = "zr-total";
-    cnt.textContent = `${onFarm} on farm${stored ? ` · ${stored} stored` : ""}`;
+    cnt.textContent = `${onFarm} on farm${stored ? ` Â· ${stored} stored` : ""}`;
     head.append(title, cnt);
 
     if (!roster.length) {
@@ -528,7 +528,7 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
       return;
     }
 
-    // Ordering picker — only worth showing once there is something to order.
+    // Ordering picker â€” only worth showing once there is something to order.
     if (roster.length > 1) {
       const label = document.createElement("label");
       label.className = "zl-sort";
@@ -606,7 +606,7 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
 // Undiscovered portraits must not expose the real art: a CSS filter only blacks
 // out the on-screen pixels, so "Save image" / long-press would still save the
 // full-colour PNG. Instead we bake a genuinely black copy through a canvas and
-// use that data-URL as the img src — the silhouette IS the image.
+// use that data-URL as the img src â€” the silhouette IS the image.
 const silhouetteCache = new Map<string, Promise<string>>();
 function silhouetteOf(url: string): Promise<string> {
   let p = silhouetteCache.get(url);
@@ -661,7 +661,7 @@ function buildAlmanacCard(hud: Hud, entry: AlmanacEntryView): HTMLElement {
   if (entry.obtained) {
     const count = document.createElement("span");
     count.className = "alm-count";
-    count.textContent = `×${entry.obtained}`;
+    count.textContent = `Ã—${entry.obtained}`;
     por.appendChild(count);
   }
   const name = document.createElement("div");
@@ -724,3 +724,4 @@ function openAlmanacEntry(hud: Hud, entry: AlmanacEntryView) {
   wrap.append(por, title, status, hint);
   panel.appendChild(wrap);
 }
+

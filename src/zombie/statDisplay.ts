@@ -1,18 +1,18 @@
-// ---------------------------------------------------------------------------
-// Displayed-stat resolution — the number the detail card / army list shows for a
+﻿// ---------------------------------------------------------------------------
+// Displayed-stat resolution â€” the number the detail card / army list shows for a
 // zombie's Damage / Speed / Life / Focus, and the per-modifier breakdown behind it.
 //
 // The shown value is NOT the raw stat: it folds in every ALWAYS-ON bonus that
-// affects THIS zombie, then normalizes to the 0–100 reference bar (traits.displayStat):
-//   effective = (base + mutation) × veterancy × Π(self passive stat-abilities)
-//   shown     = round(effective / STAT_DISPLAY_MAX × 100)   [focus: round(effective)]
+// affects THIS zombie, then normalizes to the 0â€“100 reference bar (traits.displayStat):
+//   effective = (base + mutation) Ã— veterancy Ã— Î (self passive stat-abilities)
+//   shown     = round(effective / STAT_DISPLAY_MAX Ã— 100)   [focus: round(effective)]
 //
 // Included modifiers (per the game + user spec):
-//   • Mutation   — baked into the raw str/con/dex by makeOwned; additive; focus never.
-//   • Veterancy  — ×(1 + 0.05·rank), scales ALL stats incl. focus (Master = +25%).
-//   • Abilities  — ONLY the zombie's own passive ("self") stat buffs that are unlocked
-//                  and in class-rank. Team/aura buffs (Chivalry, Grace, Heal, Protect…)
-//                  and player-activated moves (Bash, Explode…) are excluded — they don't
+//   â€¢ Mutation   â€” baked into the raw str/con/dex by makeOwned; additive; focus never.
+//   â€¢ Veterancy  â€” Ã—(1 + 0.05Â·rank), scales ALL stats incl. focus (Master = +25%).
+//   â€¢ Abilities  â€” ONLY the zombie's own passive ("self") stat buffs that are unlocked
+//                  and in class-rank. Team/aura buffs (Chivalry, Grace, Heal, Protectâ€¦)
+//                  and player-activated moves (Bash, Explodeâ€¦) are excluded â€” they don't
 //                  passively raise this unit's own stat. Mirrors raid/CombatEngine.
 //
 // Everything here is pure + headless-testable; no Pixi, no game-state object.
@@ -32,11 +32,12 @@ export interface StatSource {
   dex: number;
   con: number;
   focus: number;
-  mutation: number; // bitmask (mutationBonus)
-  invasions: number; // → veterancy rank
+  mutation: number; // vanilla bitmask (mutationBonus)
+  mutationIds?: readonly string[];
+  invasions: number; // â†’ veterancy rank
   key: string; // named-unique ability overrides
   group: string; // group ability set
-  className: string; // colour class → ability rank
+  className: string; // colour class â†’ ability rank
 }
 
 /** One line in a stat's hover breakdown. */
@@ -49,14 +50,14 @@ export interface StatModifierLine {
 export interface StatBreakdown {
   base: number; // normalized base, before any modifier
   total: number; // normalized value with every modifier applied (what the tile shows)
-  lines: StatModifierLine[]; // mutation → each self ability → veterancy, in that order
+  lines: StatModifierLine[]; // mutation â†’ each self ability â†’ veterancy, in that order
 }
 
 const STAT_KEYS = ["str", "dex", "con", "focus"] as const;
 
 /** True if an ability effect raises one of the unit's OWN displayed stats. Abilities whose
  *  effect is a team aura, a chance proc, healing, or an activated move carry no self-stat
- *  multiplier and are excluded here — they are modeled in CombatEngine/BattleSim instead. */
+ *  multiplier and are excluded here â€” they are modeled in CombatEngine/BattleSim instead. */
 function affectsSelfStat(e: AbilityCombatEffect): boolean {
   return (
     (e.allStatsMult ?? 1) !== 1 ||
@@ -66,7 +67,7 @@ function affectsSelfStat(e: AbilityCombatEffect): boolean {
   );
 }
 
-/** The zombie's active, always-on, self-affecting stat abilities — the SAME gated set
+/** The zombie's active, always-on, self-affecting stat abilities â€” the SAME gated set
  *  the detail card / CombatEngine use, minus team buffs, activated moves, and abilities
  *  whose only effect is army-wide. `abilityUnlocked` gates by beaten-boss tier. */
 export function selfStatAbilities(
@@ -88,7 +89,7 @@ export function abilityStatMult(key: string, stat: StatMeta["key"]): number {
   if (stat === "str") return all * (e.selfDamageMult ?? 1);
   if (stat === "dex") return all * (e.selfSpeedMult ?? 1);
   if (stat === "con") return all * (e.selfHpMult ?? 1);
-  return all; // focus — only "All Stats" touches it
+  return all; // focus â€” only "All Stats" touches it
 }
 
 function rawStat(z: StatSource, stat: StatMeta["key"]): number {
@@ -127,7 +128,7 @@ export function statBreakdown(
   abilityUnlocked: (key: string) => boolean
 ): StatBreakdown {
   const raw = rawStat(z, stat); // already includes the mutation bonus (makeOwned)
-  const mut = mutationBonus(z.mutation)[mutationStatFor(stat)] ?? 0;
+  const mut = mutationBonus(z.mutation, z.mutationIds)[mutationStatFor(stat)] ?? 0;
   const baseRaw = raw - mut;
   const v = veterancyMultiplier(z.invasions);
   const abilities = selfStatAbilities(z, abilityUnlocked);
@@ -158,7 +159,7 @@ export function statBreakdown(
       zero: delta === 0,
     });
   }
-  // Veterancy — always applicable to every stat; +0 at Newbie is still shown.
+  // Veterancy â€” always applicable to every stat; +0 at Newbie is still shown.
   const withoutVeterancy = v === 0 ? effective : (effective - mut) / v + mut;
   const veterancyDelta = show(effective) - show(withoutVeterancy);
   lines.push({
@@ -173,7 +174,7 @@ export function statBreakdown(
 // ---------------------------------------------------------------------------
 // Mutation bonuses in DISPLAYED units.
 // ---------------------------------------------------------------------------
-// A mutation's raw bonus is 1–4 stat points, but no surface ever shows a raw stat:
+// A mutation's raw bonus is 1â€“4 stat points, but no surface ever shows a raw stat:
 // every tile normalizes against a fixed reference (traits.STAT_DISPLAY_MAX), and the
 // three references differ wildly. Speed's is only 4.4, so Carrot's "+1 dex" lands as
 // +23 Speed on the card, while Tomato's "+1 str" is +4 Damage. Quoting the raw points
@@ -191,7 +192,7 @@ export interface BaseStats {
 
 export interface MutationDisplayGain {
   stat: StatMeta["key"];
-  label: string; // "Damage" / "Speed" / "Life" — matches the stat tiles
+  label: string; // "Damage" / "Speed" / "Life" â€” matches the stat tiles
   delta: number; // in displayed units, e.g. 23
 }
 
@@ -203,8 +204,8 @@ export interface MutationDisplayGain {
  * Grouped per stat rather than per mutation: two mutations on the same stat combine
  * into one raw sum, and normalizing that sum once avoids double rounding.
  */
-export function mutationDisplayGains(base: BaseStats, mask: number): MutationDisplayGain[] {
-  return statDisplayGains(base, mutationBonus(mask));
+export function mutationDisplayGains(base: BaseStats, mask: number, mutationIds?: readonly string[]): MutationDisplayGain[] {
+  return statDisplayGains(base, mutationBonus(mask, mutationIds));
 }
 
 /** The same, from an explicit raw stat delta rather than a mask. Split out so a
@@ -233,12 +234,12 @@ export function statDisplayGains(
  *
  * The mutation is deliberately NOT named. The two Tier-4 mutants reuse a lower tier's
  * mutation (Eyebiscus carries Carrot's, Heartichoke Cauliflower's), so a name derived
- * from the mask is simply wrong for them — the reported "wrong text ... for Heartichoke
+ * from the mask is simply wrong for them â€” the reported "wrong text ... for Heartichoke
  * (lvl 44)" defect, which read "Cauli-hair". The card's own title already names the
  * species, so the bonus is what the line needs to carry.
  */
-export function mutationMarketDescription(base: BaseStats, mask: number): string | undefined {
-  return describeMutationGains(mutationDisplayGains(base, mask));
+export function mutationMarketDescription(base: BaseStats, mask: number, mutationIds?: readonly string[]): string | undefined {
+  return describeMutationGains(mutationDisplayGains(base, mask, mutationIds));
 }
 
 /** The Market line for an already-measured set of gains. Undefined when there are none. */
@@ -250,7 +251,7 @@ export function describeMutationGains(gains: MutationDisplayGain[]): string | un
   return `Starts with a guaranteed mutation: ${effects}. Mutations carry into Zombie Pot combinations.`;
 }
 
-/** The four displayed totals (Damage/Speed/Life/Focus) for a zombie — the value each
+/** The four displayed totals (Damage/Speed/Life/Focus) for a zombie â€” the value each
  *  stat tile shows, with every always-on bonus folded in. Convenience for surfaces
  *  that show the numbers without the hover breakdown (e.g. the compact army list). */
 export function displayTotals(
@@ -261,3 +262,4 @@ export function displayTotals(
   for (const k of STAT_KEYS) out[k] = statBreakdown(z, k, abilityUnlocked).total;
   return out;
 }
+

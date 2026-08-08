@@ -1,9 +1,9 @@
-// An owned zombie unit grown from a harvested zombie crop (Phase 3). Only `id`,
+﻿// An owned zombie unit grown from a harvested zombie crop (Phase 3). Only `id`,
 // `key`, and its farm tile are source-of-truth (persisted); the taxonomy + stats
 // are derived from the zombie catalog (zombies.json) by key at spawn/restore.
 import type { ZombieDef } from "../assets";
 import { classify } from "./taxonomy";
-import { applyBodyTypeRestriction, mutationBonus } from "./mutations";
+import { applyBodyTypeIdRestriction, applyBodyTypeRestriction, mutationBonus, normalizeMutationIds } from "./mutations";
 import { randomZombieName } from "./names";
 
 export const MAX_ZOMBIE_NAME_LENGTH = 24;
@@ -15,44 +15,30 @@ export function normalizeZombieName(value: string | undefined): string | null {
   return cleaned ? [...cleaned].slice(0, MAX_ZOMBIE_NAME_LENGTH).join("") : null;
 }
 
-// A roster listing entry: an owned zombie plus whether it is stored (off the
-// farm) or deployed (wandering). Used by the Zombies menu.
 export type RosterEntry = OwnedZombie & { stored: boolean };
 
 export interface OwnedZombie {
-  id: string; // unique instance id, e.g. "z3"
-  key: string; // ZombieActor* type key
-  name: string; // the zombie's individual (random) name, e.g. "Bob"
-  typeName: string; // its species/type name, e.g. "Crazy Zombie"
-  group: string; // Regular / Female / Small / Large / Headless / Garden
-  className: string; // Green / Blue / Red / Silver / Special / Yellow
-  classColor: string; // "#rrggbb"
-  /** Optional inherited body tint. Combined zombies mix their parents' colors;
-   *  ordinary zombies leave this undefined and use the model catalog color. */
+  id: string;
+  key: string;
+  name: string;
+  typeName: string;
+  group: string;
+  className: string;
+  classColor: string;
   color?: [number, number, number];
-  /** Mutation BITMASK (see mutations.ts). 0 = unmutated. Persisted; str/dex/con/focus
-   *  below already INCLUDE the mutation stat bonuses (derived at build time). */
+  /** Vanilla mutation bitmask. Local modded mutations live in mutationIds. */
   mutation: number;
+  /** Real string ids for local modded mutations. */
+  mutationIds?: string[];
   str: number;
   dex: number;
   con: number;
   focus: number;
-  invasions: number; // survived invasions (drives veterancy rank + its +5%/rank stat bonus)
-  col: number; // farm tile (resting/spawn position)
+  invasions: number;
+  col: number;
   row: number;
 }
 
-// Build an OwnedZombie from its catalog def (falls back to the key taxonomy if a
-// field is missing — e.g. an older zombies.json without baked stats).
-//
-// `mutation` overrides the def's own mutation bit — pass it when the unit's set
-// isn't the species default (e.g. a Zombie Pot combine result, or restoring a
-// saved mask). When omitted, a market mutant grows in with its guaranteed bit
-// (def.mutation), so buying a Carrot Zombie yields a Carrot-eyed owned unit.
-// Combat stats bake in the mutation bonuses so downstream code reads str/dex/con
-// directly. Mutations the body type can't wear are stripped here (report §11) — a
-// headless zombie loses head/hair-eye ones, everyone else loses the headless-only
-// Pumpking — so a combine result never carries a mutation it can't show.
 export function makeOwned(
   id: string,
   def: ZombieDef,
@@ -62,12 +48,14 @@ export function makeOwned(
   mutation?: number,
   color?: [number, number, number],
   customName?: string,
+  mutationIds?: readonly string[],
 ): OwnedZombie {
   const tax = classify(def.key);
   const group = def.group ?? tax.group;
-  // Enforce the body-type restriction at the one place a mask lands on a unit.
-  const mask = applyBodyTypeRestriction(mutation ?? def.mutation ?? 0, group === "Headless");
-  const bonus = mutationBonus(mask);
+  const isHeadless = group === "Headless";
+  const mask = applyBodyTypeRestriction(mutation ?? def.mutation ?? 0, isHeadless);
+  const ids = applyBodyTypeIdRestriction(normalizeMutationIds(mutationIds), isHeadless);
+  const bonus = mutationBonus(mask, ids);
   return {
     id,
     key: def.key,
@@ -78,6 +66,7 @@ export function makeOwned(
     classColor: def.classColor ?? tax.classColor,
     color,
     mutation: mask,
+    ...(ids.length ? { mutationIds: ids } : {}),
     str: (def.str ?? 1) + bonus.str,
     dex: (def.dex ?? 1) + bonus.dex,
     con: (def.con ?? 1) + bonus.con,

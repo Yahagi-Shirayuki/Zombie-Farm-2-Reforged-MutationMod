@@ -1,28 +1,28 @@
+﻿// ---------------------------------------------------------------------------
+// Zombie Pot â€” combines two zombies into one (ZF2's mutation-stacking tool).
 // ---------------------------------------------------------------------------
-// Zombie Pot — combines two zombies into one (ZF2's mutation-stacking tool).
-// ---------------------------------------------------------------------------
-// Rules — GROUND TRUTH recovered by disassembling the shipped iOS binary
+// Rules â€” GROUND TRUTH recovered by disassembling the shipped iOS binary
 // (`ZFZombieCombiner` getCombineTime / determineBaseClass / combineZombieMutationFlag:;
 // see docs/mechanics/BINARY_RE_METHODOLOGY.md). These replace the earlier guesses:
-//   * Combine takes 1 HOUR by default; the CLAY Monolith cuts it to 15 min (0.25×,
-//     NOT the previously-guessed 30 min / 0.5×) — two hardcoded doubles 3600.0 / 900.0.
+//   * Combine takes 1 HOUR by default; the CLAY Monolith cuts it to 15 min (0.25Ã—,
+//     NOT the previously-guessed 30 min / 0.5Ã—) â€” two hardcoded doubles 3600.0 / 900.0.
 //     (getCombineTime checks purchase flag 28; flag 28 = Clay Monolith, whose in-game
 //     tooltip is literally "Zombie Pots combine in 15 minutes". The Mutant Monolith
 //     (flag 15) is a SEPARATE item that halves mutant-zombie GROW times, not this.)
 //   * SPECIES IS A DELIBERATE DIVERGENCE, not recovered behavior. Slot 1 determines
 //     the result species, so the player picks the outcome. Named Specials are
 //     restricted to slot 1 and are always inherited; a pair of the SAME species climbs
-//     the colour ladder — Green -> Blue -> Red once the matching grave is owned, then
-//     Red -> that body type's Silver (tier-4) at level 25+ — and level-25+ non-special
+//     the colour ladder â€” Green -> Blue -> Red once the matching grave is owned, then
+//     Red -> that body type's Silver (tier-4) at level 25+ â€” and level-25+ non-special
 //     pairs retain their chance to promote the slot-1 body type to its tier-5
 //     Special instead.
-//     The recovered `determineBaseClass` instead resolved species from the catalog —
+//     The recovered `determineBaseClass` instead resolved species from the catalog â€”
 //     non-veggie parent wins, then higher combat tier, then a coin flip on a tie.
 //     See docs/SPECIAL_ZOMBIE_ACQUISITION.md. Everything else in this list IS
 //     ground truth.
 //   * The result's color is the mixed parent color; identical colors lighten.
 //   * Mutations inherit per-slot (combineMasks): non-conflicting slots carry over; a
-//     same-slot conflict keeps the HIGHER-tier bit — DETERMINISTIC, no RNG.
+//     same-slot conflict keeps the HIGHER-tier bit â€” DETERMINISTIC, no RNG.
 //   * Both parents are consumed when the combine STARTS (they leave the roster and
 //     stop counting toward the army cap); the result appears when it finishes.
 //   * Offline-safe: the finish time is an absolute epoch, so a combine completes
@@ -31,14 +31,14 @@
 // This class is pure data/logic (no Pixi) so it is unit-testable headlessly. It
 // holds at most one job, mirroring the single in-game Zombie Pot building.
 import { OwnedZombieSave, ZombiePotSave } from "../save/schema";
-import { combineMasks } from "./mutations";
+import { combineMutationSets } from "./mutations";
 import {
   createCombineRandom, selectCombineSpecies, type CombineGraveUnlock,
 } from "./combineSpecies";
 
 /** Default combine duration: 1 hour, in ms (binary: getCombineTime = 3600.0 s). */
 export const POT_DURATION_MS = 60 * 60 * 1000;
-/** Clay Monolith multiplier on the combine timer: 0.25× -> 15 min (binary:
+/** Clay Monolith multiplier on the combine timer: 0.25Ã— -> 15 min (binary:
  *  getCombineTime returns 900.0 s when purchase flag 28 = Clay Monolith is set). */
 export const MONOLITH_MULT = 0.25;
 
@@ -46,18 +46,20 @@ export const MONOLITH_MULT = 0.25;
 export interface PotResult {
   key: string;
   mutation: number;
+  mutationIds?: string[];
   color?: [number, number, number];
 }
 
 type ZombieSnapshot = Pick<OwnedZombieSave, "key"> & {
   id?: string;
   mutation: number;
+  mutationIds?: string[];
   color?: [number, number, number];
   /** Combat tier (0..5). No longer used for species selection (slot 1 decides);
    *  persisted so a job started by an older client still round-trips. */
   tier?: number;
   /** True if this is a veggie/mutant-tier zombie (a "mutation base class"). Also no
-   *  longer used for species selection — kept for the same round-trip reason. */
+   *  longer used for species selection â€” kept for the same round-trip reason. */
   isBaseClass?: boolean;
   /** Body type and Special-category status used by the rare tier-5 promotion and
    * special-species override rules. */
@@ -203,7 +205,7 @@ export class ZombiePot {
 
   /**
    * The finished zombie WITHOUT collecting it, so the panel can show what came
-   * out while it waits to be picked up. Deterministic — same job, same result —
+   * out while it waits to be picked up. Deterministic â€” same job, same result â€”
    * so the preview always matches what collect() hands over. Null unless a job
    * is ready (a running combine keeps its result hidden).
    */
@@ -212,9 +214,17 @@ export class ZombiePot {
     const j = this.job;
     const key = this.pickSpecies(j);
     if (!key) return null;
+    const mutations = combineMutationSets(
+      j.maskA,
+      j.mutationIdsA,
+      j.maskB,
+      j.mutationIdsB,
+      this.isHeadlessKey(key),
+    );
     return {
       key,
-      mutation: combineMasks(j.maskA, j.maskB, this.isHeadlessKey(key)),
+      mutation: mutations.mask,
+      ...(mutations.ids.length ? { mutationIds: mutations.ids } : {}),
       color: mixColors(j.colorA, j.colorB),
     };
   }
@@ -243,7 +253,7 @@ export class ZombiePot {
     );
   }
 
-  /** Abandon a running combine (the parents are already gone — no refund). */
+  /** Abandon a running combine (the parents are already gone â€” no refund). */
   cancel(): void {
     this.job = null;
   }
@@ -256,3 +266,6 @@ export class ZombiePot {
     this.job = save ? { ...save } : null;
   }
 }
+
+
+

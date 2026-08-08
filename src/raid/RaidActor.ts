@@ -1,14 +1,14 @@
-// A display-only zombie sprite for the raid scene: the SAME per-type skeletal
+﻿// A display-only zombie sprite for the raid scene: the SAME per-type skeletal
 // model the farm uses (assets.zombieModels), with the SAME idle-tilt + leg-step
-// walk animation as ZombieUnit — just decoupled from the farm's field/pathing.
+// walk animation as ZombieUnit â€” just decoupled from the farm's field/pathing.
 // The scene positions it and tells it whether it's moving each frame.
 import { Container, Sprite } from "pixi.js";
 import { GameAssets, ZombieModel } from "../assets";
-import { slotOf } from "../zombie/mutations";
+import { slotOfRef } from "../zombie/mutations";
 import {
   isMutationForegroundPart,
   matchesMutationReplacement,
-  mutationBitsForRendering,
+  mutationRefsForRendering,
   mutationPartFor,
   mutationCoversFace,
   mutationPartZIndex,
@@ -18,6 +18,7 @@ import {
   BRUTE_EYEBALL_SCALE,
   DEFAULT_ZOMBIE_EYE_TINT,
   displayedAppearance,
+  displayedMutationIds,
   isBruteEyeball,
   zombiePartTint,
 } from "../zombie/appearance";
@@ -36,17 +37,17 @@ const STEP_ANGLE = 0.18;
 // the enemy); rotating toward ARM_REST drops them DOWN to the sides; RAISE_ANGLE swings
 // them up overhead (activated-move wind-up).
 const RAISE_ANGLE = -2.5;
-// Arms held STRAIGHT OUT IN FRONT (toward the enemy) — the classic zombie pose, used
+// Arms held STRAIGHT OUT IN FRONT (toward the enemy) â€” the classic zombie pose, used
 // while WALKING (advancing) and as the base while ATTACKING.
 const ARM_FWD = 0.0;
-// Arms hanging DOWN at the sides — only while WAITING in the back group.
+// Arms hanging DOWN at the sides â€” only while WAITING in the back group.
 const ARM_REST = -1.5;
 // Healing is cast from rest, sweeping FORWARD past ARM_FWD and up over the head.
 // The activated-move angle starts from the forward zombie pose and winds backward,
 // which makes a rest-to-heal motion look like the arms kick behind the body.
 const HEAL_OVERHEAD = 1.5;
 // Basic-attack wave: from the forward pose, the arms pump up/down in opposition (one
-// up while the other's down) — a full switch per landed hit. Kept small so they stay
+// up while the other's down) â€” a full switch per landed hit. Kept small so they stay
 // reading as "out in front" rather than flailing overhead.
 // A faint alternating sway on the forward arms while walking, so they're not stiff.
 const ARM_WALK_SWAY = 0.09;
@@ -96,7 +97,7 @@ export class RaidActor {
   private facing = -1;
   private tiltPhase = 0;
   private stepPhase = 0;
-  private deathT = -1; // ≥0 once dead: seconds into the head-pop animation
+  private deathT = -1; // â‰¥0 once dead: seconds into the head-pop animation
   private specialHeadFx: SpecialHeadFx | null = null;
 
   constructor(
@@ -107,12 +108,14 @@ export class RaidActor {
     /** The owned unit's body tint. Omitted (enemies, reference rigs, tests) falls
      *  back to the model's catalog colour. */
     color?: [number, number, number],
+    mutationIds: readonly string[] = [],
   ) {
     this.container.addChild(this.root);
     // Raid rigs honour the same display prefs as the farm and the portraits, so a
     // player who hid mutations (or pinned species colours) sees the same zombie here.
     const shown = displayedAppearance(mutation, color);
-    this.build(assets, key, shown.mutation, group, shown.color);
+    const shownMutationIds = displayedMutationIds(mutationIds);
+    this.build(assets, key, shown.mutation, group, shown.color, shownMutationIds);
   }
 
   /**
@@ -142,21 +145,22 @@ export class RaidActor {
   private build(
     assets: GameAssets, key: string, mutation: number, group: string,
     color?: [number, number, number],
+    mutationIds: readonly string[] = [],
   ) {
     const m: ZombieModel =
       assets.zombieModels[key] ?? assets.zombieModels["ZombieActorRegularTier1"];
-    const mutationParts = mutationBitsForRendering(assets.zombies, key, mutation).flatMap((bit) => {
-      const part = mutationPartFor(assets.mutationParts, m, bit);
+    const mutationParts = mutationRefsForRendering(assets.zombies, key, mutation, mutationIds).flatMap((ref) => {
+      const part = mutationPartFor(assets.mutationParts, m, ref);
       const texture = part ? assets.zombiePartTex[part.file] : undefined;
-      return part && texture ? [{ bit, part, texture }] : [];
+      return part && texture ? [{ ref, part, texture }] : [];
     });
     // Crop arms occupy the authored ArmF slot. Only suppress the base front arm
     // after its replacement has resolved, so incomplete assets cannot remove it.
     const replacements = new Set<MutationReplacement>();
-    for (const { bit, part } of mutationParts) {
+    for (const { ref, part } of mutationParts) {
       if (part.replaces) replacements.add(part.replaces);
       else {
-        const slot = slotOf(bit);
+        const slot = slotOfRef(ref);
         if (slot === "head") replacements.add("head");
         else if (slot === "arm") replacements.add("armF");
         else if (slot === "body") replacements.add("body");
@@ -164,7 +168,7 @@ export class RaidActor {
     }
     // A head mutation that carries its own face (the pumpkin) takes the zombie's
     // eyes and jaw with the skull, instead of leaving them in front of it.
-    const coversFace = mutationParts.some(({ bit }) => mutationCoversFace(bit));
+    const coversFace = mutationParts.some(({ ref }) => mutationCoversFace(ref));
     // Same rule as the farm rig and the portraits: an owned tint wins over the
     // model's catalog colour, so a Pot child looks the same everywhere.
     const [r, g, b] = color ?? m.color;
@@ -223,22 +227,22 @@ export class RaidActor {
     // Raid zombies use the same mutation overlays as their farm actors. The mask is
     // owned-unit state, not something that can be inferred from the species key after
     // combining, so it must travel with the combat unit.
-    for (const { bit, part: mp, texture: tex } of mutationParts) {
+    for (const { ref, part: mp, texture: tex } of mutationParts) {
       const sp = new Sprite(tex);
       sp.anchor.set(mp.ax, mp.ay);
       const px = mp.ox + (mp.headRel ? m.neck.x : 0);
       const py = -mp.oy + (mp.headRel ? m.neck.y : 0);
       sp.position.set(px, py);
       if (mp.group === "head") {
-        sp.zIndex = mutationPartZIndex(bit, mp.group, mp.z);
+        sp.zIndex = mutationPartZIndex(ref, mp.group, mp.z);
         this.headParts.push({ sp, bx: px, by: py });
       } else {
-        sp.zIndex = mutationPartZIndex(bit, mp.group, mp.z);
-        if (slotOf(bit) === "arm") this.arms.push(sp);
+        sp.zIndex = mutationPartZIndex(ref, mp.group, mp.z);
+        if (slotOfRef(ref) === "arm") this.arms.push(sp);
       }
       this.root.addChild(sp);
     }
-    // Headless models have no feet — guard the walk animation.
+    // Headless models have no feet â€” guard the walk animation.
     const headFxKind = specialHeadFxKind(key, mutation);
     if (headFxKind) {
       this.specialHeadFx = new SpecialHeadFx(headFxKind);
@@ -366,7 +370,7 @@ export class RaidActor {
     });
   }
 
-  /** Mark this zombie dead — begins the head-pop on the next update. Idempotent. */
+  /** Mark this zombie dead â€” begins the head-pop on the next update. Idempotent. */
   markDead() {
     if (this.deathT < 0) {
       this.deathT = 0;
@@ -439,3 +443,5 @@ function smooth(t: number): number {
   const x = Math.max(0, Math.min(1, t));
   return x * x * (3 - 2 * x);
 }
+
+

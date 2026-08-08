@@ -1,5 +1,5 @@
-// One owned zombie on the farm, assembled from its PER-TYPE model (reverse-
-// engineered from ZombieSheet — real body/head/features per group x tier) and
+﻿// One owned zombie on the farm, assembled from its PER-TYPE model (reverse-
+// engineered from ZombieSheet â€” real body/head/features per group x tier) and
 // tinted by its authentic unit colour. It idles/wanders the farm, routing around
 // placed objects via A* over the occupancy grid, and can be selected (a glowing
 // foot ring) to inspect its stats.
@@ -13,12 +13,12 @@ import { depth, screenToGrid, tileCenter } from "../iso";
 import { setFootprint } from "../depthSort";
 import { findEscape, findPath } from "../pathfind";
 import { OwnedZombie } from "./types";
-import { slotOf } from "./mutations";
+import { slotOfRef } from "./mutations";
 import {
   isMutationForegroundPart,
   matchesMutationReplacement,
   mutationCoversFace,
-  mutationBitsForRendering,
+  mutationRefsForRendering,
   mutationPartFor,
   mutationPartZIndex,
   type MutationReplacement,
@@ -27,6 +27,7 @@ import {
   BRUTE_EYEBALL_SCALE,
   DEFAULT_ZOMBIE_EYE_TINT,
   displayedAppearance,
+  displayedMutationIds,
   isBruteEyeball,
   zombiePartTint,
 } from "./appearance";
@@ -76,7 +77,7 @@ export class ZombieUnit {
   private field: Field;
   private root = new Container();
   // Head parts live as flat siblings in `root` (sorted by their own zIndex, like the
-  // engine's single-layer draw order — so a z8 beard sits over the z7 front arm), and
+  // engine's single-layer draw order â€” so a z8 beard sits over the z7 front arm), and
   // are tilted for the idle/walk head-nod by rotating each around the neck point every
   // frame instead of via a wrapping container (which would collapse them to one z).
   private neck = { x: 0, y: 0 };
@@ -131,7 +132,7 @@ export class ZombieUnit {
     return this.data;
   }
 
-  /** Zombie GROUP ("Garden", "Regular", …) — used to find fertilizers. */
+  /** Zombie GROUP ("Garden", "Regular", â€¦) â€” used to find fertilizers. */
   get group(): string {
     return this.data.group;
   }
@@ -143,7 +144,7 @@ export class ZombieUnit {
     return this.data.name;
   }
 
-  /** Instantly move to a world spot and pause there a beat — a Garden zombie
+  /** Instantly move to a world spot and pause there a beat â€” a Garden zombie
    *  "teleports" to a crop it fertilizes, then resumes wandering. */
   teleportTo(wx: number, wy: number) {
     this.wx = wx;
@@ -199,13 +200,14 @@ export class ZombieUnit {
     // What this unit LOOKS like on the farm, after the device's display prefs. The
     // data keeps its real mask and inherited tint; only the drawing changes.
     const shown = displayedAppearance(this.data.mutation, this.data.color);
+    const shownMutationIds = displayedMutationIds(this.data.mutationIds);
     const [r, g, b] = shown.color ?? m.color;
     const tint = (r << 16) | (g << 8) | b; // authentic Market colour
     const scale = zombieFarmScale(this.data.group, this.data.className, this.data.key);
     this.renderScale = scale;
     // Both feet are resolved from the model below, or stubbed at the end for a rig
     // that has none (Headless). Cleared first so a rebuild cannot hold on to the
-    // previous rig's — by then destroyed — sprites.
+    // previous rig's â€” by then destroyed â€” sprites.
     this.footF = this.footB = undefined as unknown as Sprite;
     this.root.sortableChildren = true;
     this.neck = { x: m.neck.x, y: m.neck.y };
@@ -254,10 +256,10 @@ export class ZombieUnit {
         headForeground.push(eyeball);
       }
     }
-    // Attach crop-mutation parts from the unit's mask (onion head, celery arm, …).
+    // Attach crop-mutation parts from the unit's mask (onion head, celery arm, â€¦).
     // Independent of species: a combined zombie shows exactly the mutations it
     // carries. Head parts join headParts (tilt with the head-nod); the rest sit flat.
-    this.addMutations(assets, m, replaceable, headForeground, shown.mutation);
+    this.addMutations(assets, m, replaceable, headForeground, shown.mutation, shownMutationIds);
     this.applyArmPose();
     this.buildFarmEffects();
     const headFxKind = specialHeadFxKind(this.data.key, shown.mutation);
@@ -276,7 +278,7 @@ export class ZombieUnit {
 
   /** Reassemble this unit's rig from the same data, picking up a changed display
    *  preference (mutations hidden / species body colour). Nothing about the unit
-   *  itself changes — only how it is drawn — so its position, path, sleep state and
+   *  itself changes â€” only how it is drawn â€” so its position, path, sleep state and
    *  selection survive. Cheap enough for the whole farm: the same work spawning one
    *  zombie already does. */
   rebuildAppearance(assets: GameAssets) {
@@ -295,7 +297,7 @@ export class ZombieUnit {
     this.eyesClosed = false; // fresh eye sprites are open; setEyesClosed early-outs otherwise
     this.build(assets);
     this.setEyesClosed(closed);
-    // build() recomputes hitH, and the invasion bubble hangs off it — a rig that just
+    // build() recomputes hitH, and the invasion bubble hangs off it â€” a rig that just
     // lost its mutation art is shorter, so re-place the bubble rather than leaving it
     // floating at the old silhouette's height.
     this.syncInvasionBubble();
@@ -324,12 +326,13 @@ export class ZombieUnit {
     model: ZombieModel,
     replaceable: Record<MutationReplacement, Sprite[]>,
     headForeground: Sprite[],
-    // The mask to DRAW — the unit's own, unless the player turned mutations off.
+    // The mask to DRAW â€” the unit's own, unless the player turned mutations off.
     mask: number,
+    mutationIds: readonly string[] = [],
   ) {
     const neck = model.neck;
-    for (const bit of mutationBitsForRendering(assets.zombies, this.data.key, mask)) {
-      const mp = mutationPartFor(assets.mutationParts, model, bit);
+    for (const ref of mutationRefsForRendering(assets.zombies, this.data.key, mask, mutationIds)) {
+      const mp = mutationPartFor(assets.mutationParts, model, ref);
       if (!mp) continue;
       const tex = assets.zombiePartTex[mp.file];
       if (!tex) continue;
@@ -339,13 +342,13 @@ export class ZombieUnit {
       const py = -mp.oy + (mp.headRel ? neck.y : 0);
       sp.position.set(px, py);
       const replacement: MutationReplacement | undefined =
-        mp.replaces ?? (slotOf(bit) === "head" ? "head" : undefined);
+        mp.replaces ?? (slotOfRef(ref) === "head" ? "head" : undefined);
       if (replacement) {
         for (const basePart of replaceable[replacement]) basePart.visible = false;
         if (replacement === "head") {
-          // The face either rides in front of the new head or is part of it — see
+          // The face either rides in front of the new head or is part of it â€” see
           // mutationCoversFace. A pumpkin brings its own.
-          const covers = mutationCoversFace(bit);
+          const covers = mutationCoversFace(ref);
           for (const basePart of headForeground) {
             if (covers) basePart.visible = false;
             else basePart.zIndex = MUT_BASE_FOREGROUND_Z + basePart.zIndex;
@@ -354,7 +357,7 @@ export class ZombieUnit {
       }
       this.root.addChild(sp);
       if (mp.group === "head") {
-        sp.zIndex = mutationPartZIndex(bit, mp.group, mp.z);
+        sp.zIndex = mutationPartZIndex(ref, mp.group, mp.z);
         this.headParts.push({ sp, bx: px, by: py }); // tilts with the head-nod
       } else {
         sp.zIndex = mp.z; // arms/body/collar keep their authored layering
@@ -393,7 +396,7 @@ export class ZombieUnit {
     return depth(g.col, g.row);
   }
 
-  // Walk to a specific tile and stay there — the Zombie Patch "calls" units to
+  // Walk to a specific tile and stay there â€” the Zombie Patch "calls" units to
   // nap on it. Stops wandering until woken.
   sleepAt(col: number, row: number) {
     this.sleeping = true;
@@ -422,7 +425,7 @@ export class ZombieUnit {
   private repath() {
     const g = screenToGrid(this.wx, this.wy);
     const from = { col: Math.round(g.col), row: Math.round(g.row) };
-    // Standing inside a placed object — bought onto an occupied tile, or one
+    // Standing inside a placed object â€” bought onto an occupied tile, or one
     // dropped on top of where it stood. Every wander candidate within reach is
     // blocked too, so walk out through the object first; wandering resumes from
     // the open ground on the far side.
@@ -598,3 +601,6 @@ export class ZombieUnit {
     this.container.destroy({ children: true });
   }
 }
+
+
+

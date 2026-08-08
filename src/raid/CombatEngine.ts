@@ -1,4 +1,4 @@
-// Deterministic raid resolver. Builds transient CombatUnits from the player's
+﻿// Deterministic raid resolver. Builds transient CombatUnits from the player's
 // selected zombies and one enemy wave, then runs a fixed-step auto-battle with NO
 // rendering and NO randomness, returning the outcome. The MVP jumps straight from
 // "Start" to the Result panel using this; a future live scene can replay the same
@@ -9,7 +9,7 @@
 //   attackCooldownMs  = clamp(3000 / dex, 600, 3500)
 //   damage per hit    = max(1, round(str * avgMult))
 // where avgMult is the frequency-weighted mean of a unit's attack damage
-// multipliers (so the RNG of "which attack" collapses to its expected value —
+// multipliers (so the RNG of "which attack" collapses to its expected value â€”
 // deterministic, and close enough for an instant resolve). Each unit attacks the
 // first living enemy on the opposite team; a side loses when all its units die.
 import type { OwnedZombie } from "../zombie/types";
@@ -44,13 +44,13 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 
 /** Frequency-weighted mean of one Attacks.json field over a unit's attack list.
  *
- *  The binary rolls a fresh attack every cycle (`Actor setAttackVariation` →
+ *  The binary rolls a fresh attack every cycle (`Actor setAttackVariation` â†’
  *  `rollAgainstFrequencyInArray:`), and the rolled attack sets BOTH that swing's
  *  `damageMultiplier` and its cycle length (`speedMultiplier`). This resolver is
- *  deterministic, so it collapses the roll to its expectation — and because the
+ *  deterministic, so it collapses the roll to its expectation â€” and because the
  *  long-run DPS of a renewal process is `E[damage] / E[cycle]`, taking the mean of
  *  each field independently reproduces the real sustained DPS exactly. (For the
- *  Lumberjack: 0.9×1.0 + 0.1×1.5 damage over 0.9×1 + 0.1×5 cycles = the true 22.5
+ *  Lumberjack: 0.9Ã—1.0 + 0.1Ã—1.5 damage over 0.9Ã—1 + 0.1Ã—5 cycles = the true 22.5
  *  dps, where using the mean damage at the base cadence would have said 30.) */
 function avgField(
   attacks: { name: string; frequency: number }[] | undefined,
@@ -87,7 +87,7 @@ function unit(
   speedMult = 1
 ): CombatUnit {
   // Ground-truth stat->fight-data derivation (initFightDataAfterLoad):
-  //   maxHp = con × 100; attack interval = (2s zombie / 1s enemy) ÷ dex.
+  //   maxHp = con Ã— 100; attack interval = (2s zombie / 1s enemy) Ã· dex.
   const maxHp = Math.max(1, Math.round(deriveMaxHp(con)));
   return {
     id,
@@ -111,10 +111,10 @@ function unit(
 }
 
 /** Effective per-hit damage of a combat unit. Ground truth (`Actor damageIn:`):
- *  finalPower × attackDamageMultiplier × band, where finalPower = effective str × 10, the
+ *  finalPower Ã— attackDamageMultiplier Ã— band, where finalPower = effective str Ã— 10, the
  *  per-hit `mult` carries the attack's damageMultiplier plus focus/ability modifiers, and
  *  `band` is the player-zombie lineup-depth falloff (1.0 for the front five, then 0.85/0.7/
- *  0.55) — enemies always fight at band 1.0. `lineupIndex` is the attacker's slot in the
+ *  0.55) â€” enemies always fight at band 1.0. `lineupIndex` is the attacker's slot in the
  *  player army (front = 0); ignored for enemies. Min 1 so the sim can't stall. */
 function hitDamage(u: CombatUnit, lineupIndex = 0): number {
   const power = u.str * POWER_PER_STR;
@@ -126,7 +126,7 @@ function hitDamage(u: CombatUnit, lineupIndex = 0): number {
 // Distraction model: during an invasion the enemy distracts your zombies, costing
 // them a little combat throughput. The `focus` stat (0-100, Help.json: "higher
 // focus = less likely distracted; premium zombies 100% focus") is the resistance.
-// A unit's damage is scaled by focusFactor below — full at focus 100, down to
+// A unit's damage is scaled by focusFactor below â€” full at focus 100, down to
 // (1 - DISTRACTION_K) at focus 0. The Concentration boost negates it entirely, so
 // every zombie fights as if perfectly focused. Kept mild so the tutorial raid
 // stays winnable with a low-focus starter army.
@@ -138,32 +138,32 @@ export function focusFactor(focus: number, concentration: boolean): number {
 
 /** Build the player's combat line from selected owned zombies. Each unit's stats
  *  compound in the SOURCE'S PIPELINE ORDER (`-[ZombieActor modifyStats:]`, which chains
- *  `modifyStatWithLevelScale:` → `modifyStatWithFarmerHeads:` → `modifyStatWithAbilities:`
- *  → `modifyStatWithRank:` → `modifyStatWithMutations:`), all deterministic:
- *   0. Player-level scale — the level-8→25 ramp, applied to the UNMUTATED base stat.
- *   1. Veterancy — +5%/rank from survived invasions (all stats).
- *   2. Its own unlocked ABILITIES (abilities.ts) — self buffs to damage / HP /
- *      speed / all-stats, gated exactly like the detail card (tier ≤ class rank
+ *  `modifyStatWithLevelScale:` â†’ `modifyStatWithFarmerHeads:` â†’ `modifyStatWithAbilities:`
+ *  â†’ `modifyStatWithRank:` â†’ `modifyStatWithMutations:`), all deterministic:
+ *   0. Player-level scale â€” the level-8â†’25 ramp, applied to the UNMUTATED base stat.
+ *   1. Veterancy â€” +5%/rank from survived invasions (all stats).
+ *   2. Its own unlocked ABILITIES (abilities.ts) â€” self buffs to damage / HP /
+ *      speed / all-stats, gated exactly like the detail card (tier â‰¤ class rank
  *      AND that ability unlocked). Pass `abilityUnlocked` so combat matches the UI;
  *      omit it (tests) to run with abilities off.
- *   3. Original type-targeted auras — Chivalry buffs Girl zombies, Grace buffs
+ *   3. Original type-targeted auras â€” Chivalry buffs Girl zombies, Grace buffs
  *      Regular zombies, Protect reduces damage to non-Headless types, and
  *      Fortitude buffs Headless Life.
- *   4. MUTATIONS LAST — a flat +str/+con/+dex added on top of everything above, never
+ *   4. MUTATIONS LAST â€” a flat +str/+con/+dex added on top of everything above, never
  *      scaled or multiplied. `OwnedZombie.str/con/dex` already INCLUDE the mutation
  *      bonus (makeOwned bakes it in so the detail card shows the listed stat), so the
  *      bonus is peeled off here, the rest of the chain runs, and it is added back.
- *      Baking it in before the level ramp — the old behaviour — let the lerp toward the
+ *      Baking it in before the level ramp â€” the old behaviour â€” let the lerp toward the
  *      group endpoint eat most of it: a full 5-slot set was worth ~25 % of its value at
  *      level 12, and only reached face value at level 25.
  *  Player attack multipliers aren't baked into zombies.json and the source attacks
- *  are ~1.0, so the base per-hit multiplier is 1x — scaled by the focus-based
+ *  are ~1.0, so the base per-hit multiplier is 1x â€” scaled by the focus-based
  *  distraction factor (negated by Concentration) times any self damage ability. */
 /** The lowest str/con/dex a player zombie can be reduced to. Only reachable via a
  *  mutation penalty (mutations.ts MutationStats): every other modifier is a positive
  *  multiplier on a positive base. Zero, not a small positive, because "does nothing"
  *  is a coherent outcome and the derivations below all define a sane behaviour for it
- *  — what must never happen is a NEGATIVE stat inverting the sign of a hit. */
+ *  â€” what must never happen is a NEGATIVE stat inverting the sign of a hit. */
 export const MIN_COMBAT_STAT = 0;
 
 export function buildPlayerUnits(
@@ -200,8 +200,8 @@ export function buildPlayerUnits(
     const v = veterancyMultiplier(z.invasions);
     // Mutations are the LAST link of the source's stat chain, so peel them off the
     // listed stat here and add them back untouched once everything else has applied.
-    const mut = mutationBonus(z.mutation);
-    // Player-level stat ramp (binary modifyStatWithLevelScale:) — str/con/dex only,
+    const mut = mutationBonus(z.mutation, z.mutationIds);
+    // Player-level stat ramp (binary modifyStatWithLevelScale:) â€” str/con/dex only,
     // NOT focus. Skipped (full base stats) when no playerLevel is supplied.
     const rawStr = z.str - mut.str;
     const rawDex = z.dex - mut.dex;
@@ -226,7 +226,7 @@ export function buildPlayerUnits(
     //
     // No current mutation is negative, so this floor never binds on today's data and
     // every recorded raid replays identically. Authoring the first negative mutation
-    // IS a rules change — bump the replay ruleset version in that same commit.
+    // IS a rules change â€” bump the replay ruleset version in that same commit.
     const str = clampResolvedRawStat("str", auraBaseStr * (1 + statAura * 0.10) + mut.str);
     const dex = clampResolvedRawStat("dex", auraBaseDex * (1 + statAura * 0.10) + mut.dex);
     const con = clampResolvedRawStat("con", auraBaseCon * (1 + lifeAura * 0.10) + mut.con);
@@ -261,7 +261,7 @@ export function buildPlayerUnits(
 
 /** Knockback / stun an enemy's attacks can inflict. An enemy knocks back if ANY of
  *  its attacks does (Attacks.json `knockBack`); its stun is the longest `stunTimer`
- *  among stun attacks (seconds → ms). Recovered from the binary — knockback sends the
+ *  among stun attacks (seconds â†’ ms). Recovered from the binary â€” knockback sends the
  *  struck zombie to the back of the line (see RAID_TIMING_AND_HAZARDS.md). */
 function attackEffects(
   attacks: { name: string; frequency: number }[] | undefined,
@@ -279,7 +279,7 @@ function attackEffects(
 }
 
 /** Representative damage-timing for an enemy's swing animation: the `damageTiming` of
- *  its most-frequent (primary) attack that defines one — the visible normal attack —
+ *  its most-frequent (primary) attack that defines one â€” the visible normal attack â€”
  *  falling back to a neutral mid-swing 0.5. Cosmetic only (drives the raid-scene lunge). */
 function primaryDamageTiming(
   attacks: { name: string; frequency: number }[] | undefined,
@@ -325,8 +325,8 @@ function weightedPopulation(stage: RaidStage): string[] {
  *  `opts` carries the two context-dependent cadence rules recovered from
  *  `-[Actor getFightAttackSpeed]`; pass BOTH client- and server-side or the
  *  deterministic replay diverges:
- *   - `raidId` + `playerLevel` → Old McDonnell's farm speeds its enemies up as you
- *     out-level it (×0.66 at L10, ×0.44 at L15). No other raid scales.
+ *   - `raidId` + `playerLevel` â†’ Old McDonnell's farm speeds its enemies up as you
+ *     out-level it (Ã—0.66 at L10, Ã—0.44 at L15). No other raid scales.
  *   - the Scallywag is flagged here and mirrors its opponent at fight time. */
 export function buildEnemyUnits(
   stage: RaidStage,
@@ -372,12 +372,12 @@ export function buildEnemyUnits(
 
 /** Run the deterministic auto-battle. Player wins iff all enemies die first.
  *
- *  Engagement model: **enemies come out ONE AT A TIME** (matching the live raid scene) —
+ *  Engagement model: **enemies come out ONE AT A TIME** (matching the live raid scene) â€”
  *  only the front enemy is "out": it attacks the lead zombie, and the player's whole living
  *  army focus-fires it. The rest of the wave is queued and doesn't act until it reaches the
  *  front. This is what makes army SIZE matter (concentration) instead of the enemy wave
  *  dog-piling the front zombie; a single strong enemy or a numbers disadvantage still loses.
- *  (Player-side melee-slot limits — how many zombies can reach the one enemy at once — are
+ *  (Player-side melee-slot limits â€” how many zombies can reach the one enemy at once â€” are
  *  not yet modeled; today the whole army engages.) */
 export function resolveRaid(
   player: CombatUnit[],
@@ -411,7 +411,7 @@ export function resolveRaid(
     const frontEnemy = firstAlive(e);
     if (!firstAlive(p) || !frontEnemy) break;
     // Acting units this tick: the ONE front enemy, then every living zombie (order fixed
-    // for determinism — enemy first). Queued enemies stay off the field.
+    // for determinism â€” enemy first). Queued enemies stay off the field.
     const actors: CombatUnit[] = [frontEnemy, ...p];
     for (const u of actors) {
       if (!u.alive) continue;
@@ -447,3 +447,4 @@ export function resolveRaid(
     playerDamage,
   };
 }
+

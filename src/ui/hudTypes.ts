@@ -1,4 +1,4 @@
-// Shared view-model types for the HUD and its panel modules. These are the data
+﻿// Shared view-model types for the HUD and its panel modules. These are the data
 // shapes main.ts builds and hands to Hud.* methods (it owns the asset/icon lookups
 // and game-state reads); the HUD only renders them. Kept separate from hud.ts so
 // panels can import the types without pulling in the whole Hud class.
@@ -36,7 +36,7 @@ export interface MenuCard {
    * current player's own ability unlocks. */
   zombie?: {
     group: string; className: string; classColor: string;
-    str: number; dex: number; con: number; focus: number; mutation: number;
+    str: number; dex: number; con: number; focus: number; mutation: number; mutationIds?: string[];
   };
 }
 
@@ -73,7 +73,8 @@ export interface ZombieInfo {
   dex: number;
   con: number;
   focus: number;
-  mutation: number; // mutation bitmask — stats it boosts render green
+  mutation: number; // vanilla mutation bitmask â€” stats it boosts render green
+  mutationIds?: string[]; // local modded mutation ids
   portrait: string;
   color?: [number, number, number]; // individual tint used by the generated portrait
   invasions: number; // lifetime invasions (drives veterancy)
@@ -91,14 +92,14 @@ export interface AlmanacEntryView {
   className: string;
   classColor: string;
   category: "normal" | "special" | "mutant";
-  // BASE stats straight from the catalog — no farmer/veterancy/mutation modifiers.
+  // BASE stats straight from the catalog â€” no farmer/veterancy/mutation modifiers.
   str: number;
   dex: number;
   con: number;
   focus: number;
   /** Lifetime obtained count. 0 = undiscovered (rendered as a silhouette). */
   obtained: number;
-  /** How to acquire this species — the only detail an undiscovered entry reveals. */
+  /** How to acquire this species â€” the only detail an undiscovered entry reveals. */
   hint: string;
   /** True on Epic Boss exclusives. `category` alone cannot tell them apart (they are
    *  all "special"), so this is what files them under the Almanac's Epic group. */
@@ -121,7 +122,7 @@ export interface ObjectActions {
   onStore: () => void;
   onSell: () => void;
   /** A building whose tap USED to go straight to its own panel (the Pet Pen's pet
-   *  collection) keeps that panel one tap away here — otherwise routing the tap to
+   *  collection) keeps that panel one tap away here â€” otherwise routing the tap to
    *  this sheet would be the only way to store it and the only way to lose the panel. */
   manageLabel?: string;
   onManage?: () => void;
@@ -132,7 +133,7 @@ export interface LevelUpUnlock {
   icon: string;
   tint?: number; // packed placeable tint, so the card matches the farm
   name: string;
-  kind: string; // "Invasion" | "Item" | "Boost" | …
+  kind: string; // "Invasion" | "Item" | "Boost" | â€¦
 }
 export interface LevelUpView {
   level: number; // the new level reached
@@ -173,3 +174,6 @@ export function graveNeededFor(className: string): "Blue" | "Red" | "Silver" | n
   if (className === "Silver") return "Silver";
   return null; // Green (T1), Special, Yellow need no grave
 }
+
+
+

@@ -1,8 +1,8 @@
-import { Application, Assets, Container, FederatedPointerEvent, Graphics, Point, Sprite, Text, TextStyle, Texture } from "pixi.js";
+﻿import { Application, Assets, Container, FederatedPointerEvent, Graphics, Point, Sprite, Text, TextStyle, Texture } from "pixi.js";
 import { snapPlowOrigin } from "./plowSelection";
 // Patch Pixi's renderer to use no-eval polyfills for its shader/UBO/uniform/particle
 // codegen (it otherwise uses `new Function`, which the production CSP's script-src
-// blocks — no 'unsafe-eval'). Side-effect import; must run before `new Application()`.
+// blocks â€” no 'unsafe-eval'). Side-effect import; must run before `new Application()`.
 // pixi.js lists ./lib/unsafe-eval/init.* under "sideEffects", so it survives bundling.
 import "pixi.js/unsafe-eval";
 import { loadAssets, ensureObjectTexture, ensureObjectTextures, objectSpriteFiles, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
@@ -76,8 +76,9 @@ import {
   combineSubject, combineSubjectAliases, mutantSubjectIndex, unitQuestSubjects,
   unitSubjectAliases,
 } from "./quest/mutantSubjects";
-import { resolveCropMutations } from "./zombie/cropMutations";
+import { resolveCropMutationSet } from "./zombie/cropMutations";
 import { MutationPortraits } from "./zombie/mutationPortrait";
+import type { MutationSet } from "./zombie/mutations";
 import {
   DR_GROUNDHOG,
   EPIC_BOSSES,
@@ -100,7 +101,7 @@ import { showExportOnly } from "./exportOnly";
 
 // The boot / start screen lives in index.html and paints on the first frame (no
 // empty-farm flash). We report load milestones to it and, once the game is fully
-// built, tell it to finish — it then shows "Click to Start" and a tap dismisses it.
+// built, tell it to finish â€” it then shows "Click to Start" and a tap dismisses it.
 const boot = (window as unknown as {
   __ZFBoot?: {
     progress(p: number): void;
@@ -111,7 +112,7 @@ const boot = (window as unknown as {
   };
 }).__ZFBoot;
 
-// Export writes the same kind of file from either farm — a plain SaveGame — and only
+// Export writes the same kind of file from either farm â€” a plain SaveGame â€” and only
 // Local Farm's Import reads one, so an export never travels back online. Module scope
 // because the closedown export screen runs long before the Settings wiring exists.
 function downloadSaveFile(raw: string, name: string): void {
@@ -135,13 +136,13 @@ async function main() {
   // even when this browser still has a valid Online Farm session.
   //
   // Ask the server what it currently permits BEFORE offering the choice. During the
-  // beta→release closedown this is what lets the chooser say "Online Farm is closed,
+  // betaâ†’release closedown this is what lets the chooser say "Online Farm is closed,
   // export it" instead of sending the player through a sign-in that ends in an error.
   // It fails open, so a flaky connection never fakes a closure.
   //
   // Skipped outright for a player who has already chosen Local Farm: no service mode
-  // can change anything for them, and making them wait on a network round trip — or
-  // on its timeout, offline — before their own device's farm opens would be a
+  // can change anything for them, and making them wait on a network round trip â€” or
+  // on its timeout, offline â€” before their own device's farm opens would be a
   // regression for the one group the closedown is meant not to touch.
   const service = getPreferredPlayMode() === "local" ? OPEN_STATUS : await fetchServiceStatus();
   const playMode: PlayMode = await choosePlayMode(auth.isOnlineAvailable(), service);
@@ -163,7 +164,7 @@ async function main() {
   // and taking it would show the player's other device a spurious "Farm active
   // elsewhere" takeover prompt for a session that is only here to export.
   if (onlineFarm && !exportOnlyFarm) await api.prepareWriterAccess();
-  boot?.progress(0.35); // signed in — start filling the plate bar
+  boot?.progress(0.35); // signed in â€” start filling the plate bar
   const app = new Application();
   await app.init({
     background: "#67bb4e", // grass green around the farm, matching the backdrop hills
@@ -179,7 +180,7 @@ async function main() {
   document.getElementById("app")!.appendChild(app.canvas);
 
   const assets = await loadAssets();
-  boot?.progress(0.8); // heaviest step done — art is in
+  boot?.progress(0.8); // heaviest step done â€” art is in
   const state = new GameState();
   let epicBoss = new EpicBossManager(DR_GROUNDHOG);
   state.seedFarmerCatalog(assets.farmer);
@@ -187,7 +188,7 @@ async function main() {
   const hud = new Hud(state, audio, playMode);
   hud.setPlayStatus(playMode, playMode === "online" ? "reconnecting" : "synced");
   const mutationPortraits = new MutationPortraits(app.renderer, assets);
-  hud.zombieMutationPortraitOf = (key, mutation, color) => mutationPortraits.get(key, mutation, color);
+  hud.zombieMutationPortraitOf = (key, mutation, color, mutationIds) => mutationPortraits.get(key, mutation, color, mutationIds);
   hud.setFarmerCatalog(assets.farmer);
   hud.setPetCatalog(assets.pets);
   // Give Android/browser Back an in-app dismissal layer. One guard entry keeps the
@@ -261,11 +262,11 @@ async function main() {
     const b = subjectsOf(pot.keyB, pot.maskB);
     return { subject: combineSubject(a[0] ?? "", b[0] ?? ""), aliases: combineSubjectAliases(a, b) };
   };
-  const offlineHarvestMutation = (key: string, context: { cropKeys: string[]; guaranteed: boolean }): number | undefined => {
+  const offlineHarvestMutation = (key: string, context: { cropKeys: string[]; guaranteed: boolean }): MutationSet | undefined => {
     if (state.onFarm) return undefined; // online mutation rolls are server-owned
     const def = zombieDefs.get(key);
     if (!def) return undefined;
-    return resolveCropMutations(def.mutation ?? 0, context.cropKeys, {
+    return resolveCropMutationSet(def.mutation ?? 0, [], context.cropKeys, {
       guaranteed: context.guaranteed,
       headless: def.group === "Headless",
     });
@@ -324,8 +325,8 @@ async function main() {
   for (const b of assets.boosts) boostCatalog.set(b.key, b);
   hud.setBoosts(assets.boosts);
 
-  // Level-up popup: gather everything the new level(s) opened up — invasions,
-  // market items, boosts — and show the celebratory unlock screen.
+  // Level-up popup: gather everything the new level(s) opened up â€” invasions,
+  // market items, boosts â€” and show the celebratory unlock screen.
   const raidImg = (f: string) => `${BASE}assets/raids/images/${f}`;
   state.onLevelUpCb = (from, to) => {
     const unlocks: LevelUpUnlock[] = [];
@@ -363,7 +364,7 @@ async function main() {
 
   // Static hills-and-sky backdrop. The farm's top corner (tile 0,0) sits at world
   // y=0 and the land is centered on x=0, so anchor the backdrop bottom-center and
-  // lift it a few tiles above y=0 — its hill bases stay just above the top tiles,
+  // lift it a few tiles above y=0 â€” its hill bases stay just above the top tiles,
   // never overlapping the field. It lives at the back of the world so it pans and
   // zooms with the farm.
   const BG_GAP_TILES = 3; // hill bases stay this many tiles above the top tile
@@ -386,7 +387,7 @@ async function main() {
   // Fertilize leaf FX draw above crops/actors (below night so they dim at dusk).
   world.addChild(field.fxLayer);
 
-  // Decorative foliage on the grass AROUND the farm — never on a farm tile. It's
+  // Decorative foliage on the grass AROUND the farm â€” never on a farm tile. It's
   // added to the depth-sorted entity layer (zIndex = grid depth) so trees south of
   // the farm draw in front of it and northern ones behind, matching placed trees.
   // Purely visual: not registered in the tile grid, so it blocks nothing.
@@ -411,7 +412,7 @@ async function main() {
     const MARGIN = 2.5; // clear grass between the farm edge and the nearest foliage
 
     // Fill the WORLD-SPACE rectangle the camera can reveal at max zoom-out
-    // ([boundL..boundR] x [treeTop..boundB]) instead of a grid-space diamond ring —
+    // ([boundL..boundR] x [treeTop..boundB]) instead of a grid-space diamond ring â€”
     // that ring is why the far screen corners used to sit on bare grass when fully
     // zoomed out. We sweep the rotated (u,v) lattice (u = col-row, v = col+row),
     // which maps straight onto that rect:  worldX = u*HW,  worldY = v*HH + HH.
@@ -534,7 +535,7 @@ async function main() {
   audio.setZombieBarkSource(() => zombies.randomBrainBark());
 
   // Night lighting layer: a dark mask with the lights erased out of it (revealing
-  // the daytime scene under each light — never a glare), above the farm/entities
+  // the daytime scene under each light â€” never a glare), above the farm/entities
   // but below the job labels & cursor (UI stays readable). Toggled from the HUD's
   // Developer menu for now (a real day/night cycle comes later).
   const night = new NightLayer();
@@ -557,7 +558,7 @@ async function main() {
     lanternInner.visible = on;
     lanternOuter.visible = on;
     // Leave the viewport FILLER (the area beyond the hills backdrop) the daytime
-    // hill/grass green in both modes — it's the exact colour of the backdrop hills
+    // hill/grass green in both modes â€” it's the exact colour of the backdrop hills
     // (sampled 0x67bb4e). At night the NightLayer's dark overlay covers the whole
     // screen, so it darkens this filler by the SAME amount as the hills; they read
     // as one continuous surface instead of the hills floating over a near-black void.
@@ -688,8 +689,8 @@ async function main() {
   window.addEventListener("keyup", (e) => cameraKeys.delete(e.key.toLowerCase()));
   window.addEventListener("blur", () => cameraKeys.clear());
 
-  // Zoom by `factor` while keeping the world point under (sx,sy) — a screen-space
-  // pixel — fixed. Shared by mouse-wheel (desktop) and pinch (touch) so both zoom
+  // Zoom by `factor` while keeping the world point under (sx,sy) â€” a screen-space
+  // pixel â€” fixed. Shared by mouse-wheel (desktop) and pinch (touch) so both zoom
   // toward the pointer/pinch-midpoint identically.
   const zoomAt = (sx: number, sy: number, factor: number) => {
     const cursor = new Point(sx, sy);
@@ -729,7 +730,7 @@ async function main() {
   type Float = { view: Container; text: Text; icon: Sprite; ttl: number; delay: number };
   const floats: Float[] = [];
   // Retired popups are reused instead of destroyed. Insta-Harvest pops every plot's
-  // OWN numbers in a single frame — up to three per plot, plus one per ripe tree — so
+  // OWN numbers in a single frame â€” up to three per plot, plus one per ripe tree â€” so
   // a full farm builds hundreds at once. Beyond the allocation churn, destroying a
   // Text drops its rasterised texture, which meant the next identical "+31g" had to be
   // measured and re-rendered from scratch. The pool is capped so one huge harvest
@@ -883,8 +884,8 @@ async function main() {
   );
 
   // `raidActive` is declared up here (ahead of both the celebration queue and the raid
-  // block far below) so every closure that reads it — the tutorial's isRaidActive(),
-  // celebrateQuest() — sees an already-initialised binding; the raid launch handlers
+  // block far below) so every closure that reads it â€” the tutorial's isRaidActive(),
+  // celebrateQuest() â€” sees an already-initialised binding; the raid launch handlers
   // assign it.
   let raidActive = false;
 
@@ -949,7 +950,7 @@ async function main() {
 
   /** Put a server-awarded zombie on the results panel, where the player actually
    *  looks. A prize that could not go straight onto the farm used to be announced
-   *  only by a toast fired the instant before the panel covered it — for an Epic
+   *  only by a toast fired the instant before the panel covered it â€” for an Epic
    *  Boss milestone that meant the event's signature zombie arrived unannounced.
    *  Also counts the species for the Almanac when it went to Received: nothing
    *  claims it into the roster, so no other path would. */
@@ -977,7 +978,7 @@ async function main() {
       // Online: the server grants the quest's currency reward (and any level-up brains)
       // authoritatively and idempotently; return true so QuestSystem skips the local add
       // (which the spend-only economy endpoint would reject anyway). Offline: `economy`
-      // is null → return false → currency is granted locally as before.
+      // is null â†’ return false â†’ currency is granted locally as before.
       grantReward: (def) => {
         if (!economy) return false;
         economy.submitQuest(def.id);
@@ -1034,7 +1035,7 @@ async function main() {
     if (def.effect === "gift" && giftLimitReached(def.key)) return false; // 1 per farm
     if (state.onInventory) {
       // ONLINE: the server prices the boost (exact catalog cost), debits currency, and
-      // grants perPurchase — atomically. Affordability is checked against the
+      // grants perPurchase â€” atomically. Affordability is checked against the
       // server-synced balance first for instant feedback; the server is the gate.
       const funds = def.brainsNeeded ? state.brains : state.gold;
       if (funds < def.cost) return false;
@@ -1058,7 +1059,7 @@ async function main() {
     powerGold = 0;
     powerXp = 0;
     if (!applyBoost(def)) return; // only consume if it did something
-    // ONLINE: the server owns the count — decrement there (optimistic + reconcile).
+    // ONLINE: the server owns the count â€” decrement there (optimistic + reconcile).
     // A gift voucher redeems into a zombie, so it also carries the spawned unit's id:
     // the server consumes the voucher and files that unit in the roster atomically.
     if (state.onInventory) {
@@ -1136,7 +1137,7 @@ async function main() {
   let powerXp = 0;
 
   // Apply a farm-usable boost's effect. Returns true if it actually did anything
-  // (so a no-op — e.g. Insta-Harvest with nothing ripe — doesn't waste the boost).
+  // (so a no-op â€” e.g. Insta-Harvest with nothing ripe â€” doesn't waste the boost).
   const applyBoost = (def: BoostDef): boolean => {
     const c = tileCenter(walk.tile.col, walk.tile.row); // float near the farmer
     if (def.effect === "grow") {
@@ -1198,7 +1199,7 @@ async function main() {
         if (r.zombieKey) {
           floatText(cropCenter.x, cropCenter.y, `+${xp}xp`);
         } else {
-          floatText(cropCenter.x, cropCenter.y, `+${gold}g${r.fertilized ? " ×2" : ""}`);
+          floatText(cropCenter.x, cropCenter.y, `+${gold}g${r.fertilized ? " Ã—2" : ""}`);
           if (xp) floatText(cropCenter.x, cropCenter.y, `+${xp}xp`, 0.42);
           if (bossToken) floatText(cropCenter.x, cropCenter.y, "+1 Boss Token!", xp ? 0.84 : 0.42);
         }
@@ -1248,7 +1249,7 @@ async function main() {
       if (!zombieDefs.has(def.giftZombieKey)) return false;
       // ONLINE, the voucher `use` grants this unit server-side, so spawn it verified
       // (no onGrant) and hand its id to onUseBoost to send. A full active farm files
-      // the award in Received instead — the server does exactly the same, and reports
+      // the award in Received instead â€” the server does exactly the same, and reports
       // no created id for it, so `giftUnitId` must stay null on that path.
       // The server re-checks the catalog key, voucher count, and 1-per-farm rule.
       const unit = grantEarnedZombie(def.giftZombieKey);
@@ -1296,14 +1297,14 @@ async function main() {
   const pauseFarmJobs = () => { advanceFarmJobsToNow(); jobs.setPaused(true); };
   const resumeFarmJobs = () => { advanceFarmJobsToNow(); jobs.setPaused(false); lastJobAdvanceAt = Date.now(); };
 
-  // Visit mode: if a friend farm was requested (via enterVisit → reload), hydrate
-  // THEIR read-only save into these fresh singletons and — crucially — never call
+  // Visit mode: if a friend farm was requested (via enterVisit â†’ reload), hydrate
+  // THEIR read-only save into these fresh singletons and â€” crucially â€” never call
   // enableAutosave(). The player's own save is never loaded in this mode, so a
   // visit cannot read, write, or corrupt it. On any fetch failure we clear the
   // target and fall through to a normal load, so the player always lands on their
   // own farm.
   // A visit target stashed before the closedown began would otherwise send this load
-  // into a friend's read-only farm instead of the export handoff — the player would
+  // into a friend's read-only farm instead of the export handoff â€” the player would
   // have to work out that "leave farm" is the way to reach their own export. Visiting
   // is meaningless during a closedown, so drop the target and go collect their farm.
   if (exportOnlyFarm) clearVisitTarget();
@@ -1317,7 +1318,7 @@ async function main() {
       // Defense in depth: a friend's farm is server-validated on write, but the
       // visitor re-checks the dimensions before hydrating so a malformed/extreme
       // save can never drive an oversized field allocation here. (See SECURITY.md
-      // finding #9 — malicious saves attacking visitors.)
+      // finding #9 â€” malicious saves attacking visitors.)
       const w = save?.farm?.w, h = save?.farm?.h;
       const MAX_VISIT_DIM = 128;
       const okDim = (n: unknown) =>
@@ -1380,8 +1381,8 @@ async function main() {
     state.seedFarmerCatalog(assets.farmer);
     applyFarmerAppearance();
     if (!restored) quests.restore(); // fresh farm: activate the opening quests
-    // Closedown handoff. The farm is now hydrated from the server — which is the only
-    // way to serialise an Online Farm, since one keeps no full blob on the device — so
+    // Closedown handoff. The farm is now hydrated from the server â€” which is the only
+    // way to serialise an Online Farm, since one keeps no full blob on the device â€” so
     // this is the earliest point the export can be produced, and the latest point that
     // is still before autosave, the economy client, and the game loop start. The screen
     // never resolves: every button downloads or reloads.
@@ -1402,7 +1403,7 @@ async function main() {
           return saveManager.exportOnline();
         },
         // Byte-for-byte the file Settings' Export writes, and the only thing Local
-        // Farm's Import accepts — one export format, one import path.
+        // Farm's Import accepts â€” one export format, one import path.
         download: (raw) => downloadSaveFile(raw, "online"),
         openLocal: () => {
           setPreferredPlayMode("local");
@@ -1460,7 +1461,7 @@ async function main() {
     state.equipFarmerHead(head.id);
     economy?.submitFarmerEquip(head.id);
     // Bought from inside the Market modal, so the world-space float would be
-    // hidden behind it — the toast is the visible half (see showPurchaseXp).
+    // hidden behind it â€” the toast is the visible half (see showPurchaseXp).
     showPurchaseXp(xp);
     return true;
   };
@@ -1490,7 +1491,7 @@ async function main() {
   };
   const storedObjectIds = new Map<string, string[]>();
   const objectPurchases = new Map<string, { cost: number; currency: "gold" | "brains" }>();
-  /** The instance id of one stored copy of `key` — what both the retrieve and sell
+  /** The instance id of one stored copy of `key` â€” what both the retrieve and sell
    *  paths act on. Online that identity is the server's and comes from the object
    *  reconcile below; offline the save carries counts only, so it is minted on first
    *  use (otherwise a reloaded local shed holds items that can't be placed or sold). */
@@ -1514,7 +1515,7 @@ async function main() {
     economy.onPendingChange = (pending) =>
       hud.setPlayStatus("online", pending > 0 ? "saving" : "synced", pending);
     // This tab's JS and the deployed Worker disagree about the raid ruleset, so every
-    // invasion would be refused at /raid/start. Tell the player up front — the fix is a
+    // invasion would be refused at /raid/start. Tell the player up front â€” the fix is a
     // reload, and finding that out before committing an army is far better than after.
     economy.onRulesetSkew = (serverVersion, clientVersion) => {
       console.warn("[raid] ruleset skew", { serverVersion, clientVersion });
@@ -1567,7 +1568,7 @@ async function main() {
       field.reconcilePlots([...presentation, ...authoritative], (key) => catalog.get(key));
     };
     let objectReconcileGeneration = 0;
-    /** Server objects the farm has no room to re-home — warned about once each, so a
+    /** Server objects the farm has no room to re-home â€” warned about once each, so a
      *  full farm does not repeat the same toast on every reconcile. */
     const rehomeWarned = new Set<string>();
     economy.onObjectState = async (objects, aliases, baseZombieMax, rejectedLocalIds) => {
@@ -1624,7 +1625,7 @@ async function main() {
         const source = current.get(object.instanceId) ?? (localId ? current.get(localId) : undefined);
         // `current` is a snapshot, so it keeps resolving a local object after that
         // object has been renamed to a server instance id. Two server objects aliased to
-        // the SAME local id would therefore both be placed on its tile — stacking, and
+        // the SAME local id would therefore both be placed on its tile â€” stacking, and
         // displacing whatever legitimately stood there (this is how a Zombie Pot could
         // vanish from the farm while the server still owned it). One claim per local
         // object: a loser is skipped, and a reload rebuilds it from the server list.
@@ -1662,14 +1663,14 @@ async function main() {
       //
       // This runs even when the farm is otherwise empty. Gameplay objects and the
       // presentation blob arrive in the SAME bootstrap response, so "no positions at all"
-      // cannot mean a half-loaded save — it means those positions are genuinely gone, and
+      // cannot mean a half-loaded save â€” it means those positions are genuinely gone, and
       // a real tile beats an invisible object the player has already paid for.
       for (const orphan of orphans) {
         const spot = field.findFreeOrigin(orphan.def);
         if (!spot) {
           if (!rehomeWarned.has(orphan.instanceId)) {
             rehomeWarned.add(orphan.instanceId);
-            hud.showToast(`No room to put your ${orphan.def.name} back — clear a space and it will reappear.`);
+            hud.showToast(`No room to put your ${orphan.def.name} back â€” clear a space and it will reappear.`);
           }
           continue;
         }
@@ -1684,7 +1685,7 @@ async function main() {
       const armyBonus = placed.reduce((sum, object) => sum + (placeCatalog.get(object.key)?.armyMax ?? 0), 0);
       const itemCap = placed.reduce((cap, object) => Math.max(cap, placeCatalog.get(object.key)?.storageSlots ?? 0), 8);
       state.syncCapacities(baseZombieMax + armyBonus, itemCap);
-      return true; // aliases consumed — EconomyClient may drop them
+      return true; // aliases consumed â€” EconomyClient may drop them
     };
     economy.onRosterState = (roster, aliases, settled) => {
       const pots = zombies.reconcileServerPots(roster, settled);
@@ -1696,8 +1697,8 @@ async function main() {
         // parents are ordinary roster units again and the reconcile below will show
         // them. Persist immediately so a reload cannot resurrect the phantom Pot.
         hud.showToast(pots.retired.length > 1
-          ? "Some Zombie Pot combines could not be confirmed — those zombies are back on your farm."
-          : "That Zombie Pot combine could not be confirmed — your zombies are back on your farm.");
+          ? "Some Zombie Pot combines could not be confirmed â€” those zombies are back on your farm."
+          : "That Zombie Pot combine could not be confirmed â€” your zombies are back on your farm.");
         saveManager.flushCritical();
       }
       const hidden = new Set(zombies.pendingPotParents().flatMap((pot) => [pot.parentAId, pot.parentBId]));
@@ -1738,7 +1739,7 @@ async function main() {
     // Server-owned roster: seed the shadow from the current units, then report every
     // post-load create (grant) / casualty + combined parent (casualty), and route a
     // SELL through the server (it prices + credits it, rejecting a unit it doesn't own
-    // — so a fabricated zombie can't be cashed out). Seed + go-live before wiring the
+    // â€” so a fabricated zombie can't be cashed out). Seed + go-live before wiring the
     // hooks so restoring the save doesn't re-emit grants.
     void economy.syncRoster(zombies.seedData());
     zombies.onGrant = (u) => economy!.submitRoster({ type: "grant", unitId: u.id, key: u.key, mutation: u.mutation, invasions: u.invasions });
@@ -1759,7 +1760,7 @@ async function main() {
     // route through the server at their call sites (object buy + sellObject).
     void economy.syncObjects(field.objectKeyCounts());
     // Server-owned soil: import this save's already-plowed plots (one-time). Without it
-    // the server would reject planting on soil this client shows as tilled — and won't
+    // the server would reject planting on soil this client shows as tilled â€” and won't
     // let the player re-till, since re-tilling only applies to harvested dirt/holes.
     void economy.syncFarm(field.plowedPlotOrigins());
     // Server-owned farm size + climate skins: adopt the authoritative values (a resize
@@ -1789,7 +1790,7 @@ async function main() {
     // and on the console so a screenshot names the branch.
     economy.onGameplayUnavailable = (reason) => {
       hud.setPlayStatus("online", "reconnecting");
-      hud.showToast(`Online gameplay paused (${reason}) — reconnecting to your farm.`);
+      hud.showToast(`Online gameplay paused (${reason}) â€” reconnecting to your farm.`);
       console.warn(`[zf] gameplay paused: ${reason} | ${economy?.unavailableReason}`);
     };
     const showWriterLock = () => {
@@ -1856,7 +1857,7 @@ async function main() {
     state.setZombieCount(0); // no starter; sync the HUD count off the default 1
   }
 
-  // Visit mode UI: hide the farm-editing chrome, show a "Visiting X — Exit" banner.
+  // Visit mode UI: hide the farm-editing chrome, show a "Visiting X â€” Exit" banner.
   // Autosave was never enabled above, so nothing here can persist.
   if (visiting && visitTarget) {
     hud.setMode("walk"); // no tool is ever active while visiting
@@ -1964,8 +1965,8 @@ async function main() {
   // ---- multi-touch pinch-to-zoom (mobile) ----
   // Handled with native touch events (not Pixi pointers): e.touches reliably
   // lists every finger with coordinates, which is exactly what a pinch needs.
-  // While two fingers are down, `touchPinch` is set — the Pixi pan/tap path
-  // early-returns on it — and the finger-spread ratio drives zoom (toward the
+  // While two fingers are down, `touchPinch` is set â€” the Pixi pan/tap path
+  // early-returns on it â€” and the finger-spread ratio drives zoom (toward the
   // midpoint) while the midpoint's travel pans, i.e. one pinch-and-drag gesture.
   // Attached unconditionally: the handlers no-op unless exactly two fingers are
   // down, so a mouse device pays nothing and any touch-capable device works
@@ -2252,10 +2253,10 @@ async function main() {
   // Lets crop cards quote the harvest XP the Plowing Monolith actually pays out.
   hud.hasPlowFree = () => field.hasPlowFree();
 
-  // ---- Farm Size upgrade (Market → Upgrade tab) ----
+  // ---- Farm Size upgrade (Market â†’ Upgrade tab) ----
   // Buying an expansion grows the field (origin stays at 0,0 so nothing on the farm
   // moves) and re-fits the backdrop/foliage/camera to the new size. Sizes are bought
-  // in order (30 → 40 → 50 → 60). Each tier has a gold card and a brains card;
+  // in order (30 â†’ 40 â†’ 50 â†’ 60). Each tier has a gold card and a brains card;
   // buying either grows the farm, so the other currency's card then reads as owned.
   hud.setUpgrades(assets.upgrades.mapSize);
   hud.getMapSize = () => field.w;
@@ -2269,7 +2270,7 @@ async function main() {
     );
     if (size !== nextSize) return false;
     const cost = currency === "brains" ? up.brains : up.gold;
-    // ONLINE: the server owns the farm size — it prices + debits the upgrade (and can
+    // ONLINE: the server owns the farm size â€” it prices + debits the upgrade (and can
     // reject it). Wait for settlement before changing the playable boundary.
     if (economy) {
       const funds = currency === "brains" ? state.brains : state.gold;
@@ -2286,12 +2287,12 @@ async function main() {
     }
     audio.play("buy");
     saveManager.save(); // persist the new size (server owns it; blob is an offline cache)
-    hud.showToast(`Farm expanded to ${size}×${size}!`);
+    hud.showToast(`Farm expanded to ${size}Ã—${size}!`);
     questBus.post(QuestEvent.ItemBought, up.name);
     return true;
   };
 
-  // ---- Ground/climate skins (Market → Upgrade → Ground) ----
+  // ---- Ground/climate skins (Market â†’ Upgrade â†’ Ground) ----
   // Buying a skin charges gold, repaints the farm, and records ownership so it can
   // be re-applied for free later. Grassy is the free default (always owned).
   hud.setClimates(assets.upgrades.climate);
@@ -2301,7 +2302,7 @@ async function main() {
     if (onlineGameplayBlocked()) return false;
     if (state.ownsClimate(c.terrain) || c.terrain === "grass") return false;
     if (state.level < c.level) return false;
-    // ONLINE: the server owns the climate set — it prices + debits the skin (and can
+    // ONLINE: the server owns the climate set â€” it prices + debits the skin (and can
     // reject it). Wait for settlement before applying or saving the presentation.
     if (economy) {
       if (state.gold < c.gold) return false;
@@ -2336,7 +2337,7 @@ async function main() {
     const xp = buyXp(def.cost, def.xp, !!def.brainsNeeded, def.category);
     // Server-owned upgrade (online, priced): the server charges the new shed's full
     // price, swaps the ownership record, and grants the xp. The old shed is given up
-    // with no refund — same as the local path. A legacy shed the server doesn't know
+    // with no refund â€” same as the local path. A legacy shed the server doesn't know
     // is rejected, and the optimistic debit reconciles away.
     const from = field.objectDefOf(id);
     const serverObject = !!economy && !!from && def.cost > 0;
@@ -2393,7 +2394,7 @@ async function main() {
   // cap limits only the count deployed on the farm.
   hud.getRoster = () => zombies.roster();
   // Zombie Almanac: every obtainable species with its lifetime-obtained count.
-  // Base catalog stats only — deliberately no farmer/veterancy/mutation modifiers.
+  // Base catalog stats only â€” deliberately no farmer/veterancy/mutation modifiers.
   const almanacSources = {
     raidNameById: (raidId: number) => assets.raids.find((raid) => raid.id === raidId)?.name,
     epicBossNameByQuestId: (questId: string) =>
@@ -2478,7 +2479,7 @@ async function main() {
     const p = zombies.selectById(id); // deployed unit's world pos (null if stored)
     if (!zombies.sell(id)) return; // gone already; don't credit gold
     audio.play("sell");
-    // ONLINE: the server owns the roster — it prices + credits the sell (and rejects a
+    // ONLINE: the server owns the roster â€” it prices + credits the sell (and rejects a
     // unit it doesn't own, so a fabricated zombie can't be cashed out). OFFLINE: credit
     // locally as before.
     if (state.onRosterSell) state.onRosterSell(id, value);
@@ -2504,7 +2505,8 @@ async function main() {
       pending: pot.pending
         ? {
             keyA: pot.pending.keyA, keyB: pot.pending.keyB,
-            maskA: pot.pending.maskA, maskB: pot.pending.maskB,
+            maskA: pot.pending.maskA, mutationIdsA: pot.pending.mutationIdsA,
+            maskB: pot.pending.maskB, mutationIdsB: pot.pending.mutationIdsB,
             colorA: pot.pending.colorA, colorB: pot.pending.colorB,
           }
         : null,
@@ -2539,7 +2541,7 @@ async function main() {
       if (combined?.subject) {
         questBus.post(QuestEvent.CombinerCombined, combined.subject, 1, combined.aliases);
       }
-      // Only a species neither parent was counts as "combined for" — see
+      // Only a species neither parent was counts as "combined for" â€” see
       // isCombinePromotion. A job with no snapshot to compare against keeps the
       // old unconditional behavior rather than silently losing quest progress.
       if (!pending || isCombinePromotion(z.key, pending.keyA, pending.keyB)) {
@@ -2548,7 +2550,7 @@ async function main() {
       const c = tileCenter(z.col, z.row);
       floatText(c.x, c.y, z.mutation ? `${z.name}!` : z.name);
       // No toast naming the result: the Pot's ready view already shows the finished
-      // zombie — portrait, name and inherited mutations — before it is collected.
+      // zombie â€” portrait, name and inherited mutations â€” before it is collected.
       try { await economy?.settleBeforeDependency(); }
       catch { hud.showToast("The combine result is waiting for the server to reconnect."); }
       zombies.confirmCombineCollection(targetPotId);
@@ -2556,10 +2558,10 @@ async function main() {
     } else if (zombies.combineReadyFor(targetPotId) &&
                (stored ? zombies.canStoreCombine() : zombies.canAdd())) {
       // The job is still ready and the chosen destination has room, so this was not the
-      // ordinary "wait for a slot" refusal — the collection could not be handed to the
+      // ordinary "wait for a slot" refusal â€” the collection could not be handed to the
       // server (or its species no longer resolves). collectCombine has already put the
       // job back; say so rather than letting the button appear dead.
-      hud.showToast("That combine could not be confirmed just now — it is still in the Pot. Try again in a moment.");
+      hud.showToast("That combine could not be confirmed just now â€” it is still in the Pot. Try again in a moment.");
     }
     return z ? z.name : null;
   };
@@ -2634,7 +2636,7 @@ async function main() {
     const active = epicBoss.isActive(run);
     quests.setEpicBossActive(active, active ? epicBoss.def.questIds : []);
     const days = active && run ? Math.max(1, Math.ceil((run.expiresAt - Date.now()) / 86_400_000)) : 0;
-    hud.setBossShortcut(active, days ? `Boss · ${days}d` : "Boss");
+    hud.setBossShortcut(active, days ? `Boss Â· ${days}d` : "Boss");
   };
   if (economy) economy.onEpicBossState = (run) => {
     const previous = state.epicBossRun;
@@ -2672,7 +2674,7 @@ async function main() {
         const code = errCode(error);
         hud.showToast(code === "locked" ? `${def.name} unlocks at level ${unlockLevel}.`
           : code === "insufficient_brains" ? `You need ${def.costBrains} brains.`
-          : code === "gameplay_unavailable" || code === "offline" ? "Reconnecting to the farm serverâ€¦"
+          : code === "gameplay_unavailable" || code === "offline" ? "Reconnecting to the farm serverÃ¢â‚¬Â¦"
           : "The Epic Boss event could not be started.");
         return false;
       }
@@ -2719,14 +2721,14 @@ async function main() {
   let raidLaunchLockedUntil = 0;
   tutorial = new TutorialController({
     hud, state, field, zombies, questBus,
-    // Screen-pixel center of a plot origin (world → global for the arrow).
+    // Screen-pixel center of a plot origin (world â†’ global for the arrow).
     plotScreenPos: (col, row) => {
       const c = field.plotCenterOf(col, row);
       const g = world.toGlobal(new Point(c.x, c.y));
       return { x: g.x, y: g.y };
     },
     // Reuse the tutorial zombie's plot when restoring an older in-progress save;
-    // otherwise find empty ground near the farmer. This only selects a target —
+    // otherwise find empty ground near the farmer. This only selects a target â€”
     // the tutorial's Plow step creates the soil through the real job/backend path.
     findTutorialPlot: (preferExisting = false) => {
       const plots = field.serialize();
@@ -2767,7 +2769,7 @@ async function main() {
   // cleanly from the target profile; rename/delete just update the index. ----
   hud.getProfiles = playMode === "local" ? () => profiles.listProfiles() : null;
   // Flush the current game to its (still-active) profile, then STOP saving before
-  // moving the active pointer — otherwise this page's beforeunload/autosave would
+  // moving the active pointer â€” otherwise this page's beforeunload/autosave would
   // write the outgoing game into the profile we're switching into. The reload
   // then loads the target profile cleanly (fresh, for a brand-new one).
   hud.onSwitchProfile = playMode === "local" ? (id) => {
@@ -2779,7 +2781,7 @@ async function main() {
   hud.onCreateProfile = playMode === "local" ? (name) => {
     saveManager.save();
     saveManager.suspend();
-    profiles.setActive(profiles.createProfile(name)); // fresh (no save) → new game on reload
+    profiles.setActive(profiles.createProfile(name)); // fresh (no save) â†’ new game on reload
     location.reload();
   } : null;
   hud.onRenameProfile = playMode === "local" ? (id, name) => profiles.renameProfile(id, name) : null;
@@ -2826,7 +2828,7 @@ async function main() {
     saveManager.clear();
     location.reload();
   } : null;
-  // Available in both farm modes — the service worker serves the app shell either way.
+  // Available in both farm modes â€” the service worker serves the app shell either way.
   hud.onCheckForUpdate = () => checkForUpdate();
 
   // ---- friends: OFFLINE path (local stub, autosaved via GameState.onChange).
@@ -2936,7 +2938,7 @@ async function main() {
     if (awaitingClaim) await economy?.prepareExternalMutation();
     // The BALANCE has to move on screen either way: a sale's brains are PAID OUT by
     // this call (the market held them until now), and a filled request's were credited
-    // at settlement — an event this client never observed. Without adopting a fresh
+    // at settlement â€” an event this client never observed. Without adopting a fresh
     // balance neither shows up until the next bootstrap or command batch.
     const result = await api.collectBlackMarketOrder(orderId);
     // A claimed zombie arrives as a roster row this client has never seen, and a payout
@@ -3032,7 +3034,7 @@ async function main() {
         catch (refreshError) { console.warn("[gift] inbox refresh failed", errCode(refreshError)); }
       }
       // The server decides (and reports) the contents. A claim that credited nothing
-      // (already opened on another device) has no reward to reveal — say so rather
+      // (already opened on another device) has no reward to reveal â€” say so rather
       // than guessing at a payout the player never received.
       if (!claimed.credited) return null;
       return claimed.reward ?? { kind: "brain" as const, amount: 1 };
@@ -3061,30 +3063,30 @@ async function main() {
     // and inbox data remains on-demand when those menus open.
     void hud.refreshInbox?.().then(() => {
       const n = hud.getInbox?.().length ?? 0;
-      if (n) hud.showToast(`You have ${n} gift${n === 1 ? "" : "s"} waiting! 🎁`);
+      if (n) hud.showToast(`You have ${n} gift${n === 1 ? "" : "s"} waiting! ðŸŽ`);
     }).catch(() => { /* best-effort toast; offline boot must not surface an error */ });
     void hud.refreshRequests?.().then(() => {
       const n = hud.getRequests?.().length ?? 0;
-      if (n) hud.showToast(`You have ${n} friend request${n === 1 ? "" : "s"}! 👋`);
+      if (n) hud.showToast(`You have ${n} friend request${n === 1 ? "" : "s"}! ðŸ‘‹`);
     }).catch(() => { /* best-effort toast; offline boot must not surface an error */ });
     void hud.getBlackMarketFulfillments?.().then((rows) => {
       const n = rows.length;
       if (!n) return;
-      // A zombie waiting to be claimed is the more urgent of the two — it is not on the
-      // farm yet — so it names the toast whenever the batch contains one.
+      // A zombie waiting to be claimed is the more urgent of the two â€” it is not on the
+      // farm yet â€” so it names the toast whenever the batch contains one.
       const zombies = rows.filter((row) => row.awaitingClaim).length;
       if (zombies) hud.showToast(zombies === 1
-        ? "A Black Market zombie is waiting for you! Visit the market to collect. 🧟"
-        : `${zombies} Black Market zombies are waiting for you! Visit the market to collect. 🧟`);
+        ? "A Black Market zombie is waiting for you! Visit the market to collect. ðŸ§Ÿ"
+        : `${zombies} Black Market zombies are waiting for you! Visit the market to collect. ðŸ§Ÿ`);
       else {
         // Name the money when the market is holding some: this toast used to promise a
         // "collect" that only dismissed a notice, because the brains had already landed.
         const brains = rows.reduce((total, row) => total + (row.awaitingPayout ? row.priceBrains : 0), 0);
         hud.showToast(brains
-          ? `${brains} brains from your Black Market sales are waiting! Visit the market to collect. 💰`
+          ? `${brains} brains from your Black Market sales are waiting! Visit the market to collect. ðŸ’°`
           : n === 1
-            ? "One of your Black Market posts was fulfilled! Visit the market to collect. 💰"
-            : `${n} of your Black Market posts were fulfilled! Visit the market to collect. 💰`);
+            ? "One of your Black Market posts was fulfilled! Visit the market to collect. ðŸ’°"
+            : `${n} of your Black Market posts were fulfilled! Visit the market to collect. ðŸ’°`);
       }
     }).catch(() => { /* best-effort toast; a market-disabled server must not surface an error */ });
   }
@@ -3094,7 +3096,7 @@ async function main() {
   hud.onSetNight = (on) => setNight(on);
 
   // Farm Background picker (Settings): re-seed & rebuild the foliage ring live at
-  // the new density — no reload, same spirit as the night toggle.
+  // the new density â€” no reload, same spirit as the night toggle.
   hud.getFarmBackground = () => displayedFarmBackground;
   hud.onSetFarmBackground = (bg) => {
     displayedFarmBackground = bg;
@@ -3120,7 +3122,7 @@ async function main() {
     maxDice: raids.maxDiceFor(raidId),
   });
 
-  // Live battle scene — the ONLY way a raid is played out (no instant/auto-resolve in
+  // Live battle scene â€” the ONLY way a raid is played out (no instant/auto-resolve in
   // the game; `raids.start` remains only for the `ZF.runRaid` dev hook + headless tests).
   // `raidActive` gates farm input synchronously (the scene loads its textures async);
   // `raidScene` is the running scene once ready.
@@ -3230,8 +3232,8 @@ async function main() {
           state.addBrains(currency.brains, "epic_boss_victory");
           state.addGold(currency.gold, "epic_boss_victory");
           questBus.post(QuestEvent.EpicStageEnemyDefeated, String(result.defeatedLevel), 1);
-          // Collected spans every place a prize can end up — unclaimed, in the shed, or
-          // already standing on the farm — plus tamed pets. Received alone would treat a
+          // Collected spans every place a prize can end up â€” unclaimed, in the shed, or
+          // already standing on the farm â€” plus tamed pets. Received alone would treat a
           // claimed prize as never-won and keep re-offering it ahead of unseen ones.
           const collected = new Set([
             ...state.received,
@@ -3307,7 +3309,7 @@ async function main() {
       if (!raidActive) return scene.destroy();
       raidScene = scene;
       app.stage.addChild(scene.container);
-      // Debug handle — dev builds only, mirroring the online launch path below.
+      // Debug handle â€” dev builds only, mirroring the online launch path below.
       if (import.meta.env.DEV) {
         (window as unknown as { ZF?: Record<string, unknown> }).ZF!.raidScene = scene;
       }
@@ -3353,7 +3355,7 @@ async function main() {
         if (!gate.ok) {
           // Distinguish the server's refusals: the client already hides locked raids and
           // blocks a second launch, so `locked` / `raid_in_progress` mean the client and
-          // server disagree — say so plainly rather than blaming the cooldown.
+          // server disagree â€” say so plainly rather than blaming the cooldown.
           if (gate.error === "locked") {
             hud.showToast(`That invasion unlocks at level ${gate.unlockLevel ?? "?"}.`);
           } else if (gate.error === "raid_in_progress") {
@@ -3362,7 +3364,7 @@ async function main() {
             hud.showToast("No Invasion Voucher to skip the cooldown.");
           } else {
             const mins = Math.ceil((gate.cooldownRemaining ?? 0) / 60000);
-            hud.showToast(`Invasion on cooldown — about ${mins} min left.`);
+            hud.showToast(`Invasion on cooldown â€” about ${mins} min left.`);
           }
           return false;
         }
@@ -3396,14 +3398,14 @@ async function main() {
         if (error instanceof api.ApiError) {
           const body = (error.body ?? {}) as { cooldownRemaining?: number; unlockLevel?: number };
           if (error.code === "cooldown") {
-            hud.showToast(`Invasion on cooldown — about ${Math.ceil((body.cooldownRemaining ?? 0) / 60000)} min left.`);
+            hud.showToast(`Invasion on cooldown â€” about ${Math.ceil((body.cooldownRemaining ?? 0) / 60000)} min left.`);
           } else if (error.code === "locked") hud.showToast(`That invasion unlocks at level ${body.unlockLevel ?? "?"}.`);
           else if (error.code === "raid_in_progress") hud.showToast("Another invasion is already in progress.");
           else if (error.code === "no_voucher") hud.showToast("No Invasion Voucher to skip the cooldown.");
           else if (error.code === "stale_ruleset") {
             // This tab predates the deployed Worker, so the server refuses to pin a fight
             // it and the client would simulate differently. Nothing is consumed and no
-            // cooldown starts — but without this branch the player just sees "could not
+            // cooldown starts â€” but without this branch the player just sees "could not
             // start that invasion" and has no way to know a reload fixes it.
             hud.showToast("The game has updated. Reload to keep raiding.", 6000);
             promptReload("The game has updated. Reload to keep raiding.");
@@ -3420,19 +3422,19 @@ async function main() {
       // The server already opened a session but no battle will run, so drop the fence:
       // this one really IS abandoned and recovery should be free to close it.
       economy?.setLiveRaid(null);
-      return false; // gated (cooldown/army) — the army screen stays up
+      return false; // gated (cooldown/army) â€” the army screen stays up
     }
     // First invasion that actually fields a hazard: hazards are the one part of a
     // fight the player has to handle by hand, and nothing on screen says so. Ask the
-    // resolved setup rather than the raid's data flags — raids 2/10/11 declare a grab
+    // resolved setup rather than the raid's data flags â€” raids 2/10/11 declare a grab
     // or an obstacle they have no implementation for, and the wall is per-STAGE, so
     // only this tells us a hazard will really show up.
     if (!hasSeenHazardTip() && (setup.grabber || setup.crab || setup.wallTemplate)) {
       markHazardTipSeen();
       const verb = isTouch() ? "Tap" : "Click";
       await hud.timSays(
-        "Careful now — this invasion's got HAZARDS. They'll grab your zombies\n" +
-        `right off the field, or block the way forward.\n${verb} one to damage it — ` +
+        "Careful now â€” this invasion's got HAZARDS. They'll grab your zombies\n" +
+        `right off the field, or block the way forward.\n${verb} one to damage it â€” ` +
         "keep at it and it'll go away!"
       );
     }
@@ -3463,7 +3465,7 @@ async function main() {
       onCheckpoint: undefined,
       onFinish: (outcome, finalTick, inputs) => {
         // ONLINE: the server prices the base win gold + first-clear XP AND rolls the
-        // loot. finishRaid() credits none of it locally — it hands the reward back as
+        // loot. finishRaid() credits none of it locally â€” it hands the reward back as
         // `serverReward`, which we submit through the balance client (POST /raid/finish).
         // That call also starts the server-owned cooldown and returns the authoritative
         // balance + lastRaidAt + the rolled drop, which the client reconciles.
@@ -3569,7 +3571,7 @@ async function main() {
           resumeFarmJobs();
           world.visible = true;
           hud.setRaiding(false);
-          audio.exitRaid(); // battle over — hand the farm bed back
+          audio.exitRaid(); // battle over â€” hand the farm bed back
           // OFFLINE, advance raid quests only now that we're back on the farm. Online
           // the server already counted this win and its questChanges have been applied,
           // so posting again would count it twice (see src/raid/questEvents.ts).
@@ -3617,7 +3619,7 @@ async function main() {
       if (!raidActive) return scene.destroy(); // finished/aborted before load done
       raidScene = scene;
       app.stage.addChild(scene.container);
-      // Debug handle — dev builds only (window.ZF doesn't exist in prod). Guarded
+      // Debug handle â€” dev builds only (window.ZF doesn't exist in prod). Guarded
       // so the missing global can't throw in production.
       if (import.meta.env.DEV) {
         (window as unknown as { ZF?: Record<string, unknown> }).ZF!.raidScene = scene;
@@ -3650,7 +3652,7 @@ async function main() {
   // ---- Received rewards: resolve the raw key list into displayable cards ----
   // Entries are heterogeneous strings: boost names, a brains-currency drop, and
   // decorations. A decoration resolves to a placeable by display name, or (when
-  // the placeable's name differs from the reward's) via the drop's `tile` key —
+  // the placeable's name differs from the reward's) via the drop's `tile` key â€”
   // so nearly every loot/reward decor can now be placed. Anything that still
   // resolves to no placeable (e.g. the Rusty Fragment key-piece) is a trophy.
   const receivedDef = (entry: string): PlaceableDef | undefined =>
@@ -3695,7 +3697,7 @@ async function main() {
     const zombie = parseReceivedZombie(entry);
     if (zombie) {
       // Deploy onto the farm whenever the army has room, and fall back to the
-      // Mausoleum only when it does not — mirrors the Worker's storage.claim, so both
+      // Mausoleum only when it does not â€” mirrors the Worker's storage.claim, so both
       // sides agree on where the unit lands (client zombieMax already carries the
       // placed army bonus online). A full crypt must not strand an earned reward
       // while there is a free army slot standing empty.
@@ -3780,7 +3782,7 @@ async function main() {
   hud.onRotateTool = rotateCurrent;
 
   // Place the selected object at the pointer tile if the footprint is valid,
-  // unlocked, and affordable. Stays in placement mode to place several — except
+  // unlocked, and affordable. Stays in placement mode to place several â€” except
   // for an item whose last allowed copy this was (see the exit below).
   const tryPlaceObject = (col: number, row: number) => {
     const def = hud.placing;
@@ -3828,7 +3830,7 @@ async function main() {
     }
     if (state.level < def.level) return;
     // The Zombie Pot costs 500 GOLD for the first, then a flat 3 BRAINS for every
-    // one after — permanently, even if the player sells it (see zombiePotBought).
+    // one after â€” permanently, even if the player sells it (see zombiePotBought).
     const potBought = !!def.zombiePot && state.zombiePotBought;
     const cost = def.zombiePot ? (potBought ? 3 : 500) : def.cost;
     const useBrains = def.zombiePot ? potBought : def.brainsNeeded;
@@ -3906,7 +3908,7 @@ async function main() {
     const plot = field.plotOriginAt(col, row);
     if (!plot) return;
     if (!field.canMovePlot(plot.oc, plot.or)) {
-      // Say why rather than silently ignoring the tap — an unresponsive plot reads
+      // Say why rather than silently ignoring the tap â€” an unresponsive plot reads
       // as a broken tool.
       hud.showToast("Only bare tilled plots can be moved.");
       return;
@@ -4076,7 +4078,7 @@ async function main() {
     if (origin) {
       const crop = field.cropInfoAt(col, row);
       // Bare plowed soil holds nothing of value (the seed is only paid for when the
-      // farmer actually plants), so removing it is a plain tap — no confirmation.
+      // farmer actually plants), so removing it is a plain tap â€” no confirmation.
       if (crop) {
         const confirmed = await hud.confirmInGame(
           "Remove this plot?",
@@ -4115,7 +4117,7 @@ async function main() {
       const napping = zombies.toggleGather(field.patchRestTiles());
       const wp = field.objectWorkPoint(objId);
       saveManager.flushCritical();
-      if (wp) floatText(wp.x, wp.y - 24, napping ? "Zzzâ€¦" : "Awake!");
+      if (wp) floatText(wp.x, wp.y - 24, napping ? "ZzzÃ¢â‚¬Â¦" : "Awake!");
     } else if (objDef.zombiePot) {
       activePotId = objId;
       hud.openCombiner();
@@ -4131,7 +4133,7 @@ async function main() {
     zombies.select(zu);
     const d = zu.getData();
     const wp = zu.worldPos;
-    floatText(wp.x, wp.y - 44, "Brains…");
+    floatText(wp.x, wp.y - 44, "Brainsâ€¦");
     audio.brain(d.group, d.key);
     hud.openZombieInfo({
       name: d.name, typeName: d.typeName, key: d.key, group: d.group,
@@ -4171,7 +4173,7 @@ async function main() {
       // Name the cause. "reconnect to continue" on its own sends players chasing a
       // network problem they don't have.
       const why = economy.unavailableReason;
-      hud.showToast(`Gameplay paused (${why}) — reconnect to continue.`);
+      hud.showToast(`Gameplay paused (${why}) â€” reconnect to continue.`);
       console.warn(`[zf] tap while paused: ${why}`);
       return;
     }
@@ -4450,7 +4452,7 @@ async function main() {
       if (hud.mode === "walk") {
         // Select tool: clicking an owned zombie inspects it; the storage shed opens
         // Storage; a ripe fruit tree harvests for gold; else it's tile-based (same
-        // clickbox as Plow) — ripe plot -> harvest; tilled plot -> plant picker;
+        // clickbox as Plow) â€” ripe plot -> harvest; tilled plot -> plant picker;
         // spent plot -> re-till; else free-roam when idle.
         // A mouse resolves the zombie first; a finger cannot. A zombie's sprite
         // covers the plots drawn behind it, so on touch the tile keeps the tap and
@@ -4478,7 +4480,7 @@ async function main() {
         const touchPlot = plotOwnsObjectTap(pressPointerType, !!field.plotOriginAt(col, row));
         const objId = touchPlot ? null : field.objectAtPoint(wx, wy);
         const objDef = objId ? field.objectDefOf(objId) : null;
-        // Signature decor (Liberty Bell, Gnome King, …) plays its own tap sound.
+        // Signature decor (Liberty Bell, Gnome King, â€¦) plays its own tap sound.
         if (objDef?.tapSound) audio.tap(objDef.tapSound);
         if (objId && objDef && objDef.storageSlots) {
           hud.openStorage();
@@ -4489,7 +4491,7 @@ async function main() {
           const napping = zombies.toggleGather(field.patchRestTiles());
           const wp = field.objectWorkPoint(objId);
           saveManager.flushCritical();
-          if (wp) floatText(wp.x, wp.y - 24, napping ? "Zzz…" : "Awake!");
+          if (wp) floatText(wp.x, wp.y - 24, napping ? "Zzzâ€¦" : "Awake!");
         } else if (objId && objDef && objDef.zombiePot) {
           activePotId = objId;
           hud.openCombiner(); // pick two zombies to combine, or collect a finished one
@@ -4635,7 +4637,7 @@ async function main() {
   let toolWheel: ToolWheelHandle | null = null;
   const closeToolWheel = () => { toolWheel?.close(); toolWheel = null; };
   // Equip a tool without the toolbar's toggle behaviour: choosing the tool you are
-  // already holding, from a menu, must keep it — not silently unequip it.
+  // already holding, from a menu, must keep it â€” not silently unequip it.
   const equipTool = (m: Mode) => { if (hud.mode !== m) hud.setMode(m); };
   const toolWheelItems = (): ToolWheelItem[] => [
     { id: "walk", label: "Select", icon: "button_multitool.png", hint: "1",
@@ -4648,14 +4650,14 @@ async function main() {
       active: hud.mode === "till", onPick: () => equipTool("till") },
     { id: "remove", label: "Remove", icon: "button_sell.png", hint: "5",
       active: hud.mode === "remove", onPick: () => equipTool("remove") },
-    { id: "plant", label: "Plant…", icon: "button_plant.png", hint: "P",
+    { id: "plant", label: "Plantâ€¦", icon: "button_plant.png", hint: "P",
       active: hud.mode === "plant",
       onPick: () => hud.openPlantMenu((cfg) => hud.setPlanting(cfg)) },
   ];
   app.canvas.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     if (tutorial.active || visiting || raidActive) return;
-    // Touch long-press already means "inspect"; a phone gets the × cancel button
+    // Touch long-press already means "inspect"; a phone gets the Ã— cancel button
     // instead, so never let a synthesized contextmenu open the menu there.
     if (isTouchPointer(pressPointerType)) return;
     if (toolWheel) { closeToolWheel(); return; }
@@ -4891,7 +4893,7 @@ async function main() {
   // Live game-state handle + mutation helpers for local testing (instant raids,
   // boost grants, zombie spawning, placement, combine, raid wins). DEV BUILDS
   // ONLY: `import.meta.env.DEV` is statically false in production, so Vite
-  // tree-shakes this entire object — and the helpers it closes over — out of the
+  // tree-shakes this entire object â€” and the helpers it closes over â€” out of the
   // shipped bundle. It was never a security boundary (a determined player can edit
   // browser state regardless), but it must not be handed to every player. Real
   // integrity comes from server-side validation/authority.
@@ -4953,7 +4955,7 @@ async function main() {
   // eslint-disable-next-line no-console
   console.log(`field ${field.w}x${field.h} ready`);
 
-  // Game is fully built behind the boot overlay — fill the bar and flip it to
+  // Game is fully built behind the boot overlay â€” fill the bar and flip it to
   // "Click to Start". Once that signed-in player dismisses the overlay, offer
   // fullscreen on supported mobile browsers. This callback timing prevents the
   // prompt from covering the loading art, while its dedicated top layer keeps it
@@ -4975,3 +4977,4 @@ main().catch((err) => {
   const hud = document.getElementById("hud");
   if (hud) hud.innerHTML = `<b style="color:#ffb0b0">Error:</b> ${err}`;
 });
+

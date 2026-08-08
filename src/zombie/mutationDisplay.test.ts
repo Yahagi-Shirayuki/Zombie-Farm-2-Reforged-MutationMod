@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+﻿import { describe, it, expect } from "vitest";
 // The app has no @types/node (it only ever runs in a browser); the node test
 // environment provides this at runtime. Same treatment as ui/tutorialLayering.test.ts.
 // @ts-ignore
@@ -81,8 +81,8 @@ describe("mutationEntries", () => {
 
 describe("mutation art", () => {
   it("points every icon at a file the prep tool actually shipped", () => {
-    // Guards the three names that differ from our mutation keys — the game calls
-    // them cauliflower and dragonfruit, and pumpking is the composed one — plus a
+    // Guards the three names that differ from our mutation keys â€” the game calls
+    // them cauliflower and dragonfruit, and pumpking is the composed one â€” plus a
     // stale MUTATION_ICON entry after any re-run of tools/prep_mutation_icons.py.
     const shipped = new Set(
       readdirSync(new URL("../../public/assets/ui/mutation", import.meta.url))
@@ -91,7 +91,7 @@ describe("mutation art", () => {
       ...Object.values(MUTATION_ICON),
       ...Object.values(MUTATION_VARIANTS).flatMap((v) => Object.values(v).map((m) => m.icon)),
     ];
-    expect(icons.length).toBe(ALL_BITS.length + 2); // every bit + the two variants
+    expect(icons.length).toBeGreaterThanOrEqual(ALL_BITS.length + 2); // every vanilla bit + variants + modded placeholders
     for (const icon of icons) {
       expect(shipped, `missing art for ${icon}`).toContain(icon.split("/").pop());
     }
@@ -125,7 +125,7 @@ describe("mutationNames", () => {
 
 describe("mutationTipText", () => {
   it("is just the effect and the slot it occupies", () => {
-    // The tile carries no label, so the effect must be here — and nothing else, the
+    // The tile carries no label, so the effect must be here â€” and nothing else, the
     // name is the tooltip's own title.
     const [flytrap] = mutationEntries(zombie(bitOf("flytrap")));
     expect(mutationTipText(flytrap)).toBe(
@@ -135,7 +135,7 @@ describe("mutationTipText", () => {
 
   it("writes a penalty signed, on its own line, and marks it as a loss", () => {
     // A mutation that trades stats writes both halves in the same tooltip, so the
-    // penalty has to be distinguishable from a smaller gain — by the sign AND by a
+    // penalty has to be distinguishable from a smaller gain â€” by the sign AND by a
     // class the card can colour (see hud.css .zeff-down).
     const entry: MutationCardEntry = {
       bit: 1, partKey: "1", icon: "", name: "Cornhead", slotLabel: "Head",
@@ -154,7 +154,7 @@ describe("mutationTipText", () => {
 
 describe("a mutation that trades one stat for another", () => {
   // Cornhead: big Life, real Speed cost. Nothing in the shipped catalog does this yet,
-  // so it is supplied as an explicit def — mutationEntriesFrom is the same code path
+  // so it is supplied as an explicit def â€” mutationEntriesFrom is the same code path
   // mutationEntries uses once the defs are resolved.
   const CORNHEAD: MutationDef = {
     bit: 1 << 20, key: "cornhead", name: "Cornhead", slot: "head",
@@ -197,3 +197,4 @@ describe("a mutation that trades one stat for another", () => {
     expect(describeMutationGains(gains)).not.toContain("+45 Speed");
   });
 });
+

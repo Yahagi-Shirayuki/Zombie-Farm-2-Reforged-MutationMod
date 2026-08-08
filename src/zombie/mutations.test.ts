@@ -1,9 +1,9 @@
-import { describe, it, expect } from "vitest";
+﻿import { describe, it, expect } from "vitest";
 import {
   applyBodyTypeRestriction, bitGrowable, canReceive, combineMasks, HEADLESS_FORBIDDEN_MASK,
   HEADLESS_HEAD_MASK, mutationBonus, mutationLabel, SLOT_MASK,
-  ALL_MUTATIONS_MASK, bitOf, mutationOf, MUTATION_LIST,
-  resolveMutationBit, sanitizeMutationMask, slotOfRef, statEffectsOf, type MutationStats,
+  ALL_MUTATIONS_MASK, bitOf, combineMutationSets, MODDED_MUTATIONS, mutationOf, MUTATION_LIST,
+  resolveMutationBit, resolveMutationRef, sanitizeMutationMask, slotOfRef, statEffectsOf, type MutationStats,
 } from "./mutations";
 import {
   bitValue, maskHas, maskIntersect, maskUnion, maskWithout, MAX_MASK_BITS,
@@ -11,25 +11,25 @@ import {
 
 // Mutations are named, never numbered: bitOf resolves a key to the bit it persists as,
 // so these read as the rules they encode rather than as arithmetic. The bit VALUES
-// still matter to one rule — a same-slot conflict keeps the higher one — and the
+// still matter to one rule â€” a same-slot conflict keeps the higher one â€” and the
 // catalog's append-only order is what makes "higher bit" mean "higher tier".
 const TOMATO = bitOf("tomato"), POTATO = bitOf("potato");
 const GARLIC = bitOf("garlic"), PUMPKING = bitOf("pumpking");
 const CARROT = bitOf("carrot"), BROCCOLI = bitOf("broccoli");
 const TURNIP = bitOf("turnip"), DRAGON = bitOf("dragon"), LIMABEAN = bitOf("limabean");
 
-// Ground truth: combineZombieMutationFlag:withZombieFlag: / randMutation: — per slot,
+// Ground truth: combineZombieMutationFlag:withZombieFlag: / randMutation: â€” per slot,
 // non-conflicting bits carry over; a same-slot conflict keeps the HIGHER bit value
 // (higher-tier mutation), DETERMINISTICALLY (no RNG). One mutation per slot.
 
-describe("combineMasks — deterministic per-slot inheritance", () => {
+describe("combineMasks â€” deterministic per-slot inheritance", () => {
   it("carries a mutation from either parent when the other slot is empty", () => {
     expect(combineMasks(TOMATO, 0)).toBe(TOMATO); // only A (head)
     expect(combineMasks(0, TURNIP)).toBe(TURNIP); // only B (arm)
   });
 
   it("unions mutations that occupy different slots", () => {
-    // tomato is a head, turnip an arm — independent slots
+    // tomato is a head, turnip an arm â€” independent slots
     expect(combineMasks(TOMATO, TURNIP)).toBe(maskUnion(TOMATO, TURNIP));
   });
 
@@ -54,7 +54,7 @@ describe("combineMasks — deterministic per-slot inheritance", () => {
   });
 });
 
-describe("headless restriction — no head or hair/eye mutations", () => {
+describe("headless restriction â€” no head or hair/eye mutations", () => {
   it("covers every head and hair/eye bit except the headless family's own Pumpking", () => {
     expect(HEADLESS_FORBIDDEN_MASK)
       .toBe(maskWithout(maskUnion(SLOT_MASK.head, SLOT_MASK.hair_eye), HEADLESS_HEAD_MASK));
@@ -69,7 +69,7 @@ describe("headless restriction — no head or hair/eye mutations", () => {
   });
 });
 
-describe("Pumpking — grown only on the headless family, worn by anyone", () => {
+describe("Pumpking â€” grown only on the headless family, worn by anyone", () => {
 
   it("pays the head slot's best attack bonus", () => {
     expect(mutationBonus(PUMPKING)).toEqual({ str: 3, con: 0, dex: 0, wis: 0 });
@@ -102,7 +102,7 @@ describe("Pumpking — grown only on the headless family, worn by anyone", () =>
 
   it("reaches a non-headless child through the Pot, winning the head slot", () => {
     // Garlic and Pumpking both sit in the head slot, and the higher bit
-    // wins — so a headless parent hands its pumpkin to a child of any body type.
+    // wins â€” so a headless parent hands its pumpkin to a child of any body type.
     // This is the ONLY route: it cannot be grown on a zombie that has a head.
     expect(combineMasks(GARLIC, PUMPKING, false)).toBe(PUMPKING);
     expect(combineMasks(PUMPKING, GARLIC, false)).toBe(PUMPKING); // order-independent
@@ -112,7 +112,7 @@ describe("Pumpking — grown only on the headless family, worn by anyone", () =>
 });
 
 // The Market's guaranteed-mutation line moved to zombie/statDisplay, because the
-// number it shows has to be normalized — see marketMutationText.test.ts.
+// number it shows has to be normalized â€” see marketMutationText.test.ts.
 
 // ---------------------------------------------------------------------------
 // The catalog itself: bits are persisted values, so the shape of the table that
@@ -131,7 +131,7 @@ describe("mutation catalog", () => {
   it("assigns every shipped mutation the bit it has always had", () => {
     // A row inserted, removed or reordered in CATALOG shifts every bit below it and
     // would silently re-label every mutated zombie in every save. mutations.ts throws
-    // at load if that happens; this spells out what it is protecting — the ORDER,
+    // at load if that happens; this spells out what it is protecting â€” the ORDER,
     // and the fact that position N still means bit 2^N.
     expect(MUTATION_LIST.slice(0, SHIPPED_ORDER.length).map((def) => def.key))
       .toEqual(SHIPPED_ORDER);
@@ -141,7 +141,7 @@ describe("mutation catalog", () => {
     });
     expect(bitOf("tomato")).toBe(1);
     expect(bitOf("pumpking")).toBe(8192);
-    expect(ALL_MUTATIONS_MASK).toBe(33554431);
+    expect(ALL_MUTATIONS_MASK).toBe(16383);
   });
 
   it("keeps one mutation per slot resolvable from either its key or its bit", () => {
@@ -150,9 +150,18 @@ describe("mutation catalog", () => {
     expect(slotOfRef("celery")).toBe("arm");
     expect(slotOfRef(bitOf("celery"))).toBe("arm");
     // A key the catalog does not have is not a mutation, however it is spelled.
-    expect(() => bitOf("cornhead")).toThrow(/unknown mutation/);
+    expect(() => bitOf("cornhead")).toThrow(/unknown vanilla mutation/);
   });
 
+  it("keeps local modded mutations as string ids instead of bit slots", () => {
+    expect(MODDED_MUTATIONS.corn_head.slot).toBe("head");
+    expect(resolveMutationBit("corn_head")).toBeNull();
+    expect(resolveMutationRef("corn_head")).toBe("corn_head");
+    expect(slotOfRef("corn_head")).toBe("head");
+    expect(mutationBonus(0, ["corn_head"])).toEqual({ str: 2, con: 3, dex: -1, wis: 0 });
+    expect(mutationLabel(0, ["corn_head"])).toBe("Corned head");
+    expect(combineMutationSets(TOMATO, [], 0, ["corn_head"]).ids).toEqual(["corn_head"]);
+  });
   it("resolves an unknown name to nothing rather than to a neighbouring bit", () => {
     // A typo in cropMutations.ts or in a data file must cost that entry its mutation,
     // never land it on someone else's.
@@ -164,10 +173,10 @@ describe("mutation catalog", () => {
 
   it("drops unknown bits from an untrusted mask instead of clamping it", () => {
     // This replaced `Math.min(0xffff, mask)` on the server. A clamp turned an
-    // out-of-range value into 0xffff — a mask of arbitrary OTHER mutations — where
+    // out-of-range value into 0xffff â€” a mask of arbitrary OTHER mutations â€” where
     // intersecting against the catalog yields only what the catalog actually knows.
     expect(sanitizeMutationMask(TOMATO | TURNIP)).toBe(TOMATO | TURNIP);
-    expect(sanitizeMutationMask(0xffff)).toBe(0xffff);
+    expect(sanitizeMutationMask(0xffff)).toBe(ALL_MUTATIONS_MASK);
     expect(sanitizeMutationMask(2 ** 40 + CARROT)).toBe(CARROT);
     expect(sanitizeMutationMask(2 ** 40)).toBe(0);
     expect(sanitizeMutationMask(-1)).toBe(0);
@@ -177,10 +186,10 @@ describe("mutation catalog", () => {
 
   it("has room to grow, and the room is the one mutationMask.ts advertises", () => {
     expect(MUTATION_LIST.length).toBeLessThan(MAX_MASK_BITS);
-    // The next mutation appended to CATALOG lands here, and everything downstream —
-    // slots, bonuses, combine — is bit-agnostic, so no other file has to learn it.
+    // The next mutation appended to CATALOG lands here, and everything downstream â€”
+    // slots, bonuses, combine â€” is bit-agnostic, so no other file has to learn it.
     const nextBit = bitValue(MUTATION_LIST.length);
-    expect(nextBit).toBe(33554432);
+    expect(nextBit).toBe(16384);
     expect(maskHas(ALL_MUTATIONS_MASK, nextBit)).toBe(false);
     expect(sanitizeMutationMask(nextBit)).toBe(0); // unknown until it is catalogued
   });
@@ -188,7 +197,7 @@ describe("mutation catalog", () => {
 
 describe("mutation stats", () => {
   // A mutation names any mix of str/dex/con, and a negative is a real penalty. None
-  // of ZF2's fourteen use one, so these work from explicit specs — that is what
+  // of ZF2's fourteen use one, so these work from explicit specs â€” that is what
   // statEffectsOf is for, and it is the same function the catalog goes through.
   const spec = (stats: MutationStats) => ({ stats });
 
@@ -221,7 +230,7 @@ describe("mutation stats", () => {
   });
 
   it("keeps every shipped mutation a pure gain", () => {
-    // Not a rule of the system — penalties are supported — but a change to any of
+    // Not a rule of the system â€” penalties are supported â€” but a change to any of
     // ZF2's own fourteen should be deliberate rather than a typo'd minus sign.
     for (const def of MUTATION_LIST.slice(0, 14)) {
       const effects = statEffectsOf(def);
@@ -232,3 +241,4 @@ describe("mutation stats", () => {
     }
   });
 });
+
