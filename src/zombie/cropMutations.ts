@@ -33,6 +33,8 @@ export const CROP_MUTATIONS: CropMutationTable = {
   lima_beans: "limabean",
   venus_flytrap: "flytrap",
   dragon_fruit: "dragon",
+  pumpking: "pumpking",
+  // mod stuffs
   breadfruit: "bread_neck",
   sampaguita: "sampaguita_hair",
   candycorn: ["corn_head", "corn_arm"],
@@ -41,7 +43,6 @@ export const CROP_MUTATIONS: CropMutationTable = {
   skellyberry: "skellyberry_body",
   reddelicious: "apple_head",
   felonmelon: "melon_head",
-  pumpking: "pumpking",
 };
 
 export function cropMutationRefs(

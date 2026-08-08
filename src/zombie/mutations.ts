@@ -54,22 +54,22 @@ export function statEffectsOf(def: Pick<ResolvedMutationDef, "stats">): { stat: 
 // APPEND VANILLA ONLY. Modded entries belong in MODDED_MUTATIONS below so they keep
 // real string ids instead of spending finite bit positions.
 const CATALOG: readonly MutationSpec[] = [
-  { key: "tomato", name: "Tomatohead", slot: "head", stats: { str: 1 } },
-  { key: "onion", name: "Onionhead", slot: "head", stats: { con: 1 } },
-  { key: "carrot", name: "Carrot-eyed", slot: "hair_eye", stats: { dex: 1 } },
-  { key: "turnip", name: "Turnip-Arm", slot: "arm", stats: { str: 2 } },
-  { key: "potato", name: "Potatohead", slot: "head", stats: { con: 2 } },
-  { key: "coffee", name: "Coffeehead", slot: "head", stats: { dex: 2 } },
-  { key: "celery", name: "Celery-arms", slot: "arm", stats: { str: 3 } },
-  { key: "broccoli", name: "Broccohair", slot: "hair_eye", stats: { con: 3 } },
-  { key: "garlic", name: "Garlichead", slot: "head", stats: { str: 3 } },
-  { key: "cauli", name: "Cauli-hair", slot: "hair_eye", stats: { con: 3 } },
-  { key: "limabean", name: "Lima Bean", slot: "body", stats: { con: 3 } },
-  { key: "flytrap", name: "Flytrap", slot: "neck", stats: { con: 4 } },
-  { key: "dragon", name: "Dragon-arm", slot: "arm", stats: { str: 4 } },
-  { key: "pumpking", name: "Pumpking", slot: "head", stats: { str: 3 } },
+  { key: "tomato", name: "Tomatohead", slot: "head", stats: { str: 1, con: 1 } },
+  { key: "onion", name: "Onionhead", slot: "head", stats: { dex: 1, con: 1 }  },
+  { key: "carrot", name: "Carrot-eyed", slot: "hair_eye", stats: { dex: 1, wis: 1 } },
+  { key: "turnip", name: "Turnip-Arm", slot: "arm", stats: { str: 3, dex: -1 } },
+  { key: "potato", name: "Potatohead", slot: "head", stats: { con: 3, dex: -1 } },
+  { key: "coffee", name: "Coffeehead", slot: "head", stats: { dex: 3, wis: 1, con: -2 } },
+  { key: "celery", name: "Celery-arms", slot: "arm", stats: { str: 3, con: 1, dex: -1 } },
+  { key: "broccoli", name: "Broccohair", slot: "hair_eye", stats: { con: 3, wis: 2, dex: -2 } },
+  { key: "garlic", name: "Garlichead", slot: "head", stats: { str: 4, con: 1, dex: -2 } },
+  { key: "cauli", name: "Cauli-hair", slot: "hair_eye", stats: { con: 2, wis: 3, dex: -2 } },
+  { key: "limabean", name: "Lima Bean", slot: "body", stats: { str: 2, con: 3, dex: -2 } },
+  { key: "flytrap", name: "Flytrap", slot: "neck", stats: { str: 2, con: 3, wis: 1, dex: -2 } },
+  { key: "dragon", name: "Dragon-arm", slot: "arm", stats: { str: 5, dex: 2, con: -3 } },
+  { key: "pumpking", name: "Pumpking", slot: "head", stats: { str: 3, con: 2, wis: -2 } },
 ];
-
+// modded mutations
 export const MODDED_MUTATIONS: Readonly<Record<MutationKey, ModdedMutationDef>> = Object.freeze({
   turnip_eye: { modded: true, key: "turnip_eye", name: "Turnip-eyed", slot: "hair_eye", stats: { wis: 2, dex: 1, con: -1 } },
   turnip_head: { modded: true, key: "turnip_head", name: "Turnip-head", slot: "head", stats: { str: 2, con: 2, dex: -1 } },

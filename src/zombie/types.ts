@@ -4,6 +4,7 @@
 import type { ZombieDef } from "../assets";
 import { classify } from "./taxonomy";
 import { applyBodyTypeIdRestriction, applyBodyTypeRestriction, mutationBonus, normalizeMutationIds } from "./mutations";
+import { wisToFocusBonus } from "./traits";
 import { randomZombieName } from "./names";
 
 export const MAX_ZOMBIE_NAME_LENGTH = 24;
@@ -70,9 +71,10 @@ export function makeOwned(
     str: (def.str ?? 1) + bonus.str,
     dex: (def.dex ?? 1) + bonus.dex,
     con: (def.con ?? 1) + bonus.con,
-    focus: (def.focus ?? 0) + bonus.wis,
+    focus: (def.focus ?? 0) + wisToFocusBonus(bonus.wis),
     invasions,
     col,
     row,
   };
 }
+

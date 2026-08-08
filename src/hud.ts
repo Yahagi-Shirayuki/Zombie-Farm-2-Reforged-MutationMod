@@ -53,7 +53,7 @@ import {
   REQUESTABLE_MUTATION_MASK,
 } from "./blackMarketRules";
 // HUD styles live in a real stylesheet (src/ui/hud.css) so they get CSS tooling
-// and hot-reload. Vite injects it at module load â€” no manual <style> element.
+// and hot-reload. Vite injects it at module load — no manual <style> element.
 import "./ui/hud.css";
 import {
   bindBackdropDismiss, markPrimary, MENU_ACTIVATION_DELAY_MS, openModal,
@@ -99,12 +99,12 @@ interface MktEntry {
   timeLabel?: string; // catalog grow/regrowth time
   qty?: number; // how many units the listed price buys (boost packs)
   graveNeeded?: "Blue" | "Red" | "Silver"; // locked until this colored grave is owned
-  ownedLimit?: boolean; // "1 per farm" limit reached (gift vouchers) â€” can't buy
+  ownedLimit?: boolean; // "1 per farm" limit reached (gift vouchers) — can't buy
   owned?: boolean;
   equipped?: boolean;
   description?: string; // "what does it do" blurb shown by the card's magnifier
   /** Zombies: the magnifier opens the species' full inspect card instead of the
-   *  description parchment â€” stats and abilities are the thing worth reading before
+   *  description parchment — stats and abilities are the thing worth reading before
    *  buying, and the blurb rides along under the card. */
   inspect?: () => void;
   tint?: [number, number, number]; // multiplicative object tint from Market data
@@ -161,7 +161,7 @@ function functionalDescription(def: PlaceableDef): string | undefined {
     return `Raises your zombie army limit by ${def.armyMax}, so you can send more zombies on each invasion.`;
   if (def.plowFree) return "Plowing soil costs no gold while this stands on your farm.";
   if (def.fastWork)
-    return "Farming is instant â€” plowing, planting, and harvesting finish with no waiting.";
+    return "Farming is instant — plowing, planting, and harvesting finish with no waiting.";
   if (def.mutantMonolith)
     return "Nearby mutation crops always mutate harvested zombies. Mutant zombies also grow in half the time.";
   if (def.combineFast)
@@ -172,11 +172,11 @@ function functionalDescription(def: PlaceableDef): string | undefined {
     return `Stores up to ${def.zombieSlots ?? 0} spare zombies off the field, freeing up graves to plant more. Upgrade it for five more slots.`;
   if (def.zombiePatch) return "A cosy spot where your idle zombies gather to relax and nap.";
   if (def.graveColor)
-    return `Unlocks planting ${def.graveColor}-class zombies â€” you must own this grave before you can grow them.`;
+    return `Unlocks planting ${def.graveColor}-class zombies — you must own this grave before you can grow them.`;
   if (def.storageSlots)
-    return `A shed for objects you've packed away â€” holds up to ${def.storageSlots} items. Buy a bigger shed to store more.`;
+    return `A shed for objects you've packed away — holds up to ${def.storageSlots} items. Buy a bigger shed to store more.`;
   if (def.petPen)
-    return "An enclosure your pets roam around in. Tap it and choose Pets to pick up to four of the pets you own â€” one pen is all you need.";
+    return "An enclosure your pets roam around in. Tap it and choose Pets to pick up to four of the pets you own — one pen is all you need.";
   if (def.key === "cameraNormal") return "A decorative camera to show off your farm.";
   return undefined;
 }
@@ -200,19 +200,19 @@ function levelTier(level: number | undefined): string {
 
 /** Wording for the coarse activity bucket the server discloses. Kept short because
  *  it shares one ellipsising line with the gift count on a phone, and the count is
- *  the more useful half â€” the full phrasing lives in the row's title attribute. */
+ *  the more useful half — the full phrasing lives in the row's title attribute. */
 const ACTIVITY_LABEL: Record<FriendActivity, string> = {
   today: "seen today",
   week: "seen this week",
   away: "seen a while",
 };
 
-/** Player-facing wording for what a gift paid out ("a brain ðŸ§ ", "300 gold ðŸ’°"). */
+/** Player-facing wording for what a gift paid out ("a brain 🧠", "300 gold 💰"). */
 function giftRewardLabel(reward: GiftReward): string {
   if (reward.kind === "brain") {
-    return reward.amount === 1 ? "a brain ðŸ§ " : `${reward.amount} brains ðŸ§ `;
+    return reward.amount === 1 ? "a brain 🧠" : `${reward.amount} brains 🧠`;
   }
-  return `${reward.amount.toLocaleString()} gold ðŸ’°`;
+  return `${reward.amount.toLocaleString()} gold 💰`;
 }
 
 
@@ -570,8 +570,8 @@ export class Hud {
     // the nameplate. Clicking it opens the (otherwise hidden) Developer menu.
     // DEV BUILDS ONLY: `import.meta.env.DEV` is statically false in production, so
     // Vite tree-shakes this branch (and the openDevMenu it references) out of the
-    // shipped bundle. The dev menu is a convenience, never a security boundary â€”
-    // gameplay authority is being moved server-side â€” but it must not ship.
+    // shipped bundle. The dev menu is a convenience, never a security boundary —
+    // gameplay authority is being moved server-side — but it must not ship.
     const devHot = import.meta.env.DEV ? document.createElement("button") : null;
     if (devHot) {
       devHot.className = "devhot";
@@ -585,7 +585,7 @@ export class Hud {
     name.setAttribute("role", "button");
     // Clicking your name opens the Account menu (who you're signed in as + Sign
     // out). Profile SWITCHING is intentionally not exposed here for now (see
-    // openProfiles) â€” the friend code / add / gift / visit all live in Friends.
+    // openProfiles) — the friend code / add / gift / visit all live in Friends.
     name.onclick = () => this.openProfiles();
     this.nameEl = name;
     this.playStatusEl = document.createElement("button");
@@ -661,13 +661,13 @@ export class Hud {
     for (const q of this.questViews.slice(0, Hud.RAIL_MAX)) {
       this.questCol.appendChild(this.questCard(q));
     }
-    // Expand button â†’ full quest log (all active quests). Shown whenever there are
+    // Expand button → full quest log (all active quests). Shown whenever there are
     // any quests; its badge is the total active count.
     if (this.questViews.length) {
       const more = document.createElement("button");
       more.className = "quest qmore";
       more.title = "View all quests (Q)";
-      more.innerHTML = `<span class="qmore-glyph">â˜°</span>`;
+      more.innerHTML = `<span class="qmore-glyph">☰</span>`;
       const badge = document.createElement("span");
       badge.className = "qbadge";
       badge.textContent = String(this.questViews.length);
@@ -717,7 +717,7 @@ export class Hud {
       for (const o of q.objectives) {
         const row = document.createElement("div");
         row.className = "qlog-obj" + (o.done ? " done" : "");
-        row.textContent = `${o.done ? "âœ“" : "â—†"} ${o.text}  (${Math.min(o.count, o.total)}/${o.total})`;
+        row.textContent = `${o.done ? "✓" : "◆"} ${o.text}  (${Math.min(o.count, o.total)}/${o.total})`;
         body.appendChild(row);
       }
       if (q.reward) {
@@ -761,7 +761,7 @@ export class Hud {
     for (const o of q.objectives) {
       const row = document.createElement("div");
       row.className = "qobj" + (o.done ? " done" : "");
-      const mark = o.done ? "âœ“" : "â—†";
+      const mark = o.done ? "✓" : "◆";
       row.textContent = `${mark} ${o.text}  (${Math.min(o.count, o.total)}/${o.total})`;
       panel.appendChild(row);
     }
@@ -802,10 +802,10 @@ export class Hud {
     this.playStatusEl.className = `play-status ${mode} ${state}`;
     this.playStatusEl.textContent = mode === "local"
       ? "LOCAL FARM"
-      : state === "cached" ? "ONLINE Â· OFFLINE VIEW"
-      : state === "reconnecting" ? "ONLINE Â· RECONNECTING"
-      : state === "saving" ? `ONLINE Â· SAVING${pending ? ` (${pending})` : ""}`
-      : "ONLINE Â· SYNCED";
+      : state === "cached" ? "ONLINE · OFFLINE VIEW"
+      : state === "reconnecting" ? "ONLINE · RECONNECTING"
+      : state === "saving" ? `ONLINE · SAVING${pending ? ` (${pending})` : ""}`
+      : "ONLINE · SYNCED";
     this.playStatusEl.setAttribute(
       "aria-label",
       `${mode === "local" ? "Local Farm" : "Online Farm"}: ${statusLabel}. Choose Local or Online.`
@@ -843,9 +843,9 @@ export class Hud {
       }
       try {
         await navigator.clipboard.writeText(text);
-        this.showToast("Friend code copied! ðŸ“‹");
+        this.showToast("Friend code copied! 📋");
       } catch {
-        this.showToast("Highlighted â€” press Ctrl+C to copy");
+        this.showToast("Highlighted — press Ctrl+C to copy");
       }
     };
   }
@@ -903,8 +903,8 @@ export class Hud {
   /** Confirm a Market purchase that COMMITS on the tap. Crops and Items deliberately
    *  do not use this: buying one only arms a planting/placement step the player still
    *  has to finish (or cancel with a right-click), so the commitment is already
-   *  explicit and a prompt there is pure friction. Everything else â€” farm size,
-   *  ground, boosts, farmer parts, pets â€” spends the moment the card is tapped, so it
+   *  explicit and a prompt there is pure friction. Everything else — farm size,
+   *  ground, boosts, farmer parts, pets — spends the moment the card is tapped, so it
    *  asks first. A free item needs no prompt. */
   private confirmPurchase(name: string, cost: number, brains = false): Promise<boolean> {
     if (cost <= 0) return Promise.resolve(true);
@@ -977,7 +977,7 @@ export class Hud {
       this.writerLock = null;
       const banner = document.createElement("button");
       banner.className = "writer-lock-banner";
-      banner.textContent = "Read-only â€” tap to take control";
+      banner.textContent = "Read-only — tap to take control";
       banner.onclick = () => this.writerTakeover && this.showWriterLock(this.writerTakeover);
       this.el.appendChild(banner);
       this.writerBanner = banner;
@@ -987,7 +987,7 @@ export class Hud {
     take.textContent = "Take over here";
     take.onclick = async () => {
       take.disabled = true;
-      take.textContent = "Taking overâ€¦";
+      take.textContent = "Taking over…";
       const ok = await onTakeover();
       if (!ok) {
         take.disabled = false;
@@ -1011,7 +1011,7 @@ export class Hud {
     this.bossActive = active;
     const invade = this.el.querySelector<HTMLButtonElement>(".invade-shortcut");
     if (invade) {
-      if (active) invade.dataset.bossTitle = `${label} active â€” open raids for details (I)`;
+      if (active) invade.dataset.bossTitle = `${label} active — open raids for details (I)`;
       else delete invade.dataset.bossTitle;
       invade.title = invade.dataset.bossTitle ?? "Invade (I)";
     }
@@ -1126,7 +1126,7 @@ export class Hud {
     b.type = "button";
     b.setAttribute("aria-label", "Cancel current tool and select the Multi-tool");
     b.title = "Cancel tool";
-    b.textContent = "Ã—";
+    b.textContent = "×";
     b.onclick = () => { this.audio.play("menuClick"); this.setMode("walk"); };
     this.touchCancel = b;
     this.el.appendChild(b);
@@ -1135,7 +1135,7 @@ export class Hud {
 
   // Hide the right menu + bottom tools into the single bottom-right fab.
   // `chrome-expanded` on #hud lets the stylesheet move the remaining corner chrome
-  // out of the way of the two bars â€” on a portrait phone the bottom-left invasion
+  // out of the way of the two bars — on a portrait phone the bottom-left invasion
   // shortcut sits underneath the tool bar, so it steps aside while they are out.
   collapse() {
     if (this.collapsed) return;
@@ -1224,7 +1224,7 @@ export class Hud {
     this.farmUpgrades = [...mapSize].sort((a, b) => a.size - b.size);
   }
 
-  // Ground/climate skin catalog (Market Upgrade â†’ Ground).
+  // Ground/climate skin catalog (Market Upgrade → Ground).
   private climates: ClimateUpgrade[] = [];
   setClimates(climate: ClimateUpgrade[]) {
     this.climates = [...climate];
@@ -1245,7 +1245,7 @@ export class Hud {
   }
   setFarmerCatalog(catalog: FarmerCatalog) { this.farmer = catalog; }
   /** Catalog row for a head id reported by the server, for the friends list. Returns
-   *  null for an unknown or absent id â€” a head this build has no art for must draw
+   *  null for an unknown or absent id — a head this build has no art for must draw
    *  nothing rather than silently show a different player's face. */
   private friendHeadPart(headId: number | undefined): FarmerHeadDef | null {
     if (headId === undefined) return null;
@@ -1275,10 +1275,10 @@ export class Hud {
   getShedSlots: (() => number) | null = null;
   /** Whether a colored grave is placed (gates planting that zombie class). */
   hasGrave: ((color: "Blue" | "Red" | "Silver") => boolean) | null = null;
-  /** Whether the Plowing Monolith is placed â€” it moves the plow XP onto harvests,
+  /** Whether the Plowing Monolith is placed — it moves the plow XP onto harvests,
    *  so the per-harvest XP quoted on crop cards has to account for it. */
   hasPlowFree: (() => boolean) | null = null;
-  /** Whether a gift voucher has hit its "1 per farm" limit â€” you already own that
+  /** Whether a gift voucher has hit its "1 per farm" limit — you already own that
    *  zombie, or hold an (unused) voucher for it (set by main; spans both Cupid
    *  vouchers, which grant the same zombie). Keyed by the boost key. */
   giftLimitReached: ((boostKey: string) => boolean) | null = null;
@@ -1319,7 +1319,7 @@ export class Hud {
   onMausoleumUpgrade: (() => void | Promise<void>) | null = null;
   /** Whether the farm has a free army slot (gates the Deploy action). */
   canDeployZombie: (() => boolean) | null = null;
-  /** Whether an incoming zombie has anywhere to land â€” a free army slot, or a free
+  /** Whether an incoming zombie has anywhere to land — a free army slot, or a free
    *  slot in a Mausoleum that is actually placed. Advisory only: the server decides
    *  for real when the delivery is claimed. */
   canTakeZombieDelivery: (() => boolean) | null = null;
@@ -1327,7 +1327,7 @@ export class Hud {
   onZombieLocate: ((id: string) => void) | null = null;
   /** Permanently sell an owned zombie for gold (after confirmation). */
   onZombieSell: ((id: string) => void | Promise<void>) | null = null;
-  /** Market pricing of a zombie type â€” drives the gold sell payout shown on the
+  /** Market pricing of a zombie type — drives the gold sell payout shown on the
    *  detail card (brain prices convert at 1,000 gold per brain). */
   zombieBaseCost: ((key: string) => number) | null = null;
   zombieCostsBrains: ((key: string) => boolean) | null = null;
@@ -1457,7 +1457,7 @@ export class Hud {
   /** Remove a friend by id (no reload). */
   onRemoveFriend: ((id: string) => void | Promise<void>) | null = null;
   /** Gift one brain to a friend. Returns true if the gift was sent (false if
-   *  gated â€” e.g. once the daily limit lands). */
+   *  gated — e.g. once the daily limit lands). */
   onGiftBrain: ((id: string) => boolean) | null = null;
 
   // ---- online social layer (set by main; all null = offline-only) ----
@@ -1521,7 +1521,7 @@ export class Hud {
   onSetDayNightMode: ((mode: DayNightMode) => void) | null = null;
   /** Current farm-background (foliage density) choice. */
   getFarmBackground: (() => FarmBackground) | null = null;
-  /** Change the farm background â€” rebuilds the foliage ring live. */
+  /** Change the farm background — rebuilds the foliage ring live. */
   onSetFarmBackground: ((bg: FarmBackground) => void) | null = null;
   /** How zombies are drawn on this device (body tint source + whether mutations show).
    *  Applies live, everywhere a zombie is visible: farm, raids, cards and menus. */
@@ -1573,7 +1573,7 @@ export class Hud {
     banner.className = "visit-banner";
     const eye = document.createElement("span");
     eye.className = "vb-eye";
-    eye.textContent = "ðŸ‘ Visiting";
+    eye.textContent = "👁 Visiting";
     const who = document.createElement("span");
     who.className = "vb-name";
     who.textContent = name ? `${name}'s farm` : "a friend's farm";
@@ -1632,7 +1632,7 @@ export class Hud {
     const searchInput = document.createElement("input");
     searchInput.className = "mkt-search";
     searchInput.type = "search";
-    searchInput.placeholder = "Searchâ€¦";
+    searchInput.placeholder = "Search…";
     searchInput.setAttribute("aria-label", "Search the market");
     const searchToggle = document.createElement("button");
     searchToggle.className = "mkt-search-toggle";
@@ -1758,7 +1758,7 @@ export class Hud {
       }
       if (tab === "Boosts") {
         // Buying stays in the panel (buy several). The card advertises the PACK SIZE
-        // â€” how many uses the listed price buys â€” not how many you already own; the
+        // — how many uses the listed price buys — not how many you already own; the
         // owned count lives in Storage's Boosts tab, and appending it to the name
         // only put it under the magnifier button.
         return this.boosts.filter((b) => !tutorialBoostMarket || b.key === "insta_grow").map((b) => {
@@ -1813,7 +1813,7 @@ export class Hud {
       }
       if (tab === "Farmer" && sub === "Bonus") {
         // The FUNCTION slot: which owned head's bonus is live, independent of the
-        // one being worn. Only heads that carry a bonus are listed â€” a cosmetic
+        // one being worn. Only heads that carry a bonus are listed — a cosmetic
         // here would just be a differently-spelled "no bonus".
         const worn = this.farmer.heads.find((head) => head.id === this.state.farmerHeadId);
         const follow: MktEntry = {
@@ -1893,11 +1893,11 @@ export class Hud {
     const searchable = () => tab !== "Upgrade" && tab !== "Epic Boss";
 
     // How many cards a page holds. Read from the laid-out grid so it tracks the
-    // responsive column count + row height. Roomy layouts (desktop/tablet, â‰¥3
+    // responsive column count + row height. Roomy layouts (desktop/tablet, ≥3
     // columns) page to exactly the rows that fit, so the grid never scrolls. Narrow
-    // phone layouts (1â€“2 columns) fit too few per row, so they instead get a small
+    // phone layouts (1–2 columns) fit too few per row, so they instead get a small
     // touch-scrollable minimum rather than exploding into dozens of near-empty pages
-    // â€” natural on touch, and the themed thin scrollbar keeps it tidy.
+    // — natural on touch, and the themed thin scrollbar keeps it tidy.
     const pageSize = (): number => {
       const cs = getComputedStyle(grid);
       const cols = Math.max(1, cs.gridTemplateColumns.split(" ").filter(Boolean).length);
@@ -1950,7 +1950,7 @@ export class Hud {
         e.className = "mkt-empty";
         // Distinguish "no search hits" from a genuinely empty tab.
         e.textContent = q
-          ? `No items match â€œ${search.trim()}â€.`
+          ? `No items match “${search.trim()}”.`
           : "Coming soon.";
         grid.appendChild(e);
       } else {
@@ -2103,13 +2103,13 @@ export class Hud {
     const action = document.createElement("button");
     action.className = "raid-go epic-market-action";
     if (view.active) {
-      action.textContent = `Fight Â· 1 Token or ${EPIC_BOSS_FIGHT_BRAIN_COST} Brains`;
+      action.textContent = `Fight · 1 Token or ${EPIC_BOSS_FIGHT_BRAIN_COST} Brains`;
       action.disabled = !(run?.tokenCount) && this.state.brains < EPIC_BOSS_FIGHT_BRAIN_COST;
       action.onclick = () => this.openEpicBossArmy();
     } else {
       action.innerHTML = view.blocked ? "Another boss event is active" :
         view.levelLocked ? `Requires Level ${view.unlockLevel}` :
-        `Start Event Â· ${view.costBrains} <img src="${UI("topbar_brain_icon.png")}" alt="brains">`;
+        `Start Event · ${view.costBrains} <img src="${UI("topbar_brain_icon.png")}" alt="brains">`;
       action.disabled = view.blocked || view.levelLocked || this.state.brains < view.costBrains;
       action.onclick = async () => {
         if (!await this.confirmInGame(
@@ -2171,7 +2171,7 @@ export class Hud {
       if (payment === "brains" && this.state.brains < EPIC_BOSS_FIGHT_BRAIN_COST && tokens > 0) payment = "token";
       pay.value = payment;
       const canPay = payment === "token" ? tokens > 0 : this.state.brains >= EPIC_BOSS_FIGHT_BRAIN_COST;
-      head.innerHTML = `<h2>Send your army â€” ${bossName}</h2><span class="army-count">${order.length}/${party.cap} Â· min 1</span>`;
+      head.innerHTML = `<h2>Send your army — ${bossName}</h2><span class="army-count">${order.length}/${party.cap} · min 1</span>`;
       start.textContent = order.length ? `Fight with ${order.length}` : "Choose a zombie";
       start.disabled = !order.length || !canPay;
       cards.querySelectorAll<HTMLElement>(".army-card").forEach((el) => { const at = order.indexOf(el.dataset.id!); el.classList.toggle("sel", at >= 0); const tick = el.querySelector<HTMLElement>(".tick"); if (tick) tick.textContent = at >= 0 ? String(at + 1) : ""; });
@@ -2236,7 +2236,7 @@ export class Hud {
 
     const body = document.createElement("div");
     body.className = "mkt-body";
-    // Seasonal decor is only on the shelf while its theme is active â€” say which,
+    // Seasonal decor is only on the shelf while its theme is active — say which,
     // so a card the player will not find again next week reads as limited.
     if (en.theme) {
       const badge = document.createElement("div");
@@ -2283,22 +2283,22 @@ export class Hud {
     cost.className = "mkt-cost";
     const coin = en.brains ? "topbar_brain_icon.png" : "topbar_money_icon.png";
     cost.innerHTML = en.equipped
-      ? `âœ“ Equipped`
+      ? `✓ Equipped`
       : en.owned
         ? `Equip`
       : locked
-      ? `ðŸ”’ Lvl ${en.level}`
+      ? `🔒 Lvl ${en.level}`
       : graveLock
-        ? `ðŸ”’ ${en.graveNeeded} Grave`
+        ? `🔒 ${en.graveNeeded} Grave`
         : limitLock
-          ? `âœ“ Owned`
+          ? `✓ Owned`
           : `${en.cost}<img src="${UI(coin)}">`;
     body.appendChild(cost);
 
     card.append(hd, body);
     // Magnifier: a small "what is this?" button. Zombies open their inspect card;
     // everything else pops the description parchment. Present even on locked cards so
-    // players can study an item â€” or a zombie's stats â€” before they unlock it.
+    // players can study an item — or a zombie's stats — before they unlock it.
     if (en.inspect) {
       card.appendChild(magnifierButton(
         `See ${en.name}'s card`, "See this zombie's card", en.inspect));
@@ -2343,7 +2343,7 @@ export class Hud {
   // (six cards for three tiers). Tiers are bought in order (30 -> 40 -> 50 -> 60);
   // buying either currency's card grows the farm, which makes both of that tier's
   // cards read as owned. The cards carry the sizes, so there is no current-size
-  // banner â€” only the maxed-out farm still needs a line of its own.
+  // banner — only the maxed-out farm still needs a line of its own.
   private renderUpgradeGrid(grid: HTMLElement, refreshCur: () => void, rerender: () => void) {
     const current = this.getMapSize ? this.getMapSize() : 30;
     const maxed = this.farmUpgrades.every((u) => u.size <= current);
@@ -2392,17 +2392,17 @@ export class Hud {
     img.src = upgradeIcon(u.icon);
     const size = document.createElement("div");
     size.className = "mkt-upgrade-size";
-    size.textContent = `${u.size}Ã—${u.size}`;
+    size.textContent = `${u.size}×${u.size}`;
     body.append(img, size);
 
     const cost = document.createElement("div");
     cost.className = "mkt-cost";
     if (owned) {
-      cost.textContent = "âœ“ Owned";
+      cost.textContent = "✓ Owned";
     } else if (!levelOk) {
-      cost.innerHTML = `ðŸ”’ Lvl ${u.level}`;
+      cost.innerHTML = `🔒 Lvl ${u.level}`;
     } else if (!isNext) {
-      cost.innerHTML = `ðŸ”’ Get ${next?.info ?? "previous"} first`;
+      cost.innerHTML = `🔒 Get ${next?.info ?? "previous"} first`;
     } else {
       cost.innerHTML = `${price.toLocaleString()}<img src="${UI(coin)}">`;
     }
@@ -2411,7 +2411,7 @@ export class Hud {
     card.append(hd, body);
     if (buyable)
       card.onclick = async () => {
-        if (!await this.confirmPurchase(`${u.name} (${u.size}Ã—${u.size})`, price, currency === "brains")) return;
+        if (!await this.confirmPurchase(`${u.name} (${u.size}×${u.size})`, price, currency === "brains")) return;
         card.style.pointerEvents = "none";
         if (this.onBuyUpgrade && await this.onBuyUpgrade(u.size, currency)) {
           refreshCur();
@@ -2421,7 +2421,7 @@ export class Hud {
     return card;
   }
 
-  // The Market Upgrade â†’ Ground tab: one card per ground/climate skin. Grassy is
+  // The Market Upgrade → Ground tab: one card per ground/climate skin. Grassy is
   // the free default; others cost gold and, once bought, can be re-applied for free.
   private renderGroundGrid(grid: HTMLElement, refreshCur: () => void, rerender: () => void) {
     const current = this.getClimate ? this.getClimate() : "grass";
@@ -2465,11 +2465,11 @@ export class Hud {
     const cost = document.createElement("div");
     cost.className = "mkt-cost";
     if (applied) {
-      cost.textContent = "âœ“ In Use";
+      cost.textContent = "✓ In Use";
     } else if (owned) {
       cost.textContent = "Apply";
     } else if (!levelOk) {
-      cost.innerHTML = `ðŸ”’ Lvl ${c.level}`;
+      cost.innerHTML = `🔒 Lvl ${c.level}`;
     } else {
       cost.innerHTML = `${price.toLocaleString()}<img src="${UI("topbar_money_icon.png")}">`;
     }
@@ -2510,7 +2510,7 @@ export class Hud {
     const pm = document.createElement("div");
     pm.className = "pm";
     // Guided-tutorial mode: constrain the menu to a single plantable (the base
-    // Zombie) â€” the screen/subtab toggles are hidden and every other card is
+    // Zombie) — the screen/subtab toggles are hidden and every other card is
     // locked, so the player can only pick the tutorial's target.
     const onlyKey = opts?.onlyKey;
 
@@ -2590,7 +2590,7 @@ export class Hud {
     this.el.appendChild(bg);
 
     if (onlyKey) {
-      // Tutorial: skip the Plants/Zombies chrome â€” show only the Zombies list
+      // Tutorial: skip the Plants/Zombies chrome — show only the Zombies list
       // (with everything but the target locked) and hide the toggles/subtabs.
       screens.style.display = "none";
       zcat = "normal";
@@ -2603,7 +2603,7 @@ export class Hud {
     showPlants();
   }
 
-  /** XP one harvest of this crop pays out â€” the same number JobSystem awards, so a
+  /** XP one harvest of this crop pays out — the same number JobSystem awards, so a
    *  placed Plowing Monolith (which moves the plow XP onto the harvest) is included. */
   private cropXp(cfg: CropConfig): number {
     return harvestXp(cfg.xp ?? 0, !!this.hasPlowFree?.());
@@ -2661,9 +2661,9 @@ export class Hud {
     cost.className = "pm-cost";
     // Locked cards show the requirement (level or grave) instead of a buyable cost.
     cost.innerHTML = levelLocked
-      ? `<span class="pm-lock">ðŸ”’ Lvl ${c.level}</span>`
+      ? `<span class="pm-lock">🔒 Lvl ${c.level}</span>`
       : graveLock
-        ? `<span class="pm-lock">ðŸ”’ ${c.cfg.unlockGrave} Grave</span>`
+        ? `<span class="pm-lock">🔒 ${c.cfg.unlockGrave} Grave</span>`
         : `${c.cost}<img src="${UI(c.brains ? "topbar_brain_icon.png" : "topbar_money_icon.png")}">`;
 
     card.append(name, port, right, cost);
@@ -2676,8 +2676,8 @@ export class Hud {
   private openSettings() { openSettingsPanel(this); }
   private openDevMenu() { openDevMenuPanel(this); }
 
-  // Account menu: who you're signed in as + Sign out â€” and Sign out lives ONLY
-  // here. Profile SWITCHING (multiple independent save slots â€” Play / New Game /
+  // Account menu: who you're signed in as + Sign out — and Sign out lives ONLY
+  // here. Profile SWITCHING (multiple independent save slots — Play / New Game /
   // Rename / Delete) is intentionally not exposed for now; that UX needs a rework.
   // The hooks (onSwitchProfile/onCreateProfile/onRenameProfile/onDeleteProfile)
   // and save/profiles.ts are kept intact so it can be re-added here later. The
@@ -2717,7 +2717,7 @@ export class Hud {
   }
 
   /** Confirm a bulk friends-panel action ("Gift all", "Open all") before it runs.
-   *  `lines` is the breakdown shown under the question â€” for gifting that is what it
+   *  `lines` is the breakdown shown under the question — for gifting that is what it
    *  will cost, so the player never spends gold on a number they didn't see first.
    *  Shares the confirm-panel styling with confirmFriendAction. */
   private confirmBulkAction(opts: {
@@ -2879,7 +2879,7 @@ export class Hud {
     requestTab.textContent = "Requests";
     salesTab.textContent = "Zombie Sales";
     historyTab.textContent = "History";
-    // Compact screens cannot show the browse list AND the compose form at once â€”
+    // Compact screens cannot show the browse list AND the compose form at once —
     // side by side they leave the list about three cards tall. There the form
     // becomes a third tab; on a roomy screen this button is hidden by CSS and the
     // form stays permanently docked beside the list.
@@ -2958,7 +2958,7 @@ export class Hud {
     mutationMode.append(
       new Option("No mutation", "false"),
       new Option("Any mutation", "true"),
-      new Option("Specific mutationsâ€¦", "specific")
+      new Option("Specific mutations…", "specific")
     );
     const mutationChoices = document.createElement("div");
     mutationChoices.className = "bm-mutation-choices";
@@ -3048,13 +3048,13 @@ export class Hud {
       assetCaption.textContent = selling ? "Owned zombie" : "Zombie type";
       if (selling) {
         for (const zombie of this.getRoster?.() ?? []) {
-          const option = new Option(`${zombie.name} â€” ${zombie.typeName}${zombie.mutation ? " (Mutated)" : ""}`, zombie.id);
+          const option = new Option(`${zombie.name} — ${zombie.typeName}${zombie.mutation ? " (Mutated)" : ""}`, zombie.id);
           asset.appendChild(option);
         }
       } else {
         for (const card of catalog) {
           const lock = purchaseLockFor(card.cfg.key);
-          const option = new Option(lock ? `${card.name} â€” ${lock.label}` : card.name, card.cfg.key);
+          const option = new Option(lock ? `${card.name} — ${lock.label}` : card.name, card.cfg.key);
           asset.append(option);
         }
       }
@@ -3092,7 +3092,7 @@ export class Hud {
       const header = document.createElement("div");
       header.className = "bm-fulfill-title";
       header.textContent = heldBrains
-        ? `Trades settled! The market is holding ${heldBrains} brains for you â€” collect them.`
+        ? `Trades settled! The market is holding ${heldBrains} brains for you — collect them.`
         : rows.some((row) => row.awaitingClaim)
           ? "Trades settled! Collect to take delivery."
           : "Your posts went through! Collect to dismiss.";
@@ -3102,7 +3102,7 @@ export class Hud {
       for (const entry of rows) {
         // A card either owes this player a zombie (they bought it, or their request was
         // filled) or reports brains that already landed. The zombie is minted by the
-        // Collect below â€” until then it lives on the order, so nothing can strand it in
+        // Collect below — until then it lives on the order, so nothing can strand it in
         // a Mausoleum the farm does not have.
         const claiming = !!entry.awaitingClaim;
         const paying = !!entry.awaitingPayout;
@@ -3112,8 +3112,8 @@ export class Hud {
         card.className = "bm-card bm-fulfilled";
         const portrait = document.createElement("img");
         portrait.src = this.zombiePortraitOf?.(entry.zombieKey) ?? cardFor(entry.zombieKey)?.portrait ?? "";
-        // Both directions describe one concrete unit â€” the sale's escrowed zombie, or
-        // the one the fulfiller handed over for a request â€” so both get that unit's
+        // Both directions describe one concrete unit — the sale's escrowed zombie, or
+        // the one the fulfiller handed over for a request — so both get that unit's
         // mutated portrait. Trades too old to have recorded it keep the neutral
         // species portrait and say nothing about mutations.
         if (entry.mutation !== undefined && this.zombieMutationPortraitOf) {
@@ -3126,15 +3126,15 @@ export class Hud {
         const body = document.createElement("div");
         const name = document.createElement("div");
         name.className = "bm-name";
-        name.textContent = sold ? `${zombieName} â€” Sold!`
-          : entry.kind === "SELL_ZOMBIE" ? `${zombieName} â€” Purchased!`
-          : `${zombieName} â€” Request filled!`;
+        name.textContent = sold ? `${zombieName} — Sold!`
+          : entry.kind === "SELL_ZOMBIE" ? `${zombieName} — Purchased!`
+          : `${zombieName} — Request filled!`;
         const traits = document.createElement("div");
         traits.className = "bm-fulfill-traits";
         if (entry.mutation !== undefined) {
           const bits = [mutationLabel(entry.mutation) || "No mutations"];
           if (entry.invasions) bits.push(veterancy(entry.invasions));
-          traits.textContent = bits.join(" Â· ");
+          traits.textContent = bits.join(" · ");
         } else {
           traits.hidden = true;
         }
@@ -3143,14 +3143,14 @@ export class Hud {
         const when = new Date(entry.fulfilledAt).toLocaleDateString();
         const room = this.canTakeZombieDelivery?.() ?? true;
         meta.textContent = sold
-          ? `Bought by ${entry.fulfilledBy} Â· ${when}\n${paying
-            ? `The market is holding ${entry.priceBrains} brains â€” collect to bank them.`
+          ? `Bought by ${entry.fulfilledBy} · ${when}\n${paying
+            ? `The market is holding ${entry.priceBrains} brains — collect to bank them.`
             : "The brains are already in your balance."}`
           : claiming
-            ? `From ${entry.fulfilledBy} Â· ${when}\n${room
-              ? "Waiting for you â€” collect to bring it home."
+            ? `From ${entry.fulfilledBy} · ${when}\n${room
+              ? "Waiting for you — collect to bring it home."
               : "Your farm and Mausoleum are full. Free a slot, then collect."}`
-            : `Delivered by ${entry.fulfilledBy} Â· ${when}\nThe zombie is already on your farm.`;
+            : `Delivered by ${entry.fulfilledBy} · ${when}\nThe zombie is already on your farm.`;
         const cost = document.createElement("div");
         cost.className = "bm-price";
         cost.append(String(entry.priceBrains));
@@ -3171,11 +3171,11 @@ export class Hud {
             refreshBalance();
             this.showToast(sold
               ? result?.brainsPaid
-                ? `Cha-ching! ${result.brainsPaid} brains collected â€” ${zombieName} sold to ${entry.fulfilledBy}. ðŸ§ `
-                : `Cha-ching! ${zombieName} sold to ${entry.fulfilledBy} for ${entry.priceBrains} brains. ðŸ§ `
+                ? `Cha-ching! ${result.brainsPaid} brains collected — ${zombieName} sold to ${entry.fulfilledBy}. 🧠`
+                : `Cha-ching! ${zombieName} sold to ${entry.fulfilledBy} for ${entry.priceBrains} brains. 🧠`
               : claimed?.stored
-                ? `${zombieName} is resting in your Mausoleum â€” deploy it when there's room. ðŸ§Ÿ`
-                : `${zombieName} has joined your horde! ðŸ§Ÿ`);
+                ? `${zombieName} is resting in your Mausoleum — deploy it when there's room. 🧟`
+                : `${zombieName} has joined your horde! 🧟`);
           } catch (error) {
             // The delivery is never lost: refused for room, it keeps waiting on the
             // card, so say what to do instead of the generic retry line.
@@ -3192,7 +3192,7 @@ export class Hud {
     };
 
     const renderHistory = async () => {
-      historyView.innerHTML = `<div class="bm-empty">Opening the ledgerâ€¦</div>`;
+      historyView.innerHTML = `<div class="bm-empty">Opening the ledger…</div>`;
       if (!this.socialOnline?.() || !this.getBlackMarketHistory) {
         historyView.innerHTML = `<div class="bm-empty">Sign in to see your trade history.</div>`;
         return;
@@ -3216,10 +3216,10 @@ export class Hud {
         statsRow.appendChild(chip);
       };
       const { sold, bought, mostTraded } = result.stats;
-      stat(`ðŸ§Ÿ Sold ${sold.count} Â· earned ${sold.brains} ðŸ§ `);
-      stat(`ðŸ›’ Bought ${bought.count} Â· spent ${bought.brains} ðŸ§ `);
-      if (sold.best) stat(`ðŸ† Best sale: ${nameOf(sold.best.zombieKey)} for ${sold.best.priceBrains} ðŸ§ `);
-      if (mostTraded) stat(`â­ Most traded: ${nameOf(mostTraded.zombieKey)} Ã—${mostTraded.count}`);
+      stat(`🧟 Sold ${sold.count} · earned ${sold.brains} 🧠`);
+      stat(`🛒 Bought ${bought.count} · spent ${bought.brains} 🧠`);
+      if (sold.best) stat(`🏆 Best sale: ${nameOf(sold.best.zombieKey)} for ${sold.best.priceBrains} 🧠`);
+      if (mostTraded) stat(`⭐ Most traded: ${nameOf(mostTraded.zombieKey)} ×${mostTraded.count}`);
       historyView.appendChild(statsRow);
 
       if (!result.entries.length) {
@@ -3253,19 +3253,19 @@ export class Hud {
         title.textContent = entry.earned
           ? entry.mine
             ? `Sold ${nameOf(entry.zombieKey)} to ${entry.counterparty}`
-            : `Filled ${entry.counterparty}'s request â€” ${nameOf(entry.zombieKey)}`
+            : `Filled ${entry.counterparty}'s request — ${nameOf(entry.zombieKey)}`
           : entry.mine
-            ? `${entry.counterparty} filled your request â€” ${nameOf(entry.zombieKey)}`
+            ? `${entry.counterparty} filled your request — ${nameOf(entry.zombieKey)}`
             : `Bought ${nameOf(entry.zombieKey)} from ${entry.counterparty}`;
         const detailBits = [new Date(entry.fulfilledAt).toLocaleDateString()];
         if (entry.mutation) detailBits.push(mutationLabel(entry.mutation));
         if (entry.invasions) detailBits.push(veterancy(entry.invasions));
         const detail = document.createElement("div");
-        detail.textContent = detailBits.join(" Â· ");
+        detail.textContent = detailBits.join(" · ");
         body.append(title, detail);
         const delta = document.createElement("div");
         delta.className = entry.earned ? "bm-ledger-gain" : "bm-ledger-loss";
-        delta.append(`${entry.earned ? "+" : "âˆ’"}${entry.priceBrains}`);
+        delta.append(`${entry.earned ? "+" : "−"}${entry.priceBrains}`);
         const brain = document.createElement("img");
         brain.src = UI("topbar_brain_icon.png");
         delta.appendChild(brain);
@@ -3276,7 +3276,7 @@ export class Hud {
 
     const renderOrders = async () => {
       const generation = ++renderGeneration;
-      list.innerHTML = `<div class="bm-empty">Refreshing marketâ€¦</div>`;
+      list.innerHTML = `<div class="bm-empty">Refreshing market…</div>`;
       if (!this.socialOnline?.() || !this.getBlackMarketOrders) {
         list.innerHTML = `<div class="bm-empty">Sign in to use the Black Market.</div>`;
         return;
@@ -3320,8 +3320,8 @@ export class Hud {
               ? `Requested mutations: ${blackMarketMutationRequirementLabel(order.mutationRequired)}`
               : `Requested mutation: ${order.mutated ? "Any mutation" : "None"}`
             : `Mutated: ${order.mutated
-              ? `Yes${order.mutation ? ` â€” ${mutationLabel(order.mutation)}` : ""}`
-              : "No"}${order.invasions ? ` Â· ${veterancy(order.invasions)}` : ""}`;
+              ? `Yes${order.mutation ? ` — ${mutationLabel(order.mutation)}` : ""}`
+              : "No"}${order.invasions ? ` · ${veterancy(order.invasions)}` : ""}`;
           meta.textContent = `${mutationText}\n${order.mine ? "Your post" : order.creatorName}`;
           const cost = document.createElement("div"); cost.className = "bm-price";
           cost.append(String(order.priceBrains));
@@ -3340,16 +3340,16 @@ export class Hud {
               try {
                 await this.onCancelBlackMarketOrder?.(order.id);
                 refreshBalance();
-                this.showToast("Post cancelled â€” your escrow was returned.");
+                this.showToast("Post cancelled — your escrow was returned.");
                 await renderOrders();
               }
               catch (error) {
-                // A cancel hands the escrowed zombie straight back â€” there is no waiting
-                // card to hold it â€” so it is refused outright when there is nowhere to
+                // A cancel hands the escrowed zombie straight back — there is no waiting
+                // card to hold it — so it is refused outright when there is nowhere to
                 // put it. The post survives, so say what to free rather than "try again".
                 const code = error instanceof Error ? error.message : "";
                 this.showToast(code.startsWith("no_room")
-                  ? "Your farm and Mausoleum are full â€” free a slot before taking this zombie back."
+                  ? "Your farm and Mausoleum are full — free a slot before taking this zombie back."
                   : "Could not cancel that post. Refresh and try again.");
                 action.disabled = false;
               }
@@ -3368,8 +3368,8 @@ export class Hud {
               if (purchaseLock) { this.showToast(purchaseLock.label); return; }
               let unitId: string | undefined;
               let detail = `Spend ${order.priceBrains} brains for this zombie?`;
-              // Buying with nowhere to put it is allowed â€” the zombie waits on the
-              // Collect card rather than being forced somewhere â€” but say so up front
+              // Buying with nowhere to put it is allowed — the zombie waits on the
+              // Collect card rather than being forced somewhere — but say so up front
               // instead of letting it look like the purchase went nowhere.
               if (order.kind === "SELL_ZOMBIE" && this.canTakeZombieDelivery?.() === false) {
                 detail += "\n\nYour farm and Mausoleum are full, so it will wait to be collected until you free a slot.";
@@ -3386,8 +3386,8 @@ export class Hud {
                 refreshBalance();
                 const zombieName = cardFor(order.zombieKey)?.name ?? order.zombieKey;
                 this.showToast(order.kind === "SELL_ZOMBIE"
-                  ? `Bought ${zombieName} for ${order.priceBrains} brains â€” collect it above! ðŸ§Ÿ`
-                  : `Sold your ${zombieName} for ${order.priceBrains} brains! ðŸ§ `);
+                  ? `Bought ${zombieName} for ${order.priceBrains} brains — collect it above! 🧟`
+                  : `Sold your ${zombieName} for ${order.priceBrains} brains! 🧠`);
                 await renderOrders();
                 // The purchase now waits as a collectable delivery, so surface its card
                 // straight away rather than at the next time the panel opens.
@@ -3578,7 +3578,7 @@ export class Hud {
     panel.appendChild(buildZombieCard(this, info, panel));
     const note = document.createElement("div");
     note.className = lockLabel ? "bm-lock" : "bm-meta";
-    note.textContent = lockLabel ?? `${order.priceBrains} brains Â· ${order.creatorName}`;
+    note.textContent = lockLabel ?? `${order.priceBrains} brains · ${order.creatorName}`;
     panel.appendChild(note);
     if (!order.mine && trade) {
       const action = document.createElement("button");
@@ -3591,9 +3591,9 @@ export class Hud {
   }
 
   // Friends panel. Two modes, chosen at open time:
-  //   â€¢ Offline (no server configured, or signed out): the local friends stub â€”
+  //   • Offline (no server configured, or signed out): the local friends stub —
   //     add by NAME, gift locally, remove. Same as before online landed.
-  //   â€¢ Online (signed in): server-backed â€” your shareable code up top, a gift
+  //   • Online (signed in): server-backed — your shareable code up top, a gift
   //     inbox to claim, friends synced from the server, add by CODE, gift via the
   //     server (which owns the once-per-day limit).
   // Reuses the prof-* / fr-* styles.
@@ -3654,7 +3654,7 @@ export class Hud {
 
     const renderAcct = () => {
       acctBar.innerHTML = "";
-      if (!canOnline) return; // no server â†’ no account UI at all
+      if (!canOnline) return; // no server → no account UI at all
       if (online()) {
         const acct = this.myAccount?.();
         const who = document.createElement("div");
@@ -3702,7 +3702,7 @@ export class Hud {
     // ---- bulk actions --------------------------------------------------
     // Both are just the single-gift path in a loop: every send and every claim is
     // still validated, charged, and fenced individually server-side. Sequential on
-    // purpose â€” claims contend for the account fence, and serial sends keep the
+    // purpose — claims contend for the account fence, and serial sends keep the
     // gold check honest instead of racing ten of them at the balance.
 
     /** True while a batch is running: blocks a second batch from interleaving. */
@@ -3755,10 +3755,10 @@ export class Hud {
       const spent = Math.max(0, goldBefore - this.state.gold);
       const parts = [`Sent ${sent} gift${sent === 1 ? "" : "s"}!`];
       if (online()) parts.push(`+${sent * GIFT_XP_REWARD} XP`);
-      if (spent > 0) parts.push(`âˆ’${spent.toLocaleString()} gold`);
+      if (spent > 0) parts.push(`−${spent.toLocaleString()} gold`);
       const missed = plan.targets.length - sent;
       if (missed > 0) parts.push(`${missed} couldn't be delivered`);
-      this.showToast(parts.join(" Â· "));
+      this.showToast(parts.join(" · "));
     };
 
     const confirmGiftAll = () => {
@@ -3783,7 +3783,7 @@ export class Hud {
         return;
       }
       // Only the free tier depends on today's send count, and a friend blocked by an
-      // UNOPENED gift wasn't necessarily gifted today â€” so count the ones actually on
+      // UNOPENED gift wasn't necessarily gifted today — so count the ones actually on
       // today's cooldown rather than every ineligible friend.
       const sentToday = (this.getFriends?.() ?? [])
         .filter((f) => f.giftOnCooldown && !f.giftPending).length;
@@ -3795,13 +3795,13 @@ export class Hud {
         return;
       }
       const cost = plan.paidCount === 0
-        ? `All ${plan.freeCount === 1 ? "of it is" : "free"} â€” no gold.`
+        ? `All ${plan.freeCount === 1 ? "of it is" : "free"} — no gold.`
         : plan.freeCount > 0
-          ? `${plan.freeCount} free + ${plan.paidCount} Ã— ${GIFT_GOLD_COST} gold = ${plan.goldCost.toLocaleString()} gold.`
-          : `${plan.paidCount} Ã— ${GIFT_GOLD_COST} gold = ${plan.goldCost.toLocaleString()} gold.`;
+          ? `${plan.freeCount} free + ${plan.paidCount} × ${GIFT_GOLD_COST} gold = ${plan.goldCost.toLocaleString()} gold.`
+          : `${plan.paidCount} × ${GIFT_GOLD_COST} gold = ${plan.goldCost.toLocaleString()} gold.`;
       const lines = [cost, `You have ${this.state.gold.toLocaleString()} gold. Each gift earns you ${GIFT_XP_REWARD} XP.`];
       if (plan.skippedForGold > 0) {
-        lines.push(`${plan.skippedForGold} friend${plan.skippedForGold === 1 ? "" : "s"} left out â€” not enough gold for them.`);
+        lines.push(`${plan.skippedForGold} friend${plan.skippedForGold === 1 ? "" : "s"} left out — not enough gold for them.`);
       }
       this.confirmBulkAction({
         title: "Gift all friends?",
@@ -3818,10 +3818,10 @@ export class Hud {
       let brains = 0;
       let gold = 0;
       let opened = 0;
-      let emptied = 0; // already opened elsewhere â€” nothing credited
+      let emptied = 0; // already opened elsewhere — nothing credited
       let failure: string | null = null;
       for (const g of gifts) {
-        // refreshInbox:false â€” one pull at the end instead of one per gift.
+        // refreshInbox:false — one pull at the end instead of one per gift.
         const result = await (this.onClaimGift?.(g.id, { refreshInbox: false })
           ?? Promise.resolve("You're offline right now."));
         if (typeof result === "string") { failure = result; break; }
@@ -3836,8 +3836,8 @@ export class Hud {
         return;
       }
       const haul = [
-        brains > 0 ? `${brains} brain${brains === 1 ? "" : "s"} ðŸ§ ` : null,
-        gold > 0 ? `${gold.toLocaleString()} gold ðŸ’°` : null,
+        brains > 0 ? `${brains} brain${brains === 1 ? "" : "s"} 🧠` : null,
+        gold > 0 ? `${gold.toLocaleString()} gold 💰` : null,
       ].filter(Boolean).join(" and ");
       this.showToast(`Opened ${opened} gift${opened === 1 ? "" : "s"}: ${haul}!`);
       // A stopped batch leaves the rest in the inbox; say so rather than going quiet.
@@ -3874,7 +3874,7 @@ export class Hud {
       if (!online()) return;
       const gifts = this.getInbox?.() ?? [];
       if (!gifts.length) return;
-      // Every row reads "ðŸŽ Gift from â€¹nameâ€º" â€” near-identical, and one per friend once
+      // Every row reads "🎁 Gift from ‹name›" — near-identical, and one per friend once
       // the pending rule is in force. Rendering all of them buried "Open all" and the
       // friends list under a wall of them, so preview a few and let the player ask for
       // the rest. Collapse again whenever the inbox shrinks back under the limit.
@@ -3882,9 +3882,9 @@ export class Hud {
       const shown = inboxExpanded ? gifts : gifts.slice(0, INBOX_PREVIEW);
       const hd = document.createElement("div");
       hd.className = "fr-inbox-h fr-sticky-h";
-      hd.textContent = `ðŸŽ Gifts for you (${gifts.length})`;
+      hd.textContent = `🎁 Gifts for you (${gifts.length})`;
       if (gifts.length > 1) {
-        hd.appendChild(bulkButton("Open all", "Openingâ€¦", confirmOpenAll));
+        hd.appendChild(bulkButton("Open all", "Opening…", confirmOpenAll));
       }
       inboxWrap.appendChild(hd);
       for (const g of shown) {
@@ -3893,8 +3893,8 @@ export class Hud {
         const nm = document.createElement("div");
         nm.className = "prof-name";
         // The contents were fixed when the gift was sent, but they stay sealed until
-        // it's opened â€” the inbox never says what's inside.
-        nm.append("ðŸŽ Gift from ");
+        // it's opened — the inbox never says what's inside.
+        nm.append("🎁 Gift from ");
         const bfrom = document.createElement("b");
         bfrom.textContent = g.fromName; // textContent: no markup from account strings
         nm.appendChild(bfrom);
@@ -3940,14 +3940,14 @@ export class Hud {
       if (!reqs.length) return;
       const hd = document.createElement("div");
       hd.className = "fr-inbox-h";
-      hd.textContent = `ðŸ‘‹ Friend requests (${reqs.length})`;
+      hd.textContent = `👋 Friend requests (${reqs.length})`;
       requestsWrap.appendChild(hd);
       for (const r of reqs) {
         const row = document.createElement("div");
         row.className = "prof-row fr-req-row";
         const nm = document.createElement("div");
         nm.className = "prof-name";
-        nm.textContent = r.name; // account-controlled â†’ textContent, never innerHTML
+        nm.textContent = r.name; // account-controlled → textContent, never innerHTML
         const acts = document.createElement("div");
         acts.className = "prof-actions";
         const accept = document.createElement("button");
@@ -3957,7 +3957,7 @@ export class Hud {
           accept.disabled = true;
           const err = await (this.onAcceptRequest?.(r.fromAccountId) ?? Promise.resolve("offline"));
           // A full list still RECEIVES requests, so a refusal here needs to say which
-          // side is full â€” otherwise the request just sits there looking broken.
+          // side is full — otherwise the request just sits there looking broken.
           if (err) {
             this.showToast(
               err === "friends_full"
@@ -3967,7 +3967,7 @@ export class Hud {
             );
             accept.disabled = false;
           }
-          else { this.showToast(`You and ${r.name} are now friends! ðŸ§Ÿ`); await refresh(); }
+          else { this.showToast(`You and ${r.name} are now friends! 🧟`); await refresh(); }
         };
         const reject = document.createElement("button");
         reject.className = "prof-btn del";
@@ -3986,14 +3986,14 @@ export class Hud {
     const renderToolbar = () => {
       toolbar.innerHTML = "";
       const friends = this.getFriends?.() ?? [];
-      if (friends.length < 2) return; // one friend â€” nothing to sort or batch
+      if (friends.length < 2) return; // one friend — nothing to sort or batch
       const label = document.createElement("label");
       label.className = "fr-sort";
       label.append("Sort");
       const select = document.createElement("select");
       select.className = "prof-input fr-sort-select";
       for (const option of FRIEND_SORTS) {
-        // "Gifts to you" is meaningless for the local list â€” nobody sends to it.
+        // "Gifts to you" is meaningless for the local list — nobody sends to it.
         if (option.id === "giftsReceived" && !online()) continue;
         const item = document.createElement("option");
         item.value = option.id;
@@ -4009,7 +4009,7 @@ export class Hud {
       };
       label.appendChild(select);
       const ready = giftableFriends().length;
-      const btn = bulkButton(`Gift all ðŸŽ${ready ? ` (${ready})` : ""}`, "Sendingâ€¦", confirmGiftAll);
+      const btn = bulkButton(`Gift all 🎁${ready ? ` (${ready})` : ""}`, "Sending…", confirmGiftAll);
       btn.classList.add("fr-gift");
       btn.disabled = btn.disabled || !ready;
       btn.title = ready
@@ -4043,9 +4043,9 @@ export class Hud {
         // opening every friend in turn to compare.
         const lvl = document.createElement("span");
         lvl.className = `fr-lvl ${levelTier(f.level)}`;
-        lvl.textContent = f.level == null ? "â€“" : String(f.level);
+        lvl.textContent = f.level == null ? "–" : String(f.level);
         lvl.title = f.level == null ? "Level unavailable" : `Level ${f.level}`;
-        // The head they're wearing, beside their name â€” the list is how players
+        // The head they're wearing, beside their name — the list is how players
         // recognise each other, and a chosen face does that faster than a name does.
         // Absent for local entries and for anyone on an older Worker: the row simply
         // renders without a face rather than falling back to someone else's.
@@ -4071,22 +4071,22 @@ export class Hud {
         // Online: how generous they've been to me + how recently they played.
         // Offline: the local list only knows what I've sent them.
         // A phone row has room for roughly one of the two halves spelled out, so the
-        // gift count drops to its badge form there â€” it's the half players asked to
+        // gift count drops to its badge form there — it's the half players asked to
         // see, and the title attribute keeps the full reading available.
         const sentToYou = isMobile() ? "" : " sent to you";
         const bits = online()
           ? [
-            f.giftsReceived ? `ðŸŽ ${f.giftsReceived}${sentToYou}` : null,
+            f.giftsReceived ? `🎁 ${f.giftsReceived}${sentToYou}` : null,
             f.activity ? ACTIVITY_LABEL[f.activity] : null,
           ]
-          : [f.giftsSent ? `ðŸŽ ${f.giftsSent}${isMobile() ? "" : " sent"}` : null];
-        meta.textContent = bits.filter(Boolean).join(" Â· ");
+          : [f.giftsSent ? `🎁 ${f.giftsSent}${isMobile() ? "" : " sent"}` : null];
+        meta.textContent = bits.filter(Boolean).join(" · ");
         // The line ellipsises on a narrow phone, so keep the unabbreviated reading
         // available on the row itself.
         if (meta.textContent) {
           meta.title = online()
             ? `${f.giftsReceived ?? 0} gift${f.giftsReceived === 1 ? "" : "s"} sent to you`
-              + (f.activity ? ` Â· ${ACTIVITY_LABEL[f.activity]}` : "")
+              + (f.activity ? ` · ${ACTIVITY_LABEL[f.activity]}` : "")
             : `${f.giftsSent} gift${f.giftsSent === 1 ? "" : "s"} sent`;
         }
         nm.append(nameText);
@@ -4094,7 +4094,7 @@ export class Hud {
         const more = document.createElement("button");
         more.className = "fr-friend-more";
         more.type = "button";
-        more.textContent = "â‹¯";
+        more.textContent = "⋯";
         more.setAttribute("aria-label", `More actions for ${f.name}`);
         more.setAttribute("aria-expanded", "false");
         const menu = document.createElement("div");
@@ -4114,11 +4114,11 @@ export class Hud {
         gift.disabled = giftCoolingDown;
         // Two different reasons to be blocked, and the player can act on one of them
         // (wait for tomorrow) but not the other (wait for THEM), so name which it is.
-        gift.textContent = giftCoolingDown ? (f.giftPending ? "Waiting ðŸŽ" : "Gifted ðŸŽ") : "Gift ðŸŽ";
+        gift.textContent = giftCoolingDown ? (f.giftPending ? "Waiting 🎁" : "Gifted 🎁") : "Gift 🎁";
         gift.title = !giftCoolingDown
           ? "Send this friend a gift"
           : f.giftPending
-            ? "They haven't opened your last gift yet â€” you can send another once they do."
+            ? "They haven't opened your last gift yet — you can send another once they do."
             : "You already gifted this friend today.";
         gift.onclick = async () => {
           if (online()) {
@@ -4132,7 +4132,7 @@ export class Hud {
             }
           } else {
             if (this.onGiftBrain?.(f.id)) {
-              this.showToast(`Sent a gift to ${f.name}! ðŸŽ`);
+              this.showToast(`Sent a gift to ${f.name}! 🎁`);
               renderFriends();
             }
           }
@@ -4142,7 +4142,7 @@ export class Hud {
         if (online()) {
           const visit = document.createElement("button");
           visit.className = "prof-btn play fr-visit";
-          visit.textContent = "Visit ðŸ‘";
+          visit.textContent = "Visit 👁";
           visit.title = `Look around ${f.name}'s farm (read-only)`;
           visit.onclick = () => this.onVisitFriend?.(f.id, f.name);
           acts.appendChild(visit);
@@ -4227,14 +4227,14 @@ export class Hud {
 
     const renderNote = () => {
       note.textContent = !canOnline
-        ? "Send each friend a gift a day. (Local list â€” sign-in isn't set up on this build.)"
+        ? "Send each friend a gift a day. (Local list — sign-in isn't set up on this build.)"
         : online()
-          ? `One gift per friend a day (once they've opened the last one). ${FREE_DAILY_GIFTS} free, then ${GIFT_GOLD_COST} gold each â€” and ${GIFT_XP_REWARD} XP every time.`
+          ? `One gift per friend a day (once they've opened the last one). ${FREE_DAILY_GIFTS} free, then ${GIFT_GOLD_COST} gold each — and ${GIFT_XP_REWARD} XP every time.`
           : "Sign in to connect with friends online. You can still keep a local list below.";
     };
 
     // The toolbar's "Gift all (N)" count and the rows both read the same cooldown
-    // state, so gifting one friend has to repaint BOTH â€” repainting only the list
+    // state, so gifting one friend has to repaint BOTH — repainting only the list
     // left the count one gift stale.
     const renderFriends = () => { renderToolbar(); renderList(); };
     const renderAll = () => {
@@ -4416,7 +4416,7 @@ export class Hud {
       if (next) {
         const button = document.createElement("button");
         button.className = "zbtn deploy";
-        button.textContent = `Upgrade to ${next.slots} slots â€” ${next.cost}${next.brains ? "b" : "g"}`;
+        button.textContent = `Upgrade to ${next.slots} slots — ${next.cost}${next.brains ? "b" : "g"}`;
         button.onclick = async () => {
           button.disabled = true;
           if (await this.confirmPurchase(next.name, next.cost, next.brains)) {
@@ -4489,7 +4489,7 @@ export class Hud {
     this.el.appendChild(bg);
 
     const portraitOf = (key: string) => this.zombiePortraitOf?.(key) ?? "";
-    // A heavily mutated zombie can be unrecognisable â€” a pumpkin head and a celery
+    // A heavily mutated zombie can be unrecognisable — a pumpkin head and a celery
     // arm hide most of the body. Every tile in this panel names the SPECIES as well,
     // so the player can tell what they are actually putting in (tester request).
     const typeNameOf = (key: string) =>
@@ -4514,7 +4514,7 @@ export class Hud {
     // The same corner magnifier the Market cards carry: it opens this individual's
     // inspect card so its class, stats, mutations and abilities can be read before it
     // goes in the pot. Deliberately WITHOUT the card's Store/Sell/Deploy row (`id`
-    // omitted) â€” acting on a zombie from inside the picker would leave it selected in
+    // omitted) — acting on a zombie from inside the picker would leave it selected in
     // a slot while it left the roster.
     const inspectButton = (z: RosterEntry) =>
       magnifierButton(`See ${z.name}'s card`, "See this zombie's card",
@@ -4553,7 +4553,7 @@ export class Hud {
     const stop = () => { if (timer !== undefined) { clearInterval(timer); timer = undefined; } };
     // Registered once for the panel's lifetime, NOT cleared inside stop(): the views
     // call stop() themselves before installing a fresh interval, so clearing the
-    // handle there would leave the newest ticker unreachable â€” which is the leak this
+    // handle there would leave the newest ticker unreachable — which is the leak this
     // is here to prevent. A stale handle is harmless; stop() is idempotent.
     this.combinerStop = stop;
 
@@ -4602,7 +4602,7 @@ export class Hud {
 
       let fill: HTMLElement | null = null;
       if (done) {
-        // Nothing goes in the pot any more â€” show only what came out of it.
+        // Nothing goes in the pot any more — show only what came out of it.
         const result = document.createElement("div");
         result.className = "cmb-result";
         const p = document.createElement("div");
@@ -4662,12 +4662,12 @@ export class Hud {
         }
         t.textContent = s.ready ? "Ready!" : fmt(s.remainingMs);
         note.textContent = s.ready
-          ? "The combine is done â€” collect your new zombie."
-          : `Combiningâ€¦ ${fmt(s.remainingMs)} left` + (s.monolith ? " (Monolith: Ã—Â½)" : "");
+          ? "The combine is done — collect your new zombie."
+          : `Combining… ${fmt(s.remainingMs)} left` + (s.monolith ? " (Monolith: ×½)" : "");
         if (s.ready && !s.canCollect) {
           note.textContent = s.canStore
-            ? "Farm full â€” send your new zombie to the Mausoleum."
-            : "Farm and Mausoleum full â€” free a zombie slot to collect.";
+            ? "Farm full — send your new zombie to the Mausoleum."
+            : "Farm and Mausoleum full — free a zombie slot to collect.";
         }
         go.disabled = collecting || !s.ready || !s.canCollect;
         // Hidden rather than disabled with no Mausoleum: an always-dead second button
@@ -4700,7 +4700,7 @@ export class Hud {
       head.innerHTML = `<h2>Zombie Pot</h2>`;
       const time = document.createElement("span");
       time.className = "cmb-time";
-      time.textContent = st?.monolith ? "15 min Â· Monolith Ã—Â¼" : "1 hour";
+      time.textContent = st?.monolith ? "15 min · Monolith ×¼" : "1 hour";
       head.appendChild(time);
 
       const slots = document.createElement("div");
@@ -4739,7 +4739,7 @@ export class Hud {
 
       const ruleNote = document.createElement("div");
       ruleNote.className = "cmb-rule-note";
-      ruleNote.textContent = `Slot 1 sets the zombie type; mutations can come from both. Two zombies of the same type breed up a colour: Green to Blue, then Blue to Red, once you own that grave â€” and two Reds become a Silver at level ${COMBINE_SPECIAL_LEVEL}+. Special zombies only fit Slot 1 and always remain the same species.`;
+      ruleNote.textContent = `Slot 1 sets the zombie type; mutations can come from both. Two zombies of the same type breed up a colour: Green to Blue, then Blue to Red, once you own that grave — and two Reds become a Silver at level ${COMBINE_SPECIAL_LEVEL}+. Special zombies only fit Slot 1 and always remain the same species.`;
 
       const list = document.createElement("div");
       list.className = "cmb-list";
@@ -4831,7 +4831,7 @@ export class Hud {
     cancel.onclick = () => close();
     const buy = document.createElement("button");
     buy.className = "zbtn sell";
-    buy.textContent = `Buy Ticket Â· ${voucher.cost.toLocaleString()} Gold`;
+    buy.textContent = `Buy Ticket · ${voucher.cost.toLocaleString()} Gold`;
     markPrimary(buy); // Enter buys
     buy.onclick = () => {
       if (!this.onBuyBoost?.(voucher)) {
@@ -4849,7 +4849,7 @@ export class Hud {
   // Only playable + level-met raids can be invaded; the rest show as locked cards
   // so the ladder reads as a real (mostly future) catalog.
   openRaids() {
-    // Stop the outgoing panel's cooldown ticker before its DOM goes â€” reopening
+    // Stop the outgoing panel's cooldown ticker before its DOM goes — reopening
     // (the "i" hotkey, the Invade shortcut) otherwise leaves it running detached.
     this.raidSelectStop?.();
     document.querySelector("#hud .raid-bg")?.remove();
@@ -4910,7 +4910,7 @@ export class Hud {
         `<div class="rd-title">${c.name}</div>` +
         (c.bossName ? `<div class="rd-boss">${c.bossName}</div>` : "") +
         `<div class="rd-meta">Recommended level ${c.recommendedLevel}` +
-        (c.firstClearXp > 0 ? ` Â· First clear: ${c.firstClearXp} XP` : "") +
+        (c.firstClearXp > 0 ? ` · First clear: ${c.firstClearXp} XP` : "") +
         `</div>`;
       hero.append(por, info);
 
@@ -4918,7 +4918,7 @@ export class Hud {
       intro.className = "rd-intro";
       intro.textContent = c.lockReason && !c.unlocked
         ? (c.lockReason === "Coming soon"
-            ? "This invasion isn't available yet â€” its battlefield is still being built."
+            ? "This invasion isn't available yet — its battlefield is still being built."
             : `${c.introText}`)
         : c.introText;
 
@@ -4935,7 +4935,7 @@ export class Hud {
         ? this.getRaidStatus()
         : { cooldownMs: 0, voucherCount: 0 };
       const cd = st.cooldownMs;
-      if (cd <= 0) stop(); // ready again â€” no need to keep ticking
+      if (cd <= 0) stop(); // ready again — no need to keep ticking
 
       const foot = document.createElement("div");
       foot.className = "rd-foot";
@@ -4956,7 +4956,7 @@ export class Hud {
           go.textContent = "Use Voucher & Invade";
           go.disabled = !canFight;
           useVoucher = true;
-          army.textContent = `${st.voucherCount} voucher${st.voucherCount > 1 ? "s" : ""} Â· skips the ${fmtCooldown(cd)} wait`;
+          army.textContent = `${st.voucherCount} voucher${st.voucherCount > 1 ? "s" : ""} · skips the ${fmtCooldown(cd)} wait`;
         } else {
           // Buying a voucher is available from every unlocked invasion. Do not gate
           // the purchase on army size: McDonnell's eased minimum (1/4 zombies) made
@@ -4966,7 +4966,7 @@ export class Hud {
           go.disabled = false;
           buyVoucher = true;
           army.className = "rd-army short";
-          army.textContent = `Ready in ${fmtCooldown(cd)} Â· raid ticket: 2,000 gold`;
+          army.textContent = `Ready in ${fmtCooldown(cd)} · raid ticket: 2,000 gold`;
         }
       } else {
         go.textContent = "Invade";
@@ -5080,7 +5080,7 @@ export class Hud {
     const cap = party.cap;
     const min = raid.minArmy; // per-raid: eased for the first McDonnell clears
     // Ordered selection: index in the array = attack position (first attacks first).
-    // Starts EMPTY so any cards the player clicks land at the FRONT of the order â€” e.g.
+    // Starts EMPTY so any cards the player clicks land at the FRONT of the order — e.g.
     // click two new headless zombies to lead, then "Pick for me" fills the rest from
     // last raid's order. Clicking a card appends it; clicking a picked card removes it
     // and renumbers the rest.
@@ -5106,8 +5106,8 @@ export class Hud {
     const refresh = () => {
       const n = order.length;
       head.innerHTML =
-        `<h2>Send your army â€” ${raid.name}</h2>` +
-        `<span class="army-count${n < min ? " short" : ""}">${n}/${cap} Â· min ${min}</span>`;
+        `<h2>Send your army — ${raid.name}</h2>` +
+        `<span class="army-count${n < min ? " short" : ""}">${n}/${cap} · min ${min}</span>`;
       start.textContent = n < min ? `Need ${min - n} more` : `Invade with ${n}`;
       start.disabled = n < min;
       for (const el of grid.querySelectorAll<HTMLElement>(".army-card")) {
@@ -5140,7 +5140,7 @@ export class Hud {
       ty.textContent = z.typeName;
       const st = document.createElement("div");
       st.className = "army-st";
-      // Normalized 0â€“100 bars with all bonuses folded in: P(ower)/S(peed)/L(ife),
+      // Normalized 0–100 bars with all bonuses folded in: P(ower)/S(peed)/L(ife),
       // matching the detail card's tiles (see statDisplay.displayTotals).
       st.innerHTML =
         `<span class="army-stat${z.dispTonePower ? ` ${z.dispTonePower}` : ""}">P${z.dispPower}</span> ` +
@@ -5165,7 +5165,7 @@ export class Hud {
     if (boosts.concentration > 0) {
       const cBtn = document.createElement("button");
       cBtn.className = "raid-boost-btn";
-      cBtn.innerHTML = `ðŸ§  Concentrate <span class="rb-ct">x${boosts.concentration}</span>`;
+      cBtn.innerHTML = `🧠 Concentrate <span class="rb-ct">x${boosts.concentration}</span>`;
       cBtn.title = "Skip the focus minigame: zombies charge and advance on their own.";
       cBtn.onclick = () => {
         useConcentration = !useConcentration;
@@ -5180,11 +5180,11 @@ export class Hud {
       lbl.className = "rd-lbl";
       const dec = document.createElement("button");
       dec.className = "rd-step";
-      dec.textContent = "âˆ’";
+      dec.textContent = "−";
       const inc = document.createElement("button");
       inc.className = "rd-step";
       inc.textContent = "+";
-      const drawDice = () => { lbl.innerHTML = `ðŸŽ² Golden Dice <b>${diceChosen}</b>/${diceMax}`; };
+      const drawDice = () => { lbl.innerHTML = `🎲 Golden Dice <b>${diceChosen}</b>/${diceMax}`; };
       dec.onclick = () => { diceChosen = Math.max(0, diceChosen - 1); drawDice(); };
       inc.onclick = () => { diceChosen = Math.min(diceMax, diceChosen + 1); drawDice(); };
       drawDice();
@@ -5194,8 +5194,8 @@ export class Hud {
     if (boostRow.childElementCount) wrap.insertBefore(boostRow, foot);
 
     // "Pick for me": KEEP whatever the player has already selected (in the order they
-    // chose), then fill the remaining slots â€” first by their saved attack order from
-    // last raid, then any other eligible zombies â€” up to the cap. So leading with a few
+    // chose), then fill the remaining slots — first by their saved attack order from
+    // last raid, then any other eligible zombies — up to the cap. So leading with a few
     // hand-picked zombies and then tapping this preserves those picks at the front and
     // reproduces the previous order behind them, instead of wiping the selection.
     const pick = document.createElement("button");
@@ -5210,7 +5210,7 @@ export class Hud {
 
     start.onclick = async () => {
       if (order.length < min) return;
-      // Always play the live battle scene â€” there is no instant/auto-resolve. Launch
+      // Always play the live battle scene — there is no instant/auto-resolve. Launch
       // may be async (an online server cooldown gate). Guard against a double-tap
       // while the gate is in flight. If it declines (cooldown, or a raid already
       // running), leave this screen up so the player can retry.
@@ -5243,7 +5243,7 @@ export class Hud {
       ["Brains Plundered", String(view.brains), BRAIN_ICON],
     ];
     // First-time XP bonus ("You earned Nxp for beating this enemy for the first
-    // time.") â€” only shown when it was actually granted (first clear of this raid).
+    // time.") — only shown when it was actually granted (first clear of this raid).
     if (view.xp > 0) rows.push(["First-Time XP", String(view.xp), ""]);
     const rowHtml = rows
       .map(
@@ -5258,13 +5258,13 @@ export class Hud {
         ? `<div class="rr-loot-items">${view.loot
             .map((l) => {
               const note = l.note ? `<em class="rr-loot-note">${l.note}</em>` : "";
-              const title = l.note ? `${lootDropLabel(l)} â€” ${l.note}` : lootDropLabel(l);
+              const title = l.note ? `${lootDropLabel(l)} — ${l.note}` : lootDropLabel(l);
               return l.icon
                 ? `<span class="rr-loot-i" title="${title}"><img src="${l.icon}"><span>${lootDropLabel(l)}</span>${note}</span>`
                 : `<span class="rr-loot-i rr-loot-noimg" title="${title}">${lootDropLabel(l)}${note}</span>`;
             })
             .join("")}</div>`
-        : `<div class="rr-loot-none">â€”</div>`);
+        : `<div class="rr-loot-none">—</div>`);
     const extra = view.abilityUnlock ? `<div class="rr-unlock">${view.abilityUnlock}</div>` : "";
 
     panel.innerHTML =
@@ -5306,7 +5306,7 @@ export class Hud {
     panel.innerHTML =
       `<div class="revive-title">Revive Your Zombies</div>` +
       `<div class="revive-warning">Warning: zombies you do not revive will be permanently lost.</div>` +
-      `<div class="revive-balance">Available: ${brains} <img src="${UI("topbar_brain_icon.png")}" alt="brains"> Â· Each revival costs 1 brain.</div>`;
+      `<div class="revive-balance">Available: ${brains} <img src="${UI("topbar_brain_icon.png")}" alt="brains"> · Each revival costs 1 brain.</div>`;
     const selected = new Set<string>();
     const list = document.createElement("div");
     list.className = "revive-list";
@@ -5318,11 +5318,11 @@ export class Hud {
         rows.get(zombie.id)?.classList.toggle("selected", chosen);
         const button = buttons.get(zombie.id)!;
         button.classList.toggle("selected", chosen);
-        button.textContent = chosen ? "Undo" : "Revive Â· 1";
+        button.textContent = chosen ? "Undo" : "Revive · 1";
         button.disabled = !chosen && selected.size >= brains;
       }
       confirm.textContent = selected.size
-        ? `Revive ${selected.size} Â· Spend ${selected.size} Brain${selected.size === 1 ? "" : "s"}`
+        ? `Revive ${selected.size} · Spend ${selected.size} Brain${selected.size === 1 ? "" : "s"}`
         : `Leave All ${zombies.length} Behind`;
     };
     for (const zombie of zombies) {
@@ -5384,7 +5384,7 @@ export class Hud {
   }
 
   /** Fill in the loot row of an ALREADY-OPEN result panel. ONLINE the server rolls the
-   *  drop (it's real value), so it lands a beat after the panel opens â€” the same shape as
+   *  drop (it's real value), so it lands a beat after the panel opens — the same shape as
    *  the reward reconcile. Also bumps the gold row, since a "Bonus Gold" drop pays gold
    *  rather than an item. No-op if the panel is gone (player already hit Finish). */
   setRaidResultLoot(loot: LootDrop[], gold: number) {
@@ -5452,7 +5452,7 @@ export class Hud {
   }
 
   /** Called when a quest-complete popup is dismissed, so main can show the next
-   *  queued one (quests can complete in bursts â€” e.g. several on a raid return). */
+   *  queued one (quests can complete in bursts — e.g. several on a raid return). */
   onQuestCompleteClosed: (() => void) | null = null;
 
   // A compact Move / Store / Sell action popup for a placed farm object, shown
@@ -5526,7 +5526,7 @@ export class Hud {
     if (info.fertilized) {
       const fertilized = document.createElement("span");
       fertilized.className = "fertilized";
-      fertilized.textContent = "ðŸƒ Fertilized";
+      fertilized.textContent = "🍃 Fertilized";
       this.cropHover.append(fertilized);
     }
     this.cropHover.style.left = `${Math.min(window.innerWidth - 170, this.cropHoverX + 16)}px`;
@@ -5604,7 +5604,7 @@ export class Hud {
 
   /** Re-read the signed-in account name into the nameplate. Called by main once the
    *  account wiring (myAccount) is in place, since the nameplate is otherwise only
-   *  refreshed on the next HUD update tick â€” so right after sign-in it would briefly
+   *  refreshed on the next HUD update tick — so right after sign-in it would briefly
    *  show the default name. The nameplate is the entry point to the Profile menu, so
    *  it should show the real name immediately. */
   refreshAccount() {

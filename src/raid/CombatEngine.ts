@@ -13,7 +13,7 @@
 // deterministic, and close enough for an instant resolve). Each unit attacks the
 // first living enemy on the opposite team; a side loses when all its units die.
 import type { OwnedZombie } from "../zombie/types";
-import { clampResolvedRawStat, veterancyMultiplier } from "../zombie/traits";
+import { clampResolvedRawStat, veterancyMultiplier, wisToFocusBonus } from "../zombie/traits";
 import { mutationBonus } from "../zombie/mutations";
 import { activeAbilities, combatEffect } from "../zombie/abilities";
 import {
@@ -206,7 +206,8 @@ export function buildPlayerUnits(
     const rawStr = z.str - mut.str;
     const rawDex = z.dex - mut.dex;
     const rawCon = z.con - mut.con;
-    const rawFocus = (z.focus ?? 0) - mut.wis;
+    const focusMutation = wisToFocusBonus(mut.wis);
+    const rawFocus = (z.focus ?? 0) - focusMutation;
     const bStr = lvl == null ? rawStr : levelScaleStat(z.group, "str", rawStr, lvl);
     const bDex = lvl == null ? rawDex : levelScaleStat(z.group, "dex", rawDex, lvl);
     const bCon = lvl == null ? rawCon : levelScaleStat(z.group, "con", rawCon, lvl);
@@ -230,7 +231,7 @@ export function buildPlayerUnits(
     const str = clampResolvedRawStat("str", auraBaseStr * (1 + statAura * 0.10) + mut.str);
     const dex = clampResolvedRawStat("dex", auraBaseDex * (1 + statAura * 0.10) + mut.dex);
     const con = clampResolvedRawStat("con", auraBaseCon * (1 + lifeAura * 0.10) + mut.con);
-    const focus = clampResolvedRawStat("focus", rawFocus * v * eff.allStatsMult + mut.wis);
+    const focus = clampResolvedRawStat("focus", rawFocus * v * eff.allStatsMult + focusMutation);
     // Distraction resistance keys off the unit's real focus stat. Damage abilities
     // are already part of finalPower (`str`) so lasers and healing see them too.
     const mult = focusFactor(focus, conc);
@@ -243,6 +244,7 @@ export function buildPlayerUnits(
     u.group = z.group;
     u.className = z.className;
     u.mutation = z.mutation;
+    u.mutationIds = z.mutationIds;
     u.color = z.color;
     u.damageReduction = z.group === "Headless" ? 0 : Math.min(0.95, protect * 0.20);
     u.teamAuraStats = {
@@ -447,4 +449,3 @@ export function resolveRaid(
     playerDamage,
   };
 }
-

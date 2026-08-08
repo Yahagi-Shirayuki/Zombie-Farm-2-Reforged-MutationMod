@@ -1726,6 +1726,7 @@ async function main() {
         typeName: zombie.typeName,
         portrait: zombiePortrait(zombie.key),
         mutation: zombie.mutation,
+        mutationIds: zombie.mutationIds,
         color: zombie.color,
       }));
       hud.openZombieRevival(views, brains, async (reviveIds) => {
@@ -3588,6 +3589,7 @@ async function main() {
             typeName: zombie.typeName,
             portrait: zombiePortrait(zombie.key),
             mutation: zombie.mutation,
+            mutationIds: zombie.mutationIds,
             color: zombie.color,
           }));
           if (settlementPromise && economy) {
@@ -4139,7 +4141,7 @@ async function main() {
       name: d.name, typeName: d.typeName, key: d.key, group: d.group,
       className: d.className, classColor: d.classColor,
       str: d.str * state.farmerZombieStrengthMult(), dex: d.dex,
-      con: d.con * state.farmerZombieLifeMult(), focus: d.focus, mutation: d.mutation,
+      con: d.con * state.farmerZombieLifeMult(), focus: d.focus, mutation: d.mutation, mutationIds: d.mutationIds,
       invasions: d.invasions,
       portrait: zombiePortrait(d.key), color: d.color,
       // Friend-farm visits are inspect-only, so omit action-bearing unit IDs.
@@ -4977,4 +4979,3 @@ main().catch((err) => {
   const hud = document.getElementById("hud");
   if (hud) hud.innerHTML = `<b style="color:#ffb0b0">Error:</b> ${err}`;
 });
-

@@ -23,7 +23,7 @@ import {
   mutationBonus, mutationsOf, statEffectsOf,
   type MutationRef, type ResolvedMutationDef, type Slot, type Stat,
 } from "./mutations";
-import { STATS, displayStat } from "./traits";
+import { STATS, displayStat, wisToFocusBonus } from "./traits";
 
 // ZF2's own 40x40 mutation icons (MutationIcons.png â€” the vegetable in a lab flask),
 // sliced by tools/prep_mutation_icons.py. The set covers all 13 primaries and both
@@ -36,15 +36,32 @@ const placeholderIcon = iconFile("placeholder");
 /** mutation KEY (mutations.ts) -> its authored icon. Three names differ from ours:
  *  cauli/dragon are the game's cauliflower/dragonfruit, pumpking is the composed one. */
 export const MUTATION_ICON: Record<string, string> = {
-  tomato: iconFile("tomato"), onion: iconFile("onion"), carrot: iconFile("carrot"),
-  turnip: iconFile("turnip"), potato: iconFile("potato"), coffee: iconFile("coffee"),
-  celery: iconFile("celery"), broccoli: iconFile("broccoli"), garlic: iconFile("garlic"),
-  cauli: iconFile("cauliflower"), limabean: iconFile("limabean"), flytrap: iconFile("flytrap"),
-  dragon: iconFile("dragonfruit"), pumpking: iconFile("pumpking"),
-  turnip_eye: placeholderIcon, turnip_head: placeholderIcon, bread_neck: placeholderIcon,
-  apple_head: placeholderIcon, melon_head: placeholderIcon, sampaguita_hair: placeholderIcon,
-  corn_head: placeholderIcon, corn_arm: placeholderIcon, spineapple_body: placeholderIcon,
-  bloodberry_hair: placeholderIcon, skellyberry_body: placeholderIcon,
+  tomato: iconFile("tomato"), 
+  onion: iconFile("onion"), 
+  carrot: iconFile("carrot"),
+  turnip: iconFile("turnip"), 
+  potato: iconFile("potato"), 
+  coffee: iconFile("coffee"),
+  celery: iconFile("celery"), 
+  broccoli: iconFile("broccoli"), 
+  garlic: iconFile("garlic"),
+  cauli: iconFile("cauliflower"), 
+  limabean: iconFile("limabean"), 
+  flytrap: iconFile("flytrap"),
+  dragon: iconFile("dragonfruit"), 
+  pumpking: iconFile("pumpking"),
+  //modded icon
+  turnip_eye: iconFile("turnip"), 
+  turnip_head: iconFile("turnip"), 
+  bread_neck: placeholderIcon,
+  apple_head: iconFile("apple"), 
+  melon_head: iconFile("melon"), 
+  sampaguita_hair: placeholderIcon,
+  corn_head: placeholderIcon, 
+  corn_arm: placeholderIcon, 
+  spineapple_body: placeholderIcon,
+  bloodberry_hair: placeholderIcon, 
+  skellyberry_body: placeholderIcon,
 };
 
 /** One species' replacement art and name for a mutation it shares with others. */
@@ -132,7 +149,7 @@ export function mutationEntries(z: MutationSource): MutationCardEntry[] {
     str: z.str - bonus.str,
     dex: z.dex - bonus.dex,
     con: z.con - bonus.con,
-    wis: (z.focus ?? 0) - bonus.wis,
+    wis: (z.focus ?? 0) - wisToFocusBonus(bonus.wis),
   }, MUTATION_VARIANTS[z.key]);
 }
 
@@ -154,9 +171,15 @@ export function mutationEntriesFrom(
     const effects = statEffectsOf(def).map((effect) => {
       const rawBase = base[effect.stat] ?? 0;
       const displayKey = effect.stat === "wis" ? "focus" : effect.stat;
-      const before = displayStat(displayKey, rawBase + applied[effect.stat]);
+      const beforeRaw = effect.stat === "wis"
+        ? rawBase + wisToFocusBonus(applied.wis)
+        : rawBase + applied[effect.stat];
+      const before = displayStat(displayKey, beforeRaw);
       applied[effect.stat] += effect.amount;
-      const after = displayStat(displayKey, rawBase + applied[effect.stat]);
+      const afterRaw = effect.stat === "wis"
+        ? rawBase + wisToFocusBonus(applied.wis)
+        : rawBase + applied[effect.stat];
+      const after = displayStat(displayKey, afterRaw);
       return {
         stat: effect.stat,
         statLabel: STAT_LABELS[effect.stat],
@@ -201,5 +224,7 @@ export function mutationNames(key: string, mask: number, mutationIds?: readonly 
   const variants = MUTATION_VARIANTS[key];
   return mutationsOf(mask, mutationIds).map((def) => variants?.[def.key]?.name ?? def.name);
 }
+
+
 
 

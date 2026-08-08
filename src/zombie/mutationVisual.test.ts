@@ -3,6 +3,7 @@ import {
   EYE_MUTATION_FOREGROUND_Z,
   matchesMutationReplacement,
   mutationBitsForRendering,
+  mutationRefsForRendering,
   mutationPartFor,
   mutationPartZIndex,
 } from "./mutationVisual";
@@ -25,6 +26,18 @@ describe("mutation visual replacements", () => {
 
     expect(mutationBitsForRendering(zombies, "regular", 4 | 8)).toEqual([4, 8]);
     expect(mutationBitsForRendering(zombies, "special", 4 | 8)).toEqual([8]);
+  });
+
+  it("keeps modded string ids in every render ref list", () => {
+    const zombies = [
+      { key: "regular", category: "normal" as const },
+      { key: "special", category: "special" as const },
+    ];
+
+    expect(mutationRefsForRendering(zombies, "regular", 4, ["apple_head"]))
+      .toEqual([4, "apple_head"]);
+    expect(mutationRefsForRendering(zombies, "special", 4, ["apple_head"]))
+      .toEqual(["apple_head"]);
   });
 
   it("matches every base body silhouette without hiding unrelated decorations", () => {

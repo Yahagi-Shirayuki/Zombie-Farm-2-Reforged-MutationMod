@@ -15,7 +15,7 @@ import { MAX_ZOMBIE_NAME_LENGTH, RosterEntry } from "../../zombie/types";
 import { mutationBonus } from "../../zombie/mutations";
 import {
   STATS, veterancy, STAT_TILE, VALUE_FILL, VALUE_END, ABILITY_FRAME, MUTATION_FRAME,
-  ABILITY_POOL, unitAbilityAt, TIER_BOSS, MAX_ABILITY_TIER,
+  ABILITY_POOL, unitAbilityAt, TIER_BOSS, MAX_ABILITY_TIER, wisToFocusBonus,
 } from "../../zombie/traits";
 import { mutationEntries, mutationTipText } from "../../zombie/mutationDisplay";
 import { statBreakdown, statTone } from "../../zombie/statDisplay";
@@ -398,7 +398,7 @@ export function openCatalogZombieCard(hud: Hud, card: MenuCard) {
     str: (zombie.str + bonus.str) * hud.state.farmerZombieStrengthMult(),
     dex: zombie.dex + bonus.dex,
     con: (zombie.con + bonus.con) * hud.state.farmerZombieLifeMult(),
-    focus: (zombie.focus ?? 0) + bonus.wis, mutation: zombie.mutation, mutationIds: zombie.mutationIds, invasions: 0,
+    focus: (zombie.focus ?? 0) + wisToFocusBonus(bonus.wis), mutation: zombie.mutation, mutationIds: zombie.mutationIds, invasions: 0,
     portrait: card.portrait,
   };
   const { panel } = openModal({
@@ -420,6 +420,7 @@ export function rosterInfo(hud: Hud, z: RosterEntry): ZombieInfo {
     className: z.className, classColor: z.classColor,
     str: z.str * hud.state.farmerZombieStrengthMult(), dex: z.dex,
     con: z.con * hud.state.farmerZombieLifeMult(), focus: z.focus, mutation: z.mutation,
+    mutationIds: z.mutationIds,
     invasions: z.invasions,
     portrait: hud.zombiePortraitOf ? hud.zombiePortraitOf(z.key) : "",
     color: z.color,
@@ -724,4 +725,3 @@ function openAlmanacEntry(hud: Hud, entry: AlmanacEntryView) {
   wrap.append(por, title, status, hint);
   panel.appendChild(wrap);
 }
-

@@ -21,7 +21,7 @@
 // Type-only where the import IS a type: prefs -> rosterSort -> here drags this module
 // into the Worker's compile graph, and the server tsconfig runs verbatimModuleSyntax.
 import {
-  STATS, displayResolvedStat, veterancyMultiplier, veterancy, ABILITY_POOL, type StatMeta,
+  STATS, displayResolvedStat, veterancyMultiplier, veterancy, ABILITY_POOL, wisToFocusBonus, type StatMeta,
 } from "./traits";
 import { ABILITY_KIND, ABILITY_COMBAT, activeAbilities, type AbilityCombatEffect } from "./abilities";
 import { mutationBonus, type Stat } from "./mutations";
@@ -128,7 +128,9 @@ export function statBreakdown(
   abilityUnlocked: (key: string) => boolean
 ): StatBreakdown {
   const raw = rawStat(z, stat); // already includes the mutation bonus (makeOwned)
-  const mut = mutationBonus(z.mutation, z.mutationIds)[mutationStatFor(stat)] ?? 0;
+  const bonus = mutationBonus(z.mutation, z.mutationIds);
+  const rawMutation = bonus[mutationStatFor(stat)] ?? 0;
+  const mut = stat === "focus" ? wisToFocusBonus(rawMutation) : rawMutation;
   const baseRaw = raw - mut;
   const v = veterancyMultiplier(z.invasions);
   const abilities = selfStatAbilities(z, abilityUnlocked);
@@ -221,8 +223,9 @@ export function statDisplayGains(
     const mutationStat = mutationStatFor(stat);
     const raw = bonus[mutationStat];
     if (!raw) continue;
+    const scaledRaw = stat === "focus" ? wisToFocusBonus(raw) : raw;
     const baseRaw = base[stat] ?? 0;
-    const delta = displayResolvedStat(stat, baseRaw + raw) - displayResolvedStat(stat, baseRaw);
+    const delta = displayResolvedStat(stat, baseRaw + scaledRaw) - displayResolvedStat(stat, baseRaw);
     if (delta) gains.push({ stat, label: meta.label, delta });
   }
   return gains;
@@ -262,4 +265,6 @@ export function displayTotals(
   for (const k of STAT_KEYS) out[k] = statBreakdown(z, k, abilityUnlocked).total;
   return out;
 }
+
+
 
