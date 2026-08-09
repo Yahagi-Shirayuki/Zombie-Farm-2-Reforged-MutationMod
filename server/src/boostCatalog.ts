@@ -3,7 +3,7 @@
 // purchase grants. Consumable boost COUNTS are server-owned (the `inventory` table);
 // the save blob's boost list becomes an ignored cache, like currency.
 //
-// KEEP IN SYNC with boosts.json (6 boosts).
+// KEEP IN SYNC with boosts.json (7 boosts).
 //
 // Scope: consumable boosts only. Zombie-purchase "gift" powers are intentionally
 // omitted. Non-boost inventory (placed objects, ground skins, farm-size, received
@@ -29,11 +29,19 @@ export const BOOSTS: Readonly<Record<string, BoostEcon>> = {
   concentration: { cost: 1, brains: true, perPurchase: 2, level: 0 },
   golden_dice: { cost: 1, brains: true, perPurchase: 1, level: 0 },
   invasion_voucher: { cost: 2000, brains: false, perPurchase: 1, level: 0 },
+  brain_ticket: { cost: 10000, brains: false, perPurchase: 1, level: 0 },
 };
 
 /** The boost that bypasses the raid cooldown — consumed server-side on /raid/start.
  *  Buying one to raid again is intended play, not an exploit. */
 export const VOUCHER_KEY = "invasion_voucher";
+
+/** The Invasion Voucher's expensive cousin, also consumed server-side on /raid/start.
+ *  It skips the cooldown the same way, quadruples the fight's brain and rare-zombie odds,
+ *  and promotes the invasion to ELITE — the wave fought at the scaled stats in
+ *  src/raid/eliteInvasion.ts. Whether a session was elite is pinned to it at /raid/start
+ *  (boosts_json), so the reward roll and the verifier's replay read the same fact. */
+export const BRAIN_TICKET_KEY = "brain_ticket";
 
 /** The loot-luck boost spent before a raid (Golden Dice), consumed server-side on
  *  /raid/start and pinned to the session so the server's loot roll uses the real count. */

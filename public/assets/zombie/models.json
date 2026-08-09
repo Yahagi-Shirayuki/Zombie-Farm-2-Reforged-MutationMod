@@ -6681,7 +6681,8 @@
     "ax": 0.5,
     "ay": 0.5,
     "z": 3,
-    "tint": false
+    "tint": false,
+    "scale": 1.2
    },
    {
     "file": "defaultHead",
@@ -6826,7 +6827,8 @@
     "ax": 0.5,
     "ay": 0.5,
     "z": 3,
-    "tint": false
+    "tint": false,
+    "scale": 1.2
    },
    {
     "file": "defaultHead",

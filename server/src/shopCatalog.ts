@@ -21,12 +21,28 @@ export interface SizeTier {
   level: number;
 }
 
-/** Farm-size upgrade tiers, in ascending order. Bought sequentially (30→40→50→60). */
+/**
+ * Farm-size upgrade tiers, in ascending order. Bought sequentially (30→40→50→60→70).
+ *
+ * 40/50/60 come from the source game; 70 is Reforged's own, continuing the same
+ * progression (+10 size, +10 level, x5 gold, doubling brains step). The generator
+ * side of this lives in EXTRA_SIZE_TIERS in tools/reforge_economy.py, which also
+ * asserts the progression — change one and change the other, or the client will
+ * offer a tier the server rejects as `bad_tier`.
+ */
 export const SIZE_TIERS: readonly SizeTier[] = [
   { size: 40, gold: 10000, brains: 6, level: 11 },
   { size: 50, gold: 50000, brains: 8, level: 21 },
   { size: 60, gold: 250000, brains: 12, level: 31 },
+  { size: 70, gold: 1250000, brains: 20, level: 41 },
 ];
+
+/** The largest farm the ladder can reach. Read this rather than the last tier's
+ *  literal: MAX_FARM_PLOTS is derived from it (see v3/engine.ts), and a tier added
+ *  without that derivation following along sells land the plot cap forbids plowing. */
+export const MAX_FARM_SIZE = SIZE_TIERS.reduce(
+  (largest, tier) => Math.max(largest, tier.size), BASE_FARM_SIZE
+);
 
 /** Ground/climate skin prices (gold). "grass" is the free default (always owned). */
 export const CLIMATE_COST: Readonly<Record<string, number>> = {

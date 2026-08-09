@@ -353,6 +353,7 @@ export interface SimUnit {
   explodeFxSeq: number; // increments on the tick this unit blows itself up (renderer trigger)
   abilityRollSeq: number; // replay-safe proc sequence (Block/Stun/Double Strike)
   usedAbilities: string[]; // one-use activated abilities already consumed
+  abilityRearms: number; // times a revival handed this unit its one-use moves back
   resurrectUsed: boolean; // one-use automatic Resurrect latch
   stunMs: number; // ms of stun left — can't act while > 0 (enemies AND zombies)
   // ---- enemy attack effects inflicted on a struck zombie ----
@@ -560,6 +561,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     explodeFxSeq: 0,
     abilityRollSeq: 0,
     usedAbilities: [],
+    abilityRearms: 0,
     resurrectUsed: false,
     stunMs: 0,
     knockBack: !isPlayer && !!u.knockBack,
@@ -755,6 +757,7 @@ export class BattleSim {
       laserTargetId: u.laserTargetId ?? null,
       abilityRollSeq: u.abilityRollSeq ?? 0,
       usedAbilities: [...(u.usedAbilities ?? [])],
+      abilityRearms: u.abilityRearms ?? 0,
       resurrectUsed: u.resurrectUsed ?? false,
       power: u.power ?? u.damage,
       // An old checkpoint parked at the 1-HP floor has necessarily consumed
@@ -947,8 +950,20 @@ export class BattleSim {
     }
   }
 
-  /** Trigger an activated move on ONE eligible zombie (the front-most). Returns
-   *  false if none is ready. Starts the wind-up; the payoff lands when it fills. */
+  /** Which of two eligible zombies performs an activated move. Anyone who has never
+   *  had this move handed back outranks anyone who has, so a revived exploder waits at
+   *  the BACK of the queue: it rejoins it, but only gets the call once every squadmate
+   *  who still owns their one shot has spent it. Among equals, the front-most goes —
+   *  it is nearest the enemy and already in the thick of it. */
+  private outranks(candidate: SimUnit, current: SimUnit): boolean {
+    if (candidate.abilityRearms !== current.abilityRearms) {
+      return candidate.abilityRearms < current.abilityRearms;
+    }
+    return candidate.x > current.x;
+  }
+
+  /** Trigger an activated move on ONE eligible zombie. Returns false if none is ready.
+   *  Starts the wind-up; the payoff lands when it fills. */
   activate(key: string): boolean {
     if (this.finished) return false;
     const ab = ACTIVATED_ABILITY[key];
@@ -956,7 +971,7 @@ export class BattleSim {
     let pick: SimUnit | null = null;
     for (const p of this.players) {
       if (!this.readyToActivate(p, key)) continue;
-      if (!pick || p.x > pick.x) pick = p; // front-most (nearest the enemy)
+      if (!pick || this.outranks(p, pick)) pick = p;
     }
     if (!pick) return false;
     if (key === "attachMini") {
@@ -1021,8 +1036,9 @@ export class BattleSim {
     // `useOnce` was already spent at activate() — a cancelled charge must not refund it.
     p.timerMs = this.cycleMs(p, null); // resume normal attacks after a beat
     // Explode is a SUICIDE move: the zombie goes up with the blast and is a casualty of
-    // the raid (Smalls are the only carriers and `tryResurrect` refuses Smalls, so this
-    // is final). Killed AFTER the payoff so the blast it just delivered still counts.
+    // the raid. Killed AFTER the payoff so the blast it just delivered still counts, and
+    // through `dealDamage` rather than around it, so a Garden holder's Resurrect gets its
+    // shot at the exploder exactly as it would at any other casualty.
     if (ab.suicide) {
       p.explodeFxSeq++;
       this.dealDamage(p, p.hp, false);
@@ -1300,7 +1316,6 @@ export class BattleSim {
   /** Resurrect is automatic and one-use. A living Garden holder revives the
    *  defeated non-Small zombie at full Life and sends it back into formation. */
   private tryResurrect(defeated: SimUnit): boolean {
-    if (this.isSmall(defeated)) return false;
     const healer = this.players.find(
       (p) => p.alive && (p.state === "advance" || p.state === "fight") &&
         p.abilities.includes("ressurect") && !p.resurrectUsed
@@ -1321,6 +1336,15 @@ export class BattleSim {
     defeated.windupMs = 0;
     defeated.stunMs = 0;
     defeated.oneShotProtectionUsed = false;
+    // A revived zombie comes back WHOLE, one-use moves included — so an exploder that
+    // went up with its own blast can light another fuse. `abilityRearms` is what keeps
+    // that from being free: it sends the unit to the back of the queue those moves are
+    // picked from (see activate), so a second Explode spends a zombie that still has
+    // one rather than killing the same one twice while its squadmates stand there.
+    if (defeated.usedAbilities.length) {
+      defeated.usedAbilities.length = 0;
+      defeated.abilityRearms++;
+    }
     defeated.healFxSeq++;
     return true;
   }

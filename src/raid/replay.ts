@@ -94,7 +94,28 @@ import type { RaidOutcome } from "./types";
 // `illegal_ability` a v20 client accepts, and a charge a v19 Worker freezes a v20 client
 // pays off. Same cost as v15: an invasion in flight at deploy time settles as
 // stale_ruleset and pays nothing.
-export const RAID_RULESET_VERSION = 20;
+// 21: Resurrect no longer refuses Small zombies, so an exploder can be brought back —
+// and a revived zombie now comes back WHOLE, one-use moves included. Two corrections in
+// one: the blanket `isSmall` refusal was read off a wrong annotation in
+// ZOMBIE_ABILITIES_BINARY_AUDIT.md (it called `canRez`'s state-100 rejection "the
+// mini-zombie case"; `-[ZombieActorSmall suicide:]` sets exactly state 100, so the source
+// was refusing the SUICIDED zombie, not Smalls as a type) — which meant a Small cut down
+// by an ordinary enemy could not be revived either, for no reason at all. And ZF2's
+// refusal of the suicided zombie is DELIBERATELY not carried over: an exploder that a
+// Garden holder brings back rejoins the queue its move is picked from. It rejoins at the
+// BACK, though — `abilityRearms` outranks position in `activate` — so a second Explode
+// spends a zombie that still has one instead of killing the same one twice while its
+// squadmates stand there. All three change who is standing and who acts, so a v20 client
+// and a v21 Worker diverge from the first revival. Same cost as v15: an invasion in
+// flight at deploy time settles as stale_ruleset and pays nothing.
+// 22: the Brain Ticket adds ELITE invasions (src/raid/eliteInvasion.ts) — an authorized
+// launch may now pin a wave whose enemy str/con/dex, boss projectiles, boss specials and
+// summoned wall are all multiplied by that raid's elite profile. A v21 Worker ignores
+// `brainTicket` entirely, so it would pin the ordinary wave against a v22 client fighting
+// the scaled one and diverge on the very first tick; `/raid/start` also gained a
+// `no_brain_ticket` refusal a v21 client cannot interpret. Same cost as v15: an invasion
+// in flight at deploy time settles as stale_ruleset and pays nothing.
+export const RAID_RULESET_VERSION = 22;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

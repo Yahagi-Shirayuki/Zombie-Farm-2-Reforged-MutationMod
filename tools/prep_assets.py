@@ -42,6 +42,69 @@ GROUND_ROWS = ["grass", "dirt", "snow", "stone", "sand", "water"]
 TILE_W, TILE_H = 48, 24
 
 
+# The source "water" row is the Lunar Ground skin, and as sliced it is a flat,
+# strongly BLUE slate with a handful of soft craters — it reads as water, which
+# is what the row is named, not as the moon it dresses. This regrade nudges it
+# toward real regolith without abandoning the game's stylised palette: darker,
+# most of the blue cast pulled out toward neutral grey, deeper craters, and a
+# fine dust grain over the whole tile.
+#
+# It lives HERE, in the slice, rather than as an edit to the emitted PNGs: the
+# tiles are derived from the source atlas every run, so a hand-edited tile would
+# be silently reverted the next time anyone regenerates assets.
+LUNAR_DESATURATE = 0.72   # fraction of the way to pure luminance
+LUNAR_DARKEN = 0.82       # overall exposure
+LUNAR_CONTRAST = 1.25     # expansion about LUNAR_PIVOT, so craters stay readable
+LUNAR_PIVOT = 84.0
+LUNAR_GRAIN = 6           # +/- per-pixel dust grain, in levels
+# Extra impact pits, as (centre x, centre y, x radius, y radius, darkening) per
+# variant. Deliberately small and few: the tile repeats across the whole farm, so
+# anything with a strong silhouette would read as a wallpaper pattern rather than
+# as ground. Every centre sits inside the 48x24 diamond.
+LUNAR_PITS = [
+    [(15, 15, 3, 2, 0.88), (33, 9, 2, 1, 0.91), (24, 17, 2, 1, 0.93)],
+    [(30, 15, 3, 2, 0.89), (17, 8, 2, 1, 0.92), (38, 13, 2, 1, 0.93)],
+    [(21, 7, 3, 2, 0.88), (13, 13, 2, 1, 0.92), (31, 18, 2, 1, 0.91)],
+    [(27, 16, 3, 2, 0.90), (36, 11, 2, 1, 0.92), (16, 11, 2, 1, 0.93)],
+    [(19, 16, 3, 2, 0.89), (29, 6, 2, 1, 0.93), (35, 15, 2, 1, 0.92)],
+]
+
+
+def _in_diamond(x, y):
+    """The 48x24 iso tile's alpha silhouette, as a half-pixel-centred test."""
+    return abs(x + 0.5 - TILE_W / 2) / (TILE_W / 2) + \
+           abs(y + 0.5 - TILE_H / 2) / (TILE_H / 2) <= 1.0
+
+
+def regrade_lunar(cell, variant):
+    """Repaint one sliced lunar tile as darker, grainier, near-neutral regolith."""
+    out = cell.copy()
+    px = out.load()
+    pits = LUNAR_PITS[variant % len(LUNAR_PITS)]
+    for y in range(out.height):
+        for x in range(out.width):
+            r, g, b, a = px[x, y]
+            if a == 0:
+                continue
+            lum = 0.299 * r + 0.587 * g + 0.114 * b
+            ch = []
+            for v in (r, g, b):
+                v = v + (lum - v) * LUNAR_DESATURATE      # toward neutral grey
+                v *= LUNAR_DARKEN                          # a stop down
+                v = LUNAR_PIVOT + (v - LUNAR_PIVOT) * LUNAR_CONTRAST
+                ch.append(v)
+            # Dust grain: one deterministic offset applied to all three channels,
+            # so the noise reads as brightness variation and never as colour speckle.
+            h = (x * 73856093) ^ (y * 19349663) ^ (variant * 83492791)
+            h = (h ^ (h >> 13)) & 0x7fffffff
+            grain = (h % (2 * LUNAR_GRAIN + 1)) - LUNAR_GRAIN
+            for cx, cy, rx, ry, mul in pits:
+                if ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1.0 and _in_diamond(x, y):
+                    ch = [v * mul for v in ch]
+            px[x, y] = tuple(max(0, min(255, round(v + grain))) for v in ch) + (a,)
+    return out
+
+
 def slice_ground():
     src = os.path.join(APP, "tex0000.png")
     im = Image.open(src).convert("RGBA")
@@ -54,6 +117,8 @@ def slice_ground():
         for c in range(cols):
             cell = im.crop((c * TILE_W, r * TILE_H,
                             c * TILE_W + TILE_W, r * TILE_H + TILE_H))
+            if terrain == "water":
+                cell = regrade_lunar(cell, c)
             name = f"{terrain}_{c}.png"
             cell.save(os.path.join(OUT, "ground", name))
             index[terrain].append(name)

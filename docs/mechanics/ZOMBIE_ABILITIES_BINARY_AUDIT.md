@@ -16,7 +16,7 @@ combat simulator is not evidence for original-game behavior.
 | 23 | Grace | The same aura for Regular zombies. |
 | 24 | Protect | Aura: 20% damage reduction for Regular, Girl, Large, Small, and Garden zombies. Headless is deliberately absent from the type mask. |
 | 25 | Fortitude | Aura: +10% Life for Headless zombies. |
-| 29 | Resurrect | Automatic, one-use revival. `canRez` rejects defeated actors in state 100, which is the mini-zombie case. |
+| 29 | Resurrect | Automatic, one-use revival. `canRez` walks `fightMan.defeatedZombies` and rejects any whose `state` is 100 — the state `-[ZombieActorSmall suicide:]` sets after zeroing hit points, i.e. **a zombie that blew itself up**, not the mini-zombie. Nothing else in the binary writes state 100. |
 | 30 | Mini Buddy | One-use button used before deployment; attaches a mini zombie for the ram behavior. |
 | 31 | Bash | Activated button with a 10-second recharge. `ZombieBash` is a 2.75x, 0.75-area attack. |
 | 32 | Smash | Activated button with a 10-second recharge. `ZombieBashV2` is a 1.8x, 0.75-area attack with a 1-second stun. |
@@ -47,6 +47,7 @@ but the tooltips report the executable's actual outcomes.
 - `ZombieActorHeadless damage:` / `initFightDataAfterLoad` — Block and Turbo Walking Speed.
 - `ZombieActorGarden heal`, `heal:data:`, `healAOE:`, `canRez`, and `ressurectZombie:` — support abilities.
 - `ZombieActorLarge bash:` / `bashV2:` and `ZombieActorSmall explode:` / `explodeV2:` — activated attack selection.
+- `ZombieActorSmall suicide:` — `[[self fightData] setHitPoints:0]` then `[self setState:100]`. Only the Small zombie has it, and only Smalls carry Explode: the move is a self-sacrifice.
 - `Attacks.json` records `ZombieBash`, `ZombieBashV2`, `ZombieDoubleStrike`, `ZombieExplode`, and `ZombieExplodeV2`.
 
 ## Reimplementation status
@@ -59,3 +60,8 @@ Unit construction applies authentic self buffs, auras, walking-speed metadata,
 and damage reduction; the live battle authority additionally performs
 the stateful lasers, procs, healing, resurrection, Mini Buddy, and activated
 attacks.
+
+DELIBERATE DIVERGENCE (ruleset 21): `canRez`'s state-100 rejection is not carried
+over. A zombie that blows itself up is a normal casualty here, so a Garden holder's
+Resurrect can bring it back, and it rejoins the queue its one-use move is picked from
+at the BACK (`SimUnit.abilityRearms`, applied in `BattleSim.activate`).

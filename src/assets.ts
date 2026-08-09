@@ -42,8 +42,10 @@ export interface ZombieModelPart {
   ay: number;
   z: number;
   tint: boolean;
-  /** Per-attachment scale from the source actor. Named specials sometimes resize
-   *  a replacement part (Skittles' candy body is 0.8x). */
+  /** Per-attachment scale, about the part's own pivot. Named specials carry theirs
+   *  from the source actor (Skittles' candy body is 0.8x); the growable models take
+   *  theirs from PART_SCALE in prep_zombie_models.py (the Flower zombies' 1.2x
+   *  sunflower). Absent means 1. */
   scale?: number;
 }
 // A full per-type zombie model (from tools/prep_zombie_models.py). Reverse-
@@ -266,10 +268,27 @@ export interface PlaceableDef {
    *  `sprite` but behind anything standing inside the object. Only the Pet Pen has
    *  one: its far wall, which pets have to walk in front of. */
   backSprite?: string;
+  /** Working-state art. The source ships each state of a functional object as its
+   *  own tile with the SAME footprint and ground point: the Zombie Pot is bare
+   *  while idle (`sprite`), wears a clamped-down lid while a combine cooks
+   *  (`busySprite`), and sprouts the finished zombie's arm once it is done
+   *  (`readySprite`). Both are taller than the idle art; bottom-center anchoring
+   *  keeps the pot itself in exactly the same place. */
+  busySprite?: string;
+  readySprite?: string;
   nativeW: number;
   nativeH: number;
   pivotX: number;
   pivotY: number;
+  /** Ground-hugging art (roads, ponds, rocks, the zombie patch). Its pieces are
+   *  drawn to meet each other seam-to-seam, which only works if each one hangs off
+   *  its own authored pivot instead of being bottom-centered on its footprint —
+   *  see `anchorX`/`anchorY` and Field.flatTileOffset. */
+  flatTile?: boolean;
+  /** Cocos anchor point of a flat tile's art (y measured UP from the bottom edge),
+   *  already rebased onto the trimmed PNG we ship. Only present with `flatTile`. */
+  anchorX?: number;
+  anchorY?: number;
   armyMax?: number; // functional: increases zombie army cap by this on placement
   storageSlots?: number; // functional: storage shed item capacity (8..64)
   petPen?: boolean; // Pet Pen: manages up to four displayed pets
@@ -282,6 +301,14 @@ export interface PlaceableDef {
   mutantMonolith?: boolean; // functional: Mutant Monolith — halves mutant-zombie grow times
   combineFast?: boolean; // functional: Clay Monolith — Zombie Pot combines in 15 min (0.25x)
   zombiePot?: boolean; // functional: Zombie Pot — enables combining two zombies
+  /** functional: Memorial Statue — one perished zombie can be enshrined on it,
+   *  rendered as a stone statue standing on the plinth. */
+  memorial?: boolean;
+  /** Where a `memorial` object's statue stands, as fractions of the sprite (x from
+   *  the left edge, y UP from the bottom edge) — the centre of the plinth's top
+   *  face. Authored by tools/memorial_statue.py; absent on every other object. */
+  mountX?: number;
+  mountY?: number;
   // fruit trees: repeatable harvest. growMs = time to regrow fruit; harvestValue
   // = gold per harvest; growingSprite = the pre-harvest (fruitless) sprite.
   growMs?: number;
@@ -304,10 +331,12 @@ export function multiplyObjectTint(a: number, b: number): number {
 }
 
 /** Maximum simultaneously-owned copies of a Market placeable. Functional items
- * default to one; the Zombie Pot is the explicit higher-limit exception. Stored
- * objects still count as owned. Undefined means no special purchase limit. */
+ * default to one; the Zombie Pot is the explicit higher-limit exception, and the
+ * Memorial Statue has no limit at all (one per zombie you want to remember).
+ * Stored objects still count as owned. Undefined means no special purchase limit. */
 export function placeablePurchaseLimit(def: Pick<PlaceableDef, "key" | "category">): number | undefined {
   if (def.category !== "functional") return undefined;
+  if (def.key === "memorialStatue") return undefined;
   return def.key === "zombieCombiner" ? MAX_ZOMBIE_POTS : 1;
 }
 
@@ -608,6 +637,7 @@ export async function loadAssets(): Promise<GameAssets> {
     if (p.key === "monolithCombine") p.combineFast = true; // Clay Monolith
     if (p.key === "zombieCombiner") p.zombiePot = true;
     if (p.key === "pettingZoo") p.petPen = true;
+    if (p.key === "memorialStatue") p.memorial = true;
   }
 
   // Load every ground-tile variant texture.
@@ -777,11 +807,13 @@ export async function ensureObjectTexture(
 }
 
 /** Every /assets/objects/ file a placed object draws: its own art, the pre-harvest
- *  frame a fruit tree shows, and the far-side layer the Pet Pen renders behind its
- *  contents. Callers preload the whole list — a missing back layer would leave the
- *  pen showing only its near wall. */
+ *  frame a fruit tree shows, the far-side layer the Pet Pen renders behind its
+ *  contents, and the working-state frames the Zombie Pot swaps to. Callers preload
+ *  the whole list — a missing back layer would leave the pen showing only its near
+ *  wall, and a missing lid would pop the pot back to idle art mid-combine. */
 export function objectSpriteFiles(def: PlaceableDef): string[] {
-  return [def.sprite, def.growingSprite, def.backSprite].filter((f): f is string => !!f);
+  return [def.sprite, def.growingSprite, def.backSprite, def.busySprite, def.readySprite]
+    .filter((f): f is string => !!f);
 }
 
 /** Preload every texture `def` needs before it can be placed on the farm. */

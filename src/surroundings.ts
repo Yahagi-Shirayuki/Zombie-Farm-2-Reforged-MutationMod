@@ -208,27 +208,32 @@ const DEAD: SurroundingsTheme = {
   treeShare: 0.65,
 };
 
-// "Lunar Ground": cratered regolith, wrecked hardware, nothing alive.
+// "Lunar Ground": cratered regolith. Craters ARE the landscape here — the wrecked
+// hardware is punctuation, so this is the one theme weighted AWAY from its far
+// band (treeShare well under the 0.5 default) and heavily toward a single prop.
 const LUNAR: SurroundingsTheme = {
   key: "water",
   trees: [
-    ...rep(2, { file: "crashedUFO.png", scale: 0.9 }),
-    ...rep(2, { file: "spaceLunarLander.png", scale: 0.85 }),
-    ...rep(2, { file: "setiDish.png", scale: 0.9 }),
-    ...rep(2, { file: "alienBanner.png", scale: 1 }),
+    { file: "crashedUFO.png", scale: 0.9 },
+    { file: "spaceLunarLander.png", scale: 0.85 },
+    { file: "setiDish.png", scale: 0.9 },
+    { file: "alienBanner.png", scale: 1 },
     { file: "spaceRocketShip.png", scale: 0.9 },
     { file: "teleporter.png", scale: 0.8 },
   ],
   props: [
-    ...rep(4, { file: "spaceCrater.png", scale: 0.9 }),
-    ...rep(4, { file: "rocks.png", scale: 1 }),
-    ...rep(2, { file: "boulder.png", scale: 0.7 }),
+    // Two crater sizes so a field of them still varies: wide shallow basins and
+    // small impact pocks. Together they take three quarters of the prop list.
+    ...rep(7, { file: "spaceCrater.png", scale: 0.95 }),
+    ...rep(5, { file: "spaceCrater.png", scale: 0.55 }),
+    ...rep(2, { file: "rocks.png", scale: 1 }),
+    { file: "boulder.png", scale: 0.7 },
     { file: "spaceWormHoleA.png", scale: 0.7 },
-    { file: "desertSkull.png", scale: 1.1 },
   ],
   background: "farm_background_water.png",
-  filler: 0x9195a5,
+  filler: 0x5c5f66,
   density: SPARSE_THEME_DENSITY,
+  treeShare: 0.2,
 };
 
 const THEMES: Record<string, SurroundingsTheme> = {

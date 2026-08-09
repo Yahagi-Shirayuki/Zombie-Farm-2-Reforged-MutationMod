@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BattleSim } from "./BattleSim";
+import { BattleSim, type SimUnit } from "./BattleSim";
 import type { CombatUnit } from "./types";
 
 function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | "team">): CombatUnit {
@@ -246,6 +246,109 @@ describe("activated ability display window", () => {
       expect(e.hp).toBe(hpAtCommit);
     }
     expect(p.windupKey).toBe("explode"); // still charging, still not swinging
+  });
+});
+
+// Ruleset 21. ZF2's `canRez` refuses a zombie in state 100 — the state
+// `-[ZombieActorSmall suicide:]` sets, i.e. one that blew itself up. Reforged
+// deliberately does not carry that over: the exploder is a normal casualty, so a Garden
+// holder's Resurrect gets its shot at it. What it does NOT get is a free second bomb
+// ahead of everyone else.
+describe("reviving a zombie that blew itself up", () => {
+  const smallExploder = (id: string) => unit({
+    id, sourceKey: "ZombieActorSmallTier3", group: "Small", team: "player",
+    abilities: ["explode"], attackCooldownMs: 600,
+  });
+  const medic = () => unit({
+    id: "medic", sourceKey: "ZombieActorGardenTier3", group: "Garden", team: "player",
+    isGarden: true, abilities: ["ressurect"],
+  });
+  const tank = () => unit({
+    id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", hp: 1e6, maxHp: 1e6,
+  });
+  const zombies = (sim: BattleSim) => sim.units.filter((u) => u.team === "player");
+  /** Run the WHOLE army out onto the field. The medic has to be deployed too —
+   *  Resurrect only fires from a holder that is out there. */
+  const deployAll = (sim: BattleSim) => {
+    const queued = (u: SimUnit) => u.alive && u.state !== "advance" && u.state !== "fight";
+    for (let i = 0; i < 2000 && zombies(sim).some(queued); i++) sim.step(50);
+    expect(zombies(sim).some(queued)).toBe(false);
+  };
+  /** …and hold until an exploder has walked far enough forward to light its fuse. */
+  const deploy = (sim: BattleSim) => {
+    deployAll(sim);
+    const ready = () => sim.activatedStatus().some((s) => s.key === "explode" && s.ready > 0);
+    for (let i = 0; i < 2000 && !ready(); i++) sim.step(50);
+    expect(ready()).toBe(true);
+  };
+  /** Light the next fuse and burn it down. Returns whoever the sim chose to spend. */
+  const detonate = (sim: BattleSim) => {
+    deploy(sim);
+    expect(sim.activate("explode")).toBe(true);
+    const performer = sim.units.find((u) => u.windupKey === "explode")!;
+    for (let i = 0; i < 400 && performer.windupKey; i++) sim.step(50);
+    expect(performer.explodeFxSeq).toBeGreaterThan(0);
+    return performer;
+  };
+
+  it("brings the exploder back, and gives it its fuse back with it", () => {
+    const sim = new BattleSim([smallExploder("imp"), medic()], [tank()], null, true);
+    const imp = detonate(sim);
+    expect(imp.id).toBe("imp");
+
+    expect(imp.alive).toBe(true); // ZF2 would have left it dead (canRez state 100)
+    expect(imp.hp).toBe(imp.maxHp);
+    expect(sim.outcome().losses).not.toContain("imp");
+    expect(imp.usedAbilities).toEqual([]); // back in the queue…
+    expect(imp.abilityRearms).toBe(1); // …but marked as having had its turn
+
+    // It re-enters at the charge line, so it has to walk up again before it can light
+    // another fuse — then it can, because there is nobody else to send.
+    const second = detonate(sim);
+    expect(second.id).toBe("imp");
+    expect(second.alive).toBe(false); // the medic's Resurrect was one-use
+    expect(sim.outcome().losses).toContain("imp");
+  });
+
+  it("still refuses when there is no healer to do it", () => {
+    const sim = new BattleSim([smallExploder("imp")], [tank()], null, true);
+    const imp = detonate(sim);
+    expect(imp.alive).toBe(false);
+    expect(imp.abilityRearms).toBe(0);
+    expect(sim.outcome().losses).toContain("imp");
+  });
+
+  it("sends the revived exploder to the BACK of the queue, not the front", () => {
+    const sim = new BattleSim(
+      [smallExploder("a"), smallExploder("b"), medic()], [tank()], null, true
+    );
+    const first = detonate(sim);
+    expect(first.alive).toBe(true); // revived, and holding a fresh fuse again
+
+    // Put the revived one back in FRONT of its squadmate, so position alone would keep
+    // choosing it — which is exactly the double-kill the ordering exists to prevent.
+    const other = zombies(sim).find((p) => p.id !== first.id && p.abilities.includes("explode"))!;
+    deploy(sim);
+    first.x = other.x + 40;
+
+    expect(sim.activate("explode")).toBe(true);
+    expect(other.windupKey).toBe("explode"); // the one who still owns a shot spends it
+    expect(first.windupKey).toBeNull();
+  });
+
+  it("no longer refuses a Small cut down by an ordinary enemy", () => {
+    // The old blanket `isSmall` rejection was read off a wrong note in the binary audit,
+    // so it also stranded Smalls that never touched an ability.
+    const plain = unit({
+      id: "runt", sourceKey: "ZombieActorSmallTier1", group: "Small", team: "player",
+    });
+    const sim = new BattleSim([plain, medic()], [tank()], null, true);
+    const runt = sim.units.find((u) => u.id === "runt")!;
+    deployAll(sim); // this army carries no Explode at all, so there is no fuse to wait on
+    (sim as any).dealDamage(runt, runt.hp, false);
+
+    expect(runt.alive).toBe(true);
+    expect(runt.abilityRearms).toBe(0); // nothing was spent, so nothing was handed back
   });
 });
 

@@ -13,6 +13,8 @@ import { mintObjectId, objectIdFloor } from "./objectIds";
 import { leafTexture, ParticleConfig, ParticleField } from "./raid/Particles";
 import type { PlacedObjectSave, PlotSave } from "./save/schema";
 import { plotsTouch } from "./zombie/cropMutations";
+import { sanitizeFallenUncapped, type FallenZombie } from "./zombie/memorial";
+import { buildStatueRig } from "./zombie/statueRig";
 
 export const PLOT = 4; // tiles per plot side
 
@@ -56,6 +58,12 @@ const PEN_OVERLAY_Z = 100000;
 // be. Deliberately far below every actor bias (pets 0.4, zombies 0.5, farmer 0.6): it
 // must separate the pair without ever tying with, or overtaking, a character.
 const BACK_LAYER_BIAS = 0.1;
+
+// The stone zombie standing on a Memorial Statue shares the plinth's footprint, so
+// it needs a nudge to draw in FRONT of it. Kept under every actor bias (pets 0.4,
+// zombies 0.5, farmer 0.6) so a character crossing the memorial's tiles still walks
+// in front of the statue rather than behind it.
+const MEMORIAL_RIG_BIAS = 0.2;
 
 export interface CropConfig {
   key: string;
@@ -147,6 +155,10 @@ export interface TillTarget {
 
 export type TillHandleDirection = "col-" | "col+" | "row-" | "row+";
 
+/** What a working object is doing, when that changes its art: "busy" = running,
+ *  "ready" = finished and waiting to be collected. Null/absent = idle. */
+export type ObjectWork = "busy" | "ready";
+
 // A placed farm object (tree/decor) occupying a tileW x tileH footprint.
 interface FarmObject {
   id: string;
@@ -167,14 +179,27 @@ interface FarmObject {
   // Fruit trees only: readyAt = epoch ms the fruit ripens; ready = fruit present.
   readyAt: number;
   ready: boolean;
+  // Functional objects that LOOK different while they work (the Zombie Pot: lid on
+  // while a combine cooks, the new zombie's arm out once it is done). Driven from
+  // the owning system through setObjectWork, since the job lives outside the Field.
+  work?: ObjectWork;
   // Rotated by the Rotate tool: a horizontal mirror (flip on the vertical axis), so
   // a directional decor (fences!) can face either diagonal. The footprint is a
   // rectangle centered under the sprite, so mirroring never moves which tiles it
   // occupies — collision/depth are unaffected; only the art flips.
   flipped: boolean;
+  // Memorial Statue only: the zombie enshrined on it, and the stone rig drawn
+  // standing on its plinth. `memorialRig` is derived — rebuilt whenever `memorial`
+  // changes — so only the snapshot is ever persisted.
+  memorial?: FallenZombie;
+  memorialRig?: Container;
 }
 
 export class Field {
+  /** Fired with a Memorial Statue's occupant when the statue itself is removed from
+   *  the farm, so the graveyard takes the zombie back instead of losing them with
+   *  the object. Never fires for a load/restore, which rebuilds statues wholesale. */
+  onMemorialReleased: ((fallen: FallenZombie) => void) | null = null;
   readonly container = new Container();
   readonly groundLayer = new Container();
   readonly plotLayer = new Container();
@@ -215,6 +240,10 @@ export class Field {
   private cursorLabel!: Text;
   private objGhost = new Sprite(); // placement/move preview
   private ghostFlipped = false; // current horizontal-flip of the placement ghost
+  // What the ghost is previewing, so flipping it in place can re-derive the flat-tile
+  // anchor offset (which is not symmetric about the footprint's bottom-center).
+  private ghostDef: PlaceableDef | null = null;
+  private ghostOrigin = { oc: 0, or: 0 };
   // Field dimensions in tiles. Mutable: the Farm Size upgrade grows them at
   // runtime (origin stays at tile 0,0, so all existing plots/objects keep their
   // coordinates — the farm only gains land on its south/east edges).
@@ -1000,24 +1029,88 @@ export class Field {
   private objectRenderY(def: PlaceableDef, y: number): number {
     return y + (def.collideExtend?.length ? HH : 0);
   }
-  // Which sprite to show: a fruit tree that isn't ripe shows its growing frame.
-  private objectSpriteName(def: PlaceableDef, ready: boolean): string {
+  // Which sprite to show: a working object (Zombie Pot) shows the frame for what it
+  // is doing; a fruit tree that isn't ripe shows its growing frame. A state with no
+  // art of its own falls back to the busy frame, so a pot holding a finished combine
+  // keeps its lid rather than reverting to the idle pot.
+  private objectSpriteName(def: PlaceableDef, ready: boolean, work?: ObjectWork): string {
+    if (work === "ready" && def.readySprite) return def.readySprite;
+    if (work && def.busySprite) return def.busySprite;
     return !ready && def.growingSprite ? def.growingSprite : def.sprite;
   }
   private isGroundObject(def: PlaceableDef): boolean {
     return def.zombiePatch || /road/i.test(def.key);
   }
+  // Bottom-centering an object on its footprint is an approximation, and flat
+  // ground art is where it shows: a road piece is drawn to butt up against the next
+  // one, so a couple of pixels of drift leaves a visible step in the kerb where a
+  // straight meets a crossing.
+  //
+  // GROUND TRUTH `-[Tile anchorPoint]` + `-[Tile loadBaseSprite]`: a tile pins its
+  // art by the authored `(pivotx, pivoty)` cocos anchor (default (0.38, 0)) onto the
+  // position of the GROUND TILE it sits on — which cocos' iso tile map puts at the
+  // bottom-left corner of that tile's 48x24 bounding box. This returns the offset
+  // from where we draw the sprite today to where those two rules put it. Non-flat
+  // objects keep bottom-centering: their pivots are authored for art that stands up
+  // off the ground, and nothing has to line up with them edge to edge.
+  private flatTileOffset(
+    def: PlaceableDef, oc: number, or: number, flipped: boolean,
+  ): { dx: number; dy: number } {
+    if (!def.flatTile || def.anchorX === undefined || def.anchorY === undefined) {
+      return { dx: 0, dy: 0 };
+    }
+    const s = this.objectScale();
+    const w = def.nativeW * s, h = def.nativeH * s;
+    const front = gridToScreen(oc + def.tileW - 1, or + def.tileH - 1);
+    const p = { x: front.x - HW, y: front.y + TILE_H }; // the ground tile's own position
+    const a = this.footprintAnchor(oc, or, def.tileW, def.tileH);
+    // A mirrored tile reflects about the centre line of that same ground tile, one
+    // source tile to the right of `p` — the binary's `1 - pivotx - 48/width`.
+    const anchorX = flipped
+      ? 1 - def.anchorX - this.assets.field.tileW / def.nativeW
+      : def.anchorX;
+    return {
+      dx: (p.x - a.x) + w * (0.5 - anchorX),
+      dy: (p.y - a.y) + h * def.anchorY,
+    };
+  }
+  /** Put a Memorial Statue's stone zombie on top of its plinth. The plinth is
+   *  bottom-centered on its footprint like any other object, so the statue's feet
+   *  are the plinth's authored mount point (top-face centre) measured back from
+   *  that bottom-centre anchor. Rendered ABOVE the plinth on the same footprint —
+   *  a bias below every actor's, so a zombie walking past the memorial still
+   *  passes in front of it. */
+  private fitMemorialRig(obj: FarmObject) {
+    const rig = obj.memorialRig;
+    if (!rig) return;
+    const def = obj.def;
+    const s = this.objectScale();
+    const anchor = this.footprintAnchor(obj.oc, obj.or, def.tileW, def.tileH);
+    const mountX = def.mountX ?? 0.5;
+    const mountY = def.mountY ?? 1;
+    // The plinth art is not symmetric, so a flipped plinth mirrors its mount point
+    // about the sprite's centre — otherwise the statue slides off the top face.
+    const offsetX = (obj.flipped ? 1 - mountX : mountX) - 0.5;
+    rig.position.set(
+      anchor.x + def.nativeW * s * offsetX,
+      this.objectRenderY(def, anchor.y) - def.nativeH * s * mountY,
+    );
+    setFootprint(rig, obj.oc, obj.or, obj.oc + def.tileW - 1, obj.or + def.tileH - 1,
+      MEMORIAL_RIG_BIAS);
+  }
+
   private fitObjectSprite(
     sp: Sprite, def: PlaceableDef, oc: number, or: number, ready = true, flipped = false,
-    extra?: { backSprite?: Sprite; frontOverlay?: Container },
+    extra?: { backSprite?: Sprite; frontOverlay?: Container; work?: ObjectWork },
   ) {
-    const name = this.objectSpriteName(def, ready);
+    const name = this.objectSpriteName(def, ready, extra?.work);
     const texture = this.assets.objects[name] ?? this.assets.objects[def.sprite] ?? Texture.EMPTY;
     const tint = objectTint(def.color);
     const s = this.objectScale();
     // Flip = mirror horizontally (about the sprite's bottom-center anchor), so the
     // art faces the other way while sitting in the exact same footprint tiles.
     const a = this.footprintAnchor(oc, or, def.tileW, def.tileH);
+    const off = this.flatTileOffset(def, oc, or, flipped);
     const scaleX = flipped ? -s : s;
     const c1 = oc + def.tileW - 1, r1 = or + def.tileH - 1;
     const lay = (sprite: Sprite, tex: Texture) => {
@@ -1025,7 +1118,7 @@ export class Field {
       sprite.tint = tint;
       sprite.anchor.set(0.5, 1);
       sprite.scale.set(scaleX, s);
-      sprite.position.set(a.x, this.objectRenderY(def, a.y));
+      sprite.position.set(a.x + off.dx, this.objectRenderY(def, a.y) + off.dy);
     };
     lay(sp, texture);
     // Depth-sorts by the object's full footprint (see depthSort): an actor on the
@@ -1062,10 +1155,54 @@ export class Field {
     obj.backSprite?.removeFromParent();
     obj.frontOverlay?.removeFromParent();
     obj.frontMask?.removeFromParent();
+    this.destroyMemorialRig(obj);
     obj.sprite.destroy();
     obj.backSprite?.destroy();
     obj.frontOverlay?.destroy({ children: true });
     obj.frontMask?.destroy();
+  }
+
+  private destroyMemorialRig(obj: FarmObject) {
+    if (!obj.memorialRig) return;
+    obj.memorialRig.removeFromParent();
+    obj.memorialRig.destroy({ children: true });
+    obj.memorialRig = undefined;
+  }
+
+  /** Who is enshrined on this Memorial Statue, or null (unknown id, not a memorial,
+   *  or an empty one). */
+  memorialOccupant(id: string): FallenZombie | null {
+    return this.objects.get(id)?.memorial ?? null;
+  }
+
+  /** Every placed Memorial Statue, with its occupant. Used to keep the graveyard
+   *  list and the statues from ever showing the same zombie twice. */
+  memorials(): { id: string; occupant: FallenZombie | null }[] {
+    const out: { id: string; occupant: FallenZombie | null }[] = [];
+    for (const o of this.objects.values()) {
+      if (o.def.memorial) out.push({ id: o.id, occupant: o.memorial ?? null });
+    }
+    return out;
+  }
+
+  /** Enshrine `fallen` on the statue `id` (or clear it with null), rebuilding the
+   *  stone rig. Returns false when `id` is not a Memorial Statue. Building the rig
+   *  needs the species' part textures, which the zombie catalog loads up front, so
+   *  this is synchronous. */
+  setMemorialOccupant(id: string, fallen: FallenZombie | null): boolean {
+    const obj = this.objects.get(id);
+    if (!obj?.def.memorial) return false;
+    this.destroyMemorialRig(obj);
+    obj.memorial = fallen ?? undefined;
+    if (fallen) {
+      const rig = buildStatueRig(this.assets, fallen);
+      if (rig) {
+        obj.memorialRig = rig;
+        this.entityLayer.addChild(rig);
+        this.fitMemorialRig(obj);
+      }
+    }
+    return true;
   }
 
   // Glowing objects (candle altar, sparklers, glow-flora, ...) emit an additive
@@ -1120,7 +1257,8 @@ export class Field {
   // trees, `readyAt` sets when fruit ripens (defaults to now + growMs for a fresh
   // placement); a past readyAt means it's already ripe (offline growth). Returns
   // the object id, or null if the footprint isn't valid.
-  placeObject(def: PlaceableDef, oc: number, or: number, id?: string, readyAt?: number, flipped = false): string | null {
+  placeObject(def: PlaceableDef, oc: number, or: number, id?: string, readyAt?: number,
+    flipped = false, memorial?: FallenZombie): string | null {
     if (!this.canPlaceObject(oc, or, def, id)) return null;
     const now = Date.now();
     const ra = def.growMs ? readyAt ?? now + def.growMs : 0;
@@ -1143,6 +1281,7 @@ export class Field {
       frontOverlay, frontMask, readyAt: ra, ready, flipped };
     this.objects.set(oid, obj);
     this.attachObjectLight(obj);
+    if (memorial) this.setMemorialOccupant(oid, memorial); // restoring an enshrined statue
     this.forEachFootprint(oc, or, def.tileW, def.tileH, (t) => this.tileObject.set(t, oid));
     this.setExtensionBlocks(oid, def, oc, or, flipped, true);
     return oid;
@@ -1318,9 +1457,24 @@ export class Field {
     obj.or = or;
     if (flipped !== undefined) obj.flipped = flipped;
     this.fitObjectSprite(obj.sprite, obj.def, oc, or, obj.ready, obj.flipped, obj);
+    this.fitMemorialRig(obj);
     this.positionObjectLight(obj);
     this.forEachFootprint(oc, or, obj.def.tileW, obj.def.tileH, (t) => this.tileObject.set(t, id));
     this.setExtensionBlocks(id, obj.def, oc, or, obj.flipped, true);
+    return true;
+  }
+
+  /** Show a working object's state art (the Zombie Pot's lid while a combine cooks).
+   *  The job itself lives outside the Field, so its owner pushes the state in — see
+   *  the per-pot loop in main.ts. No-op for objects with no state art, and for a
+   *  state that is already showing. Returns true when the look actually changed. */
+  setObjectWork(id: string, work: ObjectWork | null): boolean {
+    const o = this.objects.get(id);
+    if (!o || !o.def.busySprite) return false;
+    const next = work ?? undefined;
+    if (o.work === next) return false;
+    o.work = next;
+    this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, o.ready, o.flipped, o);
     return true;
   }
 
@@ -1372,6 +1526,12 @@ export class Field {
     const obj = this.objects.get(id);
     if (!obj) return null;
     if (this.highlightedObj === id) this.highlightedObj = null;
+    // A Memorial Statue can be sold or shelved, but the zombie carved on it must
+    // not go with it: the shed stores a key and a count, and a sale stores nothing
+    // at all. Hand the occupant back before the object stops existing. Announced
+    // here rather than at the call sites so every removal path — sell, store, the
+    // Remove tool, and anything added later — is covered by construction.
+    if (obj.memorial) this.onMemorialReleased?.(obj.memorial);
     this.forEachFootprint(obj.oc, obj.or, obj.def.tileW, obj.def.tileH, (t) => this.tileObject.delete(t));
     this.setExtensionBlocks(id, obj.def, obj.oc, obj.or, obj.flipped, false);
     this.destroyObjectSprites(obj);
@@ -1423,6 +1583,7 @@ export class Field {
     if (!o) return false;
     o.flipped = !o.flipped;
     this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, o.ready, o.flipped, o);
+    this.fitMemorialRig(o);
     return o.flipped;
   }
   // World point the farmer walks to in order to harvest this object (its base).
@@ -1555,7 +1716,10 @@ export class Field {
     const s = this.objectScale();
     this.objGhost.scale.set(flipped ? -s : s, s); // preview the chosen orientation
     const a = this.footprintAnchor(oc, or, def.tileW, def.tileH);
-    this.objGhost.position.set(a.x, this.objectRenderY(def, a.y));
+    const off = this.flatTileOffset(def, oc, or, flipped);
+    this.ghostDef = def;
+    this.ghostOrigin = { oc, or };
+    this.objGhost.position.set(a.x + off.dx, this.objectRenderY(def, a.y) + off.dy);
     this.objGhost.alpha = 0.6;
     this.objGhost.tint = multiplyObjectTint(
       objectTint(def.color),
@@ -1565,12 +1729,19 @@ export class Field {
     this.cursor.visible = true;
     return { oc, or, valid };
   }
-  // Flip the placement ghost in place (no reposition) — the Rotate control uses this
-  // to spin the current preview without waiting for a pointer move.
+  // Flip the placement ghost in place — the Rotate control uses this to spin the
+  // current preview without waiting for a pointer move. A flat tile's art is not
+  // centered on its footprint, so mirroring it does move where it lands.
   setGhostFlip(flipped: boolean) {
     this.ghostFlipped = flipped;
     const s = this.objectScale();
     this.objGhost.scale.x = flipped ? -s : s;
+    const def = this.ghostDef;
+    if (!def?.flatTile) return;
+    const { oc, or } = this.ghostOrigin;
+    const a = this.footprintAnchor(oc, or, def.tileW, def.tileH);
+    const off = this.flatTileOffset(def, oc, or, flipped);
+    this.objGhost.position.set(a.x + off.dx, this.objectRenderY(def, a.y) + off.dy);
   }
   get ghostFlip(): boolean {
     return this.ghostFlipped;
@@ -1712,6 +1883,7 @@ export class Field {
       const s: PlacedObjectSave = { id: o.id, key: o.def.key, oc: o.oc, or: o.or };
       if (o.def.harvestValue) s.readyAt = o.readyAt; // fruit-tree ripen timer
       if (o.flipped) s.rotation = 1; // horizontally mirrored by the Rotate tool
+      if (o.memorial) s.memorial = o.memorial; // the zombie enshrined on this plinth
       out.push(s);
     }
     return out;
@@ -1730,7 +1902,12 @@ export class Field {
     for (const s of saves) {
       const def = resolve(s.key);
       if (!def || !this.footprintFits(s.oc, s.or, def.tileW, def.tileH)) continue;
-      this.placeObject(def, s.oc, s.or, s.id, s.readyAt, !!s.rotation);
+      // A memorial occupant comes straight out of a save file, so it goes through
+      // the same shape check the graveyard list does before a rig is built from it.
+      // Uncapped: this is an ENSHRINED zombie, which the graveyard's cap never
+      // counts (see sanitizeFallenUncapped).
+      const memorial = s.memorial ? sanitizeFallenUncapped([s.memorial])[0] : undefined;
+      this.placeObject(def, s.oc, s.or, s.id, s.readyAt, !!s.rotation, memorial);
       restored.push(s.id);
     }
     // Monotonic: a save whose objects all carry server instance ids scans to nothing,

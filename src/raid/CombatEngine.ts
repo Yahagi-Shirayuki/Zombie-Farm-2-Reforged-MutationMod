@@ -16,6 +16,7 @@ import type { OwnedZombie } from "../zombie/types";
 import { veterancyMultiplier } from "../zombie/traits";
 import { mutationBonus } from "../zombie/mutations";
 import { activeAbilities, combatEffect } from "../zombie/abilities";
+import { eliteEnemyStat, type EliteProfile } from "./eliteInvasion";
 import {
   applyDamage,
   levelScaleStat,
@@ -327,18 +328,25 @@ function weightedPopulation(stage: RaidStage): string[] {
  *  deterministic replay diverges:
  *   - `raidId` + `playerLevel` → Old McDonnell's farm speeds its enemies up as you
  *     out-level it (×0.66 at L10, ×0.44 at L15). No other raid scales.
- *   - the Scallywag is flagged here and mirrors its opponent at fight time. */
+ *   - the Scallywag is flagged here and mirrors its opponent at fight time.
+ *
+ *  `opts.elite` is the Brain Ticket's ELITE multipliers (eliteInvasion.ts), or
+ *  null/absent for an ordinary invasion. It scales str/con/dex BEFORE the derivations
+ *  below, so hit points, per-hit damage and the attack clock all follow from the scaled
+ *  stat exactly as they do normally. Like the two rules above it, pass it identically on
+ *  the client and the server or the deterministic replay diverges. */
 export function buildEnemyUnits(
   stage: RaidStage,
   stats: Record<string, EnemyStat>,
   attacks: Record<string, AttackDef>,
-  opts: { raidId?: number; playerLevel?: number } = {}
+  opts: { raidId?: number; playerLevel?: number; elite?: EliteProfile | null } = {}
 ): CombatUnit[] {
   const out: CombatUnit[] = [];
   const pace = farmRaidEnemyPace(opts.raidId, opts.playerLevel);
   const add = (key: string, boss: boolean) => {
-    const st = stats[key];
-    if (!st) return;
+    const base = stats[key];
+    if (!base) return;
+    const st = eliteEnemyStat(base, opts.elite ?? null);
     const u = unit(
       `e${out.length}`,
       key,

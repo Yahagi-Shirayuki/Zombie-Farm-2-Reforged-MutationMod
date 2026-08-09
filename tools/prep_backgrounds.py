@@ -36,6 +36,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "public" / "assets" / "farm_background.png"
 OUT_DIR = ROOT / "public" / "assets"
 
+# A pixel squarely inside the hill body, away from every outline and hill tree.
+# Sampled to report each backdrop's `filler` colour (see main).
+MID_HILL_PX = (700, 530)
+
 # A ramp is a list of (luminance, rgb) stops, sampled by a source pixel's
 # luminance and linearly interpolated between neighbouring stops. Stops below
 # ~130 describe the hill TREES and edge shading; stops above describe the hill
@@ -95,18 +99,22 @@ GREEN_RAMPS: dict[str, list[tuple[int, tuple[int, int, int]]]] = {
         (185, (220, 198, 116)),
         (255, (236, 218, 146)),
     ],
-    # Lunar Ground: bare grey regolith ridges, no vegetation left.
+    # Lunar Ground: bare regolith ridges, no vegetation left. Pitched to sit just
+    # above the Lunar TERRAIN TILE (~(81,84,91) after prep_assets' regrade_lunar)
+    # rather than to look good alone — the hills and the farm are the same dust,
+    # and a pale horizon behind dark ground turns the farm into a cut-out square.
+    # Keep these two in step if either is retuned.
     "water": [
-        (0, (30, 32, 40)),
-        (49, (38, 40, 50)),
-        (96, (60, 63, 76)),
-        (106, (70, 74, 88)),
-        (126, (110, 114, 130)),
-        (140, (134, 138, 154)),
-        (150, (146, 150, 166)),
-        (158, (156, 160, 176)),
-        (185, (178, 182, 198)),
-        (255, (204, 208, 222)),
+        (0, (19, 20, 23)),
+        (49, (25, 26, 30)),
+        (96, (40, 42, 47)),
+        (106, (47, 49, 55)),
+        (126, (76, 79, 85)),
+        (140, (87, 90, 97)),
+        (150, (92, 95, 102)),
+        (158, (98, 101, 108)),
+        (185, (117, 120, 128)),
+        (255, (146, 149, 158)),
     ],
 }
 
@@ -132,6 +140,26 @@ SKY_RAMPS: dict[str, list[tuple[int, tuple[int, int, int]]]] = {
         (255, (255, 254, 248)),
     ],
 }
+
+# Starfields, by terrain. Only a sky dark enough to show them gets one.
+#
+# The count is a flat number of attempts across the whole 2800px backdrop, NOT
+# anything derived from the scenery-ring density in surroundings.ts — the two are
+# unrelated systems and a sparse moon should still have a full sky.
+STARS: dict[str, dict[str, int]] = {
+    "water": {"count": 130, "seed": 0x5EED_11A2},
+}
+# Star brightnesses, as (weight, colour). Mostly faint pinpricks with a few
+# bright ones, so the field has depth instead of reading as evenly-spaced dots.
+STAR_TONES = [
+    (6, (128, 132, 158)),
+    (5, (176, 180, 205)),
+    (3, (214, 218, 238)),
+    (2, (245, 247, 255)),
+]
+# A star this bright also gets four 1px arms, which is the only way to suggest a
+# brighter star at this resolution without it becoming a visible blob.
+STAR_CROSS_MIN = 214
 
 
 def luminance(r: int, g: int, b: int) -> float:
@@ -159,7 +187,55 @@ def is_sky(r: int, g: int, b: int) -> bool:
     return not is_green(r, g, b) and b >= r and b > 60
 
 
-def build(terrain: str, src: Image.Image) -> Image.Image:
+def flat_sky_colour(img: Image.Image) -> tuple[int, int, int, int]:
+    """The single most common colour in the top third — the open sky between the
+    clouds. Used as the mask for star placement, so stars land in clear sky and
+    never on a cloud, a hill, or the horizon haze."""
+    top = img.crop((0, 0, img.width, img.height // 3))
+    return max(top.getcolors(top.width * top.height), key=lambda kv: kv[0])[1]
+
+
+def add_stars(img: Image.Image, count: int, seed: int) -> int:
+    """Sprinkle a deterministic starfield into the open sky. Returns how many
+    landed — attempts that fall on a cloud or below the horizon are dropped
+    rather than nudged, which keeps the field naturally uneven."""
+    px = img.load()
+    sky = flat_sky_colour(img)
+    tones: list[tuple[int, int, int]] = []
+    for weight, colour in STAR_TONES:
+        tones.extend([colour] * weight)
+    # A plain LCG, not `random`: the backdrop is a checked-in build artefact, so
+    # the same source art must always produce the same sky.
+    state = seed & 0x7FFFFFFF
+
+    def rnd(n: int) -> int:
+        nonlocal state
+        state = (state * 1103515245 + 12345) & 0x7FFFFFFF
+        return state % n
+
+    def clear(x: int, y: int) -> bool:
+        return 0 <= x < img.width and 0 <= y < img.height and px[x, y] == sky
+
+    placed = 0
+    for _ in range(count):
+        x, y = rnd(img.width), rnd(img.height)
+        if not clear(x, y):
+            continue
+        colour = tones[rnd(len(tones))]
+        px[x, y] = colour + (sky[3],)
+        if colour[0] >= STAR_CROSS_MIN:
+            # Dim arms, and only onto pixels that were open sky, so a bright star
+            # near a cloud edge cannot spill onto the cloud.
+            arm = tuple(round(c * 0.45 + s * 0.55) for c, s in zip(colour, sky[:3]))
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                if clear(x + dx, y + dy):
+                    px[x + dx, y + dy] = arm + (sky[3],)
+        placed += 1
+    return placed
+
+
+def build(terrain: str, src: Image.Image) -> tuple[Image.Image, int]:
+    """The recoloured backdrop, plus how many stars landed in its sky."""
     green = GREEN_RAMPS[terrain]
     sky = SKY_RAMPS.get(terrain)
     out = src.copy()
@@ -182,18 +258,28 @@ def build(terrain: str, src: Image.Image) -> Image.Image:
                     hit = key
                 cache[key] = hit
             px[x, y] = hit
-    return out
+    # Stars go on last, so the recolour cannot smear them back into sky.
+    field = STARS.get(terrain)
+    stars = add_stars(out, field["count"], field["seed"]) if field else 0
+    return out, stars
 
 
 def main() -> None:
     if not SRC.exists():
         sys.exit(f"missing base backdrop: {SRC}")
     src = Image.open(SRC).convert("RGBA")
+    print("terrain  file                              filler (-> surroundings.ts)  stars")
     for terrain in GREEN_RAMPS:
-        out = build(terrain, src)
+        out, stars = build(terrain, src)
         dest = OUT_DIR / f"farm_background_{terrain}.png"
         out.save(dest)
-        print(f"wrote {dest.relative_to(ROOT)}")
+        # The viewport filler beyond the backdrop MUST be the backdrop's own
+        # mid-hill colour or the two stop reading as one surface (see the `filler`
+        # field in src/surroundings.ts). Print it rather than leave whoever retunes
+        # a ramp to eyedropper the PNG and hope they picked the right pixel.
+        r, g, b = out.convert("RGB").getpixel(MID_HILL_PX)
+        print(f"{terrain:<8} {dest.name:<33} 0x{r:02x}{g:02x}{b:02x}"
+              f"{'' if not stars else f'                   {stars}'}")
 
 
 if __name__ == "__main__":

@@ -14,6 +14,20 @@ describe("Epic Boss market", () => {
     expect(visibleEpicBosses(EPIC_BOSSES, "foul-owl").map((boss) => boss.id)).toEqual(["foul-owl"]);
   });
 
+  it("lists the picker in unlock order, cheapest event first", () => {
+    // The catalog array is in recovery order, which put the level-42 event second.
+    expect(visibleEpicBosses(EPIC_BOSSES, null).map((boss) => boss.id)).toEqual([
+      "dr-groundhog", "bully-frog", "rocky-rhino", "general-larvaelus",
+      "mystical-mamba", "foul-owl", "skunkarella", "loco-locust",
+    ]);
+  });
+
+  it("orders the picker by unlock level whatever order the catalog is in", () => {
+    const shuffled = [...EPIC_BOSSES].reverse();
+    const levels = visibleEpicBosses(shuffled, null).map((boss) => epicBossUnlockLevel(boss));
+    expect(levels).toEqual([...levels].sort((a, b) => a - b));
+  });
+
   it("gates each Epic Boss by how strong its prize zombies are", () => {
     // Weakest prizes first, so the level that unlocks an event tracks what it pays out.
     expect(EPIC_BOSSES.map((boss) => [boss.id, epicBossUnlockLevel(boss)] as const)

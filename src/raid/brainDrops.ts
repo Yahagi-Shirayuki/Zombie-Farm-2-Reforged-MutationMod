@@ -2,7 +2,14 @@
  * drop-rate event multiplier across every tier. Tiers roll rarest-first so a boss
  * can award at most one stack. */
 export const BRAIN_DROP_RATE_MULTIPLIER = 2;
-export const BRAIN_OPTIMAL_LEVEL = 20;
+
+/** The recommended level at which a tier's chance reaches its `upper` rate. It is a
+ *  RAMP REFERENCE, not a ceiling: the ramp keeps climbing at the same slope above it
+ *  (see brainDropTable). The old behaviour clamped here, which parked every invasion
+ *  from the Pirates (rec 21) to the Video Games (rec 43) on identical brain odds — six
+ *  raids, twenty-two levels of progression, and no reason for a late-game player to
+ *  invade anything harder. */
+export const BRAIN_RAMP_LEVEL = 20;
 
 // Post-brainflation revert: amounts are 1/10 of the old 50/30/10 stacks (a brain is now
 // ~10x more valuable). Drop CHANCES are unchanged — only the stack sizes shrank.
@@ -12,30 +19,50 @@ const BASE_BRAIN_DROP_TABLE = [
   { amount: 1, lower: 0.025, upper: 0.05 },
 ] as const;
 
-export function brainDropTable(recommendedLevel: number) {
-  const frac = Math.max(0, Math.min(1, recommendedLevel / BRAIN_OPTIMAL_LEVEL));
+/** Hard ceiling on any single tier's chance. Nothing in the catalog comes close (the
+ *  Video Games' commonest tier reaches ~16%, and 4x elite luck ~63%); it exists so a
+ *  future raid or a fatter luck multiplier can't roll a chance past certainty. */
+const MAX_TIER_CHANCE = 0.95;
+
+/** This invasion's brain tiers, rarest first.
+ *
+ *  `recommendedLevel` drives a LINEAR ramp with no upper clamp: each tier starts at its
+ *  `lower` rate and gains `(upper - lower)` for every BRAIN_RAMP_LEVEL of recommended
+ *  level, so a harder invasion always pays better than an easier one. The rates stay
+ *  deliberately stingy — the Video Games' 1-brain tier lands near 16% — but they no
+ *  longer flatline halfway up the ladder.
+ *
+ *  `luck` multiplies every tier (1 = ordinary invasion, ELITE_BRAIN_LUCK for a Brain
+ *  Ticket run). */
+export function brainDropTable(recommendedLevel: number, luck = 1) {
+  const frac = Math.max(0, recommendedLevel / BRAIN_RAMP_LEVEL);
+  const scale = BRAIN_DROP_RATE_MULTIPLIER * Math.max(0, luck);
   return BASE_BRAIN_DROP_TABLE.map((tier) => ({
     amount: tier.amount,
-    chance: (tier.lower + (tier.upper - tier.lower) * frac) * BRAIN_DROP_RATE_MULTIPLIER,
+    chance: Math.min(MAX_TIER_CHANCE, (tier.lower + (tier.upper - tier.lower) * frac) * scale),
   }));
 }
 
 /** Chance (0..1) that a brain-eligible win pays ANY brains. The tiers above are rolled
  *  independently, rarest first, and the first hit ends the roll — so the odds of walking
  *  away empty-handed are the product of every tier's miss. Display only. */
-export function brainDropChance(recommendedLevel: number): number {
-  return 1 - brainDropTable(recommendedLevel).reduce((miss, tier) => miss * (1 - tier.chance), 1);
+export function brainDropChance(recommendedLevel: number, luck = 1): number {
+  return 1 - brainDropTable(recommendedLevel, luck).reduce((miss, tier) => miss * (1 - tier.chance), 1);
 }
 
-export function rollBrainDrop(recommendedLevel: number, random: () => number = Math.random): number {
-  for (const tier of brainDropTable(recommendedLevel)) {
+export function rollBrainDrop(
+  recommendedLevel: number,
+  random: () => number = Math.random,
+  luck = 1
+): number {
+  for (const tier of brainDropTable(recommendedLevel, luck)) {
     if (random() < tier.chance) return tier.amount;
   }
   return 0;
 }
 
 /** Brain-eligible invasions a player may settle without a single brain before the next
- *  one is guaranteed to pay. At the top of the table a win drops something ~15% of the
+ *  one is guaranteed to pay. At the top of the table a win drops something ~24% of the
  *  time, so an unlucky-but-perfectly-ordinary player can otherwise go a very long dry
  *  spell; this puts a floor under it.
  *
@@ -50,14 +77,16 @@ export const BRAIN_PITY_INVASIONS = 8;
 export const BRAIN_PITY_AMOUNT = BASE_BRAIN_DROP_TABLE[BASE_BRAIN_DROP_TABLE.length - 1].amount;
 
 /** Roll a win's brain drop with the dry-streak floor applied. `dryStreak` is how many
- *  brain-eligible invasions have settled since the last brain (see nextBrainDryStreak).
- *  A natural roll always wins — the floor only fills in a zero. */
+ *  brain-eligible invasions have settled since the last brain (see nextBrainDryStreak);
+ *  `luck` is the tier multiplier (see brainDropTable). A natural roll always wins — the
+ *  floor only fills in a zero. */
 export function rollBrainDropWithPity(
   recommendedLevel: number,
   dryStreak: number,
-  random: () => number = Math.random
+  random: () => number = Math.random,
+  luck = 1
 ): number {
-  const rolled = rollBrainDrop(recommendedLevel, random);
+  const rolled = rollBrainDrop(recommendedLevel, random, luck);
   if (rolled > 0) return rolled;
   return dryStreak >= BRAIN_PITY_INVASIONS ? BRAIN_PITY_AMOUNT : 0;
 }

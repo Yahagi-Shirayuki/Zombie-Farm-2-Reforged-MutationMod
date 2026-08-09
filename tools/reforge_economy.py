@@ -78,6 +78,29 @@ CROP_REBALANCE = {
 # server/src/levels.ts both stop at 45, so a crop above it would be unplantable.
 LEVEL_CAP = 45
 
+# ---- Farm size ------------------------------------------------------------
+# Farm-size tiers Reforged ADDS beyond the three the source ships. The source
+# ladder tops out at 60x60 from level 31, leaving the last stretch to the cap with
+# nothing left to expand into.
+#
+# Each entry continues the source's own progression rather than inventing a curve:
+#
+#   size    +10 per tier      40    50     60      70
+#   level   +10 per tier      11    21     31      41
+#   gold    x5  per tier      10k   50k    250k    1.25M
+#   brains  step doubles      6     8      12      20      (+2, +4, +8)
+#
+# prep_upgrades.py appends these after the extracted tiers AND asserts they still
+# continue that progression, so a tier added with an off-pattern price fails loudly
+# instead of quietly shipping. Without this table a prep re-run would drop them.
+#
+# KEEP IN SYNC with SIZE_TIERS in server/src/shopCatalog.ts — the server prices the
+# purchase itself and would reject a tier it doesn't know.
+EXTRA_SIZE_TIERS = [
+    {"name": "Colossal 'ol Farm", "size": 70, "level": 41,
+     "gold": 1_250_000, "brains": 20},
+]
+
 # ---- Mutant zombies -------------------------------------------------------
 # A "mutant" zombie is the pre-mutated unit the market sells: it carries its
 # mutation already grown AND a tier-graded body (Green 2/2/2, Blue 5/2/5,

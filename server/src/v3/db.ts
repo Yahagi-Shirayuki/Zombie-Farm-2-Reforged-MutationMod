@@ -9,7 +9,10 @@ import type {
 import { GAMEPLAY_PROTOCOL } from "../../../src/net/protocol";
 import type { WriterProjection } from "./writer";
 import * as legacyDb from "../db";
-import { applyCommandBatch, freshGameplayState, zombieDefaultMutation } from "./engine";
+import {
+  applyCommandBatch, freshGameplayState, zombieDefaultMutation,
+  MEMORIAL_GRAVEYARD_CAP, MAX_FUNCTIONAL_OBJECTS,
+} from "./engine";
 import { levelForXp } from "../levels";
 import { projectRun } from "./epicBoss";
 import { RAID_RULESET_VERSION } from "../raidVerifier";
@@ -49,6 +52,19 @@ interface RosterRow {
   from_escrow: number;
   /** JSON "[r,g,b]" inherited body tint, or NULL for the catalog colour. */
   color: string | null;
+}
+/** One row of the graveyard (see migration 0047). */
+interface FallenRow {
+  unit_id: string;
+  zombie_key: string;
+  name: string | null;
+  mutation: number;
+  invasions: number;
+  color: string | null;
+  died_at: number;
+  /** When it last came off a statue; NULL if it never has (see migration 0048). */
+  released_at: number | null;
+  memorial_object_id: string | null;
 }
 interface RaidRow {
   id: string;
@@ -125,7 +141,7 @@ async function ensureV3(db: D1Database, accountId: string, now: number): Promise
 
 async function loadRows(db: D1Database, accountId: string, now: number) {
   await ensureV3(db, accountId, now);
-  const [runtime, balance, farm, objects, quests, core, presentation, roster, raid, raidState, raidRevival, epicBoss] = await Promise.all([
+  const [runtime, balance, farm, objects, quests, core, presentation, roster, fallen, raid, raidState, raidRevival, epicBoss] = await Promise.all([
     db.prepare("SELECT * FROM account_runtime_v3 WHERE account_id = ?").bind(accountId).first<RuntimeRow>(),
     db.prepare("SELECT gold, brains, xp FROM balances WHERE account_id = ?").bind(accountId).first<BalanceRow>(),
     db.prepare("SELECT * FROM farm_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
@@ -135,6 +151,19 @@ async function loadRows(db: D1Database, accountId: string, now: number) {
     db.prepare("SELECT version, current_json FROM presentations_v3 WHERE account_id = ?").bind(accountId).first<PresentationRow>(),
     db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, locked_by_raid, from_escrow, color
       FROM roster_v3 WHERE account_id = ? ORDER BY created_at, unit_id`).bind(accountId).all<RosterRow>(),
+    // Newest first, and capped: the graveyard is a memento list, and MEMORIAL_GRAVEYARD_CAP
+    // is what stops a long-lived farm carrying an unbounded list of its dead into
+    // every bootstrap. Enshrined zombies are pinned ahead of the cap below.
+    //
+    // "Newest" is COALESCE(released_at, died_at) — a zombie taken back off a statue
+    // rejoins at the top rather than at its (usually old) date of death. Same
+    // expression as the settlement trim in v3/raid.ts; they must agree or the row the
+    // bootstrap shows is not the row that survives.
+    db.prepare(`SELECT unit_id, zombie_key, name, mutation, invasions, color, died_at,
+        released_at, memorial_object_id
+      FROM fallen_v3 WHERE account_id = ?
+      ORDER BY (memorial_object_id IS NULL), COALESCE(released_at, died_at) DESC, unit_id
+      LIMIT ?`).bind(accountId, MEMORIAL_GRAVEYARD_CAP + MAX_FUNCTIONAL_OBJECTS).all<FallenRow>(),
     db.prepare(`SELECT id, raid_id, roster_json, started_at, earliest_finish_at, expires_at
       FROM raid_sessions_v3 WHERE account_id = ? AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1`)
       .bind(accountId).first<RaidRow>(),
@@ -147,7 +176,8 @@ async function loadRows(db: D1Database, accountId: string, now: number) {
       .bind(accountId).first<EpicRunRow>(),
   ]);
   if (!runtime || !balance || !farm || !objects || !quests || !core || !presentation || !raidState) throw new Error("v3_state_init_failed");
-  return { runtime, balance, farm, objects, quests, core, presentation, roster: roster.results ?? [], raid, raidState, raidRevival, epicBoss };
+  return { runtime, balance, farm, objects, quests, core, presentation, roster: roster.results ?? [],
+    fallen: fallen.results ?? [], raid, raidState, raidRevival, epicBoss };
 }
 
 function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection {
@@ -172,6 +202,20 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
       // Set only for a unit whose tint survived a trade (see migration 0041). Absent
       // means the client falls back to its presentation hint, then the catalog colour.
       ...(color ? { color } : {}),
+    };
+  });
+  const fallen = rows.fallen.map((f) => {
+    const color = parseRosterColor(f.color);
+    return {
+      id: f.unit_id,
+      key: f.zombie_key,
+      ...(f.name ? { name: f.name } : {}),
+      mutation: f.mutation,
+      invasions: f.invasions,
+      ...(color ? { color } : {}),
+      diedAt: f.died_at,
+      ...(f.released_at != null ? { releasedAt: f.released_at } : {}),
+      ...(f.memorial_object_id ? { memorialObjectId: f.memorial_object_id } : {}),
     };
   });
   const epicBoss = projectRun(rows.epicBoss);
@@ -202,6 +246,7 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
     tutorialRewarded: core.tutorialRewarded ?? false,
     potSlots: core.potSlots ?? {},
     roster,
+    fallen,
     raids: { progress: parse(rows.raidState.progress_json, {}), lastRaidAt: rows.raidState.last_started_at },
     raidRevival: rows.raidRevival ? {
       sessionId: rows.raidRevival.session_id,
@@ -396,6 +441,24 @@ export async function applyBatch(
         locked_by_raid=excluded.locked_by_raid, color=excluded.color`)
       .bind(accountId, unit.id, unit.key, unit.mutation, unit.invasions, unit.stored ? 1 : 0,
         unit.lockedByRaid ?? null, now, serializeRosterColor(unit.color), accountId, body.batchId));
+  }
+  // The graveyard, diffed exactly like the roster above. Commands only ever move a
+  // zombie ON or OFF a statue (memorial.enshrine / memorial.clear) — nothing in the
+  // engine can add or remove a fallen zombie, which is why there is no INSERT here:
+  // rows are born at raid settlement and die when the account does.
+  const oldFallen = new Map((before.fallen ?? []).map((f) => [f.id, f]));
+  for (const fallen of engine.state.fallen ?? []) {
+    const old = oldFallen.get(fallen.id);
+    if (old && old.memorialObjectId === fallen.memorialObjectId &&
+        old.releasedAt === fallen.releasedAt) continue;
+    // `released_at` rides along because it is stamped by the same move that clears
+    // the statue (see releaseMemorial) — it is what keeps the released zombie at the
+    // top of the graveyard instead of at its date of death.
+    statements.push(db.prepare(`UPDATE fallen_v3
+      SET memorial_object_id = ?, released_at = ?, name = COALESCE(?, name)
+      WHERE account_id = ? AND unit_id = ? AND ${guard}`)
+      .bind(fallen.memorialObjectId ?? null, fallen.releasedAt ?? null, fallen.name ?? null,
+        accountId, fallen.id, accountId, body.batchId));
   }
   const durableKinds = new Set(["power.buy", "object.buy", "object.refund", "object.upgrade", "storage.claim", "roster.sell", "roster.combine_start", "roster.combine", "farmer.buy", "pet.buy"]);
   body.commands.forEach((entry, index) => {

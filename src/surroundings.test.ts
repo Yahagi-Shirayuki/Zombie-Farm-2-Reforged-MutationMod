@@ -66,9 +66,22 @@ describe("surroundingsTheme", () => {
     for (const natural of ["grass", "dirt", "snow", "sand"]) {
       expect(surroundingsTheme(natural).treeShare ?? 0.5, natural).toBeGreaterThan(0.5);
     }
+    // Built environments: their far-band pieces are street lights and rocket
+    // wrecks, which read as an installation in any quantity.
     for (const built of ["stone", "water"]) {
-      expect(surroundingsTheme(built).treeShare ?? 0.5, built).toBe(0.5);
+      expect(surroundingsTheme(built).treeShare ?? 0.5, built).toBeLessThanOrEqual(0.5);
     }
+  });
+
+  it("makes craters the substance of the lunar surface", () => {
+    const { props, treeShare = 0.5 } = surroundingsTheme("water");
+    const craters = props.filter((p) => p.file === "spaceCrater.png");
+    expect(craters.length / props.length).toBeGreaterThan(0.6);
+    // Craters are props, so the far band must also favour props over hardware —
+    // a high crater share inside a list the scatter rarely reaches does nothing.
+    expect(treeShare).toBeLessThan(0.3);
+    // Two distinct sizes, or a crater field is one stamp repeated.
+    expect(new Set(craters.map((p) => p.scale)).size).toBeGreaterThan(1);
   });
 
   it("keeps both scatter knobs in range", () => {

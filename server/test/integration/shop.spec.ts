@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { call, signIn, uniqueSub, type Session } from "./helpers";
+import { SIZE_TIERS } from "../../src/shopCatalog";
 
 // P16 — server-owned farm SIZE (sequential scalar) + CLIMATE skins (owned set).
 // /shop/state reads authoritative state; /shop/size buys the immediate next tier
@@ -138,17 +139,25 @@ describe("shop — server-owned size + climates", () => {
     expect((await readBal(s)).gold).toBe(10_000); // NOT double-charged
   });
 
-  it("walks the full ladder 30→40→50→60 then refuses to exceed max", async () => {
-    const s = await player(1_000_000);
+  // Driven off SIZE_TIERS rather than a hardcoded ladder, so adding a tier extends
+  // the walk instead of breaking the test.
+  it("walks the whole size ladder in order then refuses to exceed max", async () => {
+    const total = SIZE_TIERS.reduce((sum, t) => sum + t.gold, 0);
+    const s = await player(total);
     await call("POST", "/shop/state", s.token, {});
-    for (const size of [40, 50, 60]) {
-      const r = await call<ShopResult>("POST", "/shop/size", s.token, command({ size, currency: "gold" }));
-      expect(r.body.ok, `buy ${size}`).toBe(true);
-      expect(r.body.size).toBe(size);
+    for (const tier of SIZE_TIERS) {
+      const r = await call<ShopResult>(
+        "POST", "/shop/size", s.token, command({ size: tier.size, currency: "gold" })
+      );
+      expect(r.body.ok, `buy ${tier.size}`).toBe(true);
+      expect(r.body.size).toBe(tier.size);
     }
-    expect((await readBal(s)).gold).toBe(1_000_000 - 10_000 - 50_000 - 250_000);
-    // Nothing above 60.
-    const over = await call<ShopResult>("POST", "/shop/size", s.token, command({ size: 70, currency: "gold" }));
+    expect((await readBal(s)).gold).toBe(0); // charged each tier exactly once
+    // Nothing above the top tier.
+    const beyond = SIZE_TIERS[SIZE_TIERS.length - 1].size + 10;
+    const over = await call<ShopResult>(
+      "POST", "/shop/size", s.token, command({ size: beyond, currency: "gold" })
+    );
     expect(over.body).toMatchObject({ ok: false, error: "bad_size" });
   });
 

@@ -1,0 +1,19 @@
+-- Where a zombie sits in the graveyard once it comes back OFF a Memorial Statue.
+--
+-- The graveyard is capped (MEMORIAL_GRAVEYARD_CAP) and ordered by `died_at`, which is
+-- right for a fresh casualty and wrong for a released one. A player enshrines the
+-- zombie they most want to remember — typically an early, memorable loss — so its
+-- `died_at` is old. Selling or shelving that statue to re-site it therefore dropped
+-- the occupant to the bottom of the list and, on any farm that had lost sixty zombies
+-- since, deleted it outright at the next settlement. The sell confirmation promises
+-- the opposite in so many words: "they return to the graveyard and can be enshrined
+-- on another statue".
+--
+-- `released_at` is the moment the zombie last left a plinth. Ordering reads
+-- COALESCE(released_at, died_at), so a released zombie rejoins at the TOP of the
+-- graveyard and ages out normally from there — behind the next sixty losses rather
+-- than immediately. Nothing displays it: the date on the plaque is always `died_at`.
+--
+-- NULL for every existing row, which is exactly right — none of them has been
+-- released, so `died_at` remains their rank.
+ALTER TABLE fallen_v3 ADD COLUMN released_at INTEGER;

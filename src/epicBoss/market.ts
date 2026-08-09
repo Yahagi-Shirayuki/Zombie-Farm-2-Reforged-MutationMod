@@ -1,12 +1,24 @@
 import { RewardType, type QuestDef } from "../quest/types";
 import { QuestEvent } from "../quest/events";
+import { epicBossUnlockLevel } from "./catalog";
 import type { EpicBossDef } from "./types";
 
-/** Keep the event picker focused on the one boss the player has already activated. */
+/** The event picker's list: every boss in UNLOCK order, or just the active one.
+ *
+ *  The catalog array is in recovery order (the five bosses with authored animation
+ *  strips first, then the three reconstructed ones), which is the right order for
+ *  asset code and the wrong one for a shop: it listed the level-42 event second, above
+ *  four cheaper ones. Sorting here rather than reordering EPIC_BOSSES keeps the
+ *  authored/reconstructed split that the asset tests rely on. Ties fall back to the
+ *  catalog's own order, so a future event without its own unlock level still lands
+ *  somewhere stable. */
 export function visibleEpicBosses(
   bosses: readonly EpicBossDef[], activeBossId: string | null
 ): readonly EpicBossDef[] {
-  return activeBossId ? bosses.filter((boss) => boss.id === activeBossId) : bosses;
+  if (activeBossId) return bosses.filter((boss) => boss.id === activeBossId);
+  return [...bosses].sort(
+    (a, b) => epicBossUnlockLevel(a) - epicBossUnlockLevel(b) || bosses.indexOf(a) - bosses.indexOf(b)
+  );
 }
 
 /** Player-facing milestone notes for the special zombies in a boss's quest chain. */

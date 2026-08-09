@@ -65,16 +65,19 @@ DEFAULT = {
 }
 HEAD_SLOTS = {"Head", "EyeL", "EyeR", "Jaw", "UpperTeeth", "LowerTeeth", "Scar"}
 
-# Crop-mutation body parts, keyed by mutation BITMASK (see src/zombie/mutations.ts).
-# These are STRIPPED from the runtime base body model and re-added at runtime from
-# a unit's `mutation` mask, so a combined zombie shows exactly the mutations it
-# carries — independent of which parent species it inherited. (Portraits keep the
-# full art.)
-BIT_PART = {
-    1: "tomatoHead", 2: "onionHead", 4: "carrotHat", 8: "turnipArm",
-    16: "potatoHead", 32: "coffeeHead", 64: "celeryArm", 128: "broccoliHat",
-    256: "garlicHead", 512: "cauliflowerHat", 1024: "limaBeanBody",
-    2048: "flytrapCollar", 4096: "dragonArm",
+# Crop-mutation body parts, keyed by mutation KEY (the catalog in
+# src/zombie/mutations.ts). Keys, not bits: the catalog is append-only and a
+# mutation's bit is just its position in it, so art addressed by bit silently
+# re-points if the list ever moves. These parts are STRIPPED from the runtime base
+# body model and re-added at runtime from a unit's `mutation` mask, so a combined
+# zombie shows exactly the mutations it carries — independent of which parent
+# species it inherited. (Portraits keep the full art.)
+MUTATION_PART = {
+    "tomato": "tomatoHead", "onion": "onionHead", "carrot": "carrotHat",
+    "turnip": "turnipArm", "potato": "potatoHead", "coffee": "coffeeHead",
+    "celery": "celeryArm", "broccoli": "broccoliHat", "garlic": "garlicHead",
+    "cauli": "cauliflowerHat", "limabean": "limaBeanBody",
+    "flytrap": "flytrapCollar", "dragon": "dragonArm",
     # Pumpking. `pumpkinHead` is the authored carved jack-o'-lantern: a HEAD-slot part
     # with the same offsets as every other vegetable head (offsetX 6 / offsetY 36 / z 4,
     # exactly onionHead's), so it needs no rig override of its own.
@@ -83,22 +86,24 @@ BIT_PART = {
     # TOP of its ordinary head — a hat, not a head. Pointing the bit at it rendered the
     # mutation as a faceless gourd hovering over the shoulders, and needed a hand-tuned
     # offset to sit anywhere near right.
-    8192: "pumpkinHead",
+    "pumpking": "pumpkinHead",
 }
-# Tier-4 variants SHARE a stat bit with a lower-tier mutation (Eyebiscus=Carrot bit 4,
-# Heartichoke=Cauliflower bit 512) but have their OWN hair art. We emit a per-model
-# `mutationOverrides` remap so the field render swaps the shared bit's part for the
-# variant's true sprite; the stat bit itself is unchanged. Keyed by unitKey ->
-# (bit, part-name). Their portraits already use the true art via the FEATURE map.
+# Tier-4 variants SHARE a mutation with a lower tier (Eyebiscus=Carrot,
+# Heartichoke=Cauliflower) but have their OWN hair art. We emit a per-model
+# `mutationOverrides` remap so the field render swaps the shared mutation's part for
+# the variant's true sprite; the mutation itself is unchanged. Keyed by unitKey ->
+# (mutation key, part-name). MIRRORED by MUTATION_VARIANTS in
+# src/zombie/mutationDisplay.ts, which supplies the matching NAME and icon — the two
+# must name the same part. Their portraits already use the true art via FEATURE.
 VARIANT_OVERRIDE = {
-    "ZombieActorRegularTier4Eyebiscus": (4, "eyebiscusHat"),
-    "ZombieActorRegularTier4Heartichoke": (512, "heartichokeBody"),
+    "ZombieActorRegularTier4Eyebiscus": ("carrot", "eyebiscusHat"),
+    "ZombieActorRegularTier4Heartichoke": ("cauli", "heartichokeBody"),
 }
 # Every mutation part name (incl. the Tier-4 variants + the generic mutationArm),
 # stripped from runtime base models. No exemption is needed: JackoZombie's own
 # pumpkin is `pumpkinHatFeature`, which is not a mutation part at all, and no base
 # model draws the carved `pumpkinHead`.
-MUT_PARTS = set(BIT_PART.values()) | {
+MUT_PARTS = set(MUTATION_PART.values()) | {
     "eyebiscusHat", "heartichokeBody", "mutationArm",
 }
 
@@ -134,6 +139,14 @@ TINTABLE = {"defaultArmB", "defaultBody", "defaultHead", "defaultEyeL", "default
             "defaultJaw", "defaultUpperTeeth", "defaultLowerTeeth", "defaultScar",
             "defaultFootF", "defaultFootB", "defaultArmF", "amazonBody",
             "browFeature", "bruteJaw", "barbarianJaw"}
+
+# Per-part display scale, applied about the part's own pivot (the runtime reads
+# `scale` off each part; a missing entry means 1). This is the one place the rig
+# deliberately departs from the sheet geometry: the Garden flower's petals read as a
+# thin ring behind the head at native size, so both Flower zombies wear a bigger one.
+PART_SCALE = {
+    "sunflowerFeature": 1.2,
+}
 
 # ---------------------------------------------------------------------------
 # Per-unit part additions/removals, keyed by catalog unitKey. `add` = extra parts;
@@ -332,12 +345,15 @@ def main():
             if grp == "head" and SLOT.get(p) != "Head" and p != "defaultHead":
                 ox += head[0]
                 oy += head[1]
-            mp.append({
+            part = {
                 "file": p, "group": grp,
                 "px": ox, "py": -oy,
                 "ax": L["pivotX"], "ay": 1 - L["pivotY"], "z": L.get("z", 0),
                 "tint": p in TINTABLE,
-            })
+            }
+            if p in PART_SCALE:
+                part["scale"] = PART_SCALE[p]
+            mp.append(part)
         mp.sort(key=lambda m: m["z"])
         return {
             "name": name_of.get(key, key),
@@ -362,8 +378,8 @@ def main():
         models[key] = build(key, base_parts)         # runtime: plain body + default head
         # Tier-4 variant: remap its shared stat bit to its own hair sprite on the field.
         if key in VARIANT_OVERRIDE:
-            bit, part = VARIANT_OVERRIDE[key]
-            models[key]["mutationOverrides"] = {str(bit): part}
+            mutation, part = VARIANT_OVERRIDE[key]
+            models[key]["mutationOverrides"] = {mutation: part}
 
     # ---- Colour class consistency ------------------------------------------
     # A zombie's body tint IS its colour class made visible: every Green zombie
@@ -398,14 +414,14 @@ def main():
             if key in catalog:
                 catalog[key]["color"] = list(band_color)
 
-    # mutations.json: rig for each mutation BIT, so the runtime can attach the part
-    # onto any base body. Head-relative parts (hats) add the model's neck offset at
+    # mutations.json: rig for each mutation, so the runtime can attach the part onto
+    # any base body. Head-relative parts (hats) add the model's neck offset at
     # runtime; head-slot parts (onionHead) and root parts (arms/body/collar) use
     # their own offset. Bumped z keeps overlays above the base parts they cover.
     mutations = {}
-    # Bit-keyed entries, plus the Tier-4 variant parts keyed by NAME (looked up via a
-    # model's mutationOverrides) so they can attach onto any base body at runtime.
-    mut_targets = [(str(bit), part) for bit, part in BIT_PART.items()]
+    # Key-addressed entries, plus the Tier-4 variant parts keyed by NAME (looked up
+    # via a model's mutationOverrides) so they can attach onto any base body.
+    mut_targets = list(MUTATION_PART.items())
     mut_targets += [(part, part) for _, part in VARIANT_OVERRIDE.values()]
     for target, part in mut_targets:
         L = lay(part)
@@ -474,6 +490,13 @@ def _portraits(frames, models):
             x, y = int(L["x"]), int(L["y"])
             w, h = int(round(L["width"])), int(round(L["height"]))
             part = atlas.crop((x, y, x + w, y + h))
+            # Same per-part scale the rig applies, so a menu portrait and the zombie
+            # standing on the farm wear the same size flower. Grows about the pivot,
+            # which the placement below already measures from.
+            s = mp.get("scale", 1)
+            if s != 1:
+                w, h = max(1, int(round(w * s))), max(1, int(round(h * s)))
+                part = part.resize((w, h), Image.LANCZOS)
             if mp["tint"]:
                 # Default eyeballs are a soft light yellow in every species; the
                 # rest of the grey skeleton inherits the zombie's body color.

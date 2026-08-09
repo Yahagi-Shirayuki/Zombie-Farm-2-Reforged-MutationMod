@@ -16,6 +16,7 @@ import { ZombieField } from "./zombie/ZombieField";
 import { makeOwned, type OwnedZombie } from "./zombie/types";
 import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
 import { almanacEntries, isEpicZombie, obtainHint } from "./zombie/almanac";
+import { fallenToInfo, snapshotFallen } from "./zombie/memorial";
 import { POT_DURATION_MS } from "./zombie/ZombiePot";
 import { isCombinePromotion } from "./zombie/combineSpecies";
 import { GameState } from "./GameState";
@@ -56,7 +57,7 @@ import {
   DEFAULT_FARM_BACKGROUND, getFarmBackground, isFarmBackground, setFarmBackground,
   FARM_BG_DENSITY, type FarmBackground, getDayNightMode, setDayNightMode,
   isLocalNight, type DayNightMode, hasSeenHazardTip, markHazardTipSeen,
-  hasSeenRaidTip, markRaidTipSeen,
+  hasSeenRaidTip, markRaidTipSeen, hasSeenEliteTip, markEliteTipSeen,
   zombieAppearancePrefs, setZombieBodyColorMode, setShowZombieMutations,
 } from "./prefs";
 import { raidTip } from "./raid/raidTips";
@@ -566,6 +567,14 @@ async function main() {
     () => walk.tile // where a unit with no saved position of its own arrives
   );
   audio.setZombieBarkSource(() => zombies.randomBrainBark());
+  // The graveyard. Wired here (not in the online block) because both the offline
+  // and the server-verified raid paths funnel their dead through removeCasualties,
+  // and a Memorial Statue is a purely local, cosmetic keepsake either way.
+  zombies.onFallen = (units) =>
+    state.recordFallen(units.map((unit) => snapshotFallen(unit, Date.now())));
+  zombies.onRevived = (ids) => state.forgetFallen(ids);
+  // Selling or shelving a statue must not take its occupant with it.
+  field.onMemorialReleased = (fallen) => state.releaseFallen(fallen);
 
   // Night lighting layer: a dark mask with the lights erased out of it (revealing
   // the daytime scene under each light — never a glare), above the farm/entities
@@ -936,7 +945,7 @@ async function main() {
       currency === "gold" ? "Not enough coins." : `Not enough brains (need ${needed}).`
     ),
     popHarvestIcon,
-    () => zombies.canHarvestZombie()
+    () => zombies.zombieHarvestRoom()
   );
 
   // `raidActive` is declared up here (ahead of both the celebration queue and the raid
@@ -1236,8 +1245,11 @@ async function main() {
           state.addXp(xp);
           if (r.zombieKey) {
             const context = mutationContexts.get(`${pl.oc}:${pl.or}`) ?? r.mutationContext!;
+            // spawnVerified, not spawn: the army may be full with the Mausoleum still
+            // open (canHarvestZombie above passes on either), and plain spawn would
+            // return null there — silently deleting a zombie whose crop is now spent.
             harvestAliases = unitSubjectAliasesOf(
-              zombies.spawn(r.zombieKey, pl.oc + 1, pl.or + 1,
+              zombies.spawnVerified(r.zombieKey, pl.oc + 1, pl.or + 1,
                 offlineHarvestMutation(r.zombieKey, context))
             );
           }
@@ -2155,11 +2167,9 @@ async function main() {
       return jobs.enqueue("till", target.oc, target.or);
     }
     if (!field.isRipe(target.oc, target.or)) return false;
-    if (field.ripeZombieAt(target.oc, target.or) && !zombies.canHarvestZombie()) {
-      const center = field.plotCenterOf(target.oc, target.or);
-      floatText(center.x, center.y, "Army full!");
-      return false;
-    }
+    // The army/Mausoleum check lives in jobs.enqueue, which also debits the zombie
+    // harvests already queued — a swipe across a field of ripe zombies must not queue
+    // more than there is room for, and re-swiping a queued plot must not re-warn.
     return jobs.enqueue("harvest", target.oc, target.or);
   };
 
@@ -2312,7 +2322,7 @@ async function main() {
   // ---- Farm Size upgrade (Market → Upgrade tab) ----
   // Buying an expansion grows the field (origin stays at 0,0 so nothing on the farm
   // moves) and re-fits the backdrop/foliage/camera to the new size. Sizes are bought
-  // in order (30 → 40 → 50 → 60). Each tier has a gold card and a brains card;
+  // in order (30 → 40 → 50 → 60 → 70). Each tier has a gold card and a brains card;
   // buying either grows the farm, so the other currency's card then reads as owned.
   hud.setUpgrades(assets.upgrades.mapSize);
   hud.getMapSize = () => field.w;
@@ -2650,6 +2660,7 @@ async function main() {
   hud.getRaidStatus = () => ({
     cooldownMs: raids.cooldownRemaining(),
     voucherCount: raids.voucherCount(),
+    brainTicketCount: raids.brainTicketCount(),
   });
   const selectEpicBoss = (bossId: string | null | undefined) => {
     const def = epicBossById(bossId) ?? DR_GROUNDHOG;
@@ -3188,6 +3199,7 @@ async function main() {
     concentration: raids.concentrationCount(),
     dice: raids.diceCount(),
     maxDice: raids.maxDiceFor(raidId),
+    brainTickets: raids.brainTicketCount(),
   });
 
   // Live battle scene — the ONLY way a raid is played out (no instant/auto-resolve in
@@ -3418,7 +3430,8 @@ async function main() {
           raidId,
           partyIds,
           !!opts.concentration,
-          Math.max(0, Math.floor(opts.dice ?? 0))
+          Math.max(0, Math.floor(opts.dice ?? 0)),
+          !!opts.brainTicket
         );
         if (!gate.ok) {
           // Distinguish the server's refusals: the client already hides locked raids and
@@ -3430,6 +3443,8 @@ async function main() {
             hud.showToast("Another invasion is already in progress.");
           } else if (gate.error === "no_voucher") {
             hud.showToast("No Invasion Voucher to skip the cooldown.");
+          } else if (gate.error === "no_brain_ticket") {
+            hud.showToast("No Brain Ticket for an elite invasion.");
           } else {
             const mins = Math.ceil((gate.cooldownRemaining ?? 0) / 60000);
             hud.showToast(`Invasion on cooldown — about ${mins} min left.`);
@@ -3458,6 +3473,7 @@ async function main() {
           bypassed: !!gate.bypassed,
           serverDice: gate.dice ?? 0,
           serverBrainDrop: gate.brainDrop ?? 0,
+          serverElite: !!gate.elite,
           // The server pinned its wave from this same id, so a raid with per-fight
           // randomness (the Robots' random boss) resolves identically on both sides.
           waveSeed: raidSessionId ?? undefined,
@@ -3470,6 +3486,7 @@ async function main() {
           } else if (error.code === "locked") hud.showToast(`That invasion unlocks at level ${body.unlockLevel ?? "?"}.`);
           else if (error.code === "raid_in_progress") hud.showToast("Another invasion is already in progress.");
           else if (error.code === "no_voucher") hud.showToast("No Invasion Voucher to skip the cooldown.");
+          else if (error.code === "no_brain_ticket") hud.showToast("No Brain Ticket for an elite invasion.");
           else if (error.code === "stale_ruleset") {
             // This tab predates the deployed Worker, so the server refuses to pin a fight
             // it and the client would simulate differently. Nothing is consumed and no
@@ -3491,6 +3508,19 @@ async function main() {
       // this one really IS abandoned and recovery should be free to close it.
       economy?.setLiveRaid(null);
       return false; // gated (cooldown/army) — the army screen stays up
+    }
+    // First Brain Ticket ever spent. Buying one advertises brains; nothing about it
+    // says the invasion it starts is several rungs harder than the one on the card, and
+    // by the time the player finds out their army is already on the field and its
+    // casualties are permanent. Tim says it plainly, once — `setup.elite` rather than
+    // the request, so this only fires when a ticket was really charged.
+    if (setup.elite && !hasSeenEliteTip()) {
+      markEliteTipSeen();
+      await hud.timSays(
+        "Whoa there — that's a BRAIN TICKET. It'll pay out four times the brains,\n" +
+        "sure, but it turns the invasion ELITE. They hit a whole lot harder than\n" +
+        "anything you've faced here. Bring your best, and don't say I didn't warn you!"
+      );
     }
     // First invasion that actually fields a hazard: hazards are the one part of a
     // fight the player has to handle by hand, and nothing on screen says so. Ask the
@@ -3547,7 +3577,10 @@ async function main() {
         // That call also starts the server-owned cooldown and returns the authoritative
         // balance + lastRaidAt + the rolled drop, which the client reconciles.
         const online = onlineFarm && !!raidSessionId && !!economy;
-        const view = raids.finishRaid(setup.raid, setup.party, outcome, setup.dice, online, setup.brainDrop, setup.brainEligible);
+        const view = raids.finishRaid(
+          setup.raid, setup.party, outcome, setup.dice, online,
+          setup.brainDrop, setup.brainEligible, setup.elite
+        );
         const casualtyParty = setup.party.filter((zombie) => outcome.losses.includes(zombie.id));
         let settlementPromise: Promise<api.RaidFinishResult> | null = null;
         if (online) {
@@ -3997,11 +4030,17 @@ async function main() {
   // Gold paid when selling a placed object. Brain prices convert at 1,000g each.
   const sellRefund = (def: PlaceableDef) => sellBack(def.cost, !!def.brainsNeeded);
 
+  /** Functional items are permanent — except the Memorial Statue, which is bought
+   *  in quantity and has to be reversible: a player who buys ten and wants two back
+   *  otherwise has no way out. Its occupant is handed back to the graveyard by
+   *  Field.onMemorialReleased, so a sale costs the plinth and nothing else. */
+  const canSellObject = (def: PlaceableDef) => def.category !== "functional" || !!def.memorial;
+
   // Sell a placed object for a refund (used by the Remove tool + object popup).
   const sellObject = (id: string) => {
     if (onlineGameplayBlocked()) return;
     const def = field.objectDefOf(id);
-    if (def?.category === "functional") return;
+    if (def && !canSellObject(def)) return;
     const o = field.objectOriginOf(id);
     field.removeObject(id);
     if (!def || !o) return;
@@ -4030,7 +4069,9 @@ async function main() {
     if (onlineGameplayBlocked()) return false;
     const def = placeCatalog.get(key);
     const instanceId = storedInstanceId(key);
-    if (!def || def.category === "functional") return false;
+    // A shelved Memorial Statue is always a bare plinth (its occupant went back to
+    // the graveyard when it was stored), so selling it from here frees nothing.
+    if (!def || !canSellObject(def)) return false;
     if (!instanceId) {
       hud.showToast("That item is no longer in your shed.");
       return false;
@@ -4096,10 +4137,13 @@ async function main() {
   };
 
   // Can this object be stored in the shed? Storage buildings can't; the shed
-  // must have a free slot.
+  // must have a free slot. A Memorial Statue can — the shed holds only a key and a
+  // count, so it goes in as a bare plinth and its occupant returns to the graveyard
+  // (Field.onMemorialReleased) rather than being shelved with it.
   const canStore = (def: PlaceableDef) =>
     !def.storageSlots && !def.zombieStorage &&
     state.storedItemTotal() < state.storageItemCap;
+
 
   // The Move / Rotate / Store / Sell sheet for a placed object. Both entry points
   // (desktop tap and touch long-press) go through here so every object reachable
@@ -4110,7 +4154,7 @@ async function main() {
       portrait: `${BASE}assets/objects/${def.sprite}`,
       tint: objectTint(def.color), // monoliths share one sprite, coloured per def
       canStore: canStore(def),
-      canSell: def.category !== "functional",
+      canSell: canSellObject(def),
       sellRefund: sellRefund(def),
       sellBrains: false,
       // The pen's own collection, which used to be all a tap on it could reach.
@@ -4126,8 +4170,28 @@ async function main() {
       },
       onRotate: () => { field.flipObject(oid); saveManager.save(); },
       onStore: () => storeObject(oid),
-      onSell: () => sellObject(oid),
+      // The sheet sells decor on one tap, which is fine for a 50-gold daisy. A
+      // Memorial Statue is a 3,000-gold object that may be carrying somebody, so it
+      // asks first — and says where that somebody goes.
+      onSell: def.memorial ? () => void confirmSellMemorial(oid, def) : () => sellObject(oid),
     });
+  };
+
+  /** Confirm-then-sell for a Memorial Statue. The occupant is not destroyed: it goes
+   *  back to the graveyard (Field.onMemorialReleased), so this only costs the plinth. */
+  const confirmSellMemorial = async (oid: string, def: PlaceableDef) => {
+    const occupant = field.memorialOccupant(oid);
+    const refund = sellRefund(def);
+    const confirmed = await hud.confirmInGame(
+      `Sell ${def.name}?`,
+      `Sell this statue for ${refund} gold?`
+      + (occupant
+        ? ` ${occupant.name} is not lost with it — they return to the graveyard and can be enshrined on another statue.`
+        : ""),
+      `Sell +${refund}g`,
+    );
+    // The farm may have changed while the confirmation was open.
+    if (confirmed && field.objectDefOf(oid) === def) sellObject(oid);
   };
 
   // Remove tool: a placed OBJECT sells back for a 50% refund; any plot is cleared
@@ -4136,14 +4200,17 @@ async function main() {
     const id = field.objectAtPoint(wx, wy);
     if (id) {
       const d = field.objectDefOf(id);
-      if (d?.category === "functional") return;
-      if (!d) return;
+      if (!d || !canSellObject(d)) return;
       const purchase = objectPurchases.get(id);
       const boughtWithBrains = purchase ? purchase.currency === "brains" : !!d.brainsNeeded;
       const refund = purchase ? sellBack(purchase.cost, boughtWithBrains) : sellRefund(d);
+      // Selling a memorial does not destroy who it remembered — say so, or the
+      // warning reads as "this deletes your dead zombie" and nobody ever taps it.
+      const occupant = d.memorial ? field.memorialOccupant(id) : null;
       const confirmed = await hud.confirmInGame(
         `Sell ${d.name}?`,
-        `The Remove tool will permanently sell this item for ${refund} gold. This cannot be undone.`,
+        `The Remove tool will permanently sell this item for ${refund} gold. This cannot be undone.`
+        + (occupant ? ` ${occupant.name} returns to the graveyard and can be enshrined again.` : ""),
         `Sell +${refund}g`
       );
       // The farm may have changed while the confirmation was open.
@@ -4186,9 +4253,47 @@ async function main() {
     }
   };
 
+  /** Tap a Memorial Statue: show who it remembers, or pick someone to remember.
+   *  Enshrining moves the snapshot out of the graveyard and onto the statue, so the
+   *  same zombie can never stand on two plinths. */
+  const openMemorialFor = (objId: string, objDef: PlaceableDef) => {
+    hud.openMemorial({
+      occupant: field.memorialOccupant(objId),
+      fallen: state.fallenZombies,
+      cardOf: (fallen) => fallenToInfo(fallen, zombieDefs.get(fallen.key), zombiePortrait(fallen.key)),
+      onObjectOptions: () => openObjectActionsFor(objId, objDef),
+      onEnshrine: (fallenId) => {
+        const claimed = state.claimFallen(fallenId);
+        if (!claimed) return false;
+        if (!field.setMemorialOccupant(objId, claimed)) {
+          state.releaseFallen(claimed); // the statue vanished under the open panel
+          return false;
+        }
+        // ONLINE the graveyard and every statue's occupant are server-owned, because
+        // a friend visiting this farm renders the memorial from the authoritative
+        // object projection. The name rides along: it is the one client-authored
+        // field, exactly as it is for a living unit.
+        economy?.submitMemorial({ type: "memorial.enshrine", instanceId: objId,
+          unitId: claimed.id, ...(claimed.name ? { name: claimed.name } : {}) });
+        audio.play("place");
+        saveManager.save();
+        return true;
+      },
+      onClear: () => {
+        const occupant = field.memorialOccupant(objId);
+        if (!occupant) return;
+        field.setMemorialOccupant(objId, null);
+        state.releaseFallen(occupant);
+        economy?.submitMemorial({ type: "memorial.clear", instanceId: objId });
+        saveManager.save();
+      },
+    });
+  };
+
   const interactWithObject = (objId: string, objDef: PlaceableDef): boolean => {
     if (objDef.tapSound) audio.tap(objDef.tapSound);
     if (objDef.storageSlots) hud.openStorage();
+    else if (objDef.memorial) openMemorialFor(objId, objDef);
     else if (objDef.zombieStorage) hud.openMausoleum();
     else if (objDef.zombiePatch) {
       const napping = zombies.toggleGather(field.patchRestTiles());
@@ -4561,6 +4666,8 @@ async function main() {
         if (objDef?.tapSound) audio.tap(objDef.tapSound);
         if (objId && objDef && objDef.storageSlots) {
           hud.openStorage();
+        } else if (objId && objDef && objDef.memorial) {
+          openMemorialFor(objId, objDef); // who this statue remembers, or the graveyard
         } else if (objId && objDef && objDef.zombieStorage) {
           hud.openMausoleum(); // the Mausoleum's storage slots
         } else if (objId && objDef && objDef.zombiePatch) {
@@ -4893,6 +5000,10 @@ async function main() {
     }
     for (const potId of placedPotIds) {
       const pot = zombies.potFor(potId);
+      // The pot itself shows what it is doing: lid clamped on while the combine
+      // cooks, the new zombie's arm out once it is done (source art, one tile per
+      // state). Cheap to call every frame — it only repaints on a state change.
+      field.setObjectWork(potId, pot.busy ? (pot.ready ? "ready" : "busy") : null);
       let view = potBars.get(potId);
       if (!view) { view = makePotBar(); potBars.set(potId, view); }
       const wp = field.objectWorkPoint(potId);
@@ -4975,6 +5086,8 @@ async function main() {
   if (import.meta.env.DEV) (window as any).ZF = { app, world, field, actor, walk, zombies, state, hud, jobs, audio, save: saveManager, quests, questBus, raids, screenToGrid, CARROT,
     placeables: placeCatalog,
     boosts: boostCatalog,
+    // Seed/zombie-crop configs by key, so a test can plant one without the menu.
+    crops: catalog,
     // Instantly resolve a raid for testing (e.g. ZF.runRaid(1) with 8+ zombies).
     runRaid: (id: number) => raids.start(id, raids.partyView().defaultSelectedIds),
     // Grant a boost for testing (e.g. ZF.giveBoost("instaGrow", 3)).

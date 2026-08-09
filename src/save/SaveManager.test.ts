@@ -3,6 +3,7 @@ import * as api from "../net/api";
 import { SaveManager } from "./SaveManager";
 import { activeSaveKey } from "./profiles";
 import { SAVE_VERSION } from "./schema";
+import { MAX_REMEMBERED_FALLEN } from "../zombie/memorial";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -241,6 +242,46 @@ describe("SaveManager mode isolation", () => {
     expect(save.objects).toEqual([
       { id: "placed-1", key: "flowerBed", oc: 7, or: 9, rotation: undefined, readyAt: undefined },
     ]);
+  });
+
+  // The graveyard cap counts the zombies WAITING for a statue. Capping the projection
+  // as one list dropped whatever was oldest, and a statue's occupant is exactly the
+  // record most likely to be old — so a memorial bought long ago hydrated as a bare
+  // plinth once MAX_REMEMBERED_FALLEN more zombies had died behind it, and the client
+  // would then let the player re-enshrine a plinth the server refuses as occupied.
+  it("keeps a statue's occupant however far past the graveyard cap it died", () => {
+    vi.spyOn(Date, "now").mockReturnValue(20_000);
+    const manager = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "online",
+    );
+    // The occupant is the OLDEST loss on the account, buried under a full graveyard.
+    const occupant = { id: "old-friend", key: "ZombieActorRegularTier1", name: "Rufus",
+      mutation: 0, invasions: 7, diedAt: 1, memorialObjectId: "statue-1" };
+    const recent = Array.from({ length: MAX_REMEMBERED_FALLEN + 5 }, (_, i) => ({
+      id: `z${i}`, key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, diedAt: 1_000 + i,
+    }));
+    const save = (manager as any).fromBootstrap({
+      serverTime: 10_000,
+      presentation: { data: { objectLayout: [{ id: "statue-1", oc: 2, or: 3 }] } },
+      gameplay: {
+        balance: { gold: 0, brains: 0, xp: 0 }, zombieMax: 16, zombiePotBought: false,
+        farmerHeads: [1], farmerHeadId: 1, ownedPets: [], activePet: null, penPets: [],
+        farmSize: 30, climates: ["grass"], inventory: {},
+        storage: { stored: {}, received: {} }, farm: { plots: {} },
+        objects: { objects: [
+          { status: "placed", instanceId: "statue-1", catalogKey: "memorialStatue" },
+        ] },
+        roster: [], fallen: [occupant, ...recent], quests: { progress: [], completed: [] },
+        raids: { progress: {}, lastRaidAt: 0 }, epicBoss: null, tutorialRewarded: false,
+      },
+      social: { friends: [] },
+    });
+
+    expect(save.objects[0].memorial).toMatchObject({ id: "old-friend", name: "Rufus" });
+    // …and the graveyard is still capped, with the enshrined one kept out of it.
+    expect(save.fallen).toHaveLength(MAX_REMEMBERED_FALLEN);
+    expect(save.fallen.map((unit: { id: string }) => unit.id)).not.toContain("old-friend");
   });
 
   it("keeps online farmer intentions in an account-scoped device journal", () => {

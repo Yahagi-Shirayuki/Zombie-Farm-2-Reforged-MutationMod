@@ -28,6 +28,7 @@ import plistlib
 import re
 
 from reforge_economy import brain_price
+import memorial_statue
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ = os.path.dirname(HERE)
@@ -378,6 +379,43 @@ def extract_from_atlas(fl, fn):
     return im.rotate(-90, expand=True) if rotated else im
 
 
+def pair(s):
+    n = [float(v) for v in re.findall(r"-?\d+\.?\d*", s)]
+    return n[0], n[1]
+
+
+def flat_tile_fields(tp, sprite_img):
+    """`{}`, or the flat-tile anchor fields — the cocos anchor of a flatTile's art,
+    EXPRESSED AGAINST THE PNG WE SHIP.
+
+    GROUND TRUTH `-[Tile anchorPoint]` / `-[Tile loadBaseSprite]`: a tile positions
+    its node at the ground tile's own position and hangs the art off
+    `(pivotx, pivoty)` — cocos anchor, y-up, defaulting to (0.38, 0). Ordinary
+    objects survive being bottom-centered instead; flat road/pond art does not,
+    because its pieces only meet at the seams if every piece uses its own pivot.
+
+    An atlas frame is TRIMMED, and cocos applies the anchor to the UNtrimmed size
+    then shifts the quad by `offset + (untrimmed - trimmed)/2`. We ship the trimmed
+    crop, so fold both terms into one anchor against that crop.
+    """
+    if not tp.get("flatTile"):
+        return {}
+    ax = float(tp.get("pivotx", 0.38))
+    ay = float(tp.get("pivoty", 0.0))
+    w, h = sprite_img.width, sprite_img.height
+    w0, h0, offx, offy = w, h, 0.0, 0.0
+    fr = frames(tp["frameList"]) if tp.get("frameList") else None
+    f = fr.get(tp.get("frameName")) if fr else None
+    if f and "spriteSourceSize" in f:
+        w0, h0 = pair(f["spriteSourceSize"])
+        offx, offy = pair(f.get("spriteOffset", "{0,0}"))
+        offx += (w0 - w) / 2
+        offy += (h0 - h) / 2
+    return {"flatTile": True,
+            "anchorX": round((ax * w0 - offx) / w, 6),
+            "anchorY": round((ay * h0 - offy) / h, 6)}
+
+
 # ---- Variants that need their own de-coloured sprite (authored, NOT source art) --
 # A recolor family multiplies ONE sprite by each variant's tint, which assumes the
 # base art is neutral — every other family (hedge, crate, fence, balloon) is authored
@@ -414,6 +452,46 @@ def neutralize_petals(img):
 def is_blank(img):
     """True when every pixel is transparent — nothing would be drawn."""
     return img is None or img.getbbox() is None
+
+
+def loose_sprite(tp, sheet=None):
+    """Full-size in-world art for a tile that ships as a standalone tex*.png.
+
+    Some tiles are ONE frame of a SHARED sheet — the coloured graves (Blue/Red/
+    Silver) all live in tex2004.png as a 2x2 grid — so crop to this tile's own
+    rect when it sits at a nonzero offset in the sheet.
+    """
+    ss = sheet or (tp or {}).get("spriteSheet")
+    if not tp or not ss:
+        return None
+    img = image(ss)
+    if img is None:
+        return None
+    img = img.copy()
+    fw, fh = tp.get("width"), tp.get("height")
+    fx, fy = int(tp.get("x") or 0), int(tp.get("y") or 0)
+    if fw and fh and (fx > 0 or fy > 0):
+        img = img.crop((fx, fy, fx + int(fw), fy + int(fh)))
+    return img
+
+
+# Functional objects whose working state changes what they look like on the farm.
+# The source ships each state as its OWN TileProperties tile with the same
+# footprint and ground point, differing only in art: the Zombie Pot is bare while
+# idle, wears a clamped-down lid while a combine cooks, and sprouts the finished
+# zombie's arm once it is done. They ride along on the one catalog row as
+# alternate sprites (see `busySprite` / `readySprite` in assets.ts).
+STATE_SPRITE_TILES = (("cooking", "busySprite"), ("done", "readySprite"))
+
+
+def state_sprites(tileprops, tile):
+    """{"busySprite": file, ...} for `tile`'s working-state art (may be empty)."""
+    out = {}
+    for suffix, field in STATE_SPRITE_TILES:
+        img = loose_sprite(tileprops.get(f"{tile}_{suffix}"))
+        if not is_blank(img):
+            out[field] = emit_sprite(f"{tile}_{suffix}", img)
+    return out
 
 
 def extract_first_animated_frame(tp):
@@ -638,19 +716,7 @@ def main():
         else:  # functional: prefer the full-size in-world sprite from
             # TileProperties (a standalone tex10xx.png); the market icon is tiny
             # and would look pixelated placed on the farm.
-            ss = tp.get("spriteSheet") or e.get("spriteSheet")
-            if ss:
-                sprite_img = image(ss)
-                if sprite_img is not None:
-                    sprite_img = sprite_img.copy()
-                    # Some tiles are ONE frame of a SHARED sheet: the colored graves
-                    # (Blue/Red/Silver) all live in tex2004.png as a 2x2 grid, so
-                    # using the whole sheet renders all four. Crop to this tile's
-                    # frame when it sits at a nonzero offset in the sheet.
-                    fw, fh = tp.get("width"), tp.get("height")
-                    fx, fy = int(tp.get("x") or 0), int(tp.get("y") or 0)
-                    if fw and fh and (fx > 0 or fy > 0):
-                        sprite_img = sprite_img.crop((fx, fy, fx + int(fw), fy + int(fh)))
+            sprite_img = loose_sprite(tp, tp.get("spriteSheet") or e.get("spriteSheet"))
 
         if is_blank(sprite_img):
             skipped += 1
@@ -697,10 +763,16 @@ def main():
             "sprite": out_name,
             # Far-side art drawn BEHIND anything standing inside this object.
             **({"backSprite": back_name} if back_name else {}),
+            # Working-state art (Zombie Pot: lid on while cooking, arm out when done).
+            **state_sprites(tileprops, tile),
             "nativeW": sprite_img.width,
             "nativeH": sprite_img.height,
             "pivotX": tp.get("pivotx", 0.5),
             "pivotY": tp.get("pivoty", 0.0),
+            # Ground-hugging art (roads, ponds, the zombie patch) that has to line
+            # up seam-to-seam with its neighbours, so it is anchored by its authored
+            # pivot rather than bottom-centered. See flat_tile_fields.
+            **flat_tile_fields(tp, sprite_img),
             # simple functional effects the game can apply on placement
             "armyMax": e.get("increaseArmyMaxBy", 0),
             "storageSlots": slots,  # >0 for storage sheds (item capacity)
@@ -787,6 +859,10 @@ def main():
             "nativeH": sprite_img.height,
             "pivotX": tp.get("pivotx", 0.5),
             "pivotY": tp.get("pivoty", 0.0),
+            # Ground-hugging art (roads, ponds, the zombie patch) that has to line
+            # up seam-to-seam with its neighbours, so it is anchored by its authored
+            # pivot rather than bottom-centered. See flat_tile_fields.
+            **flat_tile_fields(tp, sprite_img),
             "armyMax": 0,
             "storageSlots": 0,
             "zombieSlots": 0,
@@ -824,6 +900,12 @@ def main():
             tier.update({"key": key, "name": name, "cost": cost, "zombieSlots": slots})
             catalog.append(tier)
 
+    # Memorial Statue: a reimplementation addition with no source row, whose art is
+    # cut from the Tim Statue's plinth. Built AFTER the loop above so its source
+    # sprite is already in OBJDIR, and BEFORE the orphan sweep so its own PNG counts
+    # as referenced. See tools/memorial_statue.py.
+    catalog.append(memorial_statue.build(OBJDIR))
+
     catalog.sort(key=lambda c: (c["category"], c["level"], c["cost"]))
 
     # public/assets/objects/ is entirely generated, so anything the catalog no
@@ -832,7 +914,8 @@ def main():
     # directory look like it still holds art the game can reach.
     referenced = {c["sprite"] for c in catalog} | {
         c["growingSprite"] for c in catalog if c["growingSprite"]} | {
-        c["backSprite"] for c in catalog if c.get("backSprite")}
+        c["backSprite"] for c in catalog if c.get("backSprite")} | {
+        c[field] for c in catalog for _, field in STATE_SPRITE_TILES if c.get(field)}
     orphans = sorted(f for f in os.listdir(OBJDIR)
                      if f.endswith(".png") and f not in referenced)
     for f in orphans:

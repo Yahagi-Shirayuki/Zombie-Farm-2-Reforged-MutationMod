@@ -562,6 +562,17 @@ export class EconomyClient {
     this.enqueue({ type: "object.status", instanceId, status });
   }
 
+  /** Move a fallen zombie on or off a Memorial Statue. Server-owned so a visitor
+   *  sees the same statue the owner does — the visit projection reads the
+   *  authoritative graveyard, never this client's presentation blob. Costs nothing,
+   *  so there is no optimistic balance to apply. */
+  submitMemorial(command:
+    | { type: "memorial.enshrine"; instanceId: string; unitId: string; name?: string }
+    | { type: "memorial.clear"; instanceId: string }
+  ): void {
+    this.enqueue(command);
+  }
+
   submitTreeHarvest(instanceIds: string[], optimisticGold = 0): void {
     if (instanceIds.length) this.enqueue(
       { type: "object.harvest_trees", instanceIds },

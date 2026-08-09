@@ -27,9 +27,15 @@ describe("objectCatalog — mirror of placeables.json", () => {
     }
   });
   it("limits every functional item, with the Zombie Pot capped at three", () => {
+    // Two named exceptions to one-per-farm, and they must stay named: the Zombie
+    // Pot's three, and the Memorial Statue's none at all (one statue remembers one
+    // zombie, so the farm needs as many as the player has lost). Anything else
+    // functional gaining a cap by accident is what this loop is here to catch.
+    const uncapped = new Set(["memorialStatue"]);
     for (const placeable of placeables.filter((row) => row.category === "functional")) {
-      expect(objectEcon(placeable.key)?.purchaseLimit, placeable.key)
-        .toBe(placeable.key === "zombieCombiner" ? 3 : 1);
+      const expected = uncapped.has(placeable.key) ? undefined
+        : placeable.key === "zombieCombiner" ? 3 : 1;
+      expect(objectEcon(placeable.key)?.purchaseLimit, placeable.key).toBe(expected);
     }
   });
   it("prices refund at floor(cost*0.2), and NOTHING for a free object", () => {

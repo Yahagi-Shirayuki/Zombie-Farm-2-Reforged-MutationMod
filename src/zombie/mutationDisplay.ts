@@ -187,3 +187,11 @@ export function mutationNames(key: string, mask: number): string[] {
   const variants = MUTATION_VARIANTS[key];
   return mutationsOf(mask).map((def) => variants?.[def.key]?.name ?? def.name);
 }
+
+/** A mask written out for THIS species, e.g. "Onionhead, Celery-arms" — empty for an
+ *  unmutated zombie. Every place that names a concrete unit's mutations should use
+ *  this rather than mutations.ts `mutationLabel`, which knows only the shared
+ *  mutation and so calls an Eyebiscus "Carrot-eyes". */
+export function mutationLabelFor(key: string, mask: number): string {
+  return mutationNames(key, mask).join(", ");
+}

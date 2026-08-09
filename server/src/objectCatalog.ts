@@ -275,6 +275,9 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "mausoleum5": { cost: 6, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum6": { cost: 8, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum7": { cost: 10, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  // Deliberately NO purchaseLimit despite being `functional`: one statue remembers
+  // one zombie, so the farm needs as many as the player has lost.
+  "memorialStatue": { cost: 3000, brains: false, xp: 30, level: 1 },
   "mayflower": { cost: 5, brains: true, xp: 0, level: 1 },
   "mechanicalBull": { cost: 0, brains: false, xp: 0, level: -1 },
   "monkeyBars": { cost: 4000, brains: false, xp: 40, level: 40 },

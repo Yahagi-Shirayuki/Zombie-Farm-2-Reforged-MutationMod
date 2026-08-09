@@ -952,6 +952,15 @@
   border-radius: 7px; background: linear-gradient(#7a5220, #5e3d15); color: #fff; font: 900 16px/1 system-ui;
   display: flex; align-items: center; justify-content: center; }
 #hud .raid-dice .rd-step:hover { filter: brightness(1.15); }
+/* Brain Ticket toggle. Armed it goes VIOLET, not the shared green of the other two
+   consumables: the others only help, this one also picks a much harder fight, so it must
+   not look like one more free buff sitting in the same row. The warning line spans the
+   whole row so the fight it starts is spelled out, not just implied by a colour. */
+#hud .raid-elite-btn.on { color: #f4e9ff; background: linear-gradient(#9a4fd6, #6b2ca3);
+  border-color: #3d1663; text-shadow: 0 1px 1px #000; box-shadow: 0 0 0 2px rgba(154,79,214,.45); }
+#hud .raid-elite-note:empty { display: none; }
+#hud .raid-elite-note { flex: 1 0 100%; margin: 0; font: 700 11px system-ui, sans-serif;
+  color: #e3c6ff; text-shadow: 0 1px 1px #000; }
 /* result tally — a panel that slides in from the RIGHT as the zombies march off */
 #hud .raid-res-bg { position: fixed; inset: 0; pointer-events: auto; z-index: 22;
   display: flex; align-items: stretch; justify-content: flex-end; }
@@ -1021,6 +1030,30 @@
 #hud .revive-confirm { width: 100%; padding: 12px; border: 2px solid #241307; border-radius: 10px;
   background: linear-gradient(#f2b341,#c87a18); color: #301b08; font-size: 16px; font-weight: 900; }
 #hud .revive-error { min-height: 18px; color: #8b211b; text-align: center; font-size: 12px; font-weight: 800; }
+
+/* ---- Memorial Statue ---- */
+#hud .memorial-panel { width: min(480px, 94vw); max-height: min(640px, 86vh);
+  display: flex; flex-direction: column; }
+#hud .memorial-blurb { margin: 0 0 10px; font-size: 13px; font-weight: 700; opacity: .82; }
+#hud .memorial-list { overflow-y: auto; display: grid; gap: 8px; padding-right: 4px; }
+#hud .memorial-row { display: grid; grid-template-columns: 58px 1fr auto; align-items: center;
+  gap: 10px; min-height: 66px; padding: 6px 9px; border: 2px solid #69451f; border-radius: 10px;
+  background: #f9edca; }
+#hud .memorial-row img { width: 56px; height: 56px; object-fit: contain;
+  /* The graveyard lists the dead, so the thumbnails are stone like the statues. */
+  filter: grayscale(1) contrast(.92) brightness(1.06); }
+#hud .memorial-name { font-size: 15px; font-weight: 900; }
+#hud .memorial-meta { font-size: 11px; opacity: .72; }
+#hud .memorial-pick { min-width: 96px; padding: 8px; border: 2px solid #2b170b; border-radius: 8px;
+  background: linear-gradient(#9a9a92,#6a6a63); color: #fff; font-weight: 900; cursor: pointer; }
+#hud .memorial-pick:hover { filter: brightness(1.08); }
+#hud .memorial-pick:disabled { filter: grayscale(1); opacity: .48; }
+#hud .memorial-epitaph { margin-bottom: 8px; text-align: center; font-size: 14px;
+  font-weight: 900; letter-spacing: .02em; opacity: .85; }
+/* Moving/selling the plinth is housekeeping, not part of the memorial — keep it
+   present but visibly secondary to the zombie the panel is about. */
+#hud .memorial-options { flex: 0 1 auto; font-size: 12px; opacity: .78; }
+#hud .memorial-panel .zbtns { margin-top: 10px; justify-content: center; }
 
 /* ---- Level-up popup ---- */
 #hud .lvl-bg { z-index: 24; }

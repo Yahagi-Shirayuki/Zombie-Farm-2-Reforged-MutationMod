@@ -63,28 +63,33 @@ export const ZOMBIE_LUCK_PER_DIE = 1;
 export const ZOMBIE_LUCK_DICE_CAP = 10;
 
 /** This raid's rare-zombie chance with `dice` Golden Dice spent — 0 for a raid that has no
- *  rare zombie. Never exceeds 1. */
-export function raidZombieDropRate(raidId: number, dice = 0): number {
+ *  rare zombie. `luck` is the flat elite multiplier (ELITE_BRAIN_LUCK on a Brain Ticket
+ *  run, 1 otherwise); it stacks on top of the dice the same way it does for brains.
+ *  Never exceeds 1. */
+export function raidZombieDropRate(raidId: number, dice = 0, luck = 1): number {
   const drop = RAID_ZOMBIE_DROPS[raidId];
   if (drop == null) return 0;
   const spent = Math.max(0, Math.min(ZOMBIE_LUCK_DICE_CAP, Math.trunc(Number(dice) || 0)));
-  return Math.min(1, drop.rate * (1 + ZOMBIE_LUCK_PER_DIE * spent));
+  const elite = Math.max(0, Number(luck) || 0);
+  return Math.min(1, drop.rate * (1 + ZOMBIE_LUCK_PER_DIE * spent) * elite);
 }
 
 /** A successful configured invasion independently rolls for its rare zombie reward. `dice`
- *  is the Golden Dice spent on the fight (server-pinned online, spent locally offline). */
+ *  is the Golden Dice spent on the fight (server-pinned online, spent locally offline);
+ *  `luck` is the elite multiplier (see raidZombieDropRate). */
 export function rollRaidZombieDrop(
   raidId: number,
   won: boolean,
   roll: number,
-  dice = 0
+  dice = 0,
+  luck = 1
 ): RaidZombieDrop | null {
   const drop = RAID_ZOMBIE_DROPS[raidId];
   return won &&
     drop != null &&
     Number.isFinite(roll) &&
     roll >= 0 &&
-    roll < raidZombieDropRate(raidId, dice)
+    roll < raidZombieDropRate(raidId, dice, luck)
     ? drop
     : null;
 }
@@ -109,16 +114,18 @@ export const RAID_ZOMBIE_PITY_WINS = 100;
 
 /** Roll a win's rare-zombie reward with the per-raid dry-win floor applied. `dryWins` is how
  *  many times this raid has been won since it last handed its zombie over (see
- *  nextRaidZombieDryWins); `dice` is the Golden Dice spent, which widen the natural roll.
- *  A natural roll always wins — the floor only fills in a miss. */
+ *  nextRaidZombieDryWins); `dice` is the Golden Dice spent and `luck` the elite multiplier,
+ *  both of which widen the natural roll. A natural roll always wins — the floor only fills
+ *  in a miss. */
 export function rollRaidZombieDropWithPity(
   raidId: number,
   won: boolean,
   roll: number,
   dryWins: number,
-  dice = 0
+  dice = 0,
+  luck = 1
 ): RaidZombieDrop | null {
-  const rolled = rollRaidZombieDrop(raidId, won, roll, dice);
+  const rolled = rollRaidZombieDrop(raidId, won, roll, dice, luck);
   if (rolled) return rolled;
   const drop = RAID_ZOMBIE_DROPS[raidId];
   return won && drop != null && dryWins >= RAID_ZOMBIE_PITY_WINS ? drop : null;

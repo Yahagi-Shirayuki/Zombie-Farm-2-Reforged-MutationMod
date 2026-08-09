@@ -6,7 +6,8 @@ import { readdirSync } from "node:fs";
 import models from "../../public/assets/zombie/models.json";
 import {
   mutationEntries, mutationEffectText, mutationNames, mutationTipText,
-  mutationEntriesFrom, MUTATION_ICON, MUTATION_VARIANTS, type MutationCardEntry,
+  mutationEntriesFrom, mutationLabelFor, MUTATION_ICON, MUTATION_VARIANTS,
+  type MutationCardEntry,
 } from "./mutationDisplay";
 import {
   ALL_BITS, bitOf, mutationOf, mutationBonus, type MutationDef,
@@ -120,6 +121,24 @@ describe("mutationNames", () => {
     expect(mutationNames("ZombieActorRegularTier1", 2 | 1024)).toEqual(["Onionhead", "Lima Bean"]);
     expect(mutationNames("ZombieActorRegularTier4Eyebiscus", 4)).toEqual(["Eyebiscus"]);
     expect(mutationNames("ZombieActorRegularTier1", 0)).toEqual([]);
+  });
+});
+
+describe("mutationLabelFor", () => {
+  it("writes the mask out for that species", () => {
+    expect(mutationLabelFor("ZombieActorRegularTier1", bitOf("onion") | bitOf("celery")))
+      .toBe("Onionhead, Celery-arms");
+    expect(mutationLabelFor("ZombieActorRegularTier1", 0)).toBe("");
+  });
+
+  it("never calls a Tier-4 variant by the mutation it shares", () => {
+    // The whole point: the Pot, the Black Market and the roster all name a unit's
+    // mutations through here, and an Eyebiscus is not a Carrot.
+    expect(mutationLabelFor("ZombieActorRegularTier4Eyebiscus", bitOf("carrot")))
+      .toBe("Eyebiscus");
+    expect(mutationLabelFor("ZombieActorRegularTier4Heartichoke", bitOf("cauli")))
+      .toBe("Heartichoke");
+    expect(mutationLabelFor("ZombieActorRegularTier1", bitOf("carrot"))).toBe("Carrot-eyed");
   });
 });
 

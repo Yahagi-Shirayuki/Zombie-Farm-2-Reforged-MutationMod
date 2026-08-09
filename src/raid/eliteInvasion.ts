@@ -1,0 +1,208 @@
+// Elite invasions — what a Brain Ticket buys.
+//
+// A Brain Ticket is the Invasion Voucher's expensive cousin: it skips the same
+// between-invasions wait, but it also QUADRUPLES the fight's brain and rare-zombie odds
+// and, in exchange, promotes the invasion to ELITE — the authored wave fought at scaled
+// stats. Nothing else about the raid changes: same enemies, same wave size, same gold,
+// same loot table, same hazards. Only the numbers move.
+//
+// DETERMINISM CONTRACT. The scaling here feeds `buildEnemyUnits` and the boss's
+// throw/special/wall configuration, all of which are part of the deterministic fight the
+// server replays. The client (RaidManager.beginRaid) and the server (raidVerifier's two
+// `buildPinned*` paths) must therefore derive the profile from the SAME inputs — the raid
+// id and the session's elite flag — and nothing else. Editing a profile changes every
+// elite transcript, so it is a ruleset change: bump RAID_RULESET_VERSION in the same
+// commit (see replay.ts).
+//
+// ---------------------------------------------------------------------------
+// CALIBRATION
+//
+// Difficulty is measured as p* — the weakest army that still wins, expressed as a stat
+// multiplier on a 16-strong roster of the best catalog zombies, run headlessly through
+// the real BattleSim. Lower p* = easier. eliteInvasion.balance.test.ts computes it and
+// asserts the relationships below; these are the values it measured when the table was
+// fitted:
+//
+//   raid                 normal   elite      the rung it was fitted to
+//   Old McDonnell's        0.10    0.40      Pirates, normally
+//   Summer Break           0.11    0.52      between Pirates and Robots
+//   Tree World             0.10    0.52      between Pirates and Robots
+//   Valentine's Day        0.10    0.52      between Pirates and Robots
+//   Circus                 0.10    0.65      Robots, normally
+//   Lawyers                0.29    0.69      Robots, normally
+//   Pirates                0.39    1.59      Video Games, normally
+//   Ninjas                 0.76    1.71      Video Games, normally
+//   Robots                 0.75    1.93   \
+//   Aliens                 0.81    1.89    >  one shared top tier
+//   Video Games            1.59    1.93   /
+//
+// The top tier is why the three hardest invasions take wildly different multipliers: the
+// Video Games are already almost there (x1.2 on their stats), so the Robots and the
+// Aliens climb to meet them (x2.5 and x3.7).
+//
+// THE CEILING IS REAL, and it is why the top tier sits where it does rather than higher.
+// A measuring-stick army stops winning the Video Games somewhere around 1.4x their
+// normal difficulty, and 20 zombies barely beat 16 (only the front of the formation
+// engages), so army SIZE is not the answer either. Elite has to fit under that.
+//
+// SHAPE, not just size. Each raid spends its budget on the mechanic it is known for, so
+// an elite run feels like more of THAT invasion rather than uniform stat inflation.
+// ---------------------------------------------------------------------------
+
+import type { BossSpecial, BossThrowConfig, EnemyStat } from "./types";
+
+/** The consumable that starts an elite invasion (Market → Boosts). */
+export const BRAIN_TICKET_KEY = "brain_ticket";
+
+/** How much an elite invasion multiplies its brain tiers (brainDrops.brainDropTable)
+ *  and its rare-zombie chance (zombieDrops.raidZombieDropRate). The whole point of the
+ *  ticket — the difficulty is the price. */
+export const ELITE_BRAIN_LUCK = 4;
+
+/** Per-raid stat/behaviour multipliers for an elite fight. Every field multiplies; 1
+ *  means "unchanged". */
+export interface EliteProfile {
+  /** Enemy `str` — per-hit damage (damage = str x 10 x attack multiplier). */
+  str: number;
+  /** Enemy `con` — hit points (hp = con x 100). Restraint here is deliberate: HP is
+   *  what makes a fight LONG, and a fight that outlives the four-minute replay cap
+   *  (RAID_MAX_TICKS) cannot settle at all. */
+  con: number;
+  /** Enemy `dex` — attack cadence (interval = 1 / dex seconds). Held to modest values
+   *  everywhere: past roughly 1.6x, enemies stop reading as enemies and start reading
+   *  as a strobe. */
+  dex: number;
+  /** Boss projectile damage. */
+  throwDamage: number;
+  /** Boss projectile RATE — 2 means twice as many throws (half the interval). */
+  throwRate: number;
+  /** Hit points of the blocker the boss's `wall` special drops (Ninja carrotWall /
+   *  Robot junkWall). Capped low on purpose: the wall is tapped down by hand, so a big
+   *  multiplier is a big multiplier on MANUAL INPUT, and a wall the army cannot chew
+   *  through in time can stalemate a fight into the replay cap. */
+  wallHp: number;
+  /** Damage of the boss's non-throw specials (alien laser, pixel fire, telekinesis…). */
+  specialDamage: number;
+}
+
+const PLAIN: EliteProfile = {
+  str: 1, con: 1, dex: 1, throwDamage: 1, throwRate: 1, wallHp: 1, specialDamage: 1,
+};
+
+/** Fallback for a raid with no authored profile (a new invasion, before it is tuned).
+ *  A flat, unremarkable step up — never nothing, so a Brain Ticket is never a pure
+ *  refund of 10,000 gold. */
+export const DEFAULT_ELITE_PROFILE: EliteProfile = {
+  str: 2, con: 1.8, dex: 1.3, throwDamage: 2, throwRate: 1.4, wallHp: 1.4, specialDamage: 2,
+};
+
+export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
+  // 1 — Old McDonnell's Farm. Still the tutorial invasion, and it has no signature
+  // mechanic to lean on, so it does exactly what the farmhands would do if they were
+  // any good: everything, harder. The biggest multipliers in the table, because the
+  // wave it scales is the weakest by an order of magnitude.
+  1: { str: 2.9, con: 2.9, dex: 1.6, throwDamage: 2.9, throwRate: 1.5, wallHp: 1, specialDamage: 2.9 },
+
+  // 2 — Zombies vs Lawyers. The Corporate boss is the ladder's speed threat: fast
+  // punches and the Double Punch stun. So this is the one profile that spends most of
+  // its budget on DEX, and the stun special hits hardest of all.
+  2: { str: 1.6, con: 1.8, dex: 1.85, throwDamage: 1.8, throwRate: 1.35, wallHp: 1, specialDamage: 2.1 },
+
+  // 3 — Zombies vs Pirates. Pirates hit like a cannon and their Scallywag mirrors your
+  // attack speed, so speed is explicitly NOT their lever: dex stays at 1.0 and the whole
+  // budget goes into raw power. An elite pirate one-shots almost anything it reaches;
+  // the counterplay is the same as it always was — do not bring a fast army.
+  3: { str: 5.3, con: 2.85, dex: 1, throwDamage: 4.3, throwRate: 1, wallHp: 1, specialDamage: 4 },
+
+  // 4 — Zombies vs Ninjas. Their mechanic is the carrot WALL, so the wall gets tougher
+  // (more taps, and more of the army's damage spent on it) — but only to 1.5x, see
+  // `wallHp`. The rest is a broad stat lift.
+  4: { str: 2.7, con: 1.7, dex: 1.35, throwDamage: 2.5, throwRate: 1.55, wallHp: 1.5, specialDamage: 2.2 },
+
+  // 5 — Zombies vs Robots. One of each bot, a random one leading, each with its own
+  // special (junk wall, telekinesis). Bots are already the tankiest wave in the game, so
+  // con is held back and the budget goes into their specials and their punch.
+  5: { str: 2.5, con: 1.85, dex: 1.4, throwDamage: 2.3, throwRate: 1.4, wallHp: 1.5, specialDamage: 2.9 },
+
+  // 6 — Zombies vs Aliens. Twenty minions, a summoning boss and the laser. Their normal
+  // fight is already the longest on the ladder (over two minutes), so con barely moves —
+  // an elite alien wave is not a longer grind, it is a far more dangerous one.
+  6: { str: 3.7, con: 1.45, dex: 1.6, throwDamage: 2.75, throwRate: 1.5, wallHp: 1, specialDamage: 4 },
+
+  // 7 — Summer Break. No signature boss mechanic (the crab is a client-side hazard and
+  // is deliberately left alone — see below), so it scales broadly, with heavier beach
+  // balls.
+  7: { str: 3.2, con: 3.2, dex: 1.6, throwDamage: 4, throwRate: 1.8, wallHp: 1, specialDamage: 3.2 },
+
+  // 8 — Zombies vs Circus. The ringmaster's juggling act is the mechanic: elite throws
+  // come three times as often and hit eight times as hard, which is by far the largest
+  // projectile multiplier in the table. The TRAPEZE ARTIST is untouched — it is grabbed
+  // zombies and frantic tapping, and multiplying a hazard multiplies manual input rather
+  // than difficulty.
+  8: { str: 2.8, con: 3, dex: 1.6, throwDamage: 8, throwRate: 3, wallHp: 1, specialDamage: 3 },
+
+  // 9 — Zombies vs Video Games. Already the hardest invasion in the game by a wide
+  // margin, so it needs the smallest push to reach the shared top tier — and it spends
+  // what it has on turnZombie and pixelFire, the specials that make the fight what it is.
+  9: { str: 1.2, con: 1.15, dex: 1.1, throwDamage: 1.25, throwRate: 1.1, wallHp: 1, specialDamage: 1.35 },
+
+  // 10 / 11 — Tree World and Valentine's Day. Seasonal, no signature mechanic, and the
+  // two weakest waves after McDonnell's, so they take the same broad treatment as
+  // Summer Break with a little more of it.
+  10: { str: 3.8, con: 3.8, dex: 1.6, throwDamage: 4.9, throwRate: 1.9, wallHp: 1, specialDamage: 3.8 },
+  11: { str: 3.8, con: 3.8, dex: 1.6, throwDamage: 4.9, throwRate: 1.9, wallHp: 1, specialDamage: 3.8 },
+};
+
+/** The multipliers this fight runs under: null for an ordinary invasion (so every
+ *  caller can pass the result straight through and the non-elite path stays exactly the
+ *  code it was), the raid's profile for an elite one. */
+export function eliteProfile(raidId: number, elite: boolean): EliteProfile | null {
+  if (!elite) return null;
+  return ELITE_PROFILES[raidId] ?? DEFAULT_ELITE_PROFILE;
+}
+
+/** Scale one enemy's stat template. Only str/con/dex move — attack lists, boss actions
+ *  and the loot flags are the raid's own data and stay untouched. */
+export function eliteEnemyStat(stat: EnemyStat, profile: EliteProfile | null): EnemyStat {
+  if (!profile) return stat;
+  return {
+    ...stat,
+    str: (stat.str ?? 1) * profile.str,
+    con: (stat.con ?? 1) * profile.con,
+    dex: (stat.dex ?? 1) * profile.dex,
+  };
+}
+
+/** Scale the boss's projectile config: harder hits, and `throwRate` times as many of
+ *  them (a rate multiplier DIVIDES the interval). */
+export function eliteBossThrow(
+  config: BossThrowConfig | null,
+  profile: EliteProfile | null
+): BossThrowConfig | null {
+  if (!config || !profile) return config;
+  return {
+    intervalMs: config.intervalMs / Math.max(0.01, profile.throwRate),
+    options: config.options.map((option) => ({ ...option, damage: option.damage * profile.throwDamage })),
+  };
+}
+
+/** Scale the boss's non-throw specials. Cast and cooldown are left alone: they are the
+ *  player's window to react, and shrinking them turns "harder" into "unreadable". */
+export function eliteBossSpecials(
+  specials: BossSpecial[],
+  profile: EliteProfile | null
+): BossSpecial[] {
+  if (!profile) return specials;
+  return specials.map((special) => ({ ...special, damage: special.damage * profile.specialDamage }));
+}
+
+/** Scale the hit points of a boss-summoned wall. */
+export function eliteWallHp(hp: number, profile: EliteProfile | null): number {
+  return profile ? hp * profile.wallHp : hp;
+}
+
+/** Everything an elite fight multiplies, as plain numbers, for the profile table's own
+ *  regression test and for tooling. */
+export function eliteMultipliers(raidId: number): EliteProfile {
+  return eliteProfile(raidId, true) ?? PLAIN;
+}

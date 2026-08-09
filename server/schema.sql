@@ -321,7 +321,7 @@ CREATE TABLE IF NOT EXISTS roster_actions (
   created_at  INTEGER NOT NULL
 );
 
--- Server-owned farm size (a scalar, upgraded 30→40→50→60 in sequence). Seeded once
+-- Server-owned farm size (a scalar, upgraded 30→40→50→60→70 in sequence). Seeded once
 -- from the save; thereafter the server owns it (a `sizeUpgrade` debits the exact tier
 -- price + bumps it), so an edited save can't fabricate a bigger farm.
 -- Per-account farm state — and, by history, the account's import-flag row (the *_seeded
@@ -561,6 +561,33 @@ CREATE TABLE IF NOT EXISTS raid_revivals_v3 (
 );
 CREATE INDEX IF NOT EXISTS idx_raid_revivals_pending
   ON raid_revivals_v3(account_id, resolved_at);
+-- The graveyard: casualties that were not revived, so a Memorial Statue can carve
+-- one in stone. Same minimal shape as roster_v3 (the card is derived from the
+-- catalog by key + mutation) plus the two things that cannot be derived once the
+-- roster row is gone: when it died, and its individual name. See migration 0047.
+CREATE TABLE IF NOT EXISTS fallen_v3 (
+  account_id         TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  unit_id            TEXT NOT NULL,
+  zombie_key         TEXT NOT NULL,
+  name               TEXT,
+  mutation           INTEGER NOT NULL DEFAULT 0,
+  invasions          INTEGER NOT NULL DEFAULT 0,
+  color              TEXT,
+  died_at            INTEGER NOT NULL,
+  -- When this zombie last came OFF a statue. Ordering reads
+  -- COALESCE(released_at, died_at), so a released zombie rejoins the graveyard at the
+  -- top and ages out from there instead of being evicted by its old date of death.
+  -- Never displayed — the plaque's date is `died_at`. See migration 0048.
+  released_at        INTEGER,
+  memorial_object_id TEXT,
+  PRIMARY KEY (account_id, unit_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fallen_v3_recent
+  ON fallen_v3(account_id, died_at DESC);
+-- One zombie per plinth, enforced in the database rather than in application code.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fallen_v3_statue
+  ON fallen_v3(account_id, memorial_object_id)
+  WHERE memorial_object_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS epic_boss_runs_v3 (
   account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
   run_id TEXT NOT NULL UNIQUE, boss_id TEXT NOT NULL,

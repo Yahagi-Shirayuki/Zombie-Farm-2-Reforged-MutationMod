@@ -6,6 +6,7 @@ import { ZombieField } from "../zombie/ZombieField";
 import { QuestSystem } from "../quest/QuestSystem";
 import {
   SaveGame, SAVE_VERSION, ONLINE_PRESENTATION_PREFIX, ONLINE_SNAPSHOT_PREFIX,
+  type FallenZombieSave,
 } from "./schema";
 import { activeSaveKey, migrateLegacyProfileSaves } from "./profiles";
 import * as api from "../net/api";
@@ -15,6 +16,7 @@ import { GAMEPLAY_PROTOCOL } from "../net/protocol";
 import { epicBossRunToClient, serverTimestampToClient } from "../net/clock";
 import { reconcileTutorialCompletion } from "../tutorial/steps";
 import { backfillDiscovered, sanitizeDiscovered } from "../zombie/almanac";
+import { sanitizeFallen, sanitizeFallenUncapped } from "../zombie/memorial";
 import type { PlayMode } from "../playMode";
 import type { JobSystem } from "../JobSystem";
 
@@ -33,7 +35,8 @@ type PresentationData = {
     background?: SaveGame["farm"]["background"];
     zombiePatchGathered?: boolean;
   };
-  objectLayout?: { id: string; key?: string; oc: number; or: number; rotation?: number }[];
+  objectLayout?: { id: string; key?: string; oc: number; or: number; rotation?: number;
+    memorial?: FallenZombieSave }[];
   rosterLayout?: { id: string; name?: string; pos?: { col: number; row: number }; stored?: boolean; color?: [number, number, number] }[];
   zombiePot?: SaveGame["zombiePot"];
   zombiePots?: SaveGame["zombiePots"];
@@ -42,6 +45,9 @@ type PresentationData = {
   /** Zombie Almanac lifetime-discovery counts. Cosmetic and client-authored, so
    * online it rides the presentation blob rather than a server table. */
   almanac?: SaveGame["almanac"];
+  /** The graveyard (unenshrined fallen zombies). Client-authored for the same
+   * reason: the server deletes a casualty outright and keeps no record of it. */
+  fallen?: SaveGame["fallen"];
 };
 type ObjectLayout = NonNullable<PresentationData["objectLayout"]>[number];
 
@@ -209,6 +215,7 @@ export class SaveManager {
       social: { friends: this.state.friends },
       tutorial: this.state.tutorial,
       almanac: { discovered: this.state.zombieDiscovered },
+      fallen: this.state.fallenZombies,
       ...(farmJobs ? { farmJobs } : {}),
     };
   }
@@ -245,6 +252,11 @@ export class SaveManager {
       tutorial: blob.tutorial,
       ui: { attackOrder: blob.raids?.attackOrder ?? [] },
       almanac: blob.almanac,
+      // The graveyard and each statue's occupant are SERVER-owned (fallen_v3) — a
+      // visitor renders the memorial from the authoritative projection, so a copy
+      // here would be a second source of truth that only this client can see. The
+      // `fallen` key stays allow-listed server-side purely so an older client's
+      // blob is still accepted rather than rejecting its whole presentation write.
     };
   }
 
@@ -445,6 +457,27 @@ export class SaveManager {
     this.objectLayouts = new Map((p.objectLayout ?? []).map((layout) => [layout.id, { ...layout }]));
     const objectLayout = new Map((p.objectLayout ?? []).map((o) => [o.id, o]));
     const rosterLayout = new Map((p.rosterLayout ?? []).map((u) => [u.id, u]));
+    // The graveyard is server-owned (fallen_v3), so the presentation blob's copy —
+    // written by clients before that table existed — is deliberately ignored.
+    //
+    // Split into the zombies standing on a statue and those still waiting for one
+    // BEFORE either is capped. MAX_REMEMBERED_FALLEN bounds the graveyard, which is
+    // the unenshrined list alone; capping the combined list instead dropped whichever
+    // records were oldest, and an occupant is exactly the record most likely to be old
+    // — so a statue bought to remember a long-ago loss came back as a bare plinth once
+    // sixty more zombies had died behind it, and re-enshrining it was then refused by
+    // the server as `statue_occupied`.
+    const projected = boot.gameplay.fallen ?? [];
+    const enshrinedIds = new Map(projected
+      .filter((unit) => !!unit.memorialObjectId)
+      .map((unit) => [unit.id, unit.memorialObjectId!]));
+    const enshrined = new Map(sanitizeFallenUncapped(
+      projected.filter((unit) => enshrinedIds.has(unit.id))
+    ).flatMap((unit) => {
+      const objectId = enshrinedIds.get(unit.id);
+      return objectId ? [[objectId, unit] as const] : [];
+    }));
+    const graveyard = sanitizeFallen(projected.filter((unit) => !enshrinedIds.has(unit.id)));
     const plots = Object.entries(boot.gameplay.farm.plots).map(([key, plot]) => {
       const [oc, or] = key.split(":").map(Number);
       if (plot.state === "plowed") return { oc, or, state: "plowed" as const };
@@ -465,14 +498,14 @@ export class SaveManager {
       // reconcile treats it as an orphan and re-homes it onto a real free tile.
       if (!layout) return [];
       return [{ id: obj.instanceId, key: obj.catalogKey, oc: layout.oc, or: layout.or,
-        rotation: layout.rotation, readyAt: obj.readyAt == null
+        rotation: layout.rotation, memorial: enshrined.get(obj.instanceId), readyAt: obj.readyAt == null
           ? undefined
           : serverTimestampToClient(obj.readyAt, boot.serverTime, clientTime) }];
     });
     for (const layout of objectLayout.values()) {
       if (layout.key === "storage01" && !objects.some((object) => object.id === layout.id)) {
         objects.push({ id: layout.id, key: layout.key, oc: layout.oc, or: layout.or,
-          rotation: layout.rotation, readyAt: undefined });
+          rotation: layout.rotation, memorial: layout.memorial, readyAt: undefined });
       }
     }
     const pots = Object.fromEntries(Object.entries(p.zombiePots ?? {}).filter(([, pot]) =>
@@ -541,6 +574,9 @@ export class SaveManager {
       social: { friends: boot.social.friends.map((friend) => ({ id: friend.accountId, name: friend.name, addedAt: boot.serverTime, giftsSent: 0 })) },
       tutorial: reconcileTutorialCompletion(p.tutorial, boot.gameplay.tutorialRewarded),
       almanac: p.almanac,
+      // Only the unenshrined go in the graveyard list; the rest are already standing
+      // on their statues, which carry them (see `enshrined` above).
+      fallen: graveyard,
       farmJobs: this.readJobJournal(),
     };
   }
@@ -619,6 +655,9 @@ export class SaveManager {
     // parked in it have not been through receiveItem/syncStorage yet. Owned is owned:
     // count them here too, or an unclaimed prize opens the Almanac as a silhouette.
     this.state.countUnclaimedZombieRewards();
+    // The graveyard. Statues carry their own occupant (restoreObjects below), so
+    // this is only the zombies still waiting for one.
+    this.state.fallenZombies = sanitizeFallen(data.fallen);
     if (data.farm.w && data.farm.h) this.field.resize(data.farm.w, data.farm.h);
     this.state.ownedClimates = data.farm.ownedClimates ?? ["grass"];
     if (!this.state.ownedClimates.includes("grass")) this.state.ownedClimates.unshift("grass");

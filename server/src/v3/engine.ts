@@ -5,6 +5,7 @@ import type {
   GameplayProjection,
   QuestProjection,
   RosterUnitProjection,
+  FallenUnitProjection,
   SequencedCommand,
 } from "../../../src/net/protocol";
 import plantRows from "../../../public/assets/plants.json";
@@ -20,7 +21,7 @@ import { objectBuyXp, objectEcon, objectRefund } from "../objectCatalog";
 import { planClaim } from "../storage";
 import { QUEST_DEFINITIONS, QUEST_REWARD } from "../questCatalog";
 import { isHeadlessZombie, legalMutation, zombieSell } from "../rosterCatalog";
-import { climateCost, nextSize, sizeTier } from "../shopCatalog";
+import { climateCost, MAX_FARM_SIZE, nextSize, sizeTier } from "../shopCatalog";
 import { zombieCropEcon } from "../zombieCropCatalog";
 import {
   activeBonusHeadId, farmerGold, farmerHeadHasEffect, farmerHeadXp, farmerZombieGrowMs,
@@ -39,9 +40,24 @@ import {
 } from "../../../src/quest/mutantSubjects";
 import { encodeReceivedZombie, parseReceivedZombie } from "../../../src/zombie/receivedReward";
 
-export const MAX_FARM_PLOTS = 225;
 export const MAX_FUNCTIONAL_OBJECTS = 512;
+/** How many UNENSHRINED fallen zombies an account keeps. Oldest are dropped, so the
+ *  losses a player is most likely to still want a statue for survive. Zombies already
+ *  standing on one are never counted or dropped — a memorial is permanent, and the
+ *  cap exists to bound a list nobody is looking at, not to erase a monument.
+ *  Mirrored by MAX_REMEMBERED_FALLEN on the client. */
+export const MEMORIAL_GRAVEYARD_CAP = 60;
 export const PLOT_SIZE = 4;
+/** How many plots the LARGEST farm on the ladder holds — plots are PLOT_SIZE square
+ *  and may not overlap, so a size-N farm fits floor(N / PLOT_SIZE) of them per side.
+ *
+ *  DERIVED, never a literal. It used to be hard-coded at 225, which was exactly right
+ *  for the 60x60 farm that was then the top tier and became a trap the moment 70x70
+ *  was added: the farm grew, the cap did not, and the last 64 plots of a 1,250,000-gold
+ *  upgrade could never be plowed — every attempt rejected `farm_full` and rolled back.
+ *  `validCoord` already keeps a plot inside the account's OWN farm, so this is the
+ *  ceiling across every farm size rather than a per-account limit. */
+export const MAX_FARM_PLOTS = Math.floor(MAX_FARM_SIZE / PLOT_SIZE) ** 2;
 export const GROW_GRACE_MS_V3 = 15_000;
 export const PLOW_COST_V3 = 10;
 
@@ -175,6 +191,43 @@ const mausoleumTiers = [...objectRules.entries()]
 const baseMausoleumSlots = mausoleumTiers[0]?.slots ?? 0;
 /** The tier that follows a building with `slots` capacity (undefined at the top). */
 const nextMausoleumTier = (slots: number) => mausoleumTiers.find((tier) => tier.slots > slots);
+
+/** The Memorial Statue: the one functional object bought in quantity, sellable, and
+ *  able to hold a fallen zombie. Keyed off the catalog so the rule follows the item
+ *  rather than being spelled out at every site that has to know about it. */
+const isMemorial = (catalogKey: string) => catalogKey === "memorialStatue";
+
+/** Take whoever stands on statue `instanceId` back off it. Returns false when the
+ *  plinth was already bare, which is what makes memorial.clear reject a no-op.
+ *
+ *  `now` stamps `releasedAt`, which is what the graveyard's cap orders by from here
+ *  on: a player enshrines a memorable — and so usually OLD — loss, and ranking it by
+ *  `diedAt` on the way back would drop it straight off the end of a busy farm's list.
+ *  It rejoins at the top and ages out behind the next MEMORIAL_GRAVEYARD_CAP losses. */
+function releaseMemorial(
+  state: MutableGameplayState, instanceId: string, now: number
+): boolean {
+  const occupant = (state.fallen ?? []).find((f) => f.memorialObjectId === instanceId);
+  if (!occupant) return false;
+  occupant.memorialObjectId = undefined;
+  occupant.releasedAt = now;
+  return true;
+}
+
+/** Trim a client-supplied memorial name to the same rule the roster uses (24 code
+ *  points, no control characters). Returns null when nothing usable is left, which
+ *  keeps whatever name the row already had. */
+function memorialName(raw: string | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  // Filtered by code point rather than by regex so the source carries no literal
+  // control characters of its own.
+  const printable = [...raw].filter((ch) => {
+    const code = ch.charCodeAt(0);
+    return code >= 0x20 && code !== 0x7f;
+  }).join("").replace(/\s+/g, " ").trim();
+  const cleaned = [...printable].slice(0, 24).join("");
+  return cleaned || null;
+}
 
 const farmerHeads = new Map(farmerRows.heads.map((head) => [head.id, head]));
 /** The head supplying bonuses: the pinned one, else whichever is being worn. */
@@ -701,7 +754,12 @@ function applyOne(
       const buySlots = objectRules.get(command.catalogKey)?.zombieSlots ?? 0;
       if (buySlots > 0 && buySlots !== baseMausoleumSlots) return reject(sequence, "bad_item");
       const isZombiePot = command.catalogKey === "zombieCombiner";
-      const purchaseLimit = isZombiePot ? 3 : objectRules.get(command.catalogKey)?.category === "functional" ? 1 : undefined;
+      // `functional` normally means one per farm. Two exceptions: the Zombie Pot's
+      // three, and the Memorial Statue, which has no cap at all — it is bought once
+      // per zombie the player wants to remember. Mirrors placeablePurchaseLimit.
+      const purchaseLimit = isZombiePot ? 3
+        : isMemorial(command.catalogKey) ? undefined
+        : objectRules.get(command.catalogKey)?.category === "functional" ? 1 : undefined;
       if (purchaseLimit !== undefined && state.objects.objects.filter((object) =>
         object.catalogKey === command.catalogKey).length >= purchaseLimit) {
         return reject(sequence, "object_limit");
@@ -736,9 +794,13 @@ function applyOne(
       const obj = state.objects.objects[index];
       const econ = objectEcon(obj.catalogKey);
       if (!econ) return reject(sequence, "bad_item");
-      if (objectRules.get(obj.catalogKey)?.category === "functional") {
+      // Functional buildings are permanent. The Memorial Statue is the exception:
+      // it is bought in quantity, so it has to be reversible.
+      if (objectRules.get(obj.catalogKey)?.category === "functional" && !isMemorial(obj.catalogKey)) {
         return reject(sequence, "not_sellable");
       }
+      // Selling the plinth must not bury the zombie on it a second time.
+      releaseMemorial(state, obj.instanceId, options.now);
       state.objects.objects.splice(index, 1);
       const boughtWithBrains = (obj.purchaseCurrency ?? (econ.brains ? "brains" : "gold")) === "brains";
       state.balance.gold += objectRefund(obj.purchaseCost ?? econ.cost, boughtWithBrains);
@@ -804,7 +866,37 @@ function applyOne(
       if (command.status === "stored" && ((rule?.zombieSlots ?? 0) > 0 || (rule?.storageSlots ?? 0) > 0)) {
         return reject(sequence, "not_storable");
       }
+      // The shed holds a key and a count, so a shelved statue is always a bare
+      // plinth: its occupant goes back to the graveyard rather than into storage.
+      if (command.status === "stored") releaseMemorial(state, obj.instanceId, options.now);
       obj.status = command.status;
+      return { sequence, status: "applied" };
+    }
+    case "memorial.enshrine": {
+      const obj = state.objects.objects.find((o) => o.instanceId === command.instanceId);
+      if (!obj || obj.status !== "placed" || !isMemorial(obj.catalogKey)) {
+        return reject(sequence, "not_owned");
+      }
+      const fallen = (state.fallen ?? []).find((f) => f.id === command.unitId);
+      // Only a zombie this account actually lost, and only one that is not already
+      // standing somewhere. Both are what stop a client inventing an occupant.
+      if (!fallen) return reject(sequence, "not_owned");
+      if (fallen.memorialObjectId) return reject(sequence, "already_enshrined");
+      if ((state.fallen ?? []).some((f) => f.memorialObjectId === command.instanceId)) {
+        return reject(sequence, "statue_occupied");
+      }
+      fallen.memorialObjectId = command.instanceId;
+      // The name is the one client-authored field, exactly as it is for a living
+      // unit. Normalized here so a hostile client cannot park control characters or
+      // a novel on a plinth other players can see.
+      const named = memorialName(command.name);
+      if (named) fallen.name = named;
+      return { sequence, status: "applied" };
+    }
+    case "memorial.clear": {
+      const obj = state.objects.objects.find((o) => o.instanceId === command.instanceId);
+      if (!obj || !isMemorial(obj.catalogKey)) return reject(sequence, "not_owned");
+      if (!releaseMemorial(state, command.instanceId, options.now)) return reject(sequence, "no_effect");
       return { sequence, status: "applied" };
     }
     case "object.harvest_trees": {
@@ -1173,6 +1265,7 @@ export function freshGameplayState(): MutableGameplayState {
     inventory: {},
     storage: { received: {}, stored: {} },
     roster: [] satisfies RosterUnitProjection[],
+    fallen: [] satisfies FallenUnitProjection[],
     farmSize: 30,
     climates: ["grass"],
     farmerHeads: [...freeFarmerHeads],

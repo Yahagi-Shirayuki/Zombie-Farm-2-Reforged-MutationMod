@@ -50,6 +50,15 @@ export class ZombieField {
   // (it credits gold), so it deliberately does NOT go through onCasualty.
   onGrant: ((u: { id: string; key: string; mutation: number; invasions: number }) => void) | null = null;
   onCasualty: ((ids: string[]) => void) | null = null;
+  // ---- the graveyard (Memorial Statues) ----
+  // Fired for every unit lost to a raid, and again for any of them the player then
+  // buys back at the revival offer. Both live here rather than at the call sites
+  // because removeCasualties/reviveCasualties are the ONLY doors a zombie dies or
+  // un-dies through, and the offline and server-verified raid paths use both.
+  // Unlike the hooks above these are NOT gated by `rosterLive`: an offline farm has
+  // no server shadow but still buries its dead.
+  onFallen: ((units: OwnedZombie[]) => void) | null = null;
+  onRevived: ((ids: string[]) => void) | null = null;
   // Combine goes through its own server ops so the result can be validated against the
   // two parents: onCombineStart consumes the parents; onCombineCollect grants the
   // result (the v3 server derives its species from the authoritative parents). Fall
@@ -134,9 +143,21 @@ export class ZombieField {
     return this.units.length < this.state.zombieMax;
   }
 
+  /** How many more grown zombies have somewhere to go: free army slots plus free
+   *  Mausoleum slots. Zero means a ripe zombie crop must stay in the ground — the
+   *  farm cap is never exceeded, and the crop is never spent on a unit with no home.
+   *  Callers queueing several harvests at once must debit their own pending ones. */
+  zombieHarvestRoom(): number {
+    const army = Math.max(0, this.state.zombieMax - this.units.length);
+    const crypt = this.field.mausoleumId()
+      ? Math.max(0, this.mausoleumCap - this.stored.length)
+      : 0;
+    return army + crypt;
+  }
+
   /** Can a grown zombie be collected into either the active army or Mausoleum? */
   canHarvestZombie(): boolean {
-    return this.canAdd() || (!!this.field.mausoleumId() && !this.mausoleumFull);
+    return this.zombieHarvestRoom() > 0;
   }
 
   /** A crop was just planted at plot (oc,or): each DEPLOYED Garden zombie rolls its
@@ -328,6 +349,7 @@ export class ZombieField {
     }
     // Drop the dead from the server shadow too, so they can't be sold after dying.
     if (this.rosterLive && removed.length) this.onCasualty?.(removed.map((r) => r.id));
+    if (removed.length) this.onFallen?.(removed);
     return removed;
   }
 
@@ -886,6 +908,10 @@ export class ZombieField {
     } finally {
       this.rosterLive = live;
     }
+    // Anyone bought back is not dead after all, so they leave the graveyard. This
+    // runs for every id offered, not just the ones re-added: a unit already in the
+    // roster (`owned` above) was revived by another path and must not stay buried.
+    if (casualties.length) this.onRevived?.(casualties.map((zombie) => zombie.id));
   }
 
   /** Reconcile a server roster without rebuilding unchanged actors. `aliases` maps

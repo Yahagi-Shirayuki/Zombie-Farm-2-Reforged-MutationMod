@@ -406,7 +406,14 @@ python tools/prep_backgrounds.py
 `tools/prep_backgrounds.py` is the odd one out: it takes no source-app input. It
 recolours the hand-made `public/assets/farm_background.png` into one horizon per
 ground skin (`farm_background_<terrain>.png`), so a beach farm doesn't sit in front
-of temperate green hills. See `src/surroundings.ts`.
+of temperate green hills, and sprinkles a deterministic starfield into the skies
+dark enough to show one. It prints each backdrop's mid-hill colour, which must be
+pasted into that theme's `filler` in `src/surroundings.ts` — the viewport beyond
+the backdrop is cleared to that colour, and the two have to match.
+
+The Lunar terrain tiles are regraded (darker, near-neutral, grainy) inside
+`prep_assets.py`'s `slice_ground`, and are pitched to sit just under that theme's
+hills. Retune one and check the other.
 
 `tools/extract_zf1_ipa.py` extracts the **original Zombie Farm 1** app bundle — decoding Apple
 CgBI "crushed" PNGs to portable PNGs and bucketing plists and art by category. It writes to an

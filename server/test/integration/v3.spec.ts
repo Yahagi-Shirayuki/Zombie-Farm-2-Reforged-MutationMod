@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  befriend, call, currentIntegrityHeaders, grantBalance, grantRoster, signIn, uniqueSub,
+  befriend, call, currentIntegrityHeaders, grantBalance, grantFallen, grantRoster, signIn, uniqueSub,
 } from "./helpers";
 import { RAID_RULESET_VERSION } from "../../../src/raid/replay";
 
@@ -777,6 +777,87 @@ describe("protocol v3 API", () => {
     ]));
   });
 
+  it("shows a friend the zombie carved on a Memorial Statue, and releases it on sale", async () => {
+    const owner = await signIn(uniqueSub("memorial-owner"));
+    const other = await signIn(uniqueSub("memorial-visitor"));
+    await grantBalance(owner, { gold: 30_000 });
+    await grantFallen(owner, [
+      { id: "z-dead-1", key: "ZombieActorRegularTier1", name: "Gus", mutation: 8, invasions: 3, diedAt: 1_700_000_000_000 },
+      { id: "z-dead-2", key: "ZombieActorGardenTier1", diedAt: 1_700_000_001_000 },
+    ]);
+    const boot = (await call<any>("POST", "/bootstrap", owner.token, { protocolVersion: 3, deviceId: deviceA })).body;
+    // The graveyard arrives with the bootstrap, newest first, nobody enshrined yet.
+    expect(boot.gameplay.fallen).toEqual([
+      expect.objectContaining({ id: "z-dead-2", key: "ZombieActorGardenTier1" }),
+      expect.objectContaining({ id: "z-dead-1", name: "Gus", mutation: 8, invasions: 3 }),
+    ]);
+    expect(boot.gameplay.fallen.every((u: any) => u.memorialObjectId === undefined)).toBe(true);
+
+    const built = await call<any>("POST", "/commands", owner.token,
+      commandBody(boot, "batch-memorial-buy", 1, [
+        { type: "object.buy", catalogKey: "memorialStatue", clientInstanceId: "statue-1" },
+        { type: "object.buy", catalogKey: "memorialStatue", clientInstanceId: "statue-2" },
+        { type: "memorial.enshrine", instanceId: "statue-1", unitId: "z-dead-1", name: "Gus" },
+      ]));
+    expect(built.status, JSON.stringify(built.body)).toBe(200);
+    // Unlimited copies: the one-per-farm rule every other functional item lives under
+    // does not apply, or a player could only ever remember one zombie.
+    expect(built.body.results.map((r: any) => r.status)).toEqual(["applied", "applied", "applied"]);
+    expect(built.body.gameplay.fallen).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "z-dead-1", memorialObjectId: "statue-1" }),
+    ]));
+
+    // A zombie can only stand on one plinth, and only a zombie this account lost.
+    const refused = await call<any>("POST", "/commands", owner.token,
+      commandBody(built.body, "batch-memorial-bad", 4, [
+        { type: "memorial.enshrine", instanceId: "statue-2", unitId: "z-dead-1" },
+        { type: "memorial.enshrine", instanceId: "statue-2", unitId: "z-never-existed" },
+        { type: "memorial.enshrine", instanceId: "statue-1", unitId: "z-dead-2" },
+      ]));
+    expect(refused.body.results.map((r: any) => r.error))
+      .toEqual(["already_enshrined", "not_owned", "statue_occupied"]);
+
+    // THE POINT OF ALL THIS: a visitor renders the statue from the authoritative
+    // object list, so the occupant has to travel with it. Their own graveyard stays
+    // private — a visit shows what stands on the farm, not who else died.
+    await befriend(owner, other);
+    const visit = await call<any>("GET", `/friends/${owner.accountId}/save`, other.token);
+    expect(visit.status).toBe(200);
+    const statues = visit.body.save.objects.filter((o: any) => o.key === "memorialStatue");
+    expect(statues).toHaveLength(2);
+    expect(statues.find((o: any) => o.id === "statue-1").memorial)
+      .toMatchObject({ id: "z-dead-1", key: "ZombieActorRegularTier1", name: "Gus", mutation: 8 });
+    expect(statues.find((o: any) => o.id === "statue-2").memorial).toBeUndefined();
+    expect(visit.body.save.fallen).toBeUndefined();
+
+    // Selling the plinth must not bury the zombie a second time: it goes back to the
+    // graveyard, free to be enshrined again.
+    const sold = await call<any>("POST", "/commands", owner.token,
+      commandBody(refused.body, "batch-memorial-sell", 7, [
+        { type: "object.refund", instanceId: "statue-1" },
+      ]));
+    expect(sold.body.results[0], JSON.stringify(sold.body.results[0])).toMatchObject({ status: "applied" });
+    const released = sold.body.gameplay.fallen.find((u: any) => u.id === "z-dead-1");
+    expect(released.memorialObjectId).toBeUndefined();
+    // …and it rejoins at the TOP of the graveyard rather than at its date of death.
+    // A player enshrines a loss they care about, which is usually an old one, so
+    // ranking it by `diedAt` on the way back would bury it under everything that has
+    // died since — and delete it outright at the next settlement on a farm that has
+    // lost MEMORIAL_GRAVEYARD_CAP zombies in the meantime. `z-dead-2` died LATER than
+    // `z-dead-1` and led this list before the statue was sold.
+    expect(released.releasedAt).toBeGreaterThan(released.diedAt);
+    expect(released.diedAt).toBe(1_700_000_000_000); // the plaque's date is untouched
+    expect(sold.body.gameplay.fallen.map((u: any) => u.id)).toEqual(["z-dead-1", "z-dead-2"]);
+
+    const reloaded = (await call<any>("POST", "/bootstrap", owner.token, {})).body;
+    expect(reloaded.gameplay.fallen.find((u: any) => u.id === "z-dead-1").memorialObjectId)
+      .toBeUndefined();
+    // The bootstrap's ORDER BY and the settlement trim read the same expression, so
+    // the reprieve survives a reload — this is the row that would be kept.
+    expect(reloaded.gameplay.fallen.map((u: any) => u.id)).toEqual(["z-dead-1", "z-dead-2"]);
+    expect(reloaded.gameplay.objects.objects.some((o: any) => o.instanceId === "statue-1")).toBe(false);
+  });
+
   it("bootstraps once and applies a mixed ordered batch", async () => {
     const session = await signIn();
     const boot = await call<any>("POST", "/bootstrap", session.token, { protocolVersion: 3, deviceId: deviceA });
@@ -915,6 +996,76 @@ describe("protocol v3 API", () => {
     });
   });
 
+  it("spends a Brain Ticket for an elite invasion, and refuses without one", async () => {
+    const session = await signIn();
+    await grantBalance(session, { gold: 30_000 });
+    await grantRoster(session, [{
+      id: "elite-raid-zombie",
+      key: "ZombieActorRegularTier1",
+      stored: false,
+    }]);
+    const boot = (await call<any>("POST", "/bootstrap", session.token, {
+      protocolVersion: 3,
+      deviceId: deviceA,
+    })).body;
+    const raid = {
+      raidId: 1,
+      orderedUnitIds: ["elite-raid-zombie"],
+      rulesetVersion: RAID_RULESET_VERSION,
+    };
+
+    // Asking for elite with an empty pocket is refused outright rather than quietly
+    // downgraded — the player asked for the fight they were going to be charged for.
+    const broke = await call<any>("POST", "/raid/start", session.token, { ...raid, brainTicket: true });
+    expect(broke).toMatchObject({ status: 409, body: { error: "no_brain_ticket" } });
+
+    const bought = await call<any>("POST", "/commands", session.token,
+      commandBody(boot, "batch-buy-brain-ticket", 1, [
+        { type: "power.buy", key: "brain_ticket" },
+      ]));
+    expect(bought.status, JSON.stringify(bought.body)).toBe(200);
+    expect(bought.body.results[0]).toMatchObject({ status: "applied" });
+    expect(bought.body.gameplay.inventory.brain_ticket).toBe(1);
+    expect(bought.body.gameplay.balance.gold).toBe(20_000);
+
+    const started = await call<any>("POST", "/raid/start", session.token, { ...raid, brainTicket: true });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    expect(started.body).toMatchObject({ ok: true, elite: true, inventory: { brain_ticket: 0 } });
+
+    await call<any>("POST", "/raid/finish", session.token, {
+      sessionId: started.body.sessionId,
+      finalTick: 0,
+      inputs: [{ seq: 1, tick: 0, type: "retreat" }],
+      clientWin: false,
+    });
+
+    // A ticket covers the wait too, so a second elite launch inside the cooldown needs
+    // only another ticket — not an Invasion Voucher on top of it.
+    const stillBroke = await call<any>("POST", "/raid/start", session.token, { ...raid, brainTicket: true });
+    expect(stillBroke).toMatchObject({ status: 409, body: { error: "no_brain_ticket" } });
+    const reboot = (await call<any>("POST", "/bootstrap", session.token, {
+      protocolVersion: 3,
+      deviceId: deviceA,
+    })).body;
+    // An Invasion Voucher is bought alongside it purely so the next assertion can show
+    // it was NOT taken: the ticket alone paid for the bypass.
+    const again = await call<any>("POST", "/commands", session.token,
+      commandBody(reboot, "batch-buy-brain-ticket-2", 2, [
+        { type: "power.buy", key: "brain_ticket" },
+        { type: "power.buy", key: "invasion_voucher" },
+      ]));
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body.gameplay.inventory).toMatchObject({ brain_ticket: 1, invasion_voucher: 1 });
+    const bypass = await call<any>("POST", "/raid/start", session.token, { ...raid, brainTicket: true });
+    expect(bypass.status, JSON.stringify(bypass.body)).toBe(200);
+    expect(bypass.body).toMatchObject({
+      ok: true,
+      elite: true,
+      bypassed: true,
+      inventory: { brain_ticket: 0, invasion_voucher: 1 },
+    });
+  });
+
   it("versions presentation independently and retires v2 mutations", async () => {
     const session = await signIn();
     for (const objectLayout of [{}, [null], [{ id: "o1", oc: "0", or: 0 }]]) {
@@ -934,12 +1085,36 @@ describe("protocol v3 API", () => {
       });
       expect(malformed.status, JSON.stringify(discovered)).toBe(400);
     }
+    // The graveyard is server-owned (fallen_v3), but a client built before that
+    // table still puts `fallen` in its presentation blob. It MUST stay accepted: an
+    // unknown key rejects the WHOLE blob, which would silently stop that client's
+    // object positions and zombie names from saving the moment a zombie died.
+    const fallen = (over: Record<string, unknown> = {}) => ({
+      id: "z9", key: "ZombieActorRegularTier1", name: "Bob",
+      mutation: 8, invasions: 5, diedAt: 1_700_000_000_000, ...over,
+    });
+    for (const bad of [
+      [fallen({ id: "bad id!" })],                          // id charset
+      [fallen({ name: "x".repeat(25) })],                   // name length
+      [fallen({ invasions: -1 })],                          // counters are non-negative
+      [fallen({ color: [1, 2] })],                          // colour is a triplet
+      [{ id: "z9" }],                                       // missing fields
+      Array.from({ length: 61 }, (_, i) => fallen({ id: `z${i}` })), // over the cap
+      { z9: fallen() },                                     // must be a list
+    ]) {
+      const malformed = await call("PUT", "/presentation", session.token, {
+        protocolVersion: 3, expectedVersion: 0, data: { fallen: bad },
+      });
+      expect(malformed.status, JSON.stringify(bad).slice(0, 80)).toBe(400);
+    }
     const presentation = await call<any>("PUT", "/presentation", session.token, {
       protocolVersion: 3,
       expectedVersion: 0,
       data: {
         camera: { x: 1, y: 2 }, tutorial: { done: false, step: 1 },
         almanac: { discovered: { ZombieActorRegularTier1: 2, ZombieActorGardenTier1: 1 } },
+        fallen: [fallen(), fallen({ id: "z10", color: [12, 34, 56] })],
+        objectLayout: [{ id: "o1", oc: 3, or: 4, memorial: fallen({ id: "z11" }) }],
       },
     });
     expect(presentation.status).toBe(200);

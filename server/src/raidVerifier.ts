@@ -25,6 +25,13 @@ import type {
   RaidStage,
   GrabberConfig,
 } from "../../src/raid/types";
+import {
+  eliteBossSpecials,
+  eliteBossThrow,
+  eliteProfile,
+  eliteWallHp,
+  type EliteProfile,
+} from "../../src/raid/eliteInvasion";
 import { levelForXp } from "./levels";
 import { activeBonusHeadId, farmerMultiplier } from "../../src/farmer";
 
@@ -50,6 +57,10 @@ export interface PinnedRaidConfig {
   wallTemplate: CombatUnit | null;
   grabber: GrabberConfig | null;
   concentration: boolean;
+  /** A Brain Ticket was charged at /raid/start: every combat value above is already
+   *  scaled by this raid's elite profile. Stored so a settled session can be read back
+   *  and explained without re-deriving it. */
+  elite?: boolean;
 }
 
 interface V3RosterRow {
@@ -76,7 +87,8 @@ function grabberOf(_raid: RaidDef): GrabberConfig | null {
 function bossThrowOf(
   raid: RaidDef,
   stage: RaidStage,
-  priorWins: number
+  priorWins: number,
+  elite: EliteProfile | null
 ): BossThrowConfig | null {
   if (!stage.bossKey || stage.throwingDisabled) return null;
   const options = (enemyStats[stage.bossKey]?.bossActions ?? [])
@@ -90,26 +102,29 @@ function bossThrowOf(
     .filter((o) => o.sprite);
   if (!options.length) return null;
   const secs = bossThrowIntervalSecs(raid, stage, priorWins);
-  return { intervalMs: secs * 1000, options };
+  return eliteBossThrow({ intervalMs: secs * 1000, options }, elite);
 }
 
 // Strictly the BOSS's own actions — mirrors RaidManager.bossSpecialsOf, and must stay
 // in step with it or the pinned config and the client's fight disagree.
-function bossSpecialsOf(stage: RaidStage): BossSpecial[] {
+function bossSpecialsOf(stage: RaidStage, elite: EliteProfile | null): BossSpecial[] {
   if (!stage.bossKey || stage.throwingDisabled) return [];
   const actions = enemyStats[stage.bossKey]?.bossActions ?? [];
-  return actions
-    .filter((a) => a.name !== "throw")
-    .map((a) => ({
-      name: a.name,
-      weight: a.frequency,
-      castMs: (a.castTime ?? 0) * 1000,
-      cooldownMs: (a.cooldownTime ?? a.castTime ?? 2) * 1000,
-      damage: a.damage ?? 0,
-    }));
+  return eliteBossSpecials(
+    actions
+      .filter((a) => a.name !== "throw")
+      .map((a) => ({
+        name: a.name,
+        weight: a.frequency,
+        castMs: (a.castTime ?? 0) * 1000,
+        cooldownMs: (a.cooldownTime ?? a.castTime ?? 2) * 1000,
+        damage: a.damage ?? 0,
+      })),
+    elite
+  );
 }
 
-function summonWallTemplates(stage: RaidStage, units: CombatUnit[]): {
+function summonWallTemplates(stage: RaidStage, units: CombatUnit[], elite: EliteProfile | null): {
   summonTemplate: CombatUnit | null;
   wallTemplate: CombatUnit | null;
 } {
@@ -123,7 +138,7 @@ function summonWallTemplates(stage: RaidStage, units: CombatUnit[]): {
   }
   const wall = actions.find((a) => a.name === "wall");
   if (wall) {
-    const hp = Math.max(1, Math.round(wall.hp ?? 1500));
+    const hp = Math.max(1, Math.round(eliteWallHp(wall.hp ?? 1500, elite)));
     wallTemplate = {
       id: "wall",
       sourceKey: (wall.sprite ?? "carrotWall.png").replace(/\.png$/i, ""),
@@ -161,7 +176,12 @@ export async function buildPinnedRaid(
   /** Seed for the wave's own randomness (the Robots' random boss). It MUST be the
    *  session id the client is handed back, because the client resolves the same wave
    *  from it and this pinned config is what the replay is checked against. */
-  waveSeed: string
+  waveSeed: string,
+  /** A Brain Ticket was charged for this launch — fight the ELITE wave. The caller
+   *  decides this (it is the side that debits the ticket) and hands the same answer to
+   *  the client, which must adopt it rather than re-deriving one; the two simulations
+   *  have to scale the wave identically or the replay diverges from tick 0. */
+  elite = false
 ): Promise<BuildPinnedResult> {
   if (!Array.isArray(orderedIds) || orderedIds.length > ARMY_CAP || orderedIds.length === 0) {
     return { ok: false, error: "bad_roster" };
@@ -219,7 +239,8 @@ export async function buildPinnedRaid(
   };
   // raidId + playerLevel drive the farm raid's enemy speed-up; the client passes the
   // same pair in RaidManager.beginRaid — they MUST match or the replay diverges.
-  const enemyUnits = buildEnemyUnits(stage, enemyStats, attacks, { raidId, playerLevel: level });
+  const profile = eliteProfile(raidId, elite);
+  const enemyUnits = buildEnemyUnits(stage, enemyStats, attacks, { raidId, playerLevel: level, elite: profile });
   return {
     ok: true,
     config: {
@@ -228,11 +249,12 @@ export async function buildPinnedRaid(
       rosterIds: ids,
       playerUnits: buildPlayerUnits(party, { concentration, abilityUnlocked, playerLevel: level }),
       enemyUnits,
-      bossThrow: bossThrowOf(raid, stage, wins.get(raidId) ?? 0),
-      bossSpecials: bossSpecialsOf(stage),
-      ...summonWallTemplates(stage, enemyUnits),
+      bossThrow: bossThrowOf(raid, stage, wins.get(raidId) ?? 0, profile),
+      bossSpecials: bossSpecialsOf(stage, profile),
+      ...summonWallTemplates(stage, enemyUnits, profile),
       grabber: grabberOf(raid),
       concentration,
+      elite,
     },
   };
 }
@@ -265,7 +287,12 @@ export async function buildPinnedV3Raid(
   /** Seed for the wave's own randomness (the Robots' random boss). It MUST be the
    *  session id the client is handed back, because the client resolves the same wave
    *  from it and this pinned config is what the replay is checked against. */
-  waveSeed: string
+  waveSeed: string,
+  /** A Brain Ticket was charged for this launch — fight the ELITE wave. The caller
+   *  decides this (it is the side that debits the ticket) and hands the same answer to
+   *  the client, which must adopt it rather than re-deriving one; the two simulations
+   *  have to scale the wave identically or the replay diverges from tick 0. */
+  elite = false
 ): Promise<BuildPinnedResult> {
   if (!Array.isArray(orderedIds) || orderedIds.length > ARMY_CAP || orderedIds.length === 0) {
     return { ok: false, error: "bad_roster" };
@@ -324,7 +351,8 @@ export async function buildPinnedV3Raid(
   };
   // raidId + playerLevel drive the farm raid's enemy speed-up; the client passes the
   // same pair in RaidManager.beginRaid — they MUST match or the replay diverges.
-  const enemyUnits = buildEnemyUnits(stage, enemyStats, attacks, { raidId, playerLevel: level });
+  const profile = eliteProfile(raidId, elite);
+  const enemyUnits = buildEnemyUnits(stage, enemyStats, attacks, { raidId, playerLevel: level, elite: profile });
   return {
     ok: true,
     config: {
@@ -339,11 +367,12 @@ export async function buildPinnedV3Raid(
         farmerLifeMult: farmerMultiplier(bonusHead, "zombieLife"),
       }),
       enemyUnits,
-      bossThrow: bossThrowOf(raid, stage, winsObject[String(raidId)] ?? 0),
-      bossSpecials: bossSpecialsOf(stage),
-      ...summonWallTemplates(stage, enemyUnits),
+      bossThrow: bossThrowOf(raid, stage, winsObject[String(raidId)] ?? 0, profile),
+      bossSpecials: bossSpecialsOf(stage, profile),
+      ...summonWallTemplates(stage, enemyUnits, profile),
       grabber: grabberOf(raid),
       concentration,
+      elite,
     },
   };
 }

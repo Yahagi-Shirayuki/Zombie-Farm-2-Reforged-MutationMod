@@ -91,6 +91,18 @@ export async function grantRoster(
   }
 }
 
+/** Bury zombies so a scenario can exercise memorials without staging a raid that
+ *  actually kills someone. */
+export async function grantFallen(
+  s: Session,
+  units: { id: string; key: string; name?: string; mutation?: number; invasions?: number; diedAt?: number }[]
+): Promise<void> {
+  const r = await call<{ count: number }>("POST", "/dev/fixture/fallen", s.token, { units });
+  if (r.status !== 200 || r.body.count < units.length) {
+    throw new Error(`fallen fixture failed: ${r.status}`);
+  }
+}
+
 /** Establish an explicit economy balance for a scenario that tests paid actions. */
 export async function grantBalance(
   s: Session,

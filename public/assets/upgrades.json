@@ -26,6 +26,15 @@
    "brains": 12,
    "info": "60x60",
    "icon": "upgrade_farmsize.png"
+  },
+  {
+   "name": "Colossal 'ol Farm",
+   "size": 70,
+   "level": 41,
+   "gold": 1250000,
+   "brains": 20,
+   "info": "70x70",
+   "icon": "upgrade_farmsize.png"
   }
  ],
  "climate": [

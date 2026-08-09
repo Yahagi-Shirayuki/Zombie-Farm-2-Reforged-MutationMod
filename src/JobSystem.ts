@@ -99,13 +99,32 @@ export class JobSystem {
     private onInsufficientFunds: (currency: JobCurrency, needed: number) => void = () => {},
     // Visual-only collection feedback. Called after a successful crop harvest.
     private onHarvestFx: (result: HarvestResult, x: number, y: number) => void = () => {},
-    // Rechecked when the farmer reaches a queued zombie harvest. Capacity can fill
-    // after the tap but before arrival, so enqueue-time validation is insufficient.
-    private canHarvestZombie: () => boolean = () => true
+    // How many more grown zombies the farm can take RIGHT NOW: free army slots plus
+    // free Mausoleum slots. Read at three points — enqueue, arrival, and the instant
+    // before the crop is consumed — because capacity moves under a queued harvest
+    // (an earlier queued crop lands, a combine is collected, a raid party returns).
+    private zombieHarvestRoom: () => number = () => Number.POSITIVE_INFINITY
   ) {}
 
   private key(kind: JobKind, oc: number, or: number) {
     return `${kind}:${oc},${or}`;
+  }
+
+  /** Is there anywhere for one more grown zombie to go? */
+  private hasZombieRoom(): boolean {
+    return this.zombieHarvestRoom() > 0;
+  }
+
+  /** Zombie crops already queued (or being worked): each one has claimed a slot that
+   *  the room count still shows as free, because nothing is spawned until the farmer
+   *  finishes. Without this, a farm one slot from full accepts every ripe zombie on
+   *  the field and refuses them one by one on arrival. */
+  private pendingZombieHarvests(): number {
+    let count = 0;
+    for (const job of this.active ? [this.active, ...this.queue] : this.queue) {
+      if (job.kind === "harvest" && this.field.ripeZombieAt(job.oc, job.or)) count++;
+    }
+    return count;
   }
 
   // Gold charged to plow one plot — 0 while a Plowing Monolith is placed.
@@ -142,6 +161,14 @@ export class JobSystem {
         this.onInsufficientFunds(cfg.brainsNeeded ? "brains" : "gold", cfg.cost);
         return false;
       }
+    }
+    // A zombie crop may only be queued if a home for the unit is still unclaimed —
+    // counting the zombie harvests already in the queue, which have not spawned yet.
+    if (kind === "harvest" && this.field.ripeZombieAt(oc, or) &&
+        this.zombieHarvestRoom() <= this.pendingZombieHarvests()) {
+      const at = this.field.plotCenterOf(oc, or);
+      this.float(at.x, at.y, "Army full!");
+      return false;
     }
 
     if (kind === "till") this.field.reserveTill(oc, or); // hold the area while queued
@@ -393,7 +420,7 @@ export class JobSystem {
         // Still walk to a queued zombie, but do not begin the work animation or
         // mutate the plot once both the active army and Mausoleum are full.
         if (next.kind === "harvest" && this.field.ripeZombieAt(next.oc, next.or) &&
-            !this.canHarvestZombie()) {
+            !this.hasZombieRoom()) {
           this.float(next.cx, next.cy, "Army full!");
           this.finish();
           return;
@@ -518,6 +545,15 @@ export class JobSystem {
         this.playSfx("place");
       }
     } else {
+      // Last fence before the crop is destroyed. The arrival check ran a full work
+      // phase ago, and the army/Mausoleum can fill inside it (a combine collected, a
+      // reward claimed, a raid party returning, an online reconcile). harvestAt clears
+      // the plot unconditionally, so harvesting here with nowhere to put the unit
+      // would delete a grown zombie outright rather than merely refusing it.
+      if (this.field.ripeZombieAt(job.oc, job.or) && !this.hasZombieRoom()) {
+        this.float(job.cx, job.cy, "Army full!");
+        return;
+      }
       const r = this.field.harvestAt(job.oc, job.or);
       if (r) {
         this.onHarvestFx(r, job.cx, job.cy);

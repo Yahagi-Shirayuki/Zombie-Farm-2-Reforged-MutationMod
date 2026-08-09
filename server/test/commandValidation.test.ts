@@ -47,6 +47,8 @@ const SAMPLES: Record<GameplayCommand["type"], GameplayCommand> = {
   "pet.buy": { type: "pet.buy", petKey: "cat" },
   "pet.equip": { type: "pet.equip", petKey: null },
   "pet.pen": { type: "pet.pen", petKeys: ["cat", "dog"] },
+  "memorial.enshrine": { type: "memorial.enshrine", instanceId: "obj-1", unitId: "z-1", name: "Bob" },
+  "memorial.clear": { type: "memorial.clear", instanceId: "obj-1" },
   "tutorial.complete": { type: "tutorial.complete" },
 };
 
@@ -64,6 +66,7 @@ describe("gameplay command validation", () => {
       { type: "storage.claim", itemName: "Gnome" },
       { type: "roster.combine_start", potId: "p", parentAId: "a", parentBId: "b" },
       { type: "roster.combine", parentAId: "a", parentBId: "b" },
+      { type: "memorial.enshrine", instanceId: "obj-1", unitId: "z-1" },
     ];
     for (const command of minimal) expect(validGameplayCommand(command)).toBe(true);
   });

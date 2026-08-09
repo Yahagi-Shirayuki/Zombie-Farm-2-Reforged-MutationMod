@@ -11,6 +11,7 @@ import {
 } from "./farmer";
 import type { EpicBossRun } from "./epicBoss/types";
 import { parseReceivedZombie } from "./zombie/receivedReward";
+import { releasedToGraveyard, trimFallen, type FallenZombie } from "./zombie/memorial";
 
 export const XP_THRESHOLDS = [
   0, 25, 75, 150, 250, 375, 550, 800, 1300, 1800, 2300, 2800, 3300, 3900, 4500,
@@ -38,6 +39,11 @@ export class GameState {
   // path (grow, Pot, reward, Black Market, gift); never decremented — selling or
   // losing a zombie does not un-discover its species.
   zombieDiscovered: Record<string, number> = {};
+  // ---- the graveyard: zombies lost in an invasion and not revived ----
+  // Purely a memento list — a Memorial Statue is the only thing that can consume
+  // one, and enshrining moves the snapshot onto the statue. Nothing here can ever
+  // return a zombie to the roster (see src/zombie/memorial.ts).
+  fallenZombies: FallenZombie[] = [];
   // ---- ground/climate skins owned (Market Upgrade → Ground) ----
   // "grass" is the free default; buying a skin adds its terrain key here so it can
   // be re-applied for free later. The current applied skin lives on Field.climate.
@@ -319,6 +325,52 @@ export class GameState {
     if (e.count <= 0) this.storedItems.splice(idx, 1);
     this.emit();
     return true;
+  }
+
+  /** Remember zombies that just died, so a Memorial Statue can enshrine one. Does
+   *  NOT resurrect anything: a fallen zombie is out of the roster for good, and the
+   *  only undo was the revival offer shown when the raid settled. */
+  recordFallen(fallen: FallenZombie[]) {
+    if (!fallen.length) return;
+    const known = new Set(this.fallenZombies.map((z) => z.id));
+    const added = fallen.filter((z) => !known.has(z.id));
+    if (!added.length) return;
+    this.fallenZombies = trimFallen([...this.fallenZombies, ...added]);
+    this.emit();
+  }
+
+  /** Un-bury zombies the player bought back at the post-raid revival offer. They
+   *  are alive again, so a memorial must not be able to remember them. */
+  forgetFallen(ids: string[]) {
+    if (!ids.length) return;
+    const revived = new Set(ids);
+    const kept = this.fallenZombies.filter((z) => !revived.has(z.id));
+    if (kept.length === this.fallenZombies.length) return;
+    this.fallenZombies = kept;
+    this.emit();
+  }
+
+  /** Take one fallen zombie out of the graveyard — it is moving onto a statue,
+   *  which then owns the snapshot. Returns null if it is already gone (a second
+   *  statue cannot enshrine the same zombie). */
+  claimFallen(id: string): FallenZombie | null {
+    const index = this.fallenZombies.findIndex((z) => z.id === id);
+    if (index < 0) return null;
+    const [claimed] = this.fallenZombies.splice(index, 1);
+    this.emit();
+    return claimed;
+  }
+
+  /** Put an enshrined zombie back in the graveyard — the statue holding it was
+   *  removed, or the player took them off it. They rejoin at the TOP of the list
+   *  rather than at their date of death (see graveyardRank): a farm that has lost
+   *  sixty zombies since would otherwise evict them the instant the statue is sold,
+   *  which is the opposite of what the sell confirmation promises. They still age
+   *  out — just behind the next sixty losses instead of immediately. */
+  releaseFallen(fallen: FallenZombie, at = Date.now()) {
+    if (this.fallenZombies.some((z) => z.id === fallen.id)) return;
+    this.fallenZombies = trimFallen([...this.fallenZombies, releasedToGraveyard(fallen, at)]);
+    this.emit();
   }
 
   /** Record one obtained zombie of `key` in the Almanac's lifetime counter. */

@@ -884,7 +884,8 @@ export const raidStart = (
   raidId: number,
   orderedUnitIds: string[],
   concentration = false,
-  dice = 0
+  dice = 0,
+  brainTicket = false
 ) =>
   req<{
     ok: boolean;
@@ -900,6 +901,10 @@ export const raidStart = (
      * credited only if raidFinish verifies a boss-defeating win. */
     brainDrop?: number;
     concentration?: boolean;
+    /** Whether the server actually charged a Brain Ticket and pinned this session as an
+     *  ELITE invasion. The client MUST adopt this rather than its own request: the pinned
+     *  enemy wave is scaled to match, and disagreeing desyncs the replay from tick 0. */
+    elite?: boolean;
     inventory?: Record<string, number>;
     /** Authoritative time at which this accepted invasion started its cooldown. */
     lastRaidAt?: number;
@@ -912,6 +917,7 @@ export const raidStart = (
     orderedUnitIds,
     concentration,
     dice,
+    brainTicket,
     rulesetVersion: RAID_RULESET_VERSION,
   });
 

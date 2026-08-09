@@ -732,6 +732,38 @@ describe("protocol v3 command engine", () => {
     }));
   });
 
+  it("refuses every queued harvest once the army is full with no Mausoleum", () => {
+    const state = freshGameplayState();
+    state.zombieMax = 16;
+    state.roster = Array.from({ length: 16 }, (_unit, i) => ({
+      id: `z${i}`, key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: false,
+    }));
+    for (const oc of [0, 4, 8]) {
+      state.farm.plots[`${oc}:0`] = {
+        state: "planted", cropKey: "ZombieActorGirlTier1", plantedAt: 0,
+        growMs: 1, sell: 0, xp: 1, fertilized: false, zombie: true,
+      };
+    }
+
+    // A client whose own fences failed still cannot push a 17th zombie through: each
+    // ripe crop is rejected and stays in the ground, ready to harvest after a sale.
+    const result = applyCommandBatch(state, commands(
+      { type: "farm.harvest", oc: 0, or: 0 },
+      { type: "farm.harvest", oc: 4, or: 0 },
+      { type: "farm.harvest", oc: 8, or: 0 },
+    ), { now: 1_000, id: () => "must-not-exist" });
+
+    expect(result.results).toEqual([
+      { sequence: 1, status: "rejected", error: "capacity_full" },
+      { sequence: 2, status: "rejected", error: "capacity_full" },
+      { sequence: 3, status: "rejected", error: "capacity_full" },
+    ]);
+    expect(result.state.roster).toHaveLength(16);
+    for (const oc of [0, 4, 8]) {
+      expect(result.state.farm.plots[`${oc}:0`]).toMatchObject({ state: "planted" });
+    }
+  });
+
   it("rejects removed zombie-purchase powers even if stale inventory contains one", () => {
     const state = freshGameplayState();
     state.inventory.flower_zombie_pot = 1;

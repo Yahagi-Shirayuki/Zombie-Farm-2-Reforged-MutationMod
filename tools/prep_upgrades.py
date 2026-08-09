@@ -19,7 +19,7 @@ import json
 import os
 import shutil
 
-from reforge_economy import brain_price
+from reforge_economy import EXTRA_SIZE_TIERS, LEVEL_CAP, brain_price
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -39,6 +39,32 @@ def copy_icon(sheet, dest_name):
     os.makedirs(ICON_DIR, exist_ok=True)
     shutil.copyfile(src, os.path.join(ICON_DIR, dest_name))
     return dest_name
+
+
+def check_size_progression(tiers):
+    """Assert the farm-size ladder keeps the source's own progression.
+
+    The source ships three tiers and Reforged appends more (EXTRA_SIZE_TIERS); the
+    added ones are only defensible if they continue the existing curve rather than
+    inventing a price. Fail loudly here rather than let an off-pattern tier ship.
+    """
+    for prev, cur in zip(tiers, tiers[1:]):
+        where = f"{cur['name']} ({cur['size']}x{cur['size']})"
+        if cur["size"] - prev["size"] != 10:
+            raise ValueError(f"{where}: size must step by 10, got +{cur['size'] - prev['size']}")
+        if cur["level"] - prev["level"] != 10:
+            raise ValueError(f"{where}: level must step by 10, got +{cur['level'] - prev['level']}")
+        if cur["gold"] != prev["gold"] * 5:
+            raise ValueError(f"{where}: gold must be 5x the previous tier "
+                             f"({prev['gold'] * 5}), got {cur['gold']}")
+        if cur["level"] > LEVEL_CAP:
+            raise ValueError(f"{where}: level {cur['level']} is past the cap {LEVEL_CAP}")
+    # Brains rise by a doubling step (+2, +4, +8, ...), so compare second differences.
+    steps = [cur["brains"] - prev["brains"] for prev, cur in zip(tiers, tiers[1:])]
+    for i, (a, b) in enumerate(zip(steps, steps[1:])):
+        if b != a * 2:
+            raise ValueError(f"{tiers[i + 2]['name']}: brains step must double "
+                             f"({a} -> {a * 2}), got {b}")
 
 
 def main():
@@ -72,6 +98,16 @@ def main():
             "name": r["name"], "size": size, "level": r["level"],
             "gold": gold, "brains": brains, "info": r["info"], "icon": farm_icon,
         })
+
+    # Reforged's own tiers, continuing the ladder past where the source stops.
+    for extra in EXTRA_SIZE_TIERS:
+        map_size.append({
+            "name": extra["name"], "size": extra["size"], "level": extra["level"],
+            "gold": extra["gold"], "brains": extra["brains"],
+            "info": f"{extra['size']}x{extra['size']}", "icon": farm_icon,
+        })
+    map_size.sort(key=lambda m: m["size"])
+    check_size_progression(map_size)
 
     # --- Climate/ground skins (emitted for later; not wired into UI yet). ---
     # Source terrain tileset (tex0000.png) rows, one block of 5 GIDs per climate,

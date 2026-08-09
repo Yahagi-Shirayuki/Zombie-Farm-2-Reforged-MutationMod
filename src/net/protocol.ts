@@ -57,6 +57,14 @@ export type GameplayCommand =
   | { type: "pet.buy"; petKey: string }
   | { type: "pet.equip"; petKey: string | null }
   | { type: "pet.pen"; petKeys: string[] }
+  /** Carve a fallen zombie onto a placed Memorial Statue. Server-owned because a
+   *  friend visiting the farm renders the statue from the authoritative object
+   *  projection — a client-held occupant would show them a bare plinth, or an
+   *  impossible zombie. `name` is the only client-authored field, exactly as it is
+   *  for a living unit (roster names live in the presentation blob). */
+  | { type: "memorial.enshrine"; instanceId: string; unitId: string; name?: string }
+  /** Take whoever is on this statue back off it, into the graveyard. */
+  | { type: "memorial.clear"; instanceId: string }
   | { type: "tutorial.complete" };
 
 export interface SequencedCommand {
@@ -157,6 +165,37 @@ export interface RosterUnitProjection {
   color?: [number, number, number];
 }
 
+/** A zombie that died in an invasion and was not revived — the graveyard a Memorial
+ *  Statue draws from. Deliberately the SAME minimal shape as a living roster unit:
+ *  everything else on the card (species name, body type, class, stats) is derived
+ *  from the catalog by key + mutation, exactly as it is for a unit that is alive.
+ *
+ *  A fallen zombie is display data. Nothing can return it to the roster: the one
+ *  chance to keep it was the brain-priced offer made when the raid settled. */
+export interface FallenUnitProjection {
+  id: string;
+  key: string;
+  /** Player-chosen individual name, or absent for the deterministic default. Names
+   *  are client-authored for the living too (they ride the presentation blob), so
+   *  this carries the same weight — none. Captured at death because the roster row
+   *  it came from is gone by the time anything asks. */
+  name?: string;
+  mutation: number;
+  invasions: number;
+  color?: [number, number, number];
+  /** Epoch ms the zombie was lost. */
+  diedAt: number;
+  /** Epoch ms it last came OFF a statue, if it ever has. The graveyard is ordered
+   *  and capped by `releasedAt ?? diedAt`, so a zombie the player takes off a plinth
+   *  rejoins at the top rather than being evicted by an old date of death. Never
+   *  displayed — the plaque always shows `diedAt`. */
+  releasedAt?: number;
+  /** The placed Memorial Statue this zombie stands on. Absent = still in the
+   *  graveyard, waiting for one. At most one zombie per statue, enforced by a
+   *  unique index server-side. */
+  memorialObjectId?: string;
+}
+
 export interface GameplayProjection {
   balance: BalanceProjection;
   farm: FarmDocumentProjection;
@@ -165,6 +204,9 @@ export interface GameplayProjection {
   inventory: Record<string, number>;
   storage: { received: Record<string, number>; stored: Record<string, number> };
   roster: RosterUnitProjection[];
+  /** The graveyard + who stands on each Memorial Statue. Absent on a Worker that
+   *  predates memorials, which clients read as "no dead to remember". */
+  fallen?: FallenUnitProjection[];
   farmSize: number;
   climates: string[];
   farmerHeads: number[];

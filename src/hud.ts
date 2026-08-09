@@ -12,8 +12,10 @@ import { EPIC_BOSS_FIGHT_BRAIN_COST, type EpicBossPayment } from "./epicBoss/tok
 import { AudioManager } from "./audio";
 import { RosterEntry } from "./zombie/types";
 import {
-  bitAllowed, MUTATION_LIST, mutationLabel, mutationBonus,
+  bitAllowed, MUTATION_LIST, mutationBonus,
 } from "./zombie/mutations";
+// Species-aware: an Eyebiscus wears Carrot's bit but is never called a Carrot.
+import { mutationLabelFor } from "./zombie/mutationDisplay";
 import { maskHas } from "./zombie/mutationMask";
 import { QuestView } from "./quest/types";
 import type { RaidCardView, RaidPartyView, RaidResultView, RaidLaunchOpts, LootDrop } from "./raid/RaidManager";
@@ -28,6 +30,7 @@ import {
   type DayNightMode, type FarmBackground, type ZombieAppearancePrefs,
 } from "./prefs";
 import { fmtCooldown, MCDONNELL_ID, VOUCHER_KEY } from "./raid/RaidCatalog";
+import { BRAIN_TICKET_KEY } from "./raid/eliteInvasion";
 import { marketPageSize } from "./marketPageSize";
 import { veterancy } from "./zombie/traits";
 import { COMBINE_SPECIAL_LEVEL } from "./zombie/combineSpecies";
@@ -73,6 +76,7 @@ import {
   openZombieInfo as openZombieInfoPanel,
   openZombiesPanel, rosterInfo, type ZombiesPanelTab,
 } from "./ui/panels/zombies";
+import { openMemorialPanel, type MemorialView } from "./ui/panels/memorial";
 import { openFarmersGuide } from "./ui/panels/farmersGuide";
 import { showTimNotice } from "./ui/TimNotice";
 // View-model types + the grave classifier live in hudTypes so panel modules can
@@ -1444,11 +1448,20 @@ export class Hud {
   getRaidCards: (() => RaidCardView[]) | null = null;
   /** Eligible army + default selection for the Army screen. */
   getRaidParty: (() => RaidPartyView) | null = null;
-  /** Live cooldown (ms left, 0 = ready) + Invasion Voucher count. */
-  getRaidStatus: (() => { cooldownMs: number; voucherCount: number }) | null = null;
-  /** Battle-consumable stock for a raid: owned Concentration + Golden Dice, and the
-   *  most dice worth spending on this raid (its rare-tier depth). */
-  getRaidBoosts: ((raidId: number) => { concentration: number; dice: number; maxDice: number }) | null = null;
+  /** Live cooldown (ms left, 0 = ready) + Invasion Voucher and Brain Ticket counts. */
+  getRaidStatus: (() => {
+    cooldownMs: number;
+    voucherCount: number;
+    brainTicketCount: number;
+  }) | null = null;
+  /** Battle-consumable stock for a raid: owned Concentration + Golden Dice, the most
+   *  dice worth spending on this raid (its rare-tier depth), and owned Brain Tickets. */
+  getRaidBoosts: ((raidId: number) => {
+    concentration: number;
+    dice: number;
+    maxDice: number;
+    brainTickets: number;
+  }) | null = null;
   /** Launch the live battle scene for the chosen party. Returns true if it took over
    *  (it will show the result itself on finish); false means it declined (cooldown /
    *  a raid already running). There is no instant/auto-resolve fallback. `opts` carries
@@ -3203,7 +3216,7 @@ export class Hud {
         const traits = document.createElement("div");
         traits.className = "bm-fulfill-traits";
         if (entry.mutation !== undefined) {
-          const bits = [mutationLabel(entry.mutation) || "No mutations"];
+          const bits = [mutationLabelFor(entry.zombieKey, entry.mutation) || "No mutations"];
           if (entry.invasions) bits.push(veterancy(entry.invasions));
           traits.textContent = bits.join(" · ");
         } else {
@@ -3342,7 +3355,7 @@ export class Hud {
             ? `${entry.counterparty} filled your request — ${nameOf(entry.zombieKey)}`
             : `Bought ${nameOf(entry.zombieKey)} from ${entry.counterparty}`;
         const detailBits = [new Date(entry.fulfilledAt).toLocaleDateString()];
-        if (entry.mutation) detailBits.push(mutationLabel(entry.mutation));
+        if (entry.mutation) detailBits.push(mutationLabelFor(entry.zombieKey, entry.mutation));
         if (entry.invasions) detailBits.push(veterancy(entry.invasions));
         const detail = document.createElement("div");
         detail.textContent = detailBits.join(" · ");
@@ -3408,7 +3421,7 @@ export class Hud {
               ? `Requested mutations: ${blackMarketMutationRequirementLabel(order.mutationRequired)}`
               : `Requested mutation: ${order.mutated ? "Any mutation" : "None"}`
             : `Mutated: ${order.mutated
-              ? `Yes${order.mutation ? ` — ${mutationLabel(order.mutation)}` : ""}`
+              ? `Yes${order.mutation ? ` — ${mutationLabelFor(order.zombieKey, order.mutation)}` : ""}`
               : "No"}${order.invasions ? ` · ${veterancy(order.invasions)}` : ""}`;
           meta.textContent = `${mutationText}\n${order.mine ? "Your post" : order.creatorName}`;
           const cost = document.createElement("div"); cost.className = "bm-price";
@@ -4361,6 +4374,12 @@ export class Hud {
     openZombieInfoPanel(this, info, refresh);
   }
 
+  /** A tapped Memorial Statue: its occupant's read-only card, or the graveyard to
+   *  pick one from. */
+  openMemorial(view: MemorialView) {
+    openMemorialPanel(this, view);
+  }
+
   // Info popup for the crop/zombie still growing in the plot at (col,row): its
   // type, the time left until harvest, and an Insta-Grow button that ripens it on
   // the spot. `getInfo` is re-read on a timer so the countdown ticks live and
@@ -4709,7 +4728,7 @@ export class Hud {
         n.textContent = st.result!.name;
         const mut = document.createElement("div");
         mut.className = "cmb-rm";
-        mut.textContent = mutationLabel(st.result!.mutation) || "no mutations";
+        mut.textContent = mutationLabelFor(st.result!.key, st.result!.mutation) || "no mutations";
         result.append(p, n, typeLine(typeNameOf(st.result!.key)), mut);
         const buttons = document.createElement("div");
         buttons.className = "cmb-actions";
@@ -4727,7 +4746,7 @@ export class Hud {
           showPortrait(p, key, mask, color);
           const mut = document.createElement("div");
           mut.className = "cmb-sm";
-          mut.textContent = mutationLabel(mask) || "no mutations";
+          mut.textContent = mutationLabelFor(key, mask) || "no mutations";
           d.append(p, typeLine(typeNameOf(key)), mut);
           return d;
         };
@@ -4815,7 +4834,7 @@ export class Hud {
           n.textContent = z.name;
           const mut = document.createElement("div");
           mut.className = "cmb-sm";
-          mut.textContent = mutationLabel(z.mutation) || "no mutations";
+          mut.textContent = mutationLabelFor(z.key, z.mutation) || "no mutations";
           d.append(p, n, typeLine(z.typeName), mut, inspectButton(z));
           if (z.stored) d.appendChild(storedTag());
           d.title = "Tap to remove";
@@ -4866,7 +4885,7 @@ export class Hud {
             const m = document.createElement("div");
             m.className = "cmb-zmut";
             m.textContent = "M";
-            m.title = mutationLabel(z.mutation);
+            m.title = mutationLabelFor(z.key, z.mutation);
             c.appendChild(m);
           }
           if (!chosen && eligible) {
@@ -4932,6 +4951,53 @@ export class Hud {
     buy.onclick = () => {
       if (!this.onBuyBoost?.(voucher)) {
         this.showToast(`You need ${voucher.cost.toLocaleString()} gold for an Invasion Voucher.`);
+        return;
+      }
+      close();
+      onBought();
+    };
+    btns.append(cancel, buy);
+    panel.append(msg, btns);
+  }
+
+  /** Buy a Brain Ticket from the Army screen, with what it costs AND what it does to
+   *  the fight stated before the gold leaves. The elite warning belongs here as well as
+   *  in Tim's one-off notice: Tim speaks once ever, and this is the screen where the
+   *  choice is actually made. */
+  private openBrainTicketPrompt(onBought: () => void) {
+    const ticket = this.boosts.find((boost) => boost.key === BRAIN_TICKET_KEY);
+    if (!ticket) {
+      this.showToast("Brain Tickets are unavailable right now.");
+      return;
+    }
+    const { panel, close } = openModal({
+      host: this.el, bgClass: "raid-ticket-bg", panelClass: "confirm-panel",
+      title: "Buy a Brain Ticket?", replaceSelector: ".raid-ticket-bg",
+    });
+
+    const msg = document.createElement("p");
+    msg.className = "confirm-msg";
+    msg.textContent =
+      "Quadruples this invasion's brain and rare-zombie odds, and skips the wait.";
+    const warning = document.createElement("span");
+    warning.className = "confirm-warn";
+    warning.textContent =
+      "It also makes the invasion ELITE — far stronger than usual. Zombies lost are gone for good.";
+    msg.append(document.createElement("br"), warning);
+
+    const btns = document.createElement("div");
+    btns.className = "zbtns";
+    const cancel = document.createElement("button");
+    cancel.className = "zbtn locate";
+    cancel.textContent = "Cancel";
+    cancel.onclick = () => close();
+    const buy = document.createElement("button");
+    buy.className = "zbtn sell";
+    buy.textContent = `Buy Ticket · ${ticket.cost.toLocaleString()} Gold`;
+    markPrimary(buy); // Enter buys
+    buy.onclick = () => {
+      if (!this.onBuyBoost?.(ticket)) {
+        this.showToast(`You need ${ticket.cost.toLocaleString()} gold for a Brain Ticket.`);
         return;
       }
       close();
@@ -5041,10 +5107,12 @@ export class Hud {
         .map((t) => `${t.amount} ${t.amount === 1 ? "brain" : "brains"} ${pctOdds(t.chance)}`)
         .join(" · ");
       dropRow("Brains").textContent =
-        `${pctOdds(c.brainOdds.chance)} per boss win (${tiers})`;
+        `${pctOdds(c.brainOdds.chance)} per boss win (${tiers})` +
+        ` · ${pctOdds(c.eliteBrainOdds.chance)} on a Brain Ticket`;
       if (c.zombieDrop) {
         dropRow(c.zombieDrop.name).textContent =
-          `${pctOdds(c.zombieDrop.rate)} per win · Golden Dice raise it`;
+          `${pctOdds(c.zombieDrop.rate)} per win · ${pctOdds(c.zombieDrop.eliteRate)} on a` +
+          " Brain Ticket · Golden Dice raise it";
       }
       const boostVal = dropRow("Boosts");
       if (!c.boostDrops.length) {
@@ -5060,7 +5128,7 @@ export class Hud {
 
       const st = this.getRaidStatus
         ? this.getRaidStatus()
-        : { cooldownMs: 0, voucherCount: 0 };
+        : { cooldownMs: 0, voucherCount: 0, brainTicketCount: 0 };
       const cd = st.cooldownMs;
       if (cd <= 0) stop(); // ready again — no need to keep ticking
 
@@ -5075,11 +5143,23 @@ export class Hud {
       // Button state: lock reason > cooldown (with optional voucher bypass) > ready.
       let useVoucher = false;
       let buyVoucher = false;
+      // A Brain Ticket skips the wait too, so owning one has to open the same door a
+      // voucher does. Without this branch a player holding tickets but no voucher was
+      // pushed into buying a voucher to reach the Army screen — the only screen the
+      // ticket can be spent from.
+      let armElite = false;
       if (!c.unlocked) {
         go.textContent = c.lockReason || "Locked";
         go.disabled = true;
       } else if (cd > 0) {
-        if (st.voucherCount > 0) {
+        if (st.brainTicketCount > 0 && st.voucherCount <= 0) {
+          go.textContent = "Use Brain Ticket & Invade";
+          go.disabled = !canFight;
+          armElite = true;
+          army.textContent =
+            `${st.brainTicketCount} Brain Ticket${st.brainTicketCount > 1 ? "s" : ""}` +
+            ` · skips the ${fmtCooldown(cd)} wait, but the invasion turns ELITE`;
+        } else if (st.voucherCount > 0) {
           go.textContent = "Use Voucher & Invade";
           go.disabled = !canFight;
           useVoucher = true;
@@ -5113,7 +5193,7 @@ export class Hud {
           return;
         }
         close();
-        this.openRaidArmy(c, useVoucher);
+        this.openRaidArmy(c, useVoucher, armElite);
       };
       foot.append(army, go);
 
@@ -5166,8 +5246,10 @@ export class Hud {
 
   // Army select: pick which owned zombies go on the raid. Auto-selects the
   // strongest up to the cap; toggle individual zombies; Start gated at the min.
-  // `useVoucher` carries a cooldown-bypass intent from the Raid Select screen.
-  openRaidArmy(raid: RaidCardView, useVoucher = false) {
+  // `useVoucher` carries a cooldown-bypass intent from the Raid Select screen, and
+  // `armElite` pre-arms the Brain Ticket when that screen's only way past the cooldown
+  // was a ticket — so the choice the player already made is not silently forgotten here.
+  openRaidArmy(raid: RaidCardView, useVoucher = false, armElite = false) {
     document.querySelector("#hud .army-bg")?.remove();
     const tutorialRaid = this.el.classList.contains("tutorial") && this.tutorialMenuTarget === "Invade";
     const party = this.getRaidParty ? this.getRaidParty() : null;
@@ -5214,17 +5296,20 @@ export class Hud {
     const order: string[] = [];
 
     // Battle consumables for this raid: Concentration (skip the focus minigame) +
-    // Golden Dice (each raises the loot to a rarer tier, capped by the raid's tier depth).
+    // Golden Dice (each raises the loot to a rarer tier, capped by the raid's tier depth)
+    // + the Brain Ticket (elite invasion, quadrupled brain odds).
     const boosts = this.getRaidBoosts
       ? this.getRaidBoosts(raid.id)
-      : { concentration: 0, dice: 0, maxDice: 0 };
+      : { concentration: 0, dice: 0, maxDice: 0, brainTickets: 0 };
     const diceMax = Math.min(boosts.dice, boosts.maxDice);
     let useConcentration = false;
     let diceChosen = 0;
+    let useBrainTicket = armElite && boosts.brainTickets > 0;
     const launchOpts = (): RaidLaunchOpts => ({
       useVoucher,
       concentration: useConcentration,
       dice: diceChosen,
+      brainTicket: useBrainTicket,
     });
 
     const start = document.createElement("button");
@@ -5315,6 +5400,39 @@ export class Hud {
       stepper.append(lbl, dec, inc);
       boostRow.appendChild(stepper);
     }
+    // Brain Ticket. Unlike the other two this is always offered, owned or not: it is the
+    // only route to an elite invasion, and hiding it behind "buy one first" would leave
+    // the whole feature undiscoverable from the screen it is used on. Buying happens
+    // through the same confirm prompt as the raid ticket, so the 10,000 gold is never
+    // spent on a stray tap.
+    let ticketsHeld = boosts.brainTickets;
+    const eliteBtn = document.createElement("button");
+    eliteBtn.className = "raid-boost-btn raid-elite-btn";
+    const eliteNote = document.createElement("p");
+    eliteNote.className = "raid-elite-note";
+    const drawElite = () => {
+      eliteBtn.innerHTML = ticketsHeld > 0
+        ? `🎟 Brain Ticket <span class="rb-ct">x${ticketsHeld}</span>`
+        : `🎟 Brain Ticket <span class="rb-ct">buy · ${(this.boosts.find((b) => b.key === BRAIN_TICKET_KEY)?.cost ?? 0).toLocaleString()}g</span>`;
+      eliteBtn.classList.toggle("on", useBrainTicket);
+      eliteNote.textContent = useBrainTicket
+        ? "ELITE invasion: 4x brain and rare-zombie odds — and enemies far above this invasion's usual strength."
+        : "";
+    };
+    eliteBtn.title =
+      "Spend a Brain Ticket: skips the wait and quadruples the brain and rare-zombie " +
+      "odds, but the invasion turns ELITE and hits much harder.";
+    eliteBtn.onclick = () => {
+      if (useBrainTicket) { useBrainTicket = false; drawElite(); return; }
+      if (ticketsHeld > 0) { useBrainTicket = true; drawElite(); return; }
+      this.openBrainTicketPrompt(() => {
+        ticketsHeld++;
+        useBrainTicket = true;
+        drawElite();
+      });
+    };
+    drawElite();
+    boostRow.append(eliteBtn, eliteNote);
     if (boostRow.childElementCount) wrap.insertBefore(boostRow, foot);
 
     // "Pick for me": KEEP whatever the player has already selected (in the order they

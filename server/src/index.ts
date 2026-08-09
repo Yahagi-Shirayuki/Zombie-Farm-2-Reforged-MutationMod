@@ -441,6 +441,30 @@ app.post("/dev/fixture/roster", requireAuth, async (c) => {
   return c.json({ count });
 });
 
+// Bury zombies directly. The only production path into fallen_v3 is losing a raid,
+// which needs a full verified replay that actually kills someone — far more moving
+// parts than the memorial behaviour under test.
+app.post("/dev/fixture/fallen", requireAuth, async (c) => {
+  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
+  const body = await c.req.json<{ units?: unknown }>().catch(() => ({ units: [] }));
+  const units = Array.isArray(body.units) ? body.units.slice(0, 200) : [];
+  const accountId = c.get("accountId");
+  let count = 0;
+  for (const entry of units) {
+    const unit = entry as Record<string, unknown>;
+    if (typeof unit.id !== "string" || typeof unit.key !== "string") continue;
+    await c.env.DB.prepare(`INSERT INTO fallen_v3
+      (account_id, unit_id, zombie_key, name, mutation, invasions, color, died_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, unit_id) DO UPDATE SET name = excluded.name`)
+      .bind(accountId, unit.id, unit.key, typeof unit.name === "string" ? unit.name : null,
+        Number(unit.mutation ?? 0), Number(unit.invasions ?? 0), null,
+        Number(unit.diedAt ?? Date.now())).run();
+    count++;
+  }
+  return c.json({ count });
+});
+
 app.post("/dev/fixture/balance", requireAuth, async (c) => {
   if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ gold?: number; brains?: number; xp?: number }>()
@@ -620,6 +644,41 @@ app.use("/friends/:id/save", rateLimit("RL_READ", "friend_farm", 120, 60_000));
 app.use("/gifts/inbox", rateLimit("RL_READ", "inbox", 300, 60_000));
 app.use("/session/refresh", rateLimit("RL_READ", "refresh", 60, 60_000));
 
+/** How many fallen zombies one account may park in its presentation blob. Mirrors
+ *  MAX_REMEMBERED_FALLEN on the client. The blob is capped at 128 KB in total, so
+ *  the graveyard gets a hard ceiling of its own rather than being allowed to crowd
+ *  out object positions and roster names. */
+const MAX_PRESENTATION_FALLEN = 60;
+
+/** One entry of a LEGACY client's graveyard.
+ *
+ *  The graveyard is server-owned now (fallen_v3, migration 0047): current clients
+ *  read it from the bootstrap and never write it here. This check survives only so
+ *  a client built before that table — which still puts `fallen` and
+ *  `objectLayout[].memorial` in its presentation blob — is not rejected wholesale,
+ *  which would stop its object positions and zombie names from saving too. The
+ *  contents are ignored on read; only shape and size are enforced. */
+function validFallenEntry(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const str = (v: unknown, max: number) =>
+    typeof v === "string" && [...v].length <= max && !/[\u0000-\u001f\u007f]/.test(v);
+  const num = (v: unknown, max: number) =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= max;
+  return /^[A-Za-z0-9_-]{1,80}$/.test(String(row.id ?? "")) &&
+    /^[A-Za-z0-9_-]{1,80}$/.test(String(row.key ?? "")) &&
+    (row.name === undefined || str(row.name, 24)) &&
+    (row.color === undefined || (Array.isArray(row.color) && row.color.length === 3 &&
+      row.color.every((channel) => num(channel, 255)))) &&
+    num(row.mutation, Number.MAX_SAFE_INTEGER) && num(row.invasions, 1e9) &&
+    num(row.diedAt, Number.MAX_SAFE_INTEGER);
+}
+
+function validFallenList(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) &&
+    value.length <= MAX_PRESENTATION_FALLEN && value.every(validFallenEntry));
+}
+
 const minProtocolVersion = (env: Bindings): number => {
   const value = Number(env.MIN_PROTOCOL_VERSION ?? GAMEPLAY_PROTOCOL);
   return Number.isInteger(value) && value > 0 ? value : GAMEPLAY_PROTOCOL;
@@ -790,6 +849,10 @@ export const validGameplayCommand = (value: unknown): value is GameplayCommand =
     case "pet.pen":
       return Array.isArray(command.petKeys) && command.petKeys.length <= 4 &&
         command.petKeys.every((key) => commandString(key));
+    case "memorial.enshrine":
+      return commandString(command.instanceId) && commandString(command.unitId) &&
+        (command.name === undefined || commandString(command.name, 64));
+    case "memorial.clear": return commandString(command.instanceId);
     case "tutorial.complete": return true;
     default: return false;
   }
@@ -915,7 +978,7 @@ app.put("/presentation", async (c) => {
       !body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
     return c.json({ error: "bad_presentation" }, 400);
   }
-  const presentationKeys = new Set(["player", "farm", "objectLayout", "rosterLayout", "zombiePot", "zombiePots", "tutorial", "ui", "settings", "camera", "selections", "almanac"]);
+  const presentationKeys = new Set(["player", "farm", "objectLayout", "rosterLayout", "zombiePot", "zombiePots", "tutorial", "ui", "settings", "camera", "selections", "almanac", "fallen"]);
   const pot = body.data.zombiePot as Record<string, unknown> | undefined;
   const validPot = pot === undefined || (!!pot && typeof pot === "object" && !Array.isArray(pot) &&
     typeof pot.parentAId === "string" && pot.parentAId.length <= 80 &&
@@ -952,19 +1015,29 @@ app.put("/presentation", async (c) => {
           /^[A-Za-z0-9_-]{1,80}$/.test(key) &&
           typeof count === "number" && Number.isSafeInteger(count) && count >= 1 && count <= 1_000_000));
     })());
+  // The graveyard: zombies lost in an invasion, kept only so a Memorial Statue can
+  // show one. Client-authored and cosmetic like the Almanac — the server deletes a
+  // casualty outright and keeps no record of it, so there is nothing here to check
+  // against. Bounded the same way: a hostile client must not be able to inflate the
+  // blob, and none of these fields is ever read back as gameplay truth.
+  const validFallen = validFallenList(body.data.fallen);
   const objectLayout = body.data.objectLayout as unknown;
   const validObjectLayout = objectLayout === undefined || (Array.isArray(objectLayout) &&
     objectLayout.length <= 512 && objectLayout.every((entry) => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-      const row = entry as { id?: unknown; key?: unknown; oc?: unknown; or?: unknown; rotation?: unknown };
+      const row = entry as { id?: unknown; key?: unknown; oc?: unknown; or?: unknown;
+        rotation?: unknown; memorial?: unknown };
       return typeof row.id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(row.id) &&
         (row.key === undefined || row.key === "storage01") &&
         Number.isSafeInteger(row.oc) && Number(row.oc) >= 0 && Number(row.oc) < 128 &&
         Number.isSafeInteger(row.or) && Number(row.or) >= 0 && Number(row.or) < 128 &&
-        (row.rotation === undefined || row.rotation === 0 || row.rotation === 1);
+        (row.rotation === undefined || row.rotation === 0 || row.rotation === 1) &&
+        // A Memorial Statue carries the one zombie carved on it.
+        (row.memorial === undefined || validFallenEntry(row.memorial));
     }));
   if (!Object.keys(body.data).every((key) => presentationKeys.has(key)) ||
-      !validObjectLayout || !validRosterLayout || !validPot || !validPots || !validAlmanac) {
+      !validObjectLayout || !validRosterLayout || !validPot || !validPots || !validAlmanac ||
+      !validFallen) {
     return c.json({ error: "bad_presentation" }, 400);
   }
   const encoded = JSON.stringify(body.data);
@@ -1424,6 +1497,12 @@ app.get("/friends/:id/save", async (c) => {
   };
   const objectLayout = new Map((p.objectLayout ?? []).map((o) => [o.id, o]));
   const rosterLayout = new Map((p.rosterLayout ?? []).map((u) => [u.id, u]));
+  // Statue occupants only. The rest of the graveyard is this account's private list
+  // of its dead and is deliberately not disclosed to a visitor — what a memorial
+  // shows is what standing on the farm shows.
+  const enshrined = new Map((boot.gameplay.fallen ?? [])
+    .filter((unit) => !!unit.memorialObjectId)
+    .map((unit) => [unit.memorialObjectId!, unit]));
   const background = p.farm?.background;
   const safeBackground = background === "deep-forest" || background === "woodland" || background === "light-meadow"
     ? background
@@ -1454,7 +1533,13 @@ app.get("/friends/:id/save", async (c) => {
       if (obj.status !== "placed") return [];
       const layout = objectLayout.get(obj.instanceId);
       return [{ id: obj.instanceId, key: obj.catalogKey, oc: layout?.oc ?? 0, or: layout?.or ?? 0,
-        rotation: layout?.rotation, readyAt: obj.readyAt }];
+        rotation: layout?.rotation, readyAt: obj.readyAt,
+        // A visitor sees the zombie carved on each Memorial Statue. This comes from
+        // the authoritative graveyard rather than the owner's presentation blob,
+        // which is the reason the graveyard is server-side at all: the blob is not
+        // consulted here, so a client-held occupant would show every visitor a bare
+        // plinth — and would let a tampered client display a zombie that never was.
+        ...(enshrined.has(obj.instanceId) ? { memorial: enshrined.get(obj.instanceId) } : {}) }];
     }).concat([...objectLayout.values()].flatMap((layout) =>
       layout.key === "storage01" && !boot.gameplay.objects.objects.some((obj) => obj.instanceId === layout.id)
         ? [{ id: layout.id, key: layout.key, oc: layout.oc, or: layout.or,

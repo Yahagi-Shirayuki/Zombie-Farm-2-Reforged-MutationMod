@@ -86,6 +86,38 @@ export interface SaveGame {
   /** Zombie Almanac: lifetime obtained count per species key. Absent in saves
    *  written before the Almanac existed — backfilled from ownedZombies on load. */
   almanac?: AlmanacSave;
+  /** Zombies lost for good, kept only so a Memorial Statue can enshrine one.
+   *  Absent = nothing has died yet (or the save predates memorials). */
+  fallen?: FallenZombieSave[];
+}
+
+/** A zombie that perished and was not revived — what a Memorial Statue remembers.
+ *
+ *  Deliberately the SAME minimal shape as OwnedZombieSave: species, mask, veterancy
+ *  and tint, with the whole card (type name, body type, class, stats) derived from
+ *  the catalog by key, exactly as it is for a unit that is still alive. Only two
+ *  things cannot be derived once the unit is gone, and only those are stored: when
+ *  it died, and the name its owner gave it.
+ *
+ *  It is display data. A fallen zombie can never fight, be sold, or come back — the
+ *  one chance to keep it was the revival offer made when the raid settled. Mirrored
+ *  by FallenUnitProjection on the wire and fallen_v3 on the server. */
+export interface FallenZombieSave {
+  id: string;
+  key: string;
+  /** Absent = the deterministic default name, same as an unnamed living unit. */
+  name?: string;
+  mutation: number;
+  invasions: number;
+  color?: [number, number, number];
+  /** Epoch ms the unit was lost. Shown on the memorial. */
+  diedAt: number;
+  /** Epoch ms this zombie was last taken OFF a statue, if it ever has been. It ranks
+   *  the graveyard in place of `diedAt` (see graveyardRank) so someone just released
+   *  goes back to the top of the list rather than to whatever position their date of
+   *  death earns — they still age out, just not the instant the statue is sold. Never
+   *  shown: the plaque's date is always `diedAt`. */
+  releasedAt?: number;
 }
 
 /** Zombie Almanac collection progress (cosmetic; counts never decrease). */
@@ -260,6 +292,10 @@ export interface PlacedObjectSave {
   /** Fruit trees: epoch ms when the fruit next becomes harvestable (offline
    *  growth — fruit ripens while the game is closed). */
   readyAt?: number;
+  /** Memorial Statue only: the perished zombie enshrined on this plinth. Carried
+   *  on the object rather than in `fallen` so the statue and its occupant move,
+   *  save and load as one thing. */
+  memorial?: FallenZombieSave;
 }
 
 /** Phase 3: an owned zombie unit. */
