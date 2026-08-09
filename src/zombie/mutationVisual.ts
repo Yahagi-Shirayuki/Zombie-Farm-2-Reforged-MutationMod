@@ -101,6 +101,10 @@ export function isMutationForegroundPart(file: string): boolean {
   return /(?:Eye[LR]|Jaw|LowerTeeth|Hair|Hat|Feature|Beard|Mustache)(?:\.png)?$/i.test(file);
 }
 
+export function shouldPromoteBaseHeadForegroundPart(file: string, z: number): boolean {
+  return z > 4 && isMutationForegroundPart(file);
+}
+
 export function mutationReplacementFor(
   ref: MutationRef,
   part: Pick<MutationPart, "replaces">,

@@ -772,10 +772,12 @@ export const validGameplayCommand = (value: unknown): value is GameplayCommand =
         commandInt(command.quantity);
     case "roster.sell": return commandString(command.unitId);
     case "roster.status": return commandString(command.unitId) && typeof command.stored === "boolean";
-    case "roster.dye":
-      return commandString(command.unitId) &&
+    case "roster.dye_start":
+      return commandString(command.bucketId) && commandString(command.unitId) &&
         ["red", "green", "blue", "white", "black"].includes(String(command.powderColor)) &&
         commandInt(command.amount) && command.amount >= 1 && command.amount <= 255;
+    case "roster.dye_collect":
+      return commandString(command.bucketId);
     case "roster.combine_start":
       return commandString(command.potId) && commandString(command.parentAId) &&
         commandString(command.parentBId) &&

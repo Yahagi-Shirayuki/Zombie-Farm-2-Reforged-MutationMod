@@ -16,6 +16,11 @@ import { RAID_RULESET_VERSION } from "../raidVerifier";
 import { parseRosterColor, serializeRosterColor } from "./rosterColor";
 import { normalizeMutationIds } from "../../../src/zombie/mutations";
 import { sanitizePowderGrinds, sanitizePowderStorage } from "../../../src/powderMachine";
+import {
+  sanitizeZombieColorDyeJobs,
+  sanitizeZombiePowderStatProgress,
+  sanitizeZombiePowderStats,
+} from "../../../src/zombieColorMixerBucket";
 
 interface RuntimeRow {
   account_version: number;
@@ -81,6 +86,7 @@ const coreFrom = (state: GameplayProjection) => ({
   storage: state.storage,
   powderStorage: sanitizePowderStorage(state.powderStorage),
   powderGrinds: sanitizePowderGrinds(state.powderGrinds),
+  zombieColorDyes: sanitizeZombieColorDyeJobs(state.zombieColorDyes),
   farmSize: state.farmSize,
   climates: state.climates,
   farmerHeads: state.farmerHeads,
@@ -101,6 +107,14 @@ const coreFrom = (state: GameplayProjection) => ({
   rosterMutationIds: Object.fromEntries(state.roster.flatMap((unit) => {
     const ids = normalizeMutationIds(unit.mutationIds);
     return ids.length ? [[unit.id, ids] as const] : [];
+  })),
+  rosterPowderStats: Object.fromEntries(state.roster.flatMap((unit) => {
+    const stats = sanitizeZombiePowderStats(unit.powderStats);
+    return Object.keys(stats).length ? [[unit.id, stats] as const] : [];
+  })),
+  rosterPowderProgress: Object.fromEntries(state.roster.flatMap((unit) => {
+    const progress = sanitizeZombiePowderStatProgress(unit.powderStatProgress);
+    return Object.keys(progress).length ? [[unit.id, progress] as const] : [];
   })),
 });
 
@@ -162,6 +176,8 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
   const base = freshGameplayState();
   const core = parse<ReturnType<typeof coreFrom>>(rows.core.current_json, coreFrom(base));
   const rosterMutationIds = core.rosterMutationIds ?? {};
+  const rosterPowderStats = core.rosterPowderStats ?? {};
+  const rosterPowderProgress = core.rosterPowderProgress ?? {};
   const roster = rows.roster.map((u) => {
     const color = parseRosterColor(u.color);
     const mutationIds = normalizeMutationIds(rosterMutationIds[u.unit_id]);
@@ -183,6 +199,12 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
       // Set only for a unit whose tint survived a trade (see migration 0041). Absent
       // means the client falls back to its presentation hint, then the catalog colour.
       ...(color ? { color } : {}),
+      ...(Object.keys(sanitizeZombiePowderStats(rosterPowderStats[u.unit_id])).length
+        ? { powderStats: sanitizeZombiePowderStats(rosterPowderStats[u.unit_id]) }
+        : {}),
+      ...(Object.keys(sanitizeZombiePowderStatProgress(rosterPowderProgress[u.unit_id])).length
+        ? { powderStatProgress: sanitizeZombiePowderStatProgress(rosterPowderProgress[u.unit_id]) }
+        : {}),
     };
   });
   const epicBoss = projectRun(rows.epicBoss);
@@ -199,6 +221,7 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
     storage: core.storage ?? { received: {}, stored: {} },
     powderStorage: sanitizePowderStorage(core.powderStorage),
     powderGrinds: sanitizePowderGrinds(core.powderGrinds),
+    zombieColorDyes: sanitizeZombieColorDyeJobs(core.zombieColorDyes),
     farmSize: core.farmSize ?? 30,
     climates: core.climates ?? ["grass"],
     farmerHeads: core.farmerHeads ?? base.farmerHeads,

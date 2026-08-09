@@ -14,13 +14,13 @@ import { setFootprint } from "../depthSort";
 import { findEscape, findPath } from "../pathfind";
 import { OwnedZombie } from "./types";
 import {
-  isMutationForegroundPart,
   matchesMutationReplacement,
   mutationCoversFace,
   mutationRefsForRendering,
   mutationPartForFacing,
   mutationPartZIndex,
   mutationReplacementFor,
+  shouldPromoteBaseHeadForegroundPart,
   type MutationReplacement,
 } from "./mutationVisual";
 import type { MutationRef } from "./mutations";
@@ -242,7 +242,7 @@ export class ZombieUnit {
       if (p.group === "head" && matchesMutationReplacement(p.file, "head")) {
         replaceable.head.push(sp);
       }
-      if (p.group === "head" && isMutationForegroundPart(p.file)) {
+      if (p.group === "head" && shouldPromoteBaseHeadForegroundPart(p.file, p.z)) {
         headForeground.push(sp);
       }
       if (p.group === "head") {

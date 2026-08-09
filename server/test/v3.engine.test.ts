@@ -1035,10 +1035,11 @@ describe("protocol v3 command engine", () => {
     expect(sold.state.zombiePotBought).toBe(true);
   });
 
-  it("prices Powder Machines as one gold buy followed by three brain buys with test XP", () => {
+  it("prices Powder Machines as one gold buy followed by three brain buys with normal XP", () => {
     const state = freshGameplayState();
     state.balance.gold = 30_000;
     state.balance.brains = 100;
+    state.balance.xp = 15_500; // level 23 unlocks the Powder Machine
 
     const bought = applyCommandBatch(state, commands(
       { type: "object.buy", catalogKey: "powderMachine", clientInstanceId: "powder-1" },
@@ -1057,7 +1058,7 @@ describe("protocol v3 command engine", () => {
     ]);
     expect(bought.state.balance.gold).toBe(5_000);
     expect(bought.state.balance.brains).toBe(65);
-    expect(bought.state.balance.xp).toBe(4);
+    expect(bought.state.balance.xp).toBe(18_550);
     expect(bought.state.objects.objects).toEqual(expect.arrayContaining([
       expect.objectContaining({ instanceId: "powder-1", purchaseCost: 25_000, purchaseCurrency: "gold" }),
       expect.objectContaining({ instanceId: "powder-2", purchaseCost: 5, purchaseCurrency: "brains" }),
@@ -1070,6 +1071,7 @@ describe("protocol v3 command engine", () => {
     const state = freshGameplayState();
     state.balance.gold = 30_000;
     state.balance.brains = 100;
+    state.balance.xp = 15_500; // level 23 unlocks the Paint Bucket
 
     const bought = applyCommandBatch(state, commands(
       { type: "object.buy", catalogKey: "zombieColorMixerBucket", clientInstanceId: "bucket-1" },
@@ -1086,7 +1088,7 @@ describe("protocol v3 command engine", () => {
     ]);
     expect(bought.state.balance.gold).toBe(25_000);
     expect(bought.state.balance.brains).toBe(92);
-    expect(bought.state.balance.xp).toBe(690);
+    expect(bought.state.balance.xp).toBe(16_190);
     expect(bought.state.objects.objects).toEqual(expect.arrayContaining([
       expect.objectContaining({ instanceId: "bucket-1", purchaseCost: 5_000, purchaseCurrency: "gold" }),
       expect.objectContaining({ instanceId: "bucket-2", purchaseCost: 3, purchaseCurrency: "brains" }),
@@ -1094,7 +1096,7 @@ describe("protocol v3 command engine", () => {
     ]));
   });
 
-  it("dyes a zombie by spending powder and writing the mixed RGB colour", () => {
+  it("dyes a zombie after the bucket's timed job finishes", () => {
     const state = freshGameplayState();
     state.objects.objects.push({ instanceId: "bucket-1", catalogKey: "zombieColorMixerBucket", status: "placed" });
     state.powderStorage.powders.red = 96;
@@ -1106,16 +1108,44 @@ describe("protocol v3 command engine", () => {
       stored: false,
     });
 
-    const dyed = applyCommandBatch(state, commands({
-      type: "roster.dye",
+    const started = applyCommandBatch(state, commands({
+      type: "roster.dye_start",
+      bucketId: "bucket-1",
       unitId: "z1",
       powderColor: "red",
       amount: 96,
     }), { now: 100 });
 
-    expect(dyed.results[0]).toMatchObject({ status: "applied" });
-    expect(dyed.state.powderStorage.powders.red).toBe(0);
-    expect(dyed.state.roster[0].color).toEqual([255, 255, 95]);
+    expect(started.results[0]).toMatchObject({ status: "applied" });
+    expect(started.state.powderStorage.powders.red).toBe(0);
+    expect(started.state.roster[0].lockedByRaid).toBe("dye:bucket-1");
+    expect(started.state.roster[0].color).toBeUndefined();
+    expect(started.state.zombieColorDyes?.["bucket-1"]).toMatchObject({
+      unitId: "z1",
+      powderColor: "red",
+      amount: 96,
+      inputColor: [159, 255, 95],
+      outputColor: [255, 255, 95],
+      startedAt: 100,
+      finishAt: 1_800_100,
+    });
+
+    const early = applyCommandBatch(started.state, commands({
+      type: "roster.dye_collect",
+      bucketId: "bucket-1",
+    }), { now: 1_800_099 });
+    expect(early.results[0]).toMatchObject({ status: "rejected", error: "not_ready" });
+
+    const collected = applyCommandBatch(early.state, commands({
+      type: "roster.dye_collect",
+      bucketId: "bucket-1",
+    }), { now: 1_800_100 });
+    expect(collected.results[0]).toMatchObject({ status: "applied" });
+    expect(collected.state.roster[0].lockedByRaid).toBeUndefined();
+    expect(collected.state.roster[0].color).toEqual([255, 255, 95]);
+    expect(collected.state.roster[0].powderStats).toEqual({ red: 4 });
+    expect(collected.state.roster[0].powderStatProgress).toEqual({ red: 44 });
+    expect(collected.state.zombieColorDyes?.["bucket-1"]).toBeUndefined();
   });
 
   it("rejects dyeing beyond a colour's useful range", () => {
@@ -1132,7 +1162,8 @@ describe("protocol v3 command engine", () => {
     });
 
     const dyed = applyCommandBatch(state, commands({
-      type: "roster.dye",
+      type: "roster.dye_start",
+      bucketId: "bucket-1",
       unitId: "z1",
       powderColor: "red",
       amount: 1,

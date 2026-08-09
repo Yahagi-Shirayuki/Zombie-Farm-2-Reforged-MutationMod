@@ -25,15 +25,23 @@ describe("displayed stat — bonus fold-in", () => {
     expect(bd.total).toBe(91);
   });
 
-  it("folds the mutation into the total and reports its display delta (Flytrap +13 Life)", () => {
+  it("folds the mutation into the total and reports its display delta (Flytrap +10 Life)", () => {
     // Flytrap = con base 10 + mutation bit 2048 (Flytrap, +4 con) → info.con 14.
     // NONE abilities so this isolates the mutation contribution.
     const bd = statBreakdown(z({ con: 14, mutation: 2048 }), "con", NONE);
-    expect(bd.base).toBe(34); // con 10
+    expect(bd.base).toBe(37); // con 11
     expect(bd.total).toBe(47); // con 14
     const mut = bd.lines.find((l) => l.label === "Mutation")!;
-    expect(mut.amount).toBe("+13");
+    expect(mut.amount).toBe("+10");
     expect(mut.zero).toBe(false);
+  });
+
+  it("adds powder stat bonuses as their own displayed source line", () => {
+    const bd = statBreakdown(z({ str: 10, powderStats: { red: 4 } }), "str", NONE);
+    expect(bd.total).toBe(60);
+    const powder = bd.lines.find((l) => l.label === "red powder bonus")!;
+    expect(powder.amount).toBe("+17");
+    expect(powder.zero).toBe(false);
   });
 
   it("scales every stat (incl. focus) by veterancy — Master = +25%", () => {

@@ -32,7 +32,6 @@ import {
   GRIND_CRYSTAL_CAPACITY,
   powderMachinePrice,
   POWDER_MACHINE_PURCHASE_LIMIT,
-  POWDER_MACHINE_XP,
   rollPowderGrindJob,
   rollPomegraniteCrystalHarvest,
   sanitizePowderCounts,
@@ -42,8 +41,10 @@ import {
   type PowderColor,
 } from "../../../src/powderMachine";
 import {
-  applyZombieColorPowder,
+  applyZombiePowderStatBonus,
+  createZombieColorDyeJob,
   isZombieColorMixerBucketKey,
+  sanitizeZombieColorDyeJobs,
   zombieColorMixerBucketPrice,
   ZOMBIE_COLOR_MIXER_BUCKET_LIMIT,
 } from "../../../src/zombieColorMixerBucket";
@@ -797,7 +798,7 @@ function applyOne(
       const instanceId = requested && /^[A-Za-z0-9_-]{1,80}$/.test(requested) &&
         !state.objects.objects.some((o) => o.instanceId === requested) ? requested : options.id();
       state.balance[currency] -= cost;
-      state.balance.xp += isPowderMachine ? POWDER_MACHINE_XP : objectBuyXp(
+      state.balance.xp += objectBuyXp(
         cost,
         econ.xp,
         currency === "brains",
@@ -963,23 +964,52 @@ function applyOne(
       unit.stored = command.stored;
       return { sequence, status: "applied" };
     }
-    case "roster.dye": {
-      const hasBucket = state.objects.objects.some((object) =>
-        object.status === "placed" && isZombieColorMixerBucketKey(object.catalogKey)
+    case "roster.dye_start": {
+      const bucket = state.objects.objects.find((object) =>
+        object.instanceId === command.bucketId && object.status === "placed" && isZombieColorMixerBucketKey(object.catalogKey)
       );
-      if (!hasBucket) return reject(sequence, "not_owned");
+      if (!bucket) return reject(sequence, "not_owned");
+      state.zombieColorDyes = sanitizeZombieColorDyeJobs(state.zombieColorDyes);
+      if (state.zombieColorDyes[command.bucketId]) return reject(sequence, "bucket_busy");
       const unit = state.roster.find((candidate) => candidate.id === command.unitId && !candidate.lockedByRaid);
       if (!unit) return reject(sequence, "not_owned");
       state.powderStorage = sanitizePowderStorage(state.powderStorage);
       const amount = Math.max(1, Math.min(255, Math.trunc(command.amount)));
       if ((state.powderStorage.powders[command.powderColor] ?? 0) < amount) return reject(sequence, "insufficient");
-      const result = applyZombieColorPowder(unit.color ?? zombieBaseColor(unit.key), command.powderColor, amount);
-      if (result.amountUsed !== amount) return reject(sequence, "color_saturated");
-      if (JSON.stringify(result.color) === JSON.stringify(unit.color ?? zombieBaseColor(unit.key))) {
-        return reject(sequence, "no_effect");
-      }
+      const job = createZombieColorDyeJob({
+        unitId: unit.id,
+        zombieKey: unit.key,
+        baseColor: unit.color ?? zombieBaseColor(unit.key),
+        powderColor: command.powderColor,
+        amount,
+        now: options.now,
+      });
+      if (!job) return reject(sequence, "color_saturated");
+      if (JSON.stringify(job.outputColor) === JSON.stringify(job.inputColor)) return reject(sequence, "no_effect");
       state.powderStorage.powders[command.powderColor] -= amount;
-      unit.color = result.color;
+      unit.lockedByRaid = `dye:${command.bucketId}`;
+      state.zombieColorDyes[command.bucketId] = job;
+      return { sequence, status: "applied" };
+    }
+    case "roster.dye_collect": {
+      state.zombieColorDyes = sanitizeZombieColorDyeJobs(state.zombieColorDyes);
+      const job = state.zombieColorDyes[command.bucketId];
+      if (!job) return reject(sequence, "not_busy");
+      if (options.now < job.finishAt) return reject(sequence, "not_ready");
+      const marker = `dye:${command.bucketId}`;
+      const unit = state.roster.find((candidate) => candidate.id === job.unitId && candidate.lockedByRaid === marker);
+      if (!unit) return reject(sequence, "not_owned");
+      unit.color = job.outputColor;
+      const powderStats = applyZombiePowderStatBonus(
+        unit.powderStats,
+        unit.powderStatProgress,
+        job.powderColor,
+        job.amount
+      );
+      unit.powderStats = powderStats.stats;
+      unit.powderStatProgress = powderStats.progress;
+      delete unit.lockedByRaid;
+      delete state.zombieColorDyes[command.bucketId];
       return { sequence, status: "applied" };
     }
     case "roster.combine_start": {
@@ -1273,7 +1303,8 @@ export function applyCommandBatch(
     if (command.type === "object.harvest_trees") return command.instanceIds.map((id) => `object:${id}`);
     if (command.type === "powder.grind_start" || command.type === "powder.grind_collect") return [`powder:${command.machineId}`];
     if (command.type === "roster.sell" || command.type === "roster.status") return [`unit:${command.unitId}`];
-    if (command.type === "roster.dye") return [`unit:${command.unitId}`, `powder:dye:${command.powderColor}`];
+    if (command.type === "roster.dye_start") return [`unit:${command.unitId}`, `object:${command.bucketId}`, `powder:dye:${command.powderColor}`];
+    if (command.type === "roster.dye_collect") return [`object:${command.bucketId}`];
     if (command.type === "roster.combine_start" || command.type === "roster.combine") {
       return [`unit:${command.parentAId}`, `unit:${command.parentBId}`];
     }
@@ -1328,6 +1359,7 @@ export function freshGameplayState(): MutableGameplayState {
     storage: { received: {}, stored: {} },
     powderStorage: sanitizePowderStorage(),
     powderGrinds: {},
+    zombieColorDyes: {},
     roster: [] satisfies RosterUnitProjection[],
     farmSize: 30,
     climates: ["grass"],

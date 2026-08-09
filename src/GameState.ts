@@ -21,6 +21,11 @@ import {
   type PowderGrindJob,
   type PowderStorage,
 } from "./powderMachine";
+import {
+  createZombieColorDyeJob,
+  sanitizeZombieColorDyeJobs,
+  type ZombieColorDyeJob,
+} from "./zombieColorMixerBucket";
 
 export const XP_THRESHOLDS = [
   0, 25, 75, 150, 250, 375, 550, 800, 1300, 1800, 2300, 2800, 3300, 3900, 4500,
@@ -72,6 +77,7 @@ export class GameState {
   // ---- Powder Machine resources ----
   powderStorage: PowderStorage = emptyPowderStorage();
   powderGrinds: Record<string, PowderGrindJob> = {};
+  zombieColorDyes: Record<string, ZombieColorDyeJob> = {};
   // ---- zombie abilities ----
   // DEPRECATED: ability unlocking is now derived from raidsCompleted (see
   // abilityUnlocked). Kept as an optional persisted field for save compatibility.
@@ -201,6 +207,11 @@ export class GameState {
     this.emit();
   }
 
+  syncZombieColorDyes(jobs?: Record<string, Partial<ZombieColorDyeJob> | null> | null) {
+    this.zombieColorDyes = sanitizeZombieColorDyeJobs(jobs);
+    this.emit();
+  }
+
   addPowderCrystals(color: PowderColor, count: number) {
     const amount = Math.max(0, Math.trunc(count));
     if (!amount) return;
@@ -270,6 +281,37 @@ export class GameState {
       this.powderStorage.powders[color] += count;
     }
     delete this.powderGrinds[machineId];
+    this.emit();
+    return job;
+  }
+
+  startZombieColorDye(
+    bucketId: string,
+    args: {
+      unitId: string;
+      zombieKey: string;
+      zombieName?: string;
+      baseColor: readonly [number, number, number];
+      powderColor: PowderColor;
+      amount: number;
+    },
+    now = Date.now()
+  ): ZombieColorDyeJob | null {
+    if (!bucketId || this.zombieColorDyes[bucketId]) return null;
+    const job = createZombieColorDyeJob({ ...args, now });
+    if (!job) return null;
+    this.powderStorage = sanitizePowderStorage(this.powderStorage);
+    if ((this.powderStorage.powders[job.powderColor] ?? 0) < job.amount) return null;
+    this.powderStorage.powders[job.powderColor] -= job.amount;
+    this.zombieColorDyes[bucketId] = job;
+    this.emit();
+    return job;
+  }
+
+  collectZombieColorDye(bucketId: string, now = Date.now()): ZombieColorDyeJob | null {
+    const job = this.zombieColorDyes[bucketId];
+    if (!job || now < job.finishAt) return null;
+    delete this.zombieColorDyes[bucketId];
     this.emit();
     return job;
   }

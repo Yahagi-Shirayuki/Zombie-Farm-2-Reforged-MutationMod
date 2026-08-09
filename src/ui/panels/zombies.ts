@@ -424,6 +424,7 @@ export function rosterInfo(hud: Hud, z: RosterEntry): ZombieInfo {
     invasions: z.invasions,
     portrait: hud.zombiePortraitOf ? hud.zombiePortraitOf(z.key) : "",
     color: z.color,
+    powderStats: z.powderStats,
     id: z.id, stored: z.stored,
   };
 }

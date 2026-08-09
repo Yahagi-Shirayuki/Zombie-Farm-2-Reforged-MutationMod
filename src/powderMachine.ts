@@ -1,6 +1,5 @@
 export const POWDER_MACHINE_KEY = "powderMachine";
 export const POWDER_MACHINE_PURCHASE_LIMIT = 4;
-export const POWDER_MACHINE_XP = 1;
 
 export type PowderColor = "black" | "green" | "blue" | "red" | "white";
 

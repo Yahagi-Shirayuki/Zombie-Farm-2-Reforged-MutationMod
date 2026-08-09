@@ -6,6 +6,12 @@ import { classify } from "./taxonomy";
 import { applyBodyTypeIdRestriction, applyBodyTypeRestriction, mutationBonus, normalizeMutationIds } from "./mutations";
 import { wisToFocusBonus } from "./traits";
 import { randomZombieName } from "./names";
+import {
+  sanitizeZombiePowderStatProgress,
+  sanitizeZombiePowderStats,
+  type ZombiePowderStatProgress,
+  type ZombiePowderStats,
+} from "../zombieColorMixerBucket";
 
 export const MAX_ZOMBIE_NAME_LENGTH = 24;
 
@@ -27,6 +33,8 @@ export interface OwnedZombie {
   className: string;
   classColor: string;
   color?: [number, number, number];
+  powderStats?: ZombiePowderStats;
+  powderStatProgress?: ZombiePowderStatProgress;
   /** Vanilla mutation bitmask. Local modded mutations live in mutationIds. */
   mutation: number;
   /** Real string ids for local modded mutations. */
@@ -50,6 +58,8 @@ export function makeOwned(
   color?: [number, number, number],
   customName?: string,
   mutationIds?: readonly string[],
+  powderStats?: ZombiePowderStats,
+  powderStatProgress?: ZombiePowderStatProgress,
 ): OwnedZombie {
   const tax = classify(def.key);
   const group = def.group ?? tax.group;
@@ -57,6 +67,8 @@ export function makeOwned(
   const mask = applyBodyTypeRestriction(mutation ?? def.mutation ?? 0, isHeadless);
   const ids = applyBodyTypeIdRestriction(normalizeMutationIds(mutationIds), isHeadless);
   const bonus = mutationBonus(mask, ids);
+  const cleanPowderStats = sanitizeZombiePowderStats(powderStats);
+  const cleanPowderProgress = sanitizeZombiePowderStatProgress(powderStatProgress);
   return {
     id,
     key: def.key,
@@ -66,6 +78,8 @@ export function makeOwned(
     className: def.className ?? tax.className,
     classColor: def.classColor ?? tax.classColor,
     color,
+    ...(Object.keys(cleanPowderStats).length ? { powderStats: cleanPowderStats } : {}),
+    ...(Object.keys(cleanPowderProgress).length ? { powderStatProgress: cleanPowderProgress } : {}),
     mutation: mask,
     ...(ids.length ? { mutationIds: ids } : {}),
     str: (def.str ?? 1) + bonus.str,

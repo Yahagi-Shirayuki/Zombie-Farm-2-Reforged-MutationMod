@@ -25,6 +25,7 @@ import {
 } from "./traits";
 import { ABILITY_KIND, ABILITY_COMBAT, activeAbilities, type AbilityCombatEffect } from "./abilities";
 import { mutationBonus, type Stat } from "./mutations";
+import { sanitizeZombiePowderStats, type PowderStatColor, type ZombiePowderStats } from "../zombieColorMixerBucket";
 
 /** The minimum a zombie must carry to resolve its displayed stats. */
 export interface StatSource {
@@ -34,6 +35,7 @@ export interface StatSource {
   focus: number;
   mutation: number; // vanilla bitmask (mutationBonus)
   mutationIds?: readonly string[];
+  powderStats?: ZombiePowderStats;
   invasions: number; // â†’ veterancy rank
   key: string; // named-unique ability overrides
   group: string; // group ability set
@@ -99,6 +101,16 @@ function mutationStatFor(stat: StatMeta["key"]): Stat {
   return stat === "focus" ? "wis" : stat;
 }
 
+function powderStatColorFor(stat: StatMeta["key"]): PowderStatColor {
+  return stat === "str" ? "red" : stat === "dex" ? "green" : stat === "con" ? "blue" : "white";
+}
+
+function powderRawForStat(stats: ZombiePowderStats | undefined, stat: StatMeta["key"]): number {
+  const clean = sanitizeZombiePowderStats(stats);
+  const raw = clean[powderStatColorFor(stat)] ?? 0;
+  return stat === "focus" ? wisToFocusBonus(raw) : raw;
+}
+
 export type StatTone = "boosted" | "debuffed" | "overcharged" | "";
 
 export function statTone(base: number, total: number): StatTone {
@@ -131,6 +143,8 @@ export function statBreakdown(
   const bonus = mutationBonus(z.mutation, z.mutationIds);
   const rawMutation = bonus[mutationStatFor(stat)] ?? 0;
   const mut = stat === "focus" ? wisToFocusBonus(rawMutation) : rawMutation;
+  const powder = powderRawForStat(z.powderStats, stat);
+  const powderColor = powderStatColorFor(stat);
   const baseRaw = raw - mut;
   const v = veterancyMultiplier(z.invasions);
   const abilities = selfStatAbilities(z, abilityUnlocked);
@@ -140,20 +154,29 @@ export function statBreakdown(
   // lands on top; multiplying it by veterancy here would overstate the card vs combat.
   let effective = baseRaw * v;
   for (const k of abilities) effective *= abilityStatMult(k, stat);
-  effective += mut;
+  const flat = mut + powder;
+  effective += flat;
   const show = (value: number) => displayResolvedStat(stat, value);
 
   const lines: StatModifierLine[] = [];
   // Mutation: additive; shown in display units (e.g. "+13"). Non-focus stats show
   // the line even at +0 to reveal the slot exists; Focus shows it when wis moves it.
   if (stat !== "focus" || mut !== 0) {
-    const delta = show(raw) - show(baseRaw);
+    const delta = show(baseRaw + mut) - show(baseRaw);
     lines.push({ label: "Mutation", amount: `${delta >= 0 ? "+" : ""}${delta}`, zero: mut === 0 });
+  }
+  if (powder !== 0) {
+    const delta = show(effective) - show(effective - powder);
+    lines.push({
+      label: `${powderColor} powder bonus`,
+      amount: `${delta >= 0 ? "+" : ""}${delta}`,
+      zero: delta === 0,
+    });
   }
   // Each self stat-ability, in tier order, with its actual contribution to THIS stat.
   for (const k of abilities) {
     const mult = abilityStatMult(k, stat);
-    const without = mult === 0 ? effective : (effective - mut) / mult + mut;
+    const without = mult === 0 ? effective : (effective - flat) / mult + flat;
     const delta = show(effective) - show(without);
     lines.push({
       label: ABILITY_POOL[k]?.label ?? k,
@@ -162,7 +185,7 @@ export function statBreakdown(
     });
   }
   // Veterancy â€” always applicable to every stat; +0 at Newbie is still shown.
-  const withoutVeterancy = v === 0 ? effective : (effective - mut) / v + mut;
+  const withoutVeterancy = v === 0 ? effective : (effective - flat) / v + flat;
   const veterancyDelta = show(effective) - show(withoutVeterancy);
   lines.push({
     label: `Veterancy (${veterancy(z.invasions)})`,

@@ -18,6 +18,7 @@ import { backfillDiscovered, sanitizeDiscovered } from "../zombie/almanac";
 import type { PlayMode } from "../playMode";
 import type { JobSystem } from "../JobSystem";
 import { sanitizePowderGrinds, sanitizePowderStorage } from "../powderMachine";
+import { sanitizeZombieColorDyeJobs } from "../zombieColorMixerBucket";
 
 export type FarmLoadResult =
   | { kind: "local-existing" }
@@ -205,6 +206,7 @@ export class SaveManager {
       boosts: this.state.boostInv,
       powderStorage: sanitizePowderStorage(this.state.powderStorage),
       powderGrinds: sanitizePowderGrinds(this.state.powderGrinds),
+      zombieColorDyes: sanitizeZombieColorDyeJobs(this.state.zombieColorDyes),
       quests: this.quests.serialize(),
       raids: { completed: this.state.raidsCompleted, lastRaidAt: this.state.lastRaidAt, attackOrder: this.state.raidAttackOrder,
         brainDryStreak: this.state.brainDryStreak, zombieDryWins: this.state.zombieDryWins },
@@ -499,7 +501,9 @@ export class SaveManager {
         // The server's tint wins over the local hint: after a Black Market trade the
         // unit arrives under a new id that no hint of ours describes, and the
         // authoritative row is the only place its colour survived.
-        color: unit.color ?? layout?.color };
+        color: unit.color ?? layout?.color,
+        powderStats: unit.powderStats,
+        powderStatProgress: unit.powderStatProgress };
     });
     return {
       version: SAVE_VERSION,
@@ -538,6 +542,7 @@ export class SaveManager {
       boosts: Object.entries(boot.gameplay.inventory).map(([key, count]) => ({ key, count })),
       powderStorage: sanitizePowderStorage(boot.gameplay.powderStorage),
       powderGrinds: sanitizePowderGrinds(boot.gameplay.powderGrinds),
+      zombieColorDyes: sanitizeZombieColorDyeJobs(boot.gameplay.zombieColorDyes),
       quests: { active: boot.gameplay.quests.progress.map((q) => ({ id: q.questId, counts: q.counts })), completed: boot.gameplay.quests.completed },
       raids: { completed: boot.gameplay.raids.progress,
         lastRaidAt: serverTimestampToClient(boot.gameplay.raids.lastRaidAt, boot.serverTime, clientTime),
@@ -604,6 +609,7 @@ export class SaveManager {
     this.state.boostInv = data.boosts ?? [];
     this.state.syncPowderStorage(data.powderStorage);
     this.state.syncPowderGrinds(data.powderGrinds);
+    this.state.syncZombieColorDyes(data.zombieColorDyes);
     this.state.raidsCompleted = data.raids?.completed ?? {};
     this.state.lastRaidAt = data.raids?.lastRaidAt ?? 0;
     this.state.raidAttackOrder = data.raids?.attackOrder ?? [];

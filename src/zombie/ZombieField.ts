@@ -12,6 +12,12 @@ import { addMutationRef, type MutationSet } from "./mutations";
 import { makeOwned, normalizeZombieName, OwnedZombie, RosterEntry } from "./types";
 import { ZombieUnit } from "./ZombieUnit";
 import { ZombiePot } from "./ZombiePot";
+import {
+  applyZombiePowderStatBonus,
+  sanitizeZombiePowderStatProgress,
+  sanitizeZombiePowderStats,
+  type PowderStatColor,
+} from "../zombieColorMixerBucket";
 
 /** Mausoleum storage-slot capacity of the BASE building. Every tier above it is
  *  authored in placeables.json (`zombieSlots`), so the live cap comes from the
@@ -29,6 +35,22 @@ const splitMutationInput = (mutation?: MutationInput, mutationIds?: readonly str
 
 const sameColor = (a?: readonly [number, number, number], b?: readonly [number, number, number]): boolean =>
   (!a && !b) || (!!a && !!b && a[0] === b[0] && a[1] === b[1] && a[2] === b[2]);
+const samePowderStats = (
+  a?: Partial<Record<PowderStatColor, number>>,
+  b?: Partial<Record<PowderStatColor, number>>
+): boolean => {
+  const aa = sanitizeZombiePowderStats(a);
+  const bb = sanitizeZombiePowderStats(b);
+  return aa.red === bb.red && aa.green === bb.green && aa.blue === bb.blue && aa.white === bb.white;
+};
+const samePowderProgress = (
+  a?: Partial<Record<PowderStatColor, number>>,
+  b?: Partial<Record<PowderStatColor, number>>
+): boolean => {
+  const aa = sanitizeZombiePowderStatProgress(a);
+  const bb = sanitizeZombiePowderStatProgress(b);
+  return aa.red === bb.red && aa.green === bb.green && aa.blue === bb.blue && aa.white === bb.white;
+};
 
 export function joiningPatchTile(
   gathered: boolean,
@@ -342,6 +364,23 @@ export class ZombieField {
     const kept = this.stored.find((unit) => unit.id === id);
     if (!kept) return false;
     kept.color = clean;
+    return true;
+  }
+
+  applyPowderStatBonus(id: string, color: Parameters<typeof applyZombiePowderStatBonus>[2], amount: number): boolean {
+    const apply = (data: OwnedZombie) => {
+      const next = applyZombiePowderStatBonus(data.powderStats, data.powderStatProgress, color, amount);
+      data.powderStats = next.stats;
+      data.powderStatProgress = next.progress;
+    };
+    const live = this.units.find((unit) => unit.id === id);
+    if (live) {
+      apply(live.getData());
+      return true;
+    }
+    const kept = this.stored.find((unit) => unit.id === id);
+    if (!kept) return false;
+    apply(kept);
     return true;
   }
 
@@ -722,10 +761,14 @@ export class ZombieField {
   serialize(): OwnedZombieSave[] {
     const live = this.units.map((u) => {
       const d = u.getData();
-      return { id: d.id, key: d.key, name: d.name, invasions: d.invasions, mutation: d.mutation, mutationIds: d.mutationIds, color: d.color, pos: { col: d.col, row: d.row } };
+      return { id: d.id, key: d.key, name: d.name, invasions: d.invasions, mutation: d.mutation,
+        mutationIds: d.mutationIds, color: d.color, powderStats: d.powderStats,
+        powderStatProgress: d.powderStatProgress, pos: { col: d.col, row: d.row } };
     });
     const kept = this.stored.map((d) => ({
-      id: d.id, key: d.key, name: d.name, invasions: d.invasions, mutation: d.mutation, mutationIds: d.mutationIds, color: d.color, pos: { col: d.col, row: d.row }, stored: true,
+      id: d.id, key: d.key, name: d.name, invasions: d.invasions, mutation: d.mutation,
+      mutationIds: d.mutationIds, color: d.color, powderStats: d.powderStats,
+      powderStatProgress: d.powderStatProgress, pos: { col: d.col, row: d.row }, stored: true,
     }));
     return [...live, ...kept];
   }
@@ -895,7 +938,8 @@ export class ZombieField {
       const row = home.row;
       // Pass s.mutation (may be undefined) so an old save without the field falls
       // back to the species' default bit; an explicit 0 stays unmutated.
-      const data = makeOwned(s.id, def, col, row, s.invasions ?? 0, s.mutation, s.color, s.name, s.mutationIds);
+      const data = makeOwned(s.id, def, col, row, s.invasions ?? 0, s.mutation, s.color, s.name, s.mutationIds,
+        s.powderStats, s.powderStatProgress);
       if (s.stored) this.stored.push(data);
       else this.addUnit(data);
       const m = /^z(\d+)$/.exec(s.id);
@@ -931,7 +975,9 @@ export class ZombieField {
    * its position while replacing its identity. */
   reconcileServerRoster(
     saves: { id: string; key: string; mutation: number; invasions: number; stored: boolean;
-      restored?: boolean; color?: [number, number, number] }[],
+      restored?: boolean; color?: [number, number, number];
+      powderStats?: Partial<Record<PowderStatColor, number>>;
+      powderStatProgress?: Partial<Record<PowderStatColor, number>> }[],
     aliases: Record<string, string> = {}
   ) {
     const desiredIds = new Set(saves.map((save) => save.id));
@@ -948,7 +994,9 @@ export class ZombieField {
         const source = direct ?? hinted;
         if (direct && direct.key === save.key && direct.mutation === save.mutation &&
             direct.invasions === save.invasions && direct.stored === save.stored &&
-            sameColor(direct.color, save.color)) continue;
+            sameColor(direct.color, save.color) &&
+            samePowderStats(direct.powderStats, save.powderStats) &&
+            samePowderProgress(direct.powderStatProgress, save.powderStatProgress)) continue;
         if (source) this.takeOwned(source.id);
         const def = this.resolve(save.key);
         if (!def) continue;
@@ -961,7 +1009,8 @@ export class ZombieField {
         // listing coming home under a new id â€” and it used to fall back to the
         // species' catalog colour, permanently, once the next save was written.
         const data = makeOwned(save.id, def, home.col, home.row, save.invasions, save.mutation,
-          save.color ?? source?.color, source?.name, source?.mutationIds);
+          save.color ?? source?.color, source?.name, source?.mutationIds,
+          save.powderStats ?? source?.powderStats, save.powderStatProgress ?? source?.powderStatProgress);
         if (save.stored) this.stored.push(data);
         else this.addUnit(data);
         // A server unit with no local counterpart arriving AFTER go-live is a real

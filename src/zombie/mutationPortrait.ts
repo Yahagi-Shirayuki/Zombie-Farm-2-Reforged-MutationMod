@@ -1,13 +1,13 @@
 ﻿import { Container, Rectangle, Sprite, type Renderer } from "pixi.js";
 import type { GameAssets, ZombieModel } from "../assets";
 import {
-  isMutationForegroundPart,
   matchesMutationReplacement,
   mutationCoversFace,
   mutationRefsForRendering,
   mutationPartFor,
   mutationPartZIndex,
   mutationReplacementFor,
+  shouldPromoteBaseHeadForegroundPart,
   type MutationReplacement,
 } from "./mutationVisual";
 import { displayedAppearance, displayedMutationIds, zombiePartTint } from "./appearance";
@@ -78,7 +78,7 @@ export function buildZombiePortraitRig(
     if (part.group === "head" && matchesMutationReplacement(part.file, "head")) {
       replaceable.head.push(sprite);
     }
-    if (part.group === "head" && isMutationForegroundPart(part.file)) {
+    if (part.group === "head" && shouldPromoteBaseHeadForegroundPart(part.file, part.z)) {
       headForeground.push(sprite);
     }
   }

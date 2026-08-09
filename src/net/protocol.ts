@@ -1,6 +1,7 @@
 /** Wire contract for the authoritative gameplay protocol. Keep this module free of
  * browser and Worker dependencies so both sides compile against the same shapes. */
 import type { PowderColor, PowderGrindJob, PowderStorage } from "../powderMachine";
+import type { ZombieColorDyeJob, ZombiePowderStatProgress, ZombiePowderStats } from "../zombieColorMixerBucket";
 
 export const GAMEPLAY_PROTOCOL = 3 as const;
 export const CLIENT_INTEGRITY_VERSION = 5 as const;
@@ -47,7 +48,8 @@ export type GameplayCommand =
   | { type: "powder.grind_collect"; machineId: string }
   | { type: "roster.sell"; unitId: string }
   | { type: "roster.status"; unitId: string; stored: boolean }
-  | { type: "roster.dye"; unitId: string; powderColor: PowderColor; amount: number }
+  | { type: "roster.dye_start"; bucketId: string; unitId: string; powderColor: PowderColor; amount: number }
+  | { type: "roster.dye_collect"; bucketId: string }
   | { type: "roster.combine_start"; potId: string; parentAId: string; parentBId: string; playerLevel?: number }
   /** `stored`: collect the child straight into the Mausoleum (the player chose the
    *  crypt, or the farm is full). Omitted keeps the old farm-first placement. */
@@ -162,6 +164,8 @@ export interface RosterUnitProjection {
    *  id. Absent means "no inherited tint": the client falls back to its own
    *  presentation hint and then to the species' catalog colour. */
   color?: [number, number, number];
+  powderStats?: ZombiePowderStats;
+  powderStatProgress?: ZombiePowderStatProgress;
 }
 
 export interface GameplayProjection {
@@ -173,6 +177,7 @@ export interface GameplayProjection {
   storage: { received: Record<string, number>; stored: Record<string, number> };
   powderStorage?: PowderStorage;
   powderGrinds?: Record<string, PowderGrindJob>;
+  zombieColorDyes?: Record<string, ZombieColorDyeJob>;
   roster: RosterUnitProjection[];
   farmSize: number;
   climates: string[];

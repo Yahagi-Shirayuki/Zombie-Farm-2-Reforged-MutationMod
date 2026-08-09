@@ -54,13 +54,12 @@ import { harvestXp, plowXp } from "./farmRewards";
 import {
   isPowderMachineKey,
   powderMachinePrice,
-  POWDER_MACHINE_XP,
   rollPomegraniteCrystalHarvest,
   type PowderColor,
 } from "./powderMachine";
 import {
-  applyZombieColorPowder,
   isZombieColorMixerBucketKey,
+  rgbToTint,
   zombieColorMixerBucketPrice,
 } from "./zombieColorMixerBucket";
 import {
@@ -824,6 +823,8 @@ async function main() {
     brains: await Assets.load<Texture>(`${BASE}assets/ui/topbar_brain_icon.png`),
     xp: await Assets.load<Texture>(`${BASE}assets/ui/topbar_exp_icon.png`),
   };
+  const dyePaintTexture = await Assets.load<Texture>(`${BASE}assets/ui/storage/paint.png`)
+    .catch(() => Texture.EMPTY);
   // One shared style rather than a fresh literal per popup: Pixi keys its rasterised
   // text cache on the style, so sharing one instance keeps every "+31g" hitting the
   // same cached texture. Never mutate it.
@@ -2711,7 +2712,19 @@ async function main() {
     saveManager.flushCritical();
     return true;
   };
-  hud.onDyeZombieColor = async (unitId, powderColor, amount) => {
+  hud.getZombieColorDyeStatus = (bucketId) => {
+    const job = state.zombieColorDyes[bucketId] ?? null;
+    const now = Date.now();
+    const remainingMs = job ? Math.max(0, job.finishAt - now) : 0;
+    return {
+      busy: !!job,
+      ready: !!job && remainingMs <= 0,
+      remainingMs,
+      totalMs: job ? Math.max(0, job.finishAt - job.startedAt) : 0,
+      pending: job,
+    };
+  };
+  hud.onStartZombieColorDye = async (bucketId, unitId, powderColor, amount) => {
     if (onlineGameplayBlocked()) return { ok: false, message: "Gameplay is paused." };
     let commandUnitId = unitId;
     try {
@@ -2724,19 +2737,32 @@ async function main() {
       : unitId;
     const zombie = zombies.roster().find((entry) => entry.id === localUnitId);
     if (!zombie) return { ok: false, message: "That zombie is no longer available." };
-    if ((state.powderStorage.powders[powderColor] ?? 0) < amount) {
-      return { ok: false, message: `Not enough ${powderColor} powder.` };
-    }
     const baseColor = zombie.color ?? assets.zombieModels[zombie.key]?.color ?? [255, 255, 255];
-    const result = applyZombieColorPowder(baseColor, powderColor, amount);
-    if (result.amountUsed !== amount) {
-      return { ok: false, message: result.stopReason ?? `This zombie is too ${powderColor} to use more of this colored powder.` };
+    const job = state.startZombieColorDye(bucketId, {
+      unitId: localUnitId,
+      zombieKey: zombie.key,
+      zombieName: zombie.name,
+      baseColor,
+      powderColor,
+      amount,
+    });
+    if (!job) {
+      return { ok: false, message: `Could not start dyeing with that ${powderColor} powder.` };
     }
-    if (!zombies.recolor(localUnitId, result.color)) {
+    economy?.submitZombieColorDyeStart(bucketId, commandUnitId, powderColor, job.amount, job);
+    saveManager.flushCritical();
+    return { ok: true };
+  };
+  hud.onCollectZombieColorDye = async (bucketId) => {
+    if (onlineGameplayBlocked()) return { ok: false, message: "Gameplay is paused." };
+    const job = state.collectZombieColorDye(bucketId);
+    if (!job) return { ok: false, message: "That dye job is not ready yet." };
+    if (!zombies.recolor(job.unitId, job.outputColor)) {
+      state.syncZombieColorDyes({ ...state.zombieColorDyes, [bucketId]: job });
       return { ok: false, message: "That zombie is no longer available." };
     }
-    state.addPowderStorageDelta({ powders: { [powderColor]: -amount } });
-    economy?.submitRoster({ type: "dye", unitId: commandUnitId, powderColor, amount });
+    zombies.applyPowderStatBonus(job.unitId, job.powderColor, job.amount);
+    economy?.submitZombieColorDyeCollect(bucketId);
     saveManager.flushCritical();
     return { ok: true };
   };
@@ -4020,7 +4046,7 @@ async function main() {
     const specialPrice = powderPrice ?? bucketPrice;
     const cost = specialPrice?.cost ?? (def.zombiePot ? (potBought ? 3 : 500) : def.cost);
     const useBrains = specialPrice?.brains ?? (def.zombiePot ? potBought : def.brainsNeeded);
-    const xp = isPowderMachineKey(def.key) ? POWDER_MACHINE_XP : buyXp(cost, def.xp, useBrains, def.category);
+    const xp = buyXp(cost, def.xp, useBrains, def.category);
     // Server-owned object buy: the server debits the exact price, records ownership,
     // and persists the dynamic first/subsequent Zombie Pot pricing flag.
     const serverObject = !!economy && cost > 0;
@@ -4299,7 +4325,7 @@ async function main() {
     if (objDef.tapSound) audio.tap(objDef.tapSound);
     if (objDef.storageSlots) hud.openStorage();
     else if (isPowderMachineKey(objDef.key)) hud.openPowderMachine(objId);
-    else if (isZombieColorMixerBucketKey(objDef.key)) hud.openZombieColorMixerBucket();
+    else if (isZombieColorMixerBucketKey(objDef.key)) hud.openZombieColorMixerBucket(objId);
     else if (objDef.zombieStorage) hud.openMausoleum();
     else if (objDef.zombiePatch) {
       const napping = zombies.toggleGather(field.patchRestTiles());
@@ -4329,7 +4355,7 @@ async function main() {
       str: d.str * state.farmerZombieStrengthMult(), dex: d.dex,
       con: d.con * state.farmerZombieLifeMult(), focus: d.focus, mutation: d.mutation, mutationIds: d.mutationIds,
       invasions: d.invasions,
-      portrait: zombiePortrait(d.key), color: d.color,
+      portrait: zombiePortrait(d.key), color: d.color, powderStats: d.powderStats,
       // Friend-farm visits are inspect-only, so omit action-bearing unit IDs.
       id: visiting ? undefined : d.id, stored: false,
     });
@@ -4675,7 +4701,7 @@ async function main() {
         } else if (objId && objDef && isPowderMachineKey(objDef.key)) {
           hud.openPowderMachine(objId);
         } else if (objId && objDef && isZombieColorMixerBucketKey(objDef.key)) {
-          hud.openZombieColorMixerBucket();
+          hud.openZombieColorMixerBucket(objId);
         } else if (objId && objDef && objDef.zombieStorage) {
           hud.openMausoleum(); // the Mausoleum's storage slots
         } else if (objId && objDef && objDef.zombiePatch) {
@@ -4890,6 +4916,14 @@ async function main() {
   type StatusBarView = { bar: Container; fill: Graphics; label: Text };
   const potBars = new Map<string, StatusBarView>();
   const powderBars = new Map<string, StatusBarView>();
+  const dyeBars = new Map<string, StatusBarView>();
+  const STATUS_W = 88, STATUS_H = 16, STATUS_PAD = 2;
+  const drawStatusFill = (fill: Graphics, color: number) => {
+    const x = fill.scale.x;
+    fill.clear();
+    fill.roundRect(0, 0, STATUS_W - 2 * STATUS_PAD, STATUS_H - 2 * STATUS_PAD, 3).fill({ color });
+    fill.scale.x = x;
+  };
   const makeStatusBar = (fillColor = 0x8ad14a): StatusBarView => {
     const bar = new Container();
     bar.visible = false;
@@ -4901,13 +4935,12 @@ async function main() {
         fill: 0xffffff, stroke: { color: 0x0a1406, width: 3 },
       },
     });
-    const W = 88, H = 16, PAD = 2;
     const bg = new Graphics();
-    bg.roundRect(-W / 2, -H / 2, W, H, 4)
+    bg.roundRect(-STATUS_W / 2, -STATUS_H / 2, STATUS_W, STATUS_H, 4)
       .fill({ color: 0x1a1a24, alpha: 0.9 })
       .stroke({ width: 2, color: 0x05050a });
-    fill.roundRect(0, 0, W - 2 * PAD, H - 2 * PAD, 3).fill({ color: fillColor });
-    fill.position.set(-W / 2 + PAD, -H / 2 + PAD);
+    drawStatusFill(fill, fillColor);
+    fill.position.set(-STATUS_W / 2 + STATUS_PAD, -STATUS_H / 2 + STATUS_PAD);
     fill.scale.x = 0;
     label.anchor.set(0.5, 0.5);
     bar.addChild(bg, fill, label);
@@ -4934,7 +4967,7 @@ async function main() {
     // light-map render) would be discarded work. Crop growth is wall-clock based,
     // so the first frame after the raid snaps everything to its true state.
     if (raidActive) return;
-    const modalOpen = !!hud.el.querySelector(".panelbg, .mkt-bg, .st-bg, .pm-bg");
+    const modalOpen = !!hud.el.querySelector(".panelbg, .mkt-bg, .st-bg, .pm-bg, .zcm-bg");
     if (modalOpen && hoveredCrop) {
       hoveredCrop = null;
       hud.showCropHover(null);
@@ -5035,6 +5068,35 @@ async function main() {
       if (!wp || !job) continue;
       const remainingMs = Math.max(0, job.finishAt - Date.now());
       const totalMs = Math.max(0, job.finishAt - job.startedAt);
+      view.bar.position.set(wp.x, wp.y);
+      view.fill.scale.x = remainingMs <= 0 || totalMs <= 0 ? 1 : Math.min(1, (totalMs - remainingMs) / totalMs);
+      const secs = Math.ceil(remainingMs / 1000);
+      view.label.text = remainingMs <= 0 ? "Ready!" : secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m`;
+    }
+    const placedDyeIds = new Set(field.zombieColorMixerBucketIds());
+    for (const [id, view] of dyeBars) {
+      if (placedDyeIds.has(id)) continue;
+      field.labelLayer.removeChild(view.bar);
+      view.bar.destroy({ children: true });
+      dyeBars.delete(id);
+    }
+    for (const bucketId of placedDyeIds) {
+      const job = state.zombieColorDyes[bucketId];
+      let view = dyeBars.get(bucketId);
+      if (!view) { view = makeStatusBar(0xffffff); dyeBars.set(bucketId, view); }
+      const wp = field.objectStatusBarPoint(bucketId);
+      view.bar.visible = !!wp && !!job;
+      if (!job) {
+        field.clearObjectPaintOverlay(bucketId);
+        continue;
+      }
+      const remainingMs = Math.max(0, job.finishAt - Date.now());
+      const totalMs = Math.max(0, job.finishAt - job.startedAt);
+      const outputTint = rgbToTint(job.outputColor);
+      const paintTint = remainingMs <= 0 ? outputTint : rgbToTint(job.inputColor);
+      if (dyePaintTexture !== Texture.EMPTY) field.setObjectPaintOverlay(bucketId, dyePaintTexture, paintTint);
+      drawStatusFill(view.fill, outputTint);
+      if (!wp) continue;
       view.bar.position.set(wp.x, wp.y);
       view.fill.scale.x = remainingMs <= 0 || totalMs <= 0 ? 1 : Math.min(1, (totalMs - remainingMs) / totalMs);
       const secs = Math.ceil(remainingMs / 1000);

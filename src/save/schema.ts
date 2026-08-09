@@ -27,6 +27,7 @@ import type { Friend } from "../social/friends";
 import type { FarmBackground } from "../prefs";
 import type { EpicBossRun } from "../epicBoss/types";
 import type { PowderColor, PowderGrindJob } from "../powderMachine";
+import type { ZombieColorDyeJob, ZombiePowderStatProgress, ZombiePowderStats } from "../zombieColorMixerBucket";
 
 /** Bump when the shape changes in a way that needs a migration. */
 export const SAVE_VERSION = 1;
@@ -73,6 +74,8 @@ export interface SaveGame {
   powderStorage?: PowderStorageSave;
   /** Running Powder Machine jobs, keyed by placed machine id. */
   powderGrinds?: Record<string, PowderGrindJob>;
+  /** Running Zombie Dyer jobs, keyed by placed bucket id. */
+  zombieColorDyes?: Record<string, ZombieColorDyeJob>;
   /** Real quest engine progress (active per-requirement counts + completed ids). */
   quests?: QuestSave;
   /** Phase 5: raid/invasion progress (lifetime win count per raid id). */
@@ -293,6 +296,10 @@ export interface OwnedZombieSave {
   /** Optional inherited display tint for Zombie Pot results. Omitted means use
    *  the source model's catalog tint. */
   color?: [number, number, number];
+  /** Permanent stat points earned from Zombie Dyer powder. */
+  powderStats?: ZombiePowderStats;
+  /** Hidden threshold progress, in quarter-powder units. */
+  powderStatProgress?: ZombiePowderStatProgress;
 }
 
 /** A pending Zombie Pot combine job. Both parents are consumed on start; the

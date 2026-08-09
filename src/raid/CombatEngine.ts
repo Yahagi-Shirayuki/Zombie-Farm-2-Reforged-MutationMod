@@ -15,6 +15,7 @@
 import type { OwnedZombie } from "../zombie/types";
 import { clampResolvedRawStat, veterancyMultiplier, wisToFocusBonus } from "../zombie/traits";
 import { mutationBonus } from "../zombie/mutations";
+import { sanitizeZombiePowderStats } from "../zombieColorMixerBucket";
 import { activeAbilities, combatEffect } from "../zombie/abilities";
 import {
   applyDamage,
@@ -201,12 +202,14 @@ export function buildPlayerUnits(
     // Mutations are the LAST link of the source's stat chain, so peel them off the
     // listed stat here and add them back untouched once everything else has applied.
     const mut = mutationBonus(z.mutation, z.mutationIds);
+    const powder = sanitizeZombiePowderStats(z.powderStats);
     // Player-level stat ramp (binary modifyStatWithLevelScale:) â€” str/con/dex only,
     // NOT focus. Skipped (full base stats) when no playerLevel is supplied.
     const rawStr = z.str - mut.str;
     const rawDex = z.dex - mut.dex;
     const rawCon = z.con - mut.con;
     const focusMutation = wisToFocusBonus(mut.wis);
+    const focusPowder = wisToFocusBonus(powder.white ?? 0);
     const rawFocus = (z.focus ?? 0) - focusMutation;
     const bStr = lvl == null ? rawStr : levelScaleStat(z.group, "str", rawStr, lvl);
     const bDex = lvl == null ? rawDex : levelScaleStat(z.group, "dex", rawDex, lvl);
@@ -228,10 +231,10 @@ export function buildPlayerUnits(
     // No current mutation is negative, so this floor never binds on today's data and
     // every recorded raid replays identically. Authoring the first negative mutation
     // IS a rules change â€” bump the replay ruleset version in that same commit.
-    const str = clampResolvedRawStat("str", auraBaseStr * (1 + statAura * 0.10) + mut.str);
-    const dex = clampResolvedRawStat("dex", auraBaseDex * (1 + statAura * 0.10) + mut.dex);
-    const con = clampResolvedRawStat("con", auraBaseCon * (1 + lifeAura * 0.10) + mut.con);
-    const focus = clampResolvedRawStat("focus", rawFocus * v * eff.allStatsMult + focusMutation);
+    const str = clampResolvedRawStat("str", auraBaseStr * (1 + statAura * 0.10) + mut.str + (powder.red ?? 0));
+    const dex = clampResolvedRawStat("dex", auraBaseDex * (1 + statAura * 0.10) + mut.dex + (powder.green ?? 0));
+    const con = clampResolvedRawStat("con", auraBaseCon * (1 + lifeAura * 0.10) + mut.con + (powder.blue ?? 0));
+    const focus = clampResolvedRawStat("focus", rawFocus * v * eff.allStatsMult + focusMutation + focusPowder);
     // Distraction resistance keys off the unit's real focus stat. Damage abilities
     // are already part of finalPower (`str`) so lasers and healing see them too.
     const mult = focusFactor(focus, conc);

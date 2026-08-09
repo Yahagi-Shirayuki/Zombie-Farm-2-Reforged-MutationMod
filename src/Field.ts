@@ -203,6 +203,7 @@ interface FarmObject {
   // object's ordering against characters outside the pen.
   frontOverlay?: Container;
   frontMask?: Graphics;
+  paintOverlay?: Sprite;
   light?: Sprite; // additive night glow (glowing objects only), lives in the night layer
   // Fruit trees only: readyAt = epoch ms the fruit ripens; ready = fruit present.
   readyAt: number;
@@ -1052,7 +1053,7 @@ export class Field {
   }
   private fitObjectSprite(
     sp: Sprite, def: PlaceableDef, oc: number, or: number, ready = true, flipped = false,
-    extra?: { backSprite?: Sprite; frontOverlay?: Container },
+    extra?: { backSprite?: Sprite; frontOverlay?: Container; paintOverlay?: Sprite },
   ) {
     const name = this.objectSpriteName(def, ready);
     const texture = this.assets.objects[name] ?? this.assets.objects[def.sprite] ?? Texture.EMPTY;
@@ -1098,6 +1099,13 @@ export class Field {
       overlay.addChild(copy);
       overlay.zIndex = PEN_OVERLAY_Z;
     }
+    if (extra?.paintOverlay) {
+      const paint = extra.paintOverlay;
+      paint.anchor.copyFrom(sp.anchor);
+      paint.scale.copyFrom(sp.scale);
+      paint.position.copyFrom(sp.position);
+      setFootprint(paint, oc, or, c1, r1, 0.05);
+    }
   }
 
   private destroyObjectSprites(obj: FarmObject) {
@@ -1105,10 +1113,12 @@ export class Field {
     obj.backSprite?.removeFromParent();
     obj.frontOverlay?.removeFromParent();
     obj.frontMask?.removeFromParent();
+    obj.paintOverlay?.removeFromParent();
     obj.sprite.destroy();
     obj.backSprite?.destroy();
     obj.frontOverlay?.destroy({ children: true });
     obj.frontMask?.destroy();
+    obj.paintOverlay?.destroy();
   }
 
   // Glowing objects (candle altar, sparklers, glow-flora, ...) emit an additive
@@ -1224,6 +1234,12 @@ export class Field {
     let count = 0;
     for (const o of this.objects.values()) if (isZombieColorMixerBucketKey(o.def.key)) count++;
     return count;
+  }
+
+  zombieColorMixerBucketIds(): string[] {
+    const ids: string[] = [];
+    for (const o of this.objects.values()) if (isZombieColorMixerBucketKey(o.def.key)) ids.push(o.id);
+    return ids;
   }
 
   /** How many objects of this catalog key are on the farm. Loot eligibility needs it:
@@ -1353,6 +1369,31 @@ export class Field {
     this.forEachFootprint(o.oc, o.or, def.tileW, def.tileH, (t) => this.tileObject.set(t, id));
     this.setExtensionBlocks(id, def, o.oc, o.or, o.flipped, true);
     return true;
+  }
+
+  setObjectPaintOverlay(id: string, texture: Texture, tint: number): boolean {
+    const obj = this.objects.get(id);
+    if (!obj) return false;
+    if (!obj.paintOverlay) {
+      obj.paintOverlay = new Sprite(texture);
+      obj.paintOverlay.blendMode = "normal";
+      obj.paintOverlay.alpha = 1;
+      const layer = obj.sprite.parent ?? (this.isGroundObject(obj.def) ? this.groundObjectLayer : this.entityLayer);
+      layer.addChild(obj.paintOverlay);
+    }
+    obj.paintOverlay.texture = texture;
+    obj.paintOverlay.tint = tint;
+    obj.paintOverlay.visible = true;
+    this.fitObjectSprite(obj.sprite, obj.def, obj.oc, obj.or, obj.ready, obj.flipped, obj);
+    return true;
+  }
+
+  clearObjectPaintOverlay(id: string): void {
+    const obj = this.objects.get(id);
+    if (!obj?.paintOverlay) return;
+    obj.paintOverlay.removeFromParent();
+    obj.paintOverlay.destroy();
+    obj.paintOverlay = undefined;
   }
 
   // Relocate an existing object; false if the destination footprint is invalid.
@@ -1492,7 +1533,7 @@ export class Field {
     const pivotOffset = ((0.5 - (o.def.pivotX ?? 0.5)) * (o.def.nativeW || o.sprite.width || 0) * scale) *
       (o.flipped ? -1 : 1);
     return {
-      x: o.sprite.position.x + pivotOffset - 23,
+      x: o.sprite.position.x + pivotOffset,
       y: o.sprite.position.y - (o.def.nativeH || o.sprite.height || 0) * scale * 0.72,
     };
   }

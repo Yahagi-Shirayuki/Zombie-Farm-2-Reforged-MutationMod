@@ -17,6 +17,7 @@ const model: ZombieModel = {
     { file: "defaultEyeL", group: "head", px: 0, py: -32, ax: 0.5, ay: 0.5, z: 9, tint: true },
     { file: "defaultJaw", group: "head", px: 2, py: -25, ax: 0.5, ay: 0.5, z: 10, tint: true },
     { file: "defaultLowerTeeth", group: "head", px: 2, py: -24, ax: 0.5, ay: 0.5, z: 11, tint: true },
+    { file: "sunflowerFeature", group: "head", px: 2, py: -36, ax: 0.5, ay: 0.5, z: 3, tint: false },
     { file: "gnomeFeature", group: "head", px: 2, py: -34, ax: 0.5, ay: 0.5, z: 12, tint: false },
   ],
 };
@@ -26,7 +27,7 @@ const assets = {
   zombiePartTex: {
     baseArmB: Texture.EMPTY, baseBody: Texture.EMPTY, baseArmF: Texture.EMPTY, defaultHead: Texture.EMPTY,
     defaultEyeL: Texture.EMPTY, defaultJaw: Texture.EMPTY, defaultLowerTeeth: Texture.EMPTY,
-    gnomeFeature: Texture.EMPTY,
+    sunflowerFeature: Texture.EMPTY, gnomeFeature: Texture.EMPTY,
     tomato: Texture.EMPTY, turnip: Texture.EMPTY, lima: Texture.EMPTY, backArm: Texture.EMPTY, "apple_head.png": Texture.EMPTY,
   },
   mutationParts: {
@@ -76,13 +77,14 @@ describe("mutation-aware zombie portraits", () => {
 
     expect(children.map((child) => child.label)).toEqual([
       "baseArmB", "baseBody", "baseArmF", "defaultHead", "defaultEyeL", "defaultJaw",
-      "defaultLowerTeeth", "gnomeFeature", "tomato", "turnip", "lima",
+      "defaultLowerTeeth", "sunflowerFeature", "gnomeFeature", "tomato", "turnip", "lima",
     ]);
     expect(children.find((child) => child.label === "baseBody")?.visible).toBe(false);
     expect(children.find((child) => child.label === "baseArmF")?.visible).toBe(false);
     expect(children.find((child) => child.label === "defaultHead")?.visible).toBe(false);
     expect(children.find((child) => child.label === "defaultEyeL")?.tint).toBe(0xffffff);
     const mutationZ = children.find((child) => child.label === "tomato")?.zIndex ?? 0;
+    expect(children.find((child) => child.label === "sunflowerFeature")?.zIndex).toBeLessThan(mutationZ);
     for (const label of ["defaultEyeL", "defaultJaw", "defaultLowerTeeth", "gnomeFeature"]) {
       const child = children.find((candidate) => candidate.label === label);
       expect(child?.visible).toBe(true);

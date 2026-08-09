@@ -5,6 +5,7 @@
 import { PlaceableDef } from "../assets";
 import { CropConfig } from "../Field";
 import type { EpicBossRun } from "../epicBoss/types";
+import type { ZombiePowderStats } from "../zombieColorMixerBucket";
 
 export type Mode = "walk" | "till" | "plant" | "move" | "place" | "remove" | "instagrow" | "rotate";
 
@@ -77,6 +78,7 @@ export interface ZombieInfo {
   mutationIds?: string[]; // local modded mutation ids
   portrait: string;
   color?: [number, number, number]; // individual tint used by the generated portrait
+  powderStats?: ZombiePowderStats;
   invasions: number; // lifetime invasions (drives veterancy)
   // Present when the panel should offer roster actions (store/deploy/locate).
   id?: string;

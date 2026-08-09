@@ -14,6 +14,10 @@ import {
   type PowderGrindJob,
   type PowderStorage,
 } from "../powderMachine";
+import {
+  sanitizeZombieColorDyeJobs,
+  type ZombieColorDyeJob,
+} from "../zombieColorMixerBucket";
 
 export const OWNERSHIP_POLL_IDLE_MS = 3 * 60_000;
 
@@ -33,7 +37,6 @@ export type RosterInput =
   | { type: "grant"; unitId: string; key: string; mutation?: number; invasions?: number }
   | { type: "veteran"; unitIds: string[] }
   | { type: "casualty"; unitIds: string[] }
-  | { type: "dye"; unitId: string; powderColor: PowderColor; amount: number }
   | { type: "combineStart"; potId?: string; parentAId: string; parentBId: string; playerLevel?: number }
   | { type: "combineCollect"; potId?: string; unitId: string; key: string; mutation?: number;
       /** Collect the child straight into the Mausoleum instead of the farm. */
@@ -63,6 +66,8 @@ interface OptimisticDelta {
   }>;
   powderGrindStarts?: Record<string, PowderGrindJob>;
   powderGrindClears?: string[];
+  zombieColorDyeStarts?: Record<string, ZombieColorDyeJob>;
+  zombieColorDyeClears?: string[];
   inventoryKey?: string;
   inventoryCount?: number;
   localUnitId?: string;
@@ -89,6 +94,7 @@ export class EconomyClient {
   private serverInv: Record<string, number> = {};
   private serverPowderStorage: PowderStorage = emptyPowderStorage();
   private serverPowderGrinds: Record<string, PowderGrindJob> = {};
+  private serverZombieColorDyes: Record<string, ZombieColorDyeJob> = {};
   private optimistic = new Map<number, OptimisticDelta>();
   private authoritativeUnitIds = new Map<string, string>();
   private deferredRosterAliases: Record<string, string> = {};
@@ -538,6 +544,29 @@ export class EconomyClient {
     );
   }
 
+  submitZombieColorDyeStart(bucketId: string, unitId: string, powderColor: PowderColor, amount: number, job: ZombieColorDyeJob): void {
+    this.enqueue(
+      {
+        type: "roster.dye_start",
+        bucketId,
+        unitId: this.authoritativeUnitId(unitId),
+        powderColor,
+        amount,
+      },
+      {
+        powderStorageDelta: { powders: { [powderColor]: -amount } },
+        zombieColorDyeStarts: { [bucketId]: job },
+      }
+    );
+  }
+
+  submitZombieColorDyeCollect(bucketId: string): void {
+    this.enqueue(
+      { type: "roster.dye_collect", bucketId },
+      { zombieColorDyeClears: [bucketId] }
+    );
+  }
+
   /** Returns false ONLY when a combine collection could not be submitted because this
    *  client no longer knows the job's parents (its in-memory record was cleared, or the
    *  pot id moved). That case used to fall through silently: the caller had already
@@ -576,15 +605,6 @@ export class EconomyClient {
       return true;
     }
     if (input.type === "sell") this.enqueue({ type: "roster.sell", unitId: this.authoritativeUnitId(input.unitId) }, optimistic);
-    else if (input.type === "dye") this.enqueue(
-      {
-        type: "roster.dye",
-        unitId: this.authoritativeUnitId(input.unitId),
-        powderColor: input.powderColor,
-        amount: input.amount,
-      },
-      { powderStorageDelta: { powders: { [input.powderColor]: -input.amount } } }
-    );
     // Grants, casualties, and veterancy come from farm/raid results in v3.
     return true;
   }
@@ -1010,6 +1030,7 @@ export class EconomyClient {
     this.serverInv = gameplay.inventory;
     this.serverPowderStorage = sanitizePowderStorage(gameplay.powderStorage);
     this.serverPowderGrinds = sanitizePowderGrinds(gameplay.powderGrinds);
+    this.serverZombieColorDyes = sanitizeZombieColorDyeJobs(gameplay.zombieColorDyes);
     this.state.zombiePotBought = gameplay.zombiePotBought ?? false;
     this.state.syncRaidProgress(gameplay.raids.progress);
     this.state.syncRaidCooldown(serverTimestampToClient(gameplay.raids.lastRaidAt, serverTime));
@@ -1096,6 +1117,7 @@ export class EconomyClient {
     const inventory = { ...this.serverInv };
     const powderStorage = sanitizePowderStorage(this.serverPowderStorage);
     const powderGrinds = sanitizePowderGrinds(this.serverPowderGrinds);
+    const zombieColorDyes = sanitizeZombieColorDyeJobs(this.serverZombieColorDyes);
     const applyPowderStorageDelta = (delta?: OptimisticDelta["powderStorageDelta"]) => {
       if (!delta) return;
       for (const bucket of ["crystals", "powders"] as const) {
@@ -1119,10 +1141,13 @@ export class EconomyClient {
       applyPowderStorageDelta(delta.powderStorageDelta);
       for (const id of delta.powderGrindClears ?? []) delete powderGrinds[id];
       Object.assign(powderGrinds, delta.powderGrindStarts ?? {});
+      for (const id of delta.zombieColorDyeClears ?? []) delete zombieColorDyes[id];
+      Object.assign(zombieColorDyes, delta.zombieColorDyeStarts ?? {});
     }
     this.state.syncBalance(balance.gold, balance.brains, balance.xp);
     this.state.syncInventory(inventory);
     this.state.syncPowderStorage(powderStorage);
     this.state.syncPowderGrinds(powderGrinds);
+    this.state.syncZombieColorDyes(zombieColorDyes);
   }
 }

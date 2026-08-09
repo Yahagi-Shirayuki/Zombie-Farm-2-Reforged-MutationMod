@@ -71,6 +71,7 @@ import {
 import { openStorage as openStoragePanel } from "./ui/panels/storage";
 import { openPowderMachine as openPowderMachinePanel } from "./ui/panels/powderMachine";
 import { openZombieColorMixerBucket as openZombieColorMixerBucketPanel } from "./ui/panels/zombieColorMixerBucket";
+import type { ZombieColorDyeJob } from "./zombieColorMixerBucket";
 import {
   buildZombieCard, buildRosterCard, openCatalogZombieCard,
   openZombieInfo as openZombieInfoPanel,
@@ -1423,8 +1424,21 @@ export class Hud {
     | null = null;
   onStartPowderGrind: ((machineId: string, crystals: Partial<Record<PowderColor, number>>) => boolean) | null = null;
   onCollectPowderGrind: ((machineId: string) => boolean) | null = null;
-  onDyeZombieColor:
-    | ((unitId: string, powder: PowderColor, amount: number) =>
+  getZombieColorDyeStatus:
+    | ((bucketId: string) => {
+        busy: boolean;
+        ready: boolean;
+        remainingMs: number;
+        totalMs: number;
+        pending: ZombieColorDyeJob | null;
+      })
+    | null = null;
+  onStartZombieColorDye:
+    | ((bucketId: string, unitId: string, powder: PowderColor, amount: number) =>
+        { ok: boolean; message?: string } | Promise<{ ok: boolean; message?: string }>)
+    | null = null;
+  onCollectZombieColorDye:
+    | ((bucketId: string) =>
         { ok: boolean; message?: string } | Promise<{ ok: boolean; message?: string }>)
     | null = null;
 
@@ -2535,8 +2549,8 @@ export class Hud {
     openPowderMachinePanel(this, machineId);
   }
 
-  openZombieColorMixerBucket() {
-    openZombieColorMixerBucketPanel(this);
+  openZombieColorMixerBucket(bucketId = "zombieColorMixerBucket") {
+    openZombieColorMixerBucketPanel(this, bucketId);
   }
 
   // Slide-in picker from the left (opened by the select tool on tilled ground).
