@@ -7,6 +7,8 @@ import { setZombieNames } from "./zombie/names";
 import { BASE } from "./base";
 import { fetchJson, mapConcurrent } from "./assetLoading";
 import { MAX_ZOMBIE_POTS } from "./placementLimit";
+import { isPowderMachineKey, POWDER_MACHINE_PURCHASE_LIMIT } from "./powderMachine";
+import { isZombieColorMixerBucketKey, ZOMBIE_COLOR_MIXER_BUCKET_LIMIT } from "./zombieColorMixerBucket";
 
 export interface Tile {
   terrain: string;
@@ -120,6 +122,7 @@ export interface PlantDef {
   stage1: string;
   stage2: string;
   icon: string; // standalone produce sprite for Market cards and harvest pickups
+  variants?: { stage1: string; stage2: string; icon: string; weight?: number }[];
   seasonal?: boolean;
 }
 
@@ -308,6 +311,8 @@ export function multiplyObjectTint(a: number, b: number): number {
  * objects still count as owned. Undefined means no special purchase limit. */
 export function placeablePurchaseLimit(def: Pick<PlaceableDef, "key" | "category">): number | undefined {
   if (def.category !== "functional") return undefined;
+  if (isPowderMachineKey(def.key)) return POWDER_MACHINE_PURCHASE_LIMIT;
+  if (isZombieColorMixerBucketKey(def.key)) return ZOMBIE_COLOR_MIXER_BUCKET_LIMIT;
   return def.key === "zombieCombiner" ? MAX_ZOMBIE_POTS : 1;
 }
 
@@ -639,6 +644,10 @@ export async function loadAssets(): Promise<GameAssets> {
   for (const p of plants) {
     cropFiles.add(p.stage1);
     cropFiles.add(p.stage2);
+    for (const variant of p.variants ?? []) {
+      cropFiles.add(variant.stage1);
+      cropFiles.add(variant.stage2);
+    }
   }
   await mapConcurrent(
     [...cropFiles], STARTUP_ASSET_CONCURRENCY, async (f) => {
@@ -659,7 +668,8 @@ export async function loadAssets(): Promise<GameAssets> {
   // It is shared by Market cards and the crop-only harvest burst.
   const cropIcon: Record<string, Texture> = {};
   await mapConcurrent(
-    [...new Set(plants.map((p) => p.icon))], STARTUP_ASSET_CONCURRENCY, async (f) => {
+    [...new Set(plants.flatMap((p) => [p.icon, ...(p.variants ?? []).map((variant) => variant.icon)]))],
+    STARTUP_ASSET_CONCURRENCY, async (f) => {
       cropIcon[f] = await Assets.load(`${BASE}assets/crop-icons/${f}`);
     },
   );

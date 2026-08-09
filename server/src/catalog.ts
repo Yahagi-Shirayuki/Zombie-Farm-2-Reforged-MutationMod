@@ -60,6 +60,7 @@ export const CROPS: Readonly<Record<string, CropEcon>> = {
   meat_flower: { cost: 26, sell: 38, xp: 2, growMs: 900000, level: 43 },
   eyebiscus: { cost: 100, sell: 158, xp: 6, growMs: 43200000, level: 44 },
   heartichoke: { cost: 125, sell: 213, xp: 8, growMs: 86400000, level: 45 },
+  pomegranite: { cost: 220, sell: 310, xp: 1, growMs: 86400000, level: 33 },
 };
 
 export function cropEcon(key: string): CropEcon | undefined {

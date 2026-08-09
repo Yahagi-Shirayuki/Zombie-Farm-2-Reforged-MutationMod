@@ -5,6 +5,15 @@ import type { BootstrapResponse, CommandBatchResponse, GameplayCommand } from ".
 import type { RaidOutcome } from "../raid/types";
 import { RAID_RULESET_VERSION } from "../raid/replay";
 import { epicBossRunToClient, serverTimestampToClient } from "./clock";
+import {
+  emptyPowderStorage,
+  sanitizePowderCounts,
+  sanitizePowderGrinds,
+  sanitizePowderStorage,
+  type PowderColor,
+  type PowderGrindJob,
+  type PowderStorage,
+} from "../powderMachine";
 
 export const OWNERSHIP_POLL_IDLE_MS = 3 * 60_000;
 
@@ -24,6 +33,7 @@ export type RosterInput =
   | { type: "grant"; unitId: string; key: string; mutation?: number; invasions?: number }
   | { type: "veteran"; unitIds: string[] }
   | { type: "casualty"; unitIds: string[] }
+  | { type: "dye"; unitId: string; powderColor: PowderColor; amount: number }
   | { type: "combineStart"; potId?: string; parentAId: string; parentBId: string; playerLevel?: number }
   | { type: "combineCollect"; potId?: string; unitId: string; key: string; mutation?: number;
       /** Collect the child straight into the Mausoleum instead of the farm. */
@@ -38,6 +48,7 @@ export interface FarmActionInput {
   toOr?: number;
   cropKey?: string;
   fertilized?: boolean;
+  variant?: number;
   unitId?: string;
 }
 
@@ -45,6 +56,13 @@ interface OptimisticDelta {
   gold: number;
   brains: number;
   xp: number;
+  powderCrystals?: Partial<Record<PowderColor, number>>;
+  powderStorageDelta?: Partial<{
+    crystals: Partial<Record<PowderColor, number>>;
+    powders: Partial<Record<PowderColor, number>>;
+  }>;
+  powderGrindStarts?: Record<string, PowderGrindJob>;
+  powderGrindClears?: string[];
   inventoryKey?: string;
   inventoryCount?: number;
   localUnitId?: string;
@@ -69,6 +87,8 @@ export class EconomyClient {
   private readonly queue: CommandQueue;
   private base: api.Balance | null = null;
   private serverInv: Record<string, number> = {};
+  private serverPowderStorage: PowderStorage = emptyPowderStorage();
+  private serverPowderGrinds: Record<string, PowderGrindJob> = {};
   private optimistic = new Map<number, OptimisticDelta>();
   private authoritativeUnitIds = new Map<string, string>();
   private deferredRosterAliases: Record<string, string> = {};
@@ -415,6 +435,10 @@ export class EconomyClient {
         gold: delta.gold ?? 0,
         brains: delta.brains ?? 0,
         xp: delta.xp ?? 0,
+        powderCrystals: delta.powderCrystals,
+        powderStorageDelta: delta.powderStorageDelta,
+        powderGrindStarts: delta.powderGrindStarts,
+        powderGrindClears: delta.powderGrindClears,
         inventoryKey: delta.inventoryKey,
         inventoryCount: delta.inventoryCount,
         localUnitId: delta.localUnitId,
@@ -433,7 +457,10 @@ export class EconomyClient {
    * Callers must use a semantic command or a server-derived quest/raid reward. */
   record(_currency: api.Currency, _delta: number, _reason: string): void {}
 
-  submitFarm(input: FarmActionInput, optimistic: { gold?: number; brains?: number; xp?: number }): void {
+  submitFarm(
+    input: FarmActionInput,
+    optimistic: { gold?: number; brains?: number; xp?: number; powderCrystals?: Partial<Record<PowderColor, number>> }
+  ): void {
     const command: GameplayCommand = input.type === "plant"
       ? {
           type: "farm.plant",
@@ -441,6 +468,7 @@ export class EconomyClient {
           or: input.or,
           cropKey: input.cropKey ?? "",
           fertilized: !!input.fertilized,
+          variant: input.variant,
         }
       : input.type === "harvest"
         ? { type: "farm.harvest", oc: input.oc, or: input.or }
@@ -459,7 +487,7 @@ export class EconomyClient {
 
   submitInventory(
     input: InventoryInput,
-    optimistic: { count: number; gold?: number; brains?: number; xp?: number }
+    optimistic: { count: number; gold?: number; brains?: number; xp?: number; powderCrystals?: Partial<Record<PowderColor, number>> }
   ): void {
     if (input.type === "grant") return; // grants are emitted only by server subsystems
     const command: GameplayCommand = input.type === "buy"
@@ -471,6 +499,7 @@ export class EconomyClient {
       // A farm-wide power (Insta-Harvest / Insta-Plow) pays out gold + XP across
       // every plot it hits; the server owns the real numbers and reconciles.
       xp: optimistic.xp,
+      powderCrystals: optimistic.powderCrystals,
       inventoryKey: input.key,
       inventoryCount: optimistic.count,
       localUnitId: input.unitId,
@@ -484,6 +513,29 @@ export class EconomyClient {
 
   submitPower(key: "insta_harvest" | "insta_plow"): void {
     this.enqueue({ type: "power.use", key }, { inventoryKey: key, inventoryCount: -1 });
+  }
+
+  submitPowderGrindStart(machineId: string, crystals: Partial<Record<PowderColor, number>>, job: PowderGrindJob): void {
+    const clean = sanitizePowderCounts(crystals);
+    this.enqueue(
+      { type: "powder.grind_start", machineId, crystals: clean },
+      {
+        powderStorageDelta: {
+          crystals: Object.fromEntries(Object.entries(clean).map(([color, count]) => [color, -count])) as Partial<Record<PowderColor, number>>,
+        },
+        powderGrindStarts: { [machineId]: job },
+      }
+    );
+  }
+
+  submitPowderGrindCollect(machineId: string, job: PowderGrindJob): void {
+    this.enqueue(
+      { type: "powder.grind_collect", machineId },
+      {
+        powderStorageDelta: { powders: job.powders },
+        powderGrindClears: [machineId],
+      }
+    );
   }
 
   /** Returns false ONLY when a combine collection could not be submitted because this
@@ -524,6 +576,15 @@ export class EconomyClient {
       return true;
     }
     if (input.type === "sell") this.enqueue({ type: "roster.sell", unitId: this.authoritativeUnitId(input.unitId) }, optimistic);
+    else if (input.type === "dye") this.enqueue(
+      {
+        type: "roster.dye",
+        unitId: this.authoritativeUnitId(input.unitId),
+        powderColor: input.powderColor,
+        amount: input.amount,
+      },
+      { powderStorageDelta: { powders: { [input.powderColor]: -input.amount } } }
+    );
     // Grants, casualties, and veterancy come from farm/raid results in v3.
     return true;
   }
@@ -947,6 +1008,8 @@ export class EconomyClient {
   ): void {
     this.base = gameplay.balance;
     this.serverInv = gameplay.inventory;
+    this.serverPowderStorage = sanitizePowderStorage(gameplay.powderStorage);
+    this.serverPowderGrinds = sanitizePowderGrinds(gameplay.powderGrinds);
     this.state.zombiePotBought = gameplay.zombiePotBought ?? false;
     this.state.syncRaidProgress(gameplay.raids.progress);
     this.state.syncRaidCooldown(serverTimestampToClient(gameplay.raids.lastRaidAt, serverTime));
@@ -970,6 +1033,7 @@ export class EconomyClient {
           planted_at: serverTimestampToClient(plot.plantedAt, serverTime, clientTime),
           grow_ms: plot.growMs,
           fertilized: plot.fertilized ? 1 : 0,
+          variant: plot.variant,
         });
       }
     }
@@ -1030,13 +1094,35 @@ export class EconomyClient {
     if (!this.base) return;
     const balance = { ...this.base };
     const inventory = { ...this.serverInv };
+    const powderStorage = sanitizePowderStorage(this.serverPowderStorage);
+    const powderGrinds = sanitizePowderGrinds(this.serverPowderGrinds);
+    const applyPowderStorageDelta = (delta?: OptimisticDelta["powderStorageDelta"]) => {
+      if (!delta) return;
+      for (const bucket of ["crystals", "powders"] as const) {
+        for (const [color, count] of Object.entries(delta[bucket] ?? {}) as [PowderColor, number][]) {
+          if (!(color in powderStorage[bucket])) continue;
+          powderStorage[bucket][color] = Math.max(0, powderStorage[bucket][color] + Math.trunc(count ?? 0));
+        }
+      }
+    };
     for (const delta of this.optimistic.values()) {
       balance.gold += delta.gold;
       balance.brains += delta.brains;
       balance.xp += delta.xp;
       if (delta.inventoryKey) inventory[delta.inventoryKey] = (inventory[delta.inventoryKey] ?? 0) + (delta.inventoryCount ?? 0);
+      if (delta.powderCrystals) {
+        for (const [color, count] of Object.entries(delta.powderCrystals) as [PowderColor, number][]) {
+          if (!(color in powderStorage.crystals)) continue;
+          powderStorage.crystals[color] = Math.max(0, powderStorage.crystals[color] + Math.trunc(count ?? 0));
+        }
+      }
+      applyPowderStorageDelta(delta.powderStorageDelta);
+      for (const id of delta.powderGrindClears ?? []) delete powderGrinds[id];
+      Object.assign(powderGrinds, delta.powderGrindStarts ?? {});
     }
     this.state.syncBalance(balance.gold, balance.brains, balance.xp);
     this.state.syncInventory(inventory);
+    this.state.syncPowderStorage(powderStorage);
+    this.state.syncPowderGrinds(powderGrinds);
   }
 }

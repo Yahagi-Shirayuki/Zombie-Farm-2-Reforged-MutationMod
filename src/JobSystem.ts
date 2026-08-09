@@ -13,6 +13,7 @@ import { QuestBus, QuestEvent } from "./quest/events";
 import { Sfx } from "./audio";
 import { harvestXp, plowXp } from "./farmRewards";
 import type { FarmJobQueueSave, FarmJobSave } from "./save/schema";
+import { rollPomegraniteCrystalHarvest } from "./powderMachine";
 
 export type JobKind = "till" | "plant" | "harvest";
 export type JobCurrency = "gold" | "brains";
@@ -484,7 +485,10 @@ export class JobSystem {
         this.onInsufficientFunds(cfg.brainsNeeded ? "brains" : "gold", cfg.cost);
         return;
       }
-      if (funds >= cfg.cost && this.field.plantAt(job.oc, job.or, cfg, this.replayNow ?? Date.now())) {
+      const planted = funds >= cfg.cost
+        ? this.field.plantAt(job.oc, job.or, cfg, this.replayNow ?? Date.now())
+        : null;
+      if (planted) {
         // Zombie crops are now server-owned too (plant debits the cost, harvest yields a
         // verified unit), so they go through the server path like veggie crops.
         const online = !!this.state.onFarm;
@@ -505,7 +509,7 @@ export class JobSystem {
         if (online) {
           // A zombie crop can cost BRAINS, so send the debit in the right currency.
           this.state.onFarm!(
-            { type: "plant", oc: job.oc, or: job.or, cropKey: cfg.key, fertilized },
+            { type: "plant", oc: job.oc, or: job.or, cropKey: cfg.key, fertilized, variant: planted.variant },
             cfg.brainsNeeded ? { brains: -cfg.cost } : { gold: -cfg.cost }
           );
           if (cfg.cost > 0) this.float(job.cx, job.cy, `-${cfg.cost}${cfg.brainsNeeded ? "b" : "g"}`);
@@ -541,8 +545,14 @@ export class JobSystem {
           }
         } else if (online) {
           // Veggie crop: the server credits the EXACT sell + xp, grow-gated by its clock.
-          this.state.onFarm!({ type: "harvest", oc: job.oc, or: job.or }, { gold: r.sell, xp });
+          const crystal = rollPomegraniteCrystalHarvest(r.cropKey, r.variant, r.fertilized);
+          this.state.onFarm!(
+            { type: "harvest", oc: job.oc, or: job.or },
+            { gold: r.sell, xp, powderCrystals: crystal ? { [crystal.color]: crystal.count } : undefined }
+          );
         } else {
+          const crystal = rollPomegraniteCrystalHarvest(r.cropKey, r.variant, r.fertilized);
+          if (crystal) this.state.addPowderCrystals(crystal.color, crystal.count);
           if (r.sell) this.state.addGold(r.sell);
           this.state.addXp(xp);
         }

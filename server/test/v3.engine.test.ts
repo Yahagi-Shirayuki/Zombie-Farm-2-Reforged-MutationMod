@@ -314,6 +314,114 @@ describe("protocol v3 command engine", () => {
     expect(result.state.farm.plots["4:0"]).toMatchObject({ fertilized: false, zombie: true });
   });
 
+  it("persists a rolled plant variant on variant crops", () => {
+    const state = freshGameplayState();
+    state.balance.gold = 1_000;
+    state.balance.xp = 1_000_000;
+    state.farm.plots["0:0"] = { state: "plowed" };
+
+    const result = applyCommandBatch(
+      state,
+      commands({ type: "farm.plant", oc: 0, or: 0, cropKey: "pomegranite" }),
+      { now: 1_000, random: () => 0.62 },
+    );
+
+    expect(result.results[0]).toMatchObject({ status: "applied" });
+    expect(result.state.farm.plots["0:0"]).toMatchObject({
+      state: "planted",
+      cropKey: "pomegranite",
+      variant: 3,
+    });
+  });
+
+  it("awards pomegranite crystals from the harvested variant", () => {
+    const state = freshGameplayState();
+    state.farm.plots["0:0"] = {
+      state: "planted",
+      cropKey: "pomegranite",
+      plantedAt: 0,
+      growMs: 1,
+      sell: 310,
+      xp: 1,
+      fertilized: false,
+      zombie: false,
+      variant: 0,
+    };
+
+    const result = applyCommandBatch(
+      state,
+      commands({ type: "farm.harvest", oc: 0, or: 0 }),
+      { now: 20_000, random: () => 0 },
+    );
+
+    expect(result.results[0]).toMatchObject({ status: "applied" });
+    expect(result.state.powderStorage.crystals.black).toBe(5);
+  });
+
+  it("doubles pomegranite crystal harvests when fertilized", () => {
+    const state = freshGameplayState();
+    state.farm.plots["0:0"] = {
+      state: "planted",
+      cropKey: "pomegranite",
+      plantedAt: 0,
+      growMs: 1,
+      sell: 310,
+      xp: 1,
+      fertilized: true,
+      zombie: false,
+      variant: 3,
+    };
+
+    const result = applyCommandBatch(
+      state,
+      commands({ type: "farm.harvest", oc: 0, or: 0 }),
+      { now: 20_000, random: () => 0.999999 },
+    );
+
+    expect(result.results[0]).toMatchObject({ status: "applied" });
+    expect(result.state.powderStorage.crystals.red).toBe(20);
+  });
+
+  it("starts and collects a Powder Machine grind", () => {
+    const state = freshGameplayState();
+    state.objects.objects.push({ instanceId: "powder-1", catalogKey: "powderMachine", status: "placed" });
+    state.powderStorage.crystals.red = 2;
+    state.powderStorage.crystals.blue = 1;
+
+    const started = applyCommandBatch(
+      state,
+      commands({ type: "powder.grind_start", machineId: "powder-1", crystals: { red: 2, blue: 1 } }),
+      { now: 1_000, random: () => 0 },
+    );
+
+    expect(started.results[0]).toMatchObject({ status: "applied" });
+    expect(started.state.powderStorage.crystals.red).toBe(0);
+    expect(started.state.powderStorage.crystals.blue).toBe(0);
+    expect(started.state.powderGrinds?.["powder-1"]).toMatchObject({
+      crystals: { red: 2, blue: 1 },
+      powders: { red: 14, blue: 7 },
+      startedAt: 1_000,
+      finishAt: 541_000,
+    });
+
+    const early = applyCommandBatch(
+      started.state,
+      commands({ type: "powder.grind_collect", machineId: "powder-1" }),
+      { now: 540_999 },
+    );
+    expect(early.results[0]).toMatchObject({ status: "rejected", error: "not_ready" });
+
+    const collected = applyCommandBatch(
+      started.state,
+      commands({ type: "powder.grind_collect", machineId: "powder-1" }),
+      { now: 541_000 },
+    );
+    expect(collected.results[0]).toMatchObject({ status: "applied" });
+    expect(collected.state.powderStorage.powders.red).toBe(14);
+    expect(collected.state.powderStorage.powders.blue).toBe(7);
+    expect(collected.state.powderGrinds?.["powder-1"]).toBeUndefined();
+  });
+
   it("accepts every seasonal crop shipped in the client catalog", () => {
     for (const crop of plantRows.filter((entry) => entry.seasonal)) {
       const state = freshGameplayState();
@@ -925,6 +1033,114 @@ describe("protocol v3 command engine", () => {
     expect(sold.state.balance.brains).toBe(97);
     expect(sold.state.objects.objects).toHaveLength(2);
     expect(sold.state.zombiePotBought).toBe(true);
+  });
+
+  it("prices Powder Machines as one gold buy followed by three brain buys with test XP", () => {
+    const state = freshGameplayState();
+    state.balance.gold = 30_000;
+    state.balance.brains = 100;
+
+    const bought = applyCommandBatch(state, commands(
+      { type: "object.buy", catalogKey: "powderMachine", clientInstanceId: "powder-1" },
+      { type: "object.buy", catalogKey: "powderMachine", clientInstanceId: "powder-2" },
+      { type: "object.buy", catalogKey: "powderMachine", clientInstanceId: "powder-3" },
+      { type: "object.buy", catalogKey: "powderMachine", clientInstanceId: "powder-4" },
+      { type: "object.buy", catalogKey: "powderMachine", clientInstanceId: "powder-5" },
+    ), { now: 100 });
+
+    expect(bought.results).toEqual([
+      expect.objectContaining({ status: "applied" }),
+      expect.objectContaining({ status: "applied" }),
+      expect.objectContaining({ status: "applied" }),
+      expect.objectContaining({ status: "applied" }),
+      expect.objectContaining({ status: "rejected", error: "object_limit" }),
+    ]);
+    expect(bought.state.balance.gold).toBe(5_000);
+    expect(bought.state.balance.brains).toBe(65);
+    expect(bought.state.balance.xp).toBe(4);
+    expect(bought.state.objects.objects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ instanceId: "powder-1", purchaseCost: 25_000, purchaseCurrency: "gold" }),
+      expect.objectContaining({ instanceId: "powder-2", purchaseCost: 5, purchaseCurrency: "brains" }),
+      expect.objectContaining({ instanceId: "powder-3", purchaseCost: 10, purchaseCurrency: "brains" }),
+      expect.objectContaining({ instanceId: "powder-4", purchaseCost: 20, purchaseCurrency: "brains" }),
+    ]));
+  });
+
+  it("prices Zombie Color Mixer Buckets as one gold buy followed by two brain buys", () => {
+    const state = freshGameplayState();
+    state.balance.gold = 30_000;
+    state.balance.brains = 100;
+
+    const bought = applyCommandBatch(state, commands(
+      { type: "object.buy", catalogKey: "zombieColorMixerBucket", clientInstanceId: "bucket-1" },
+      { type: "object.buy", catalogKey: "zombieColorMixerBucket", clientInstanceId: "bucket-2" },
+      { type: "object.buy", catalogKey: "zombieColorMixerBucket", clientInstanceId: "bucket-3" },
+      { type: "object.buy", catalogKey: "zombieColorMixerBucket", clientInstanceId: "bucket-4" },
+    ), { now: 100 });
+
+    expect(bought.results).toEqual([
+      expect.objectContaining({ status: "applied" }),
+      expect.objectContaining({ status: "applied" }),
+      expect.objectContaining({ status: "applied" }),
+      expect.objectContaining({ status: "rejected", error: "object_limit" }),
+    ]);
+    expect(bought.state.balance.gold).toBe(25_000);
+    expect(bought.state.balance.brains).toBe(92);
+    expect(bought.state.balance.xp).toBe(690);
+    expect(bought.state.objects.objects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ instanceId: "bucket-1", purchaseCost: 5_000, purchaseCurrency: "gold" }),
+      expect.objectContaining({ instanceId: "bucket-2", purchaseCost: 3, purchaseCurrency: "brains" }),
+      expect.objectContaining({ instanceId: "bucket-3", purchaseCost: 5, purchaseCurrency: "brains" }),
+    ]));
+  });
+
+  it("dyes a zombie by spending powder and writing the mixed RGB colour", () => {
+    const state = freshGameplayState();
+    state.objects.objects.push({ instanceId: "bucket-1", catalogKey: "zombieColorMixerBucket", status: "placed" });
+    state.powderStorage.powders.red = 96;
+    state.roster.push({
+      id: "z1",
+      key: "ZombieActorRegularTier1",
+      mutation: 0,
+      invasions: 0,
+      stored: false,
+    });
+
+    const dyed = applyCommandBatch(state, commands({
+      type: "roster.dye",
+      unitId: "z1",
+      powderColor: "red",
+      amount: 96,
+    }), { now: 100 });
+
+    expect(dyed.results[0]).toMatchObject({ status: "applied" });
+    expect(dyed.state.powderStorage.powders.red).toBe(0);
+    expect(dyed.state.roster[0].color).toEqual([255, 255, 95]);
+  });
+
+  it("rejects dyeing beyond a colour's useful range", () => {
+    const state = freshGameplayState();
+    state.objects.objects.push({ instanceId: "bucket-1", catalogKey: "zombieColorMixerBucket", status: "placed" });
+    state.powderStorage.powders.red = 1;
+    state.roster.push({
+      id: "z1",
+      key: "ZombieActorRegularTier1",
+      mutation: 0,
+      invasions: 0,
+      stored: false,
+      color: [255, 0, 0],
+    });
+
+    const dyed = applyCommandBatch(state, commands({
+      type: "roster.dye",
+      unitId: "z1",
+      powderColor: "red",
+      amount: 1,
+    }), { now: 100 });
+
+    expect(dyed.results[0]).toMatchObject({ status: "rejected", error: "color_saturated" });
+    expect(dyed.state.powderStorage.powders.red).toBe(1);
+    expect(dyed.state.roster[0].color).toEqual([255, 0, 0]);
   });
 
   it("derives brain decor XP from the post-revert price instead of raw catalog XP", () => {

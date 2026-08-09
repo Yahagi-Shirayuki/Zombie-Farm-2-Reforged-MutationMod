@@ -36,6 +36,8 @@ import { compareCropMarketOrder, compareItemMarketOrder } from "./marketOrder";
 import { decorAvailable, themeLabel, themeOf } from "./decorThemes";
 import { fillPartySelection, orderPartyRoster } from "./raid/partySelection";
 import { otherPlayMode, playModeDestinationLabel, type PlayMode } from "./playMode";
+import { isPowderMachineKey, powderMachinePrice, type PowderColor } from "./powderMachine";
+import { isZombieColorMixerBucketKey, zombieColorMixerBucketPrice } from "./zombieColorMixerBucket";
 import type { UpdateCheckResult } from "./updateCheck";
 import type {
   BlackMarketFulfillmentView, BlackMarketHistoryResponse, BlackMarketListResponse,
@@ -67,6 +69,8 @@ import {
   buildAccountBlock, buildDevicesBlock,
 } from "./ui/panels/settings";
 import { openStorage as openStoragePanel } from "./ui/panels/storage";
+import { openPowderMachine as openPowderMachinePanel } from "./ui/panels/powderMachine";
+import { openZombieColorMixerBucket as openZombieColorMixerBucketPanel } from "./ui/panels/zombieColorMixerBucket";
 import {
   buildZombieCard, buildRosterCard, openCatalogZombieCard,
   openZombieInfo as openZombieInfoPanel,
@@ -1298,6 +1302,8 @@ export class Hud {
   zombiePortraitOf: ((key: string) => string) | null = null;
   /** Render one owned zombie with its complete individual mutation mask. */
   zombieMutationPortraitOf: ((key: string, mutation: number, color?: [number, number, number], mutationIds?: readonly string[]) => Promise<string>) | null = null;
+  /** Base model tint for ordinary zombies that have no individual mixed colour. */
+  zombieBaseColorOf: ((key: string) => [number, number, number] | undefined) | null = null;
   /** Take a deployed zombie off the farm (into the Mausoleum). */
   onZombieStore: ((id: string) => void | Promise<void>) | null = null;
   /** Change an owned zombie's individual display name. */
@@ -1351,6 +1357,8 @@ export class Hud {
   /** The speed-grow (Insta-Grow) boost + a live owned-count getter, for the
    *  growing-crop info window. Null when no grow boost exists in the catalog. */
   getSpeedGrowBoost: (() => { name: string; icon: string; count: () => number } | null) | null = null;
+  /** Count owned copies of a placeable key (placed + stored, where applicable). */
+  ownedObjectCount: ((key: string) => number) | null = null;
   /** Take a stored item back out of the shed to place it (free). */
   onRetrieveItem: ((key: string) => void) | null = null;
   /** Permanently sell one stored placeable without placing it first. */
@@ -1402,6 +1410,23 @@ export class Hud {
   private combinerStop: (() => void) | null = null;
   /** Same contract as combinerStop, for the raid-select panel's cooldown ticker. */
   private raidSelectStop: (() => void) | null = null;
+
+  // ---- Powder Machine hooks (set by main) ----
+  getPowderGrindStatus:
+    | ((machineId: string) => {
+        busy: boolean;
+        ready: boolean;
+        remainingMs: number;
+        totalMs: number;
+        pending: { crystals: Record<PowderColor, number>; powders: Record<PowderColor, number> } | null;
+      })
+    | null = null;
+  onStartPowderGrind: ((machineId: string, crystals: Partial<Record<PowderColor, number>>) => boolean) | null = null;
+  onCollectPowderGrind: ((machineId: string) => boolean) | null = null;
+  onDyeZombieColor:
+    | ((unitId: string, powder: PowderColor, amount: number) =>
+        { ok: boolean; message?: string } | Promise<{ ok: boolean; message?: string }>)
+    | null = null;
 
   // ---- raid hooks (set by main) ----
   /** All invasions as cards (unlock/lock state resolved against player level). */
@@ -1741,10 +1766,17 @@ export class Hud {
           // The Zombie Pot flips to a flat 3 brains once the player has owned one
           // (see GameState.zombiePotBought); the market price must mirror the charge.
           const potPriced = !!c.def.zombiePot && this.state.zombiePotBought;
+          const powderPrice = isPowderMachineKey(c.def.key)
+            ? powderMachinePrice(this.ownedObjectCount?.(c.def.key) ?? 0)
+            : null;
+          const bucketPrice = isZombieColorMixerBucketKey(c.def.key)
+            ? zombieColorMixerBucketPrice(this.ownedObjectCount?.(c.def.key) ?? 0)
+            : null;
+          const specialPrice = powderPrice ?? bucketPrice;
           return {
             name: c.name, portrait: c.portrait,
-            cost: potPriced ? 3 : c.cost, level: c.level,
-            brains: potPriced ? true : c.brainsNeeded,
+            cost: specialPrice?.cost ?? (potPriced ? 3 : c.cost), level: c.level,
+            brains: specialPrice?.brains ?? (potPriced ? true : c.brainsNeeded),
             sell: c.category === "tree" ? c.def.harvestValue : undefined,
             timeLabel: c.category === "tree" && c.def.growMs
               ? fmtCooldown(c.def.growMs)
@@ -2497,6 +2529,14 @@ export class Hud {
   // Storage panel (Items/Pets/Boosts/Received) lives in ui/panels/storage.ts.
   openStorage(initialTab: string = "Items", managePen = false) {
     openStoragePanel(this, initialTab, managePen);
+  }
+
+  openPowderMachine(machineId = "powderMachine") {
+    openPowderMachinePanel(this, machineId);
+  }
+
+  openZombieColorMixerBucket() {
+    openZombieColorMixerBucketPanel(this);
   }
 
   // Slide-in picker from the left (opened by the select tool on tilled ground).
@@ -5618,9 +5658,3 @@ export class Hud {
     this.nameEl.textContent = acct?.name || "Zombie Farmer";
   }
 }
-
-
-
-
-
-

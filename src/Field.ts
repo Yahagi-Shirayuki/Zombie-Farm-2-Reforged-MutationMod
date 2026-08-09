@@ -13,6 +13,7 @@ import { mintObjectId, objectIdFloor } from "./objectIds";
 import { leafTexture, ParticleConfig, ParticleField } from "./raid/Particles";
 import type { PlacedObjectSave, PlotSave } from "./save/schema";
 import { plotsTouch } from "./zombie/cropMutations";
+import { isZombieColorMixerBucketKey } from "./zombieColorMixerBucket";
 
 export const PLOT = 4; // tiles per plot side
 
@@ -73,6 +74,14 @@ export interface CropConfig {
   isZombie?: boolean; // harvest leaves a hole (vs. a dirt square)
   isMutant?: boolean; // mutant-tier zombie: grows in half the time with a Mutant Monolith
   harvestIcon?: string; // standalone produce art; full stages are farm-only
+  variants?: CropVariantConfig[];
+  variant?: number;
+}
+
+export interface CropVariantConfig {
+  stages: string[];
+  harvestIcon: string;
+  weight?: number;
 }
 
 export interface ZombieMutationContext {
@@ -84,11 +93,13 @@ export interface HarvestResult {
   sell: number;
   xp: number;
   growMs: number;
+  cropKey: string;
   name: string;
   isZombie: boolean;
   fertilized: boolean;
   /** Standalone produce texture used by the collection fly-up animation. */
   icon: string;
+  variant?: number;
   zombieKey?: string;
   mutationContext?: ZombieMutationContext;
 }
@@ -103,6 +114,35 @@ export const CARROT: CropConfig = {
   unlockLevel: 1,
   harvestIcon: "stex0006.png",
 };
+
+export function cropConfigForVariant(cfg: CropConfig, variant?: number): CropConfig {
+  if (variant === undefined) return cfg;
+  const choice = cfg.variants?.[variant];
+  if (!choice) return { ...cfg, variant: undefined };
+  return {
+    ...cfg,
+    stages: [cfg.stages[0], ...choice.stages],
+    harvestIcon: choice.harvestIcon,
+    variant,
+  };
+}
+
+export function randomCropVariant(cfg: CropConfig): number | undefined {
+  const variants = cfg.variants ?? [];
+  if (!variants.length) return undefined;
+  const weights = variants.map((variant) =>
+    typeof variant.weight === "number" && Number.isFinite(variant.weight) && variant.weight > 0
+      ? variant.weight
+      : 1
+  );
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  let roll = Math.random() * total;
+  for (let i = 0; i < weights.length; i++) {
+    roll -= weights[i];
+    if (roll < 0) return i;
+  }
+  return weights.length - 1;
+}
 
 type PlotState = "plowed" | "planted" | "dirt" | "hole";
 
@@ -711,21 +751,28 @@ export class Field {
   }
 
   // Plant a crop/zombie on a plowed plot. Seeds the soil and shows the seed sprite.
-  plantAt(oc: number, or: number, cfg: CropConfig, plantedAt = Date.now()): boolean {
+  plantAt(
+    oc: number,
+    or: number,
+    cfg: CropConfig,
+    plantedAt = Date.now(),
+    variant = randomCropVariant(cfg),
+  ): CropConfig | null {
     const p = this.plots.get(this.key(oc, or));
-    if (!p || p.state !== "plowed" || p.crop) return false;
+    if (!p || p.state !== "plowed" || p.crop) return null;
     this.fit(p.soil, this.assets.soil[SEED_FILE], oc, or, PLOT); // seeded soil
     // Mutant Monolith: a mutant-zombie crop planted while the monolith is placed
     // grows in half the time. Bake it into this planting's own config (persists via
     // the per-crop growMs) so it stays consistent across save/reload.
-    const useCfg = cfg.isMutant && cfg.growMs > 0 && this.hasMutantMonolith()
-      ? { ...cfg, growMs: Math.round(cfg.growMs * 0.5) }
-      : cfg;
+    const variantCfg = cropConfigForVariant(cfg, variant);
+    const useCfg = variantCfg.isMutant && variantCfg.growMs > 0 && this.hasMutantMonolith()
+      ? { ...variantCfg, growMs: Math.round(variantCfg.growMs * 0.5) }
+      : variantCfg;
     const crop: Planting = { cfg: useCfg, plantedAt, ageMs: 0, sprite: new Sprite(), baseY: 0 };
     crop.baseY = this.layoutCrop(crop, useCfg.stages[0], oc, or); // layoutCrop parents by stage
     p.crop = crop;
     p.state = "planted";
-    return true;
+    return useCfg;
   }
 
   /** Lay out a crop for stage file `stageFile`, and put its sprite(s) in the right
@@ -804,8 +851,9 @@ export class Field {
     p.crop = undefined;
     p.state = cfg.isZombie ? "hole" : "dirt";
     this.fit(p.soil, this.assets.soil[cfg.isZombie ? HOLE_FILE : DIRT_FILE], oc, or, PLOT);
-    return { sell, xp: cfg.xp, growMs: cfg.growMs, name: cfg.name, isZombie: !!cfg.isZombie,
+    return { sell, xp: cfg.xp, growMs: cfg.growMs, cropKey: cfg.key, name: cfg.name, isZombie: !!cfg.isZombie,
       fertilized, icon: cfg.harvestIcon ?? cfg.stages[cfg.stages.length - 1],
+      variant: cfg.variant,
       zombieKey: cfg.isZombie ? cfg.key : undefined, mutationContext };
   }
 
@@ -1172,6 +1220,12 @@ export class Field {
     return this.zombiePotIds().length;
   }
 
+  zombieColorMixerBucketCount(): number {
+    let count = 0;
+    for (const o of this.objects.values()) if (isZombieColorMixerBucketKey(o.def.key)) count++;
+    return count;
+  }
+
   /** How many objects of this catalog key are on the farm. Loot eligibility needs it:
    * a `unique` drop stops being ownership-visible once it has been placed, so without
    * this the offline roll would keep re-awarding a decoration already standing outside. */
@@ -1428,6 +1482,27 @@ export class Field {
     return clampPointToGrid(base.x, base.y, this.w, this.h);
   }
 
+  /** Visual anchor for over-world status bars. Unlike objectWorkPoint, this follows
+   *  the art's authored pivot, so bars sit over the visible building rather than the
+   *  farmer interaction point. */
+  objectStatusBarPoint(id: string): { x: number; y: number } | null {
+    const o = this.objects.get(id);
+    if (!o) return null;
+    const scale = Math.abs(o.sprite.scale.x || this.objectScale());
+    const pivotOffset = ((0.5 - (o.def.pivotX ?? 0.5)) * (o.def.nativeW || o.sprite.width || 0) * scale) *
+      (o.flipped ? -1 : 1);
+    return {
+      x: o.sprite.position.x + pivotOffset - 23,
+      y: o.sprite.position.y - (o.def.nativeH || o.sprite.height || 0) * scale * 0.72,
+    };
+  }
+
+  powderMachineIds(): string[] {
+    const ids: string[] = [];
+    for (const o of this.objects.values()) if (o.def.key === "powderMachine") ids.push(o.id);
+    return ids;
+  }
+
   /** Draw a multi-plot plow preview. Invalid plots remain visible in red and are
    * skipped when the caller commits. Touch selections also expose four handles. */
   setTillSelection(targets: readonly (TillTarget & { valid: boolean })[], showHandles: boolean) {
@@ -1590,6 +1665,7 @@ export class Field {
           plantedAt: p.crop.plantedAt,
           growMs: p.crop.cfg.growMs,
           fertilized: p.crop.fertilized,
+          variant: p.crop.cfg.variant,
         };
       }
       out.push(ps);
@@ -1632,7 +1708,7 @@ export class Field {
         const base = resolve(ps.crop.key);
         if (base) {
           const cfg: CropConfig = {
-            ...base,
+            ...cropConfigForVariant(base, ps.crop.variant),
             growMs: ps.crop.growMs,
             isZombie: ps.crop.isZombie,
           };
@@ -1668,7 +1744,9 @@ export class Field {
           !next ||
           current.state !== next.state ||
           (current.state === "planted" &&
-            (!current.crop || !next.crop || current.crop.cfg.key !== next.crop.key))
+            (!current.crop || !next.crop ||
+              current.crop.cfg.key !== next.crop.key ||
+              current.crop.cfg.variant !== next.crop.variant))
         ) {
           sameStructure = false;
           break;
@@ -1690,7 +1768,7 @@ export class Field {
         return;
       }
       current.crop.cfg = {
-        ...base,
+        ...cropConfigForVariant(base, saved.variant),
         growMs: saved.growMs,
         isZombie: saved.isZombie,
       };

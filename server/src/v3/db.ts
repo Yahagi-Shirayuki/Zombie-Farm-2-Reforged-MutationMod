@@ -15,6 +15,7 @@ import { projectRun } from "./epicBoss";
 import { RAID_RULESET_VERSION } from "../raidVerifier";
 import { parseRosterColor, serializeRosterColor } from "./rosterColor";
 import { normalizeMutationIds } from "../../../src/zombie/mutations";
+import { sanitizePowderGrinds, sanitizePowderStorage } from "../../../src/powderMachine";
 
 interface RuntimeRow {
   account_version: number;
@@ -78,6 +79,8 @@ const parse = <T>(json: string | null | undefined, fallback: T): T => {
 const coreFrom = (state: GameplayProjection) => ({
   inventory: state.inventory,
   storage: state.storage,
+  powderStorage: sanitizePowderStorage(state.powderStorage),
+  powderGrinds: sanitizePowderGrinds(state.powderGrinds),
   farmSize: state.farmSize,
   climates: state.climates,
   farmerHeads: state.farmerHeads,
@@ -194,6 +197,8 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
     quests: { version: rows.quests.version, ...parse(rows.quests.current_json, { completed: [], progress: [] }) },
     inventory: core.inventory ?? {},
     storage: core.storage ?? { received: {}, stored: {} },
+    powderStorage: sanitizePowderStorage(core.powderStorage),
+    powderGrinds: sanitizePowderGrinds(core.powderGrinds),
     farmSize: core.farmSize ?? 30,
     climates: core.climates ?? ["grass"],
     farmerHeads: core.farmerHeads ?? base.farmerHeads,

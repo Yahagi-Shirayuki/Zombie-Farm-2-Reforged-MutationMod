@@ -747,7 +747,8 @@ export const validGameplayCommand = (value: unknown): value is GameplayCommand =
         commandInt(command.toOc) && commandInt(command.toOr);
     case "farm.plant":
       return commandInt(command.oc) && commandInt(command.or) && commandString(command.cropKey) &&
-        (command.fertilized === undefined || typeof command.fertilized === "boolean");
+        (command.fertilized === undefined || typeof command.fertilized === "boolean") &&
+        (command.variant === undefined || commandInt(command.variant));
     case "power.buy": return commandString(command.key);
     case "power.use":
       return commandString(command.key) && (command.oc === undefined || commandInt(command.oc)) &&
@@ -771,6 +772,10 @@ export const validGameplayCommand = (value: unknown): value is GameplayCommand =
         commandInt(command.quantity);
     case "roster.sell": return commandString(command.unitId);
     case "roster.status": return commandString(command.unitId) && typeof command.stored === "boolean";
+    case "roster.dye":
+      return commandString(command.unitId) &&
+        ["red", "green", "blue", "white", "black"].includes(String(command.powderColor)) &&
+        commandInt(command.amount) && command.amount >= 1 && command.amount <= 255;
     case "roster.combine_start":
       return commandString(command.potId) && commandString(command.parentAId) &&
         commandString(command.parentBId) &&
@@ -1447,7 +1452,8 @@ app.get("/friends/:id/save", async (c) => {
         if (plot.state === "plowed") return { oc, or, state: "plowed" as const };
         if (plot.state === "spent") return { oc, or, state: plot.zombie ? "hole" as const : "dirt" as const };
         return { oc, or, state: "planted" as const, crop: { key: plot.cropKey, isZombie: plot.zombie,
-          plantedAt: plot.plantedAt, growMs: plot.growMs, fertilized: plot.fertilized } };
+          plantedAt: plot.plantedAt, growMs: plot.growMs, fertilized: plot.fertilized,
+          variant: plot.variant } };
       }),
     },
     objects: boot.gameplay.objects.objects.flatMap((obj) => {

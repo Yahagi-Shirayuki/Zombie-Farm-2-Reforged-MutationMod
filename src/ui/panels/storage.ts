@@ -48,7 +48,8 @@ export function openStorage(hud: Hud, initialTab: string = "Items", managePen = 
 
   const cardOf = (key: string) => hud.objectCards.find((c) => c.def.key === key);
 
-  let tab = ["Items", "Pets", "Boosts", "Received"].includes(initialTab) ? initialTab : "Items";
+  const tabs = ["Items", "Pets", "Boosts", "Received"];
+  let tab = tabs.includes(initialTab) ? initialTab : "Items";
   const render = () => {
     body.innerHTML = "";
     body.scrollTop = 0;
@@ -228,7 +229,7 @@ export function openStorage(hud: Hud, initialTab: string = "Items", managePen = 
   };
 
   const tabBtns: Record<string, HTMLButtonElement> = {};
-  for (const name of ["Items", "Pets", "Boosts", "Received"]) {
+  for (const name of tabs) {
     const b = document.createElement("button");
     b.className = "st-tab" + (name === tab ? " sel" : "");
     b.textContent = name;

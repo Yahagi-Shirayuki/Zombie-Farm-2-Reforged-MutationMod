@@ -7,6 +7,7 @@
 // taps do nothing. Placement mode has to end there, or the player is left dragging
 // a ghost of something they can never put down.
 import type { PlaceableDef } from "./assets";
+import { isZombieColorMixerBucketKey, ZOMBIE_COLOR_MIXER_BUCKET_LIMIT } from "./zombieColorMixerBucket";
 
 /** Zombie Pots allowed on one farm. Mirrored by placeablePurchaseLimit. */
 export const MAX_ZOMBIE_POTS = 3;
@@ -22,6 +23,7 @@ export interface PlacementFarm {
   hasMutantMonolith(): boolean;
   hasCombineMonolith(): boolean;
   zombiePotCount(): number;
+  zombieColorMixerBucketCount(): number;
 }
 
 /** True when the farm already holds every copy of `def` it is allowed. Checked
@@ -37,5 +39,7 @@ export function noRoomForAnother(def: PlaceableDef, farm: PlacementFarm): boolea
   if (def.mutantMonolith && farm.hasMutantMonolith()) return true; // only one Mutant Monolith
   if (def.combineFast && farm.hasCombineMonolith()) return true; // only one Clay Monolith
   if (def.zombiePot && farm.zombiePotCount() >= MAX_ZOMBIE_POTS) return true;
+  if (isZombieColorMixerBucketKey(def.key) &&
+    farm.zombieColorMixerBucketCount() >= ZOMBIE_COLOR_MIXER_BUCKET_LIMIT) return true;
   return false;
 }

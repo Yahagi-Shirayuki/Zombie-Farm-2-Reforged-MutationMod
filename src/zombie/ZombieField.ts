@@ -27,6 +27,9 @@ const splitMutationInput = (mutation?: MutationInput, mutationIds?: readonly str
   return { mask: mutation, ids: [...(mutationIds ?? [])] };
 };
 
+const sameColor = (a?: readonly [number, number, number], b?: readonly [number, number, number]): boolean =>
+  (!a && !b) || (!!a && !!b && a[0] === b[0] && a[1] === b[1] && a[2] === b[2]);
+
 export function joiningPatchTile(
   gathered: boolean,
   tiles: { col: number; row: number }[] | null,
@@ -322,6 +325,24 @@ export class ZombieField {
     if (!kept) return null;
     kept.name = name;
     return name;
+  }
+
+  /** Update an owned zombie's body tint. Deployed units redraw immediately; stored
+   * units carry the new colour for the next time they are deployed or inspected. */
+  recolor(id: string, color: [number, number, number]): boolean {
+    const clean: [number, number, number] = color.map((channel) =>
+      Math.max(0, Math.min(255, Math.trunc(Number.isFinite(channel) ? channel : 255)))
+    ) as [number, number, number];
+    const live = this.units.find((unit) => unit.id === id);
+    if (live) {
+      live.getData().color = clean;
+      live.rebuildAppearance(this.assets);
+      return true;
+    }
+    const kept = this.stored.find((unit) => unit.id === id);
+    if (!kept) return false;
+    kept.color = clean;
+    return true;
   }
 
   /** Permanently remove raid casualties (dead units, by id) from the roster.
@@ -926,7 +947,8 @@ export class ZombieField {
         const hinted = current.get(aliases[save.id] ?? "");
         const source = direct ?? hinted;
         if (direct && direct.key === save.key && direct.mutation === save.mutation &&
-            direct.invasions === save.invasions && direct.stored === save.stored) continue;
+            direct.invasions === save.invasions && direct.stored === save.stored &&
+            sameColor(direct.color, save.color)) continue;
         if (source) this.takeOwned(source.id);
         const def = this.resolve(save.key);
         if (!def) continue;

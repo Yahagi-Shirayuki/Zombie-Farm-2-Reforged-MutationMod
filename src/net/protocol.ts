@@ -1,5 +1,7 @@
 /** Wire contract for the authoritative gameplay protocol. Keep this module free of
  * browser and Worker dependencies so both sides compile against the same shapes. */
+import type { PowderColor, PowderGrindJob, PowderStorage } from "../powderMachine";
+
 export const GAMEPLAY_PROTOCOL = 3 as const;
 export const CLIENT_INTEGRITY_VERSION = 5 as const;
 export const COMMAND_BATCH_LIMIT = 64;
@@ -26,7 +28,7 @@ export interface CommandResult {
 export type GameplayCommand =
   | { type: "writer.claim" }
   | { type: "farm.plow"; oc: number; or: number }
-  | { type: "farm.plant"; oc: number; or: number; cropKey: string; fertilized?: boolean }
+  | { type: "farm.plant"; oc: number; or: number; cropKey: string; fertilized?: boolean; variant?: number }
   | { type: "farm.harvest"; oc: number; or: number }
   | { type: "farm.remove"; oc: number; or: number }
   /** Relocate a plot and whatever is growing on it. Layout only — the crop,
@@ -41,8 +43,11 @@ export type GameplayCommand =
   | { type: "object.harvest_trees"; instanceIds: string[] }
   | { type: "storage.claim"; itemName: string; clientInstanceId?: string }
   | { type: "storage.move"; itemKey: string; direction: "store" | "take"; quantity: number }
+  | { type: "powder.grind_start"; machineId: string; crystals: Partial<Record<PowderColor, number>> }
+  | { type: "powder.grind_collect"; machineId: string }
   | { type: "roster.sell"; unitId: string }
   | { type: "roster.status"; unitId: string; stored: boolean }
+  | { type: "roster.dye"; unitId: string; powderColor: PowderColor; amount: number }
   | { type: "roster.combine_start"; potId: string; parentAId: string; parentBId: string; playerLevel?: number }
   /** `stored`: collect the child straight into the Mausoleum (the player chose the
    *  crypt, or the farm is full). Omitted keeps the old farm-first placement. */
@@ -93,6 +98,7 @@ export type FarmPlotProjection =
       xp: number;
       fertilized: boolean;
       zombie: boolean;
+      variant?: number;
     };
 
 export interface FarmDocumentProjection {
@@ -165,6 +171,8 @@ export interface GameplayProjection {
   quests: QuestProjection;
   inventory: Record<string, number>;
   storage: { received: Record<string, number>; stored: Record<string, number> };
+  powderStorage?: PowderStorage;
+  powderGrinds?: Record<string, PowderGrindJob>;
   roster: RosterUnitProjection[];
   farmSize: number;
   climates: string[];

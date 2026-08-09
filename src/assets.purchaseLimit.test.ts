@@ -24,4 +24,16 @@ describe("placeablePurchaseLimit", () => {
     expect(placeablePurchaseLimit(def("zombieCombiner", "functional"))).toBe(3);
     expect(placeablePurchaseLimit(def("daisy", "decor"))).toBeUndefined();
   });
+
+  it("allows four Powder Machines as a functional test building", () => {
+    const powderMachine = (placeables as PlaceableDef[]).find((entry) => entry.key === "powderMachine");
+    expect(powderMachine?.category).toBe("functional");
+    expect(placeablePurchaseLimit(powderMachine!)).toBe(4);
+  });
+
+  it("allows three Zombie Color Mixer Buckets", () => {
+    const bucket = (placeables as PlaceableDef[]).find((entry) => entry.key === "zombieColorMixerBucket");
+    expect(bucket?.category).toBe("functional");
+    expect(placeablePurchaseLimit(bucket!)).toBe(3);
+  });
 });

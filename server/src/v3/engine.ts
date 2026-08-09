@@ -9,6 +9,7 @@ import type {
 } from "../../../src/net/protocol";
 import plantRows from "../../../public/assets/plants.json";
 import zombieRows from "../../../public/assets/zombies.json";
+import zombieModelRows from "../../../public/assets/zombie/models.json";
 import farmerRows from "../../../public/assets/farmer.json";
 import petRows from "../../../public/assets/pets/catalog.json";
 import objectRows from "../../../public/assets/placeables.json";
@@ -26,6 +27,26 @@ import {
   activeBonusHeadId, farmerGold, farmerHeadHasEffect, farmerHeadXp, farmerZombieGrowMs,
 } from "../../../src/farmer";
 import { dropsEpicBossToken } from "../../../src/epicBoss/tokens";
+import {
+  isPowderMachineKey,
+  GRIND_CRYSTAL_CAPACITY,
+  powderMachinePrice,
+  POWDER_MACHINE_PURCHASE_LIMIT,
+  POWDER_MACHINE_XP,
+  rollPowderGrindJob,
+  rollPomegraniteCrystalHarvest,
+  sanitizePowderCounts,
+  sanitizePowderGrinds,
+  sanitizePowderStorage,
+  totalPowderCount,
+  type PowderColor,
+} from "../../../src/powderMachine";
+import {
+  applyZombieColorPowder,
+  isZombieColorMixerBucketKey,
+  zombieColorMixerBucketPrice,
+  ZOMBIE_COLOR_MIXER_BUCKET_LIMIT,
+} from "../../../src/zombieColorMixerBucket";
 import { combineMutationSets } from "../../../src/zombie/mutations";
 import { resolveCropMutationSet, plotsTouch } from "../../../src/zombie/cropMutations";
 import { createCombineRandom, isCombinePromotion, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
@@ -61,6 +82,8 @@ interface ObjectRule {
 }
 
 interface NamedRule { name: string }
+interface PlantVariantRule { weight?: number }
+interface PlantRule extends NamedRule { key: string; variants?: PlantVariantRule[] }
 interface ZombieRule extends NamedRule {
   key: string;
   mutation?: number;
@@ -70,11 +93,35 @@ interface ZombieRule extends NamedRule {
   group?: string;
   className?: string;
 }
+interface ZombieModelRule { color?: [number, number, number] }
 
-const plantNames = new Map((plantRows as (NamedRule & { key: string })[]).map((r) => [r.key, r.name]));
+const plantRules = plantRows as PlantRule[];
+const plantNames = new Map(plantRules.map((r) => [r.key, r.name]));
+const variantWeights = (variants?: PlantVariantRule[]): number[] =>
+  (variants ?? []).map((variant) =>
+    typeof variant.weight === "number" && Number.isFinite(variant.weight) && variant.weight > 0
+      ? variant.weight
+      : 1
+  );
+const plantVariantWeights = new Map(plantRules.map((r) => [r.key, variantWeights(r.variants)]));
+function rollVariant(weights: readonly number[], random: () => number): number | undefined {
+  if (!weights.length) return undefined;
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  let roll = random() * total;
+  for (let i = 0; i < weights.length; i++) {
+    roll -= weights[i];
+    if (roll < 0) return i;
+  }
+  return weights.length - 1;
+}
 const zombieRules = zombieRows as ZombieRule[];
 const zombieNames = new Map(zombieRules.map((r) => [r.key, r.name]));
 const zombieMutations = new Map(zombieRules.map((r) => [r.key, r.mutation ?? 0]));
+const zombieModelColors = new Map(
+  Object.entries(zombieModelRows as Record<string, ZombieModelRule>).flatMap(([key, model]) =>
+    Array.isArray(model.color) && model.color.length === 3 ? [[key, model.color] as const] : []
+  )
+);
 const rewardOnlyZombies = new Set(zombieRules.filter((r) => r.rewardOnly).map((r) => r.key));
 const zombieRuleByKey = new Map(zombieRules.map((r) => [r.key, r]));
 // Mutation bit -> Market mutant species name, so a zombie that grew its mutation in
@@ -153,6 +200,9 @@ function combinedSpecies(
 /** Catalog mutation guaranteed by a market-mutant species (0 for ordinary units). */
 export function zombieDefaultMutation(key: string): number {
   return zombieMutations.get(key) ?? 0;
+}
+function zombieBaseColor(key: string): [number, number, number] {
+  return zombieModelColors.get(key) ?? [255, 255, 255];
 }
 const objectRules = new Map(
   (objectRows as (ObjectRule & { key: string })[]).map((r) => [r.key, {
@@ -377,6 +427,11 @@ function rewardHarvest(
   const harvestValue = plot.sell * (plot.fertilized ? 2 : 1);
   state.balance.gold += farmerGold(harvestValue, bonusHeadOf(state));
   state.balance.xp += harvestXp(plot.xp, hasPlowingMonolith(state));
+  const crystal = rollPomegraniteCrystalHarvest(key, plot.variant, plot.fertilized, random);
+  if (crystal) {
+    state.powderStorage = sanitizePowderStorage(state.powderStorage);
+    state.powderStorage.crystals[crystal.color] += crystal.count;
+  }
   const run = state.epicBoss;
   if (run && !run.completedAt && run.expiresAt > now &&
       dropsEpicBossToken(plot.growMs, harvestValue, random)) {
@@ -526,6 +581,12 @@ function applyOne(
       // Roll this on the live client so the actor animation and leaf effect appear
       // immediately. It remains limited to vegetables and the existing 2x payout.
       const fertilized = !!veg && command.fertilized === true;
+      const weights = zombie ? [] : plantVariantWeights.get(command.cropKey) ?? [];
+      const variant = weights.length > 0
+        ? Number.isInteger(command.variant) && command.variant! >= 0 && command.variant! < weights.length
+          ? command.variant
+          : rollVariant(weights, options.random)
+        : undefined;
       state.farm.plots[key] = {
         state: "planted",
         cropKey: command.cropKey,
@@ -540,6 +601,7 @@ function applyOne(
         xp: veg?.xp ?? zombie?.xp ?? 0,
         fertilized,
         zombie: !!zombie,
+        ...(variant === undefined ? {} : { variant }),
       };
       events.push({ type: "kCropPlantedNotification", subject: plantNames.get(command.cropKey) ?? zombieNames.get(command.cropKey) ?? command.cropKey });
       return { sequence, status: "applied" };
@@ -708,21 +770,34 @@ function applyOne(
       const buySlots = objectRules.get(command.catalogKey)?.zombieSlots ?? 0;
       if (buySlots > 0 && buySlots !== baseMausoleumSlots) return reject(sequence, "bad_item");
       const isZombiePot = command.catalogKey === "zombieCombiner";
-      const purchaseLimit = isZombiePot ? 3 : objectRules.get(command.catalogKey)?.category === "functional" ? 1 : undefined;
-      if (purchaseLimit !== undefined && state.objects.objects.filter((object) =>
-        object.catalogKey === command.catalogKey).length >= purchaseLimit) {
+      const isPowderMachine = isPowderMachineKey(command.catalogKey);
+      const isColorMixerBucket = isZombieColorMixerBucketKey(command.catalogKey);
+      const ownedCount = state.objects.objects.filter((object) =>
+        object.catalogKey === command.catalogKey).length;
+      const purchaseLimit = isZombiePot ? 3
+        : isPowderMachine ? POWDER_MACHINE_PURCHASE_LIMIT
+          : isColorMixerBucket ? ZOMBIE_COLOR_MIXER_BUCKET_LIMIT
+          : objectRules.get(command.catalogKey)?.category === "functional" ? 1 : undefined;
+      if (purchaseLimit !== undefined && ownedCount >= purchaseLimit) {
         return reject(sequence, "object_limit");
       }
-      const cost = isZombiePot ? (state.zombiePotBought ? 3 : 500) : econ.cost;
-      const currency = isZombiePot
-        ? (state.zombiePotBought ? "brains" : "gold")
-        : (econ.brains ? "brains" : "gold");
+      const powderPrice = isPowderMachine ? powderMachinePrice(ownedCount) : null;
+      const bucketPrice = isColorMixerBucket ? zombieColorMixerBucketPrice(ownedCount) : null;
+      if (isPowderMachine && !powderPrice) return reject(sequence, "object_limit");
+      if (isColorMixerBucket && !bucketPrice) return reject(sequence, "object_limit");
+      const specialPrice = powderPrice ?? bucketPrice;
+      const cost = specialPrice?.cost ?? (isZombiePot ? (state.zombiePotBought ? 3 : 500) : econ.cost);
+      const currency = specialPrice
+        ? (specialPrice.brains ? "brains" : "gold")
+        : isZombiePot
+          ? (state.zombiePotBought ? "brains" : "gold")
+          : (econ.brains ? "brains" : "gold");
       if (state.balance[currency] < cost) return reject(sequence, "insufficient");
       const requested = command.clientInstanceId;
       const instanceId = requested && /^[A-Za-z0-9_-]{1,80}$/.test(requested) &&
         !state.objects.objects.some((o) => o.instanceId === requested) ? requested : options.id();
       state.balance[currency] -= cost;
-      state.balance.xp += objectBuyXp(
+      state.balance.xp += isPowderMachine ? POWDER_MACHINE_XP : objectBuyXp(
         cost,
         econ.xp,
         currency === "brains",
@@ -731,7 +806,7 @@ function applyOne(
       if (isZombiePot) state.zombiePotBought = true;
       const rule = objectRules.get(command.catalogKey);
       state.objects.objects.push({ instanceId, catalogKey: command.catalogKey, status: "placed",
-        ...(isZombiePot ? { purchaseCost: cost, purchaseCurrency: currency } : {}),
+        ...(isZombiePot || isPowderMachine || isColorMixerBucket ? { purchaseCost: cost, purchaseCurrency: currency } : {}),
         ...(rule?.growMs ? { readyAt: options.now + rule.growMs } : {}) });
       events.push({ type: "kItemBoughtNotification", subject: rule?.name ?? command.catalogKey,
         aliases: objectAliases.get(command.catalogKey) as string[] | undefined });
@@ -828,6 +903,45 @@ function applyOne(
       }
       return harvested ? { sequence, status: "applied" } : reject(sequence, "no_effect");
     }
+    case "powder.grind_start": {
+      const machine = state.objects.objects.find((object) =>
+        object.instanceId === command.machineId && object.status === "placed" && isPowderMachineKey(object.catalogKey)
+      );
+      if (!machine) return reject(sequence, "not_owned");
+      state.powderGrinds = sanitizePowderGrinds(state.powderGrinds);
+      if (state.powderGrinds[command.machineId]) return reject(sequence, "machine_busy");
+      const crystals = sanitizePowderCounts(command.crystals);
+      const total = totalPowderCount(crystals);
+      if (total <= 0) return reject(sequence, "no_effect");
+      if (total > GRIND_CRYSTAL_CAPACITY) return reject(sequence, "capacity");
+      state.powderStorage = sanitizePowderStorage(state.powderStorage);
+      for (const [color, count] of Object.entries(crystals) as [PowderColor, number][]) {
+        if ((state.powderStorage.crystals[color] ?? 0) < count) return reject(sequence, "insufficient");
+      }
+      const job = rollPowderGrindJob(crystals, options.now, options.random);
+      if (!job) return reject(sequence, "bad_selection");
+      for (const [color, count] of Object.entries(crystals) as [PowderColor, number][]) {
+        state.powderStorage.crystals[color] -= count;
+      }
+      state.powderGrinds[command.machineId] = job;
+      return { sequence, status: "applied" };
+    }
+    case "powder.grind_collect": {
+      const machine = state.objects.objects.find((object) =>
+        object.instanceId === command.machineId && isPowderMachineKey(object.catalogKey)
+      );
+      if (!machine) return reject(sequence, "not_owned");
+      state.powderGrinds = sanitizePowderGrinds(state.powderGrinds);
+      const job = state.powderGrinds[command.machineId];
+      if (!job) return reject(sequence, "not_busy");
+      if (options.now < job.finishAt) return reject(sequence, "not_ready");
+      state.powderStorage = sanitizePowderStorage(state.powderStorage);
+      for (const [color, count] of Object.entries(job.powders) as [PowderColor, number][]) {
+        state.powderStorage.powders[color] += count;
+      }
+      delete state.powderGrinds[command.machineId];
+      return { sequence, status: "applied" };
+    }
     case "roster.sell": {
       const index = state.roster.findIndex((u) => u.id === command.unitId && !u.lockedByRaid);
       if (index < 0) return reject(sequence, "not_owned");
@@ -847,6 +961,25 @@ function applyOne(
       }
       if (!command.stored && state.roster.filter((candidate) => !candidate.stored).length >= capacity.army) return reject(sequence, "army_full");
       unit.stored = command.stored;
+      return { sequence, status: "applied" };
+    }
+    case "roster.dye": {
+      const hasBucket = state.objects.objects.some((object) =>
+        object.status === "placed" && isZombieColorMixerBucketKey(object.catalogKey)
+      );
+      if (!hasBucket) return reject(sequence, "not_owned");
+      const unit = state.roster.find((candidate) => candidate.id === command.unitId && !candidate.lockedByRaid);
+      if (!unit) return reject(sequence, "not_owned");
+      state.powderStorage = sanitizePowderStorage(state.powderStorage);
+      const amount = Math.max(1, Math.min(255, Math.trunc(command.amount)));
+      if ((state.powderStorage.powders[command.powderColor] ?? 0) < amount) return reject(sequence, "insufficient");
+      const result = applyZombieColorPowder(unit.color ?? zombieBaseColor(unit.key), command.powderColor, amount);
+      if (result.amountUsed !== amount) return reject(sequence, "color_saturated");
+      if (JSON.stringify(result.color) === JSON.stringify(unit.color ?? zombieBaseColor(unit.key))) {
+        return reject(sequence, "no_effect");
+      }
+      state.powderStorage.powders[command.powderColor] -= amount;
+      unit.color = result.color;
       return { sequence, status: "applied" };
     }
     case "roster.combine_start": {
@@ -1138,7 +1271,9 @@ export function applyCommandBatch(
     if (command.type.startsWith("farm.") && "oc" in command && "or" in command) return [`plot:${command.oc}:${command.or}`];
     if (command.type === "object.refund" || command.type === "object.status" || command.type === "object.upgrade") return [`object:${command.instanceId}`];
     if (command.type === "object.harvest_trees") return command.instanceIds.map((id) => `object:${id}`);
+    if (command.type === "powder.grind_start" || command.type === "powder.grind_collect") return [`powder:${command.machineId}`];
     if (command.type === "roster.sell" || command.type === "roster.status") return [`unit:${command.unitId}`];
+    if (command.type === "roster.dye") return [`unit:${command.unitId}`, `powder:dye:${command.powderColor}`];
     if (command.type === "roster.combine_start" || command.type === "roster.combine") {
       return [`unit:${command.parentAId}`, `unit:${command.parentBId}`];
     }
@@ -1191,6 +1326,8 @@ export function freshGameplayState(): MutableGameplayState {
     quests: { version: 0, completed: [], progress: [] } satisfies QuestProjection,
     inventory: {},
     storage: { received: {}, stored: {} },
+    powderStorage: sanitizePowderStorage(),
+    powderGrinds: {},
     roster: [] satisfies RosterUnitProjection[],
     farmSize: 30,
     climates: ["grass"],

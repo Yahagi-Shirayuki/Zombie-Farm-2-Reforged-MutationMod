@@ -11,6 +11,16 @@ import {
 } from "./farmer";
 import type { EpicBossRun } from "./epicBoss/types";
 import { parseReceivedZombie } from "./zombie/receivedReward";
+import {
+  emptyPowderStorage,
+  rollPowderGrindJob,
+  sanitizePowderCounts,
+  sanitizePowderGrinds,
+  sanitizePowderStorage,
+  type PowderColor,
+  type PowderGrindJob,
+  type PowderStorage,
+} from "./powderMachine";
 
 export const XP_THRESHOLDS = [
   0, 25, 75, 150, 250, 375, 550, 800, 1300, 1800, 2300, 2800, 3300, 3900, 4500,
@@ -59,6 +69,9 @@ export class GameState {
   penPets: string[] = [];
   // ---- consumable boosts (bought from the Market Boosts tab) ----
   boostInv: { key: string; count: number }[] = [];
+  // ---- Powder Machine resources ----
+  powderStorage: PowderStorage = emptyPowderStorage();
+  powderGrinds: Record<string, PowderGrindJob> = {};
   // ---- zombie abilities ----
   // DEPRECATED: ability unlocking is now derived from raidsCompleted (see
   // abilityUnlocked). Kept as an optional persisted field for save compatibility.
@@ -121,8 +134,9 @@ export class GameState {
   onFarm:
     | ((
         action: { type: "plant" | "harvest" | "plow" | "remove" | "move"; oc: number; or: number;
-                  toOc?: number; toOr?: number; cropKey?: string; fertilized?: boolean; unitId?: string },
-        optimistic: { gold?: number; brains?: number; xp?: number }
+                  toOc?: number; toOr?: number; cropKey?: string; fertilized?: boolean; unitId?: string;
+                  variant?: number },
+        optimistic: { gold?: number; brains?: number; xp?: number; powderCrystals?: Partial<Record<PowderColor, number>> }
       ) => void)
     | null = null;
   /** Re-check online writer availability when a delayed farm job actually executes.
@@ -150,7 +164,7 @@ export class GameState {
   onInventory:
     | ((
         action: { type: "buy" | "use" | "grant"; key: string; qty?: number; unitId?: string; localZombieHarvests?: { id: string; oc: number; or: number }[]; oc?: number; or?: number; target?: "zombie_pot" },
-        optimistic: { count: number; gold?: number; brains?: number; xp?: number }
+        optimistic: { count: number; gold?: number; brains?: number; xp?: number; powderCrystals?: Partial<Record<PowderColor, number>> }
       ) => void)
     | null = null;
 
@@ -171,6 +185,93 @@ export class GameState {
       .filter(([, n]) => n > 0)
       .map(([key, count]) => ({ key, count }));
     this.emit();
+  }
+
+  /** Adopt the server's authoritative Powder Machine resource counts. */
+  syncPowderStorage(storage?: Partial<{
+    crystals: Partial<Record<PowderColor, number>>;
+    powders: Partial<Record<PowderColor, number>>;
+  }> | null) {
+    this.powderStorage = sanitizePowderStorage(storage);
+    this.emit();
+  }
+
+  syncPowderGrinds(grinds?: Record<string, Partial<PowderGrindJob> | null> | null) {
+    this.powderGrinds = sanitizePowderGrinds(grinds);
+    this.emit();
+  }
+
+  addPowderCrystals(color: PowderColor, count: number) {
+    const amount = Math.max(0, Math.trunc(count));
+    if (!amount) return;
+    this.powderStorage = sanitizePowderStorage(this.powderStorage);
+    this.powderStorage.crystals[color] += amount;
+    this.emit();
+  }
+
+  addPowderCrystalDelta(delta?: Partial<Record<PowderColor, number>> | null) {
+    if (!delta) return;
+    this.powderStorage = sanitizePowderStorage(this.powderStorage);
+    let changed = false;
+    for (const [color, raw] of Object.entries(delta) as [PowderColor, number | undefined][]) {
+      const amount = Math.trunc(raw ?? 0);
+      if (!amount || !(color in this.powderStorage.crystals)) continue;
+      this.powderStorage.crystals[color] = Math.max(0, this.powderStorage.crystals[color] + amount);
+      changed = true;
+    }
+    if (changed) this.emit();
+  }
+
+  addPowderStorageDelta(delta?: Partial<{
+    crystals: Partial<Record<PowderColor, number>>;
+    powders: Partial<Record<PowderColor, number>>;
+  }> | null) {
+    if (!delta) return;
+    this.powderStorage = sanitizePowderStorage(this.powderStorage);
+    let changed = false;
+    for (const bucket of ["crystals", "powders"] as const) {
+      for (const [color, raw] of Object.entries(delta[bucket] ?? {}) as [PowderColor, number | undefined][]) {
+        const amount = Math.trunc(raw ?? 0);
+        if (!amount || !(color in this.powderStorage[bucket])) continue;
+        this.powderStorage[bucket][color] = Math.max(0, this.powderStorage[bucket][color] + amount);
+        changed = true;
+      }
+    }
+    if (changed) this.emit();
+  }
+
+  startPowderGrind(
+    machineId: string,
+    crystals: Partial<Record<PowderColor, number>>,
+    now = Date.now(),
+    random: () => number = Math.random
+  ): PowderGrindJob | null {
+    if (!machineId || this.powderGrinds[machineId]) return null;
+    const clean = sanitizePowderCounts(crystals);
+    const job = rollPowderGrindJob(clean, now, random);
+    if (!job) return null;
+    this.powderStorage = sanitizePowderStorage(this.powderStorage);
+    for (const [color, count] of Object.entries(clean) as [PowderColor, number][]) {
+      if ((this.powderStorage.crystals[color] ?? 0) < count) return null;
+    }
+    for (const [color, count] of Object.entries(clean) as [PowderColor, number][]) {
+      this.powderStorage.crystals[color] -= count;
+    }
+    this.powderGrinds[machineId] = job;
+    this.emit();
+    return job;
+  }
+
+  collectPowderGrind(machineId: string, now = Date.now()): PowderGrindJob | null {
+    const job = this.powderGrinds[machineId];
+    if (!job || now < job.finishAt) return null;
+    this.powderStorage = sanitizePowderStorage(this.powderStorage);
+    for (const [color, count] of Object.entries(job.powders) as [PowderColor, number][]) {
+      this.powderStorage.powders[color] += count;
+    }
+    delete this.powderGrinds[machineId];
+    this.emit();
+    return job;
   }
 
   /** Persist tutorial progress and notify listeners (triggers autosave). */

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import placeables from "../public/assets/placeables.json";
 import type { PlaceableDef } from "./assets";
 import { MAX_ZOMBIE_POTS, noRoomForAnother, type PlacementFarm } from "./placementLimit";
+import { ZOMBIE_COLOR_MIXER_BUCKET_LIMIT } from "./zombieColorMixerBucket";
 
 const catalog = placeables as PlaceableDef[];
 
@@ -15,6 +16,7 @@ const def = (key: string, flags: Partial<PlaceableDef>): PlaceableDef => {
 const BLUE_GRAVE = def("gravestoneBlue", { graveColor: "Blue" });
 const RED_GRAVE = def("gravestoneRed", { graveColor: "Red" });
 const POT = def("zombieCombiner", { zombiePot: true });
+const BUCKET = def("zombieColorMixerBucket", {});
 const MAUSOLEUM = def("mausoleum3", { zombieStorage: true });
 const PATCH = def("soil_zombiePatch", { zombiePatch: true });
 const DAISY = { key: "daisy", category: "decor" } as PlaceableDef;
@@ -30,6 +32,7 @@ const farm = (over: Partial<PlacementFarm> = {}): PlacementFarm => ({
   hasMutantMonolith: () => false,
   hasCombineMonolith: () => false,
   zombiePotCount: () => 0,
+  zombieColorMixerBucketCount: () => 0,
   ...over,
 });
 
@@ -57,12 +60,21 @@ describe("noRoomForAnother", () => {
     expect(noRoomForAnother(POT, farm({ zombiePotCount: () => MAX_ZOMBIE_POTS }))).toBe(true);
   });
 
+  it("allows Zombie Color Mixer Buckets up to their cap, then no more", () => {
+    for (let placed = 0; placed < ZOMBIE_COLOR_MIXER_BUCKET_LIMIT; placed++)
+      expect(noRoomForAnother(BUCKET, farm({ zombieColorMixerBucketCount: () => placed })), `${placed} down`).toBe(false);
+    expect(noRoomForAnother(BUCKET, farm({
+      zombieColorMixerBucketCount: () => ZOMBIE_COLOR_MIXER_BUCKET_LIMIT,
+    }))).toBe(true);
+  });
+
   it("never limits ordinary decor", () => {
     const crowded = farm({
       shedId: () => "shed", mausoleumId: () => "tomb", patchId: () => "patch",
       hasGrave: () => true, hasPlowFree: () => true, hasFastWork: () => true,
       hasMutantMonolith: () => true, hasCombineMonolith: () => true,
       zombiePotCount: () => MAX_ZOMBIE_POTS,
+      zombieColorMixerBucketCount: () => ZOMBIE_COLOR_MIXER_BUCKET_LIMIT,
     });
     expect(noRoomForAnother(DAISY, crowded)).toBe(false);
   });

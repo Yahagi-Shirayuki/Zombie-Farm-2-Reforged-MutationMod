@@ -52,6 +52,18 @@ import { farmerHeadXp } from "./farmer";
 import { purchaseXpFeedback } from "./purchaseFeedback";
 import { harvestXp, plowXp } from "./farmRewards";
 import {
+  isPowderMachineKey,
+  powderMachinePrice,
+  POWDER_MACHINE_XP,
+  rollPomegraniteCrystalHarvest,
+  type PowderColor,
+} from "./powderMachine";
+import {
+  applyZombieColorPowder,
+  isZombieColorMixerBucketKey,
+  zombieColorMixerBucketPrice,
+} from "./zombieColorMixerBucket";
+import {
   DEFAULT_FARM_BACKGROUND, getFarmBackground, isFarmBackground, setFarmBackground,
   FARM_BG_DENSITY, type FarmBackground, getDayNightMode, setDayNightMode,
   isLocalNight, type DayNightMode, hasSeenHazardTip, markHazardTipSeen,
@@ -195,7 +207,7 @@ function installLocalFarmHotkeys(playMode: PlayMode, state: GameState, saves: Sa
 
       case "KeyJ":
         saves.flush();
-        skipLocalFarmTime(playMode, saves, 60);
+        skipLocalFarmTime(playMode, saves, 12 * 60);
         break;
 
       case "KeyK":
@@ -276,6 +288,7 @@ async function main() {
   hud.setPlayStatus(playMode, playMode === "online" ? "reconnecting" : "synced");
   const mutationPortraits = new MutationPortraits(app.renderer, assets);
   hud.zombieMutationPortraitOf = (key, mutation, color, mutationIds) => mutationPortraits.get(key, mutation, color, mutationIds);
+  hud.zombieBaseColorOf = (key) => assets.zombieModels[key]?.color;
   hud.setFarmerCatalog(assets.farmer);
   hud.setPetCatalog(assets.pets);
   // Give Android/browser Back an in-app dismissal layer. One guard entry keeps the
@@ -314,6 +327,11 @@ async function main() {
       key: p.key, name: p.name, stages: [SEED_FILE, p.stage1, p.stage2],
       growMs: p.growMs, cost: p.cost, sell: p.sell, xp: p.xp,
       unlockLevel: p.level, harvestIcon: p.icon,
+      variants: p.variants?.map((variant) => ({
+        stages: [variant.stage1, variant.stage2],
+        harvestIcon: variant.icon,
+        weight: variant.weight,
+      })),
     };
     catalog.set(cfg.key, cfg);
     return {
@@ -1145,6 +1163,7 @@ async function main() {
     giftUnitId = null;
     powerGold = 0;
     powerXp = 0;
+    powerCrystals = {};
     if (!applyBoost(def)) return; // only consume if it did something
     // ONLINE: the server owns the count â€” decrement there (optimistic + reconcile).
     // A gift voucher redeems into a zombie, so it also carries the spawned unit's id:
@@ -1157,13 +1176,14 @@ async function main() {
         : growTarget
           ? { type: "use" as const, key: def.key, oc: growTarget.oc, or: growTarget.or }
           : { type: "use" as const, key: def.key };
-      state.onInventory(action, { count: -1, gold: powerGold, xp: powerXp });
+      state.onInventory(action, { count: -1, gold: powerGold, xp: powerXp, powderCrystals: powerCrystals });
     } else state.useBoost(def.key);
     giftUnitId = null;
     powerUnitIds = [];
     growTarget = null;
     powerGold = 0;
     powerXp = 0;
+    powerCrystals = {};
   };
   hud.canUseBoost = (def) =>
     def.effect !== "plow" ||
@@ -1216,6 +1236,7 @@ async function main() {
   let giftUnitId: string | null = null;
   let powerUnitIds: { id: string; oc: number; or: number }[] = [];
   let growTarget: { oc: number; or: number } | null = null;
+  let powerCrystals: Partial<Record<PowderColor, number>> = {};
   // ONLINE: what a farm-wide power (Insta-Harvest / Insta-Plow) just paid out, summed
   // over every plot and tree it hit. The server owns these rewards, but sending them as
   // the power command's optimistic delta keeps the top-bar counters rising with the
@@ -1249,8 +1270,10 @@ async function main() {
         // farmer-adjusted gold for a vegetable, XP for both kinds.
         const gold = r.zombieKey ? 0 : state.farmerHarvestGold(r.sell);
         const xp = harvestXp(r.xp, field.hasPlowFree());
+        const crystal = rollPomegraniteCrystalHarvest(r.cropKey, r.variant, r.fertilized);
         let harvestAliases: readonly string[] = [];
         if (state.onFarm) {
+          if (crystal) powerCrystals[crystal.color] = (powerCrystals[crystal.color] ?? 0) + crystal.count;
           if (r.zombieKey) {
             const context = mutationContexts.get(`${pl.oc}:${pl.or}`) ?? r.mutationContext!;
             const unit = zombies.spawnVerified(r.zombieKey, pl.oc + 1, pl.or + 1,
@@ -1263,6 +1286,7 @@ async function main() {
           // individual optimistic harvests must not become commands. Their totals
           // ride along as that command's optimistic delta so the counters move now.
         } else {
+          if (crystal) state.addPowderCrystals(crystal.color, crystal.count);
           if (gold) state.addGold(gold);
           state.addXp(xp);
           if (r.zombieKey) {
@@ -1645,6 +1669,7 @@ async function main() {
             plantedAt: p.planted_at,
             growMs: p.grow_ms,
             fertilized: !!p.fertilized,
+            variant: p.variant,
           },
         })),
       ];
@@ -2329,12 +2354,15 @@ async function main() {
     const id = field.shedId();
     return id ? field.objectDefOf(id)?.storageSlots ?? 0 : 0;
   };
+  hud.ownedObjectCount = (key) => {
+    const placed = field.objectKeyCounts()[key] ?? 0;
+    const stored = state.storedItems.find((item) => item.key === key)?.count ?? 0;
+    return placed + stored;
+  };
   hud.objectLimitReached = (def) => {
     const limit = placeablePurchaseLimit(def);
     if (limit === undefined) return false;
-    const placed = field.objectKeyCounts()[def.key] ?? 0;
-    const stored = state.storedItems.find((item) => item.key === def.key)?.count ?? 0;
-    return placed + stored >= limit;
+    return (hud.ownedObjectCount?.(def.key) ?? 0) >= limit;
   };
   // Colored graves gate planting their zombie class (Blue/Red/Silver).
   hud.hasGrave = (color) => field.hasGrave(color);
@@ -2652,6 +2680,65 @@ async function main() {
       hud.showToast("That combine could not be confirmed just now â€” it is still in the Pot. Try again in a moment.");
     }
     return z ? z.name : null;
+  };
+
+  // ---- Powder Machine ----
+  hud.getPowderGrindStatus = (machineId) => {
+    const job = state.powderGrinds[machineId] ?? null;
+    const now = Date.now();
+    const remainingMs = job ? Math.max(0, job.finishAt - now) : 0;
+    return {
+      busy: !!job,
+      ready: !!job && remainingMs <= 0,
+      remainingMs,
+      totalMs: job ? Math.max(0, job.finishAt - job.startedAt) : 0,
+      pending: job ? { crystals: job.crystals, powders: job.powders } : null,
+    };
+  };
+  hud.onStartPowderGrind = (machineId, crystals) => {
+    if (onlineGameplayBlocked()) return false;
+    const job = state.startPowderGrind(machineId, crystals);
+    if (!job) return false;
+    economy?.submitPowderGrindStart(machineId, crystals, job);
+    saveManager.flushCritical();
+    return true;
+  };
+  hud.onCollectPowderGrind = (machineId) => {
+    if (onlineGameplayBlocked()) return false;
+    const job = state.collectPowderGrind(machineId);
+    if (!job) return false;
+    economy?.submitPowderGrindCollect(machineId, job);
+    saveManager.flushCritical();
+    return true;
+  };
+  hud.onDyeZombieColor = async (unitId, powderColor, amount) => {
+    if (onlineGameplayBlocked()) return { ok: false, message: "Gameplay is paused." };
+    let commandUnitId = unitId;
+    try {
+      if (economy) [commandUnitId] = await economy.settleUnitIds([unitId]);
+    } catch {
+      return { ok: false, message: "Could not confirm that zombie. Please reconnect." };
+    }
+    const localUnitId = zombies.roster().some((zombie) => zombie.id === commandUnitId)
+      ? commandUnitId
+      : unitId;
+    const zombie = zombies.roster().find((entry) => entry.id === localUnitId);
+    if (!zombie) return { ok: false, message: "That zombie is no longer available." };
+    if ((state.powderStorage.powders[powderColor] ?? 0) < amount) {
+      return { ok: false, message: `Not enough ${powderColor} powder.` };
+    }
+    const baseColor = zombie.color ?? assets.zombieModels[zombie.key]?.color ?? [255, 255, 255];
+    const result = applyZombieColorPowder(baseColor, powderColor, amount);
+    if (result.amountUsed !== amount) {
+      return { ok: false, message: result.stopReason ?? `This zombie is too ${powderColor} to use more of this colored powder.` };
+    }
+    if (!zombies.recolor(localUnitId, result.color)) {
+      return { ok: false, message: "That zombie is no longer available." };
+    }
+    state.addPowderStorageDelta({ powders: { [powderColor]: -amount } });
+    economy?.submitRoster({ type: "dye", unitId: commandUnitId, powderColor, amount });
+    saveManager.flushCritical();
+    return { ok: true };
   };
 
   // ---- raids / invasions ----
@@ -3921,9 +4008,19 @@ async function main() {
     // The Zombie Pot costs 500 GOLD for the first, then a flat 3 BRAINS for every
     // one after â€” permanently, even if the player sells it (see zombiePotBought).
     const potBought = !!def.zombiePot && state.zombiePotBought;
-    const cost = def.zombiePot ? (potBought ? 3 : 500) : def.cost;
-    const useBrains = def.zombiePot ? potBought : def.brainsNeeded;
-    const xp = buyXp(cost, def.xp, useBrains, def.category);
+    const ownedCount = hud.ownedObjectCount?.(def.key) ?? 0;
+    const powderPrice = isPowderMachineKey(def.key)
+      ? powderMachinePrice(ownedCount)
+      : null;
+    const bucketPrice = isZombieColorMixerBucketKey(def.key)
+      ? zombieColorMixerBucketPrice(ownedCount)
+      : null;
+    if (isPowderMachineKey(def.key) && !powderPrice) return;
+    if (isZombieColorMixerBucketKey(def.key) && !bucketPrice) return;
+    const specialPrice = powderPrice ?? bucketPrice;
+    const cost = specialPrice?.cost ?? (def.zombiePot ? (potBought ? 3 : 500) : def.cost);
+    const useBrains = specialPrice?.brains ?? (def.zombiePot ? potBought : def.brainsNeeded);
+    const xp = isPowderMachineKey(def.key) ? POWDER_MACHINE_XP : buyXp(cost, def.xp, useBrains, def.category);
     // Server-owned object buy: the server debits the exact price, records ownership,
     // and persists the dynamic first/subsequent Zombie Pot pricing flag.
     const serverObject = !!economy && cost > 0;
@@ -3937,7 +4034,7 @@ async function main() {
     }
     if (def.zombiePot) state.markZombiePotBought(); // next pot is 3 brains forever
     const placedId = field.placeObject(def, oc, or, undefined, undefined, placeFlipped);
-    if (def.zombiePot && placedId) {
+    if ((def.zombiePot || isPowderMachineKey(def.key) || isZombieColorMixerBucketKey(def.key)) && placedId) {
       objectPurchases.set(placedId, { cost, currency: useBrains ? "brains" : "gold" });
     }
     if (serverObject && placedId) {
@@ -4201,6 +4298,8 @@ async function main() {
   const interactWithObject = (objId: string, objDef: PlaceableDef): boolean => {
     if (objDef.tapSound) audio.tap(objDef.tapSound);
     if (objDef.storageSlots) hud.openStorage();
+    else if (isPowderMachineKey(objDef.key)) hud.openPowderMachine(objId);
+    else if (isZombieColorMixerBucketKey(objDef.key)) hud.openZombieColorMixerBucket();
     else if (objDef.zombieStorage) hud.openMausoleum();
     else if (objDef.zombiePatch) {
       const napping = zombies.toggleGather(field.patchRestTiles());
@@ -4573,6 +4672,10 @@ async function main() {
         if (objDef?.tapSound) audio.tap(objDef.tapSound);
         if (objId && objDef && objDef.storageSlots) {
           hud.openStorage();
+        } else if (objId && objDef && isPowderMachineKey(objDef.key)) {
+          hud.openPowderMachine(objId);
+        } else if (objId && objDef && isZombieColorMixerBucketKey(objDef.key)) {
+          hud.openZombieColorMixerBucket();
         } else if (objId && objDef && objDef.zombieStorage) {
           hud.openMausoleum(); // the Mausoleum's storage slots
         } else if (objId && objDef && objDef.zombiePatch) {
@@ -4782,11 +4885,12 @@ async function main() {
   window.addEventListener("resize", recenter);
 
   // ---- game loop ----
-  // Persistent combine-timer bar that floats over the placed Zombie Pot while a
-  // combine runs (offline-safe: it reflects the pot's absolute finish time).
-  type PotBarView = { bar: Container; fill: Graphics; label: Text };
-  const potBars = new Map<string, PotBarView>();
-  const makePotBar = (): PotBarView => {
+  // Persistent timer bars that float over functional buildings while jobs run
+  // (offline-safe: they reflect absolute finish times).
+  type StatusBarView = { bar: Container; fill: Graphics; label: Text };
+  const potBars = new Map<string, StatusBarView>();
+  const powderBars = new Map<string, StatusBarView>();
+  const makeStatusBar = (fillColor = 0x8ad14a): StatusBarView => {
     const bar = new Container();
     bar.visible = false;
     const fill = new Graphics();
@@ -4802,7 +4906,7 @@ async function main() {
     bg.roundRect(-W / 2, -H / 2, W, H, 4)
       .fill({ color: 0x1a1a24, alpha: 0.9 })
       .stroke({ width: 2, color: 0x05050a });
-    fill.roundRect(0, 0, W - 2 * PAD, H - 2 * PAD, 3).fill({ color: 0x8ad14a });
+    fill.roundRect(0, 0, W - 2 * PAD, H - 2 * PAD, 3).fill({ color: fillColor });
     fill.position.set(-W / 2 + PAD, -H / 2 + PAD);
     fill.scale.x = 0;
     label.anchor.set(0.5, 0.5);
@@ -4906,14 +5010,35 @@ async function main() {
     for (const potId of placedPotIds) {
       const pot = zombies.potFor(potId);
       let view = potBars.get(potId);
-      if (!view) { view = makePotBar(); potBars.set(potId, view); }
-      const wp = field.objectWorkPoint(potId);
+      if (!view) { view = makeStatusBar(); potBars.set(potId, view); }
+      const wp = field.objectStatusBarPoint(potId);
       view.bar.visible = !!wp && pot.busy;
       if (!wp || !pot.busy) continue;
-      view.bar.position.set(wp.x, wp.y - 92);
+      view.bar.position.set(wp.x, wp.y);
       view.fill.scale.x = pot.ready ? 1 : pot.progress();
       const secs = Math.ceil(pot.remainingMs() / 1000);
       view.label.text = pot.ready ? "Ready!" : secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m`;
+    }
+    const placedPowderIds = new Set(field.powderMachineIds());
+    for (const [id, view] of powderBars) {
+      if (placedPowderIds.has(id)) continue;
+      field.labelLayer.removeChild(view.bar);
+      view.bar.destroy({ children: true });
+      powderBars.delete(id);
+    }
+    for (const machineId of placedPowderIds) {
+      const job = state.powderGrinds[machineId];
+      let view = powderBars.get(machineId);
+      if (!view) { view = makeStatusBar(0x6ec8ff); powderBars.set(machineId, view); }
+      const wp = field.objectStatusBarPoint(machineId);
+      view.bar.visible = !!wp && !!job;
+      if (!wp || !job) continue;
+      const remainingMs = Math.max(0, job.finishAt - Date.now());
+      const totalMs = Math.max(0, job.finishAt - job.startedAt);
+      view.bar.position.set(wp.x, wp.y);
+      view.fill.scale.x = remainingMs <= 0 || totalMs <= 0 ? 1 : Math.min(1, (totalMs - remainingMs) / totalMs);
+      const secs = Math.ceil(remainingMs / 1000);
+      view.label.text = remainingMs <= 0 ? "Ready!" : secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m`;
     }
     // animate floating popups (rise + fade)
     for (let i = floats.length - 1; i >= 0; i--) {

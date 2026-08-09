@@ -718,6 +718,7 @@ export interface FarmState {
     planted_at: number;
     grow_ms: number;
     fertilized: number;
+    variant?: number;
   }[];
 }
 

@@ -459,10 +459,42 @@
   "cost": 220,
   "sell": 310,
   "growMs": 86400000,
-  "stage1": "pomegranite_stage1.png",
-  "stage2": "pomegranite_stage2.png",
-  "level": 33,
+  "stage1": "Pomegranite_4_stage1.png",
+  "stage2": "Pomegranite_4_stage2.png",
+  "level": 5,
   "xp": 1,
-  "icon": "pome_icon.png"
+  "icon": "pome_4_icon.png",
+  "variants": [
+   {
+   "stage1": "Pomegranite_0_stage1.png",
+   "stage2": "Pomegranite_0_stage2.png",
+    "icon": "pome_0_icon.png",
+    "weight": 0.8
+   },
+   {
+   "stage1": "Pomegranite_1_stage1.png",
+   "stage2": "Pomegranite_1_stage2.png",
+    "icon": "pome_1_icon.png",
+    "weight": 1
+   },
+   {
+   "stage1": "Pomegranite_2_stage1.png",
+   "stage2": "Pomegranite_2_stage2.png",
+    "icon": "pome_2_icon.png",
+    "weight": 1
+   },
+   {
+   "stage1": "Pomegranite_3_stage1.png",
+   "stage2": "Pomegranite_3_stage2.png",
+    "icon": "pome_3_icon.png",
+    "weight": 1
+   },
+   {
+   "stage1": "Pomegranite_4_stage1.png",
+   "stage2": "Pomegranite_4_stage2.png",
+    "icon": "pome_4_icon.png",
+    "weight": 0.9
+   }
+  ]
  }
 ]

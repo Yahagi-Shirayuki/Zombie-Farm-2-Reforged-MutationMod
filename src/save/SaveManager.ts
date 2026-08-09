@@ -17,6 +17,7 @@ import { reconcileTutorialCompletion } from "../tutorial/steps";
 import { backfillDiscovered, sanitizeDiscovered } from "../zombie/almanac";
 import type { PlayMode } from "../playMode";
 import type { JobSystem } from "../JobSystem";
+import { sanitizePowderGrinds, sanitizePowderStorage } from "../powderMachine";
 
 export type FarmLoadResult =
   | { kind: "local-existing" }
@@ -202,6 +203,8 @@ export class SaveManager {
       zombiePots: this.zombies.serializePots(),
       storage: { itemCap: this.state.storageItemCap, items: this.state.storedItems, received: this.state.received },
       boosts: this.state.boostInv,
+      powderStorage: sanitizePowderStorage(this.state.powderStorage),
+      powderGrinds: sanitizePowderGrinds(this.state.powderGrinds),
       quests: this.quests.serialize(),
       raids: { completed: this.state.raidsCompleted, lastRaidAt: this.state.lastRaidAt, attackOrder: this.state.raidAttackOrder,
         brainDryStreak: this.state.brainDryStreak, zombieDryWins: this.state.zombieDryWins },
@@ -452,7 +455,7 @@ export class SaveManager {
       return { oc, or, state: "planted" as const, crop: {
         key: plot.cropKey, isZombie: plot.zombie,
         plantedAt: serverTimestampToClient(plot.plantedAt, boot.serverTime, clientTime),
-        growMs: plot.growMs, fertilized: plot.fertilized,
+        growMs: plot.growMs, fertilized: plot.fertilized, variant: plot.variant,
       } };
     });
     const objects = boot.gameplay.objects.objects.flatMap((obj) => {
@@ -533,6 +536,8 @@ export class SaveManager {
         received: Object.entries(boot.gameplay.storage.received).flatMap(([key, count]) => Array(count).fill(key)),
       },
       boosts: Object.entries(boot.gameplay.inventory).map(([key, count]) => ({ key, count })),
+      powderStorage: sanitizePowderStorage(boot.gameplay.powderStorage),
+      powderGrinds: sanitizePowderGrinds(boot.gameplay.powderGrinds),
       quests: { active: boot.gameplay.quests.progress.map((q) => ({ id: q.questId, counts: q.counts })), completed: boot.gameplay.quests.completed },
       raids: { completed: boot.gameplay.raids.progress,
         lastRaidAt: serverTimestampToClient(boot.gameplay.raids.lastRaidAt, boot.serverTime, clientTime),
@@ -597,6 +602,8 @@ export class SaveManager {
       this.state.received = data.storage.received ?? [];
     }
     this.state.boostInv = data.boosts ?? [];
+    this.state.syncPowderStorage(data.powderStorage);
+    this.state.syncPowderGrinds(data.powderGrinds);
     this.state.raidsCompleted = data.raids?.completed ?? {};
     this.state.lastRaidAt = data.raids?.lastRaidAt ?? 0;
     this.state.raidAttackOrder = data.raids?.attackOrder ?? [];

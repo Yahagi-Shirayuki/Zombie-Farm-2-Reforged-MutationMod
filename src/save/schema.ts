@@ -26,6 +26,7 @@
 import type { Friend } from "../social/friends";
 import type { FarmBackground } from "../prefs";
 import type { EpicBossRun } from "../epicBoss/types";
+import type { PowderColor, PowderGrindJob } from "../powderMachine";
 
 /** Bump when the shape changes in a way that needs a migration. */
 export const SAVE_VERSION = 1;
@@ -68,6 +69,10 @@ export interface SaveGame {
   storage?: StorageSave;
   /** Consumable boost inventory (Market Boosts tab). */
   boosts?: { key: string; count: number }[];
+  /** Powder Machine resource storage. */
+  powderStorage?: PowderStorageSave;
+  /** Running Powder Machine jobs, keyed by placed machine id. */
+  powderGrinds?: Record<string, PowderGrindJob>;
   /** Real quest engine progress (active per-requirement counts + completed ids). */
   quests?: QuestSave;
   /** Phase 5: raid/invasion progress (lifetime win count per raid id). */
@@ -241,6 +246,8 @@ export interface CropSave {
   growMs: number;
   /** A Garden zombie fertilized this crop (on plant) â†’ 2x harvest + leaf FX. */
   fertilized?: boolean;
+  /** Optional visual/result variant rolled when the seed was planted. */
+  variant?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -355,6 +362,11 @@ export interface StorageSave {
   pets?: string[];
   /** Raid-looted placeables (unlimited; the Received tab). */
   received: string[];
+}
+
+export interface PowderStorageSave {
+  crystals?: Partial<Record<PowderColor, number>>;
+  powders?: Partial<Record<PowderColor, number>>;
 }
 
 export interface QuestSave {
