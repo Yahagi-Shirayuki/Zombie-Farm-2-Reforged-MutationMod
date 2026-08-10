@@ -61,8 +61,10 @@ const SFX_VOL: Partial<Record<Sfx, number>> = {
 // an explicit assets/audio/ path so A() preserves the recovered WAV extension
 // instead of applying its legacy data-driven WAV -> MP3 decor coercion.
 function fightStrikeFile({ team, attackName = "", impact, sfxFile }: FightStrike): string {
-  if (impact === "projectile") return "audio/splat.wav";
+  // An explicitly named cue wins over the generic thrown-debris splat: the alien bolt
+  // has its own authored fire/hit pair (alienLaser.wav / stun.wav).
   if (sfxFile) return sfxFile.includes("/") ? sfxFile : `audio/${sfxFile}`;
+  if (impact === "projectile") return "audio/splat.wav";
   const attack = attackName.toLowerCase();
   if (attack.includes("bite")) return "audio/bite.wav";
   if (attack.includes("poke") || attack.includes("stab") || attack.includes("midgetstack")) {
@@ -568,6 +570,8 @@ const clampVolume = (value: unknown, fallback = 1): number =>
 const FIGHT_CUE_FILES = [
   "audio/bite.wav", "audio/flail.wav", "audio/poke.wav",
   "audio/swipe.wav", "audio/punch.wav", "audio/splat.wav",
+  // Alien boss laser: fired on `AlienStageBullet init`, hit on `collidedWith:`.
+  "audio/alienLaser.wav", "audio/stun.wav",
 ];
 
 /** Web Audio voices allowed at once. Combat can fire ~20 cues/s; past this many

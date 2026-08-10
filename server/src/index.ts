@@ -674,6 +674,26 @@ function validFallenEntry(value: unknown): boolean {
     num(row.diedAt, Number.MAX_SAFE_INTEGER);
 }
 
+/** The client's saved farm line-ups (`ui.teams`): a name plus the account's own
+ *  zombie ids. Cosmetic and client-authored — assembling a team only issues the
+ *  ordinary roster.status commands this Worker validates one by one, so there is
+ *  nothing here to check against. Bounded like every other client-authored shape
+ *  purely so it cannot crowd out the rest of a 128 KB blob. Absent, or written by
+ *  a client that predates teams, is fine. */
+function validTeamList(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > 16) return false;
+  return value.every((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    const row = entry as { id?: unknown; name?: unknown; members?: unknown };
+    return typeof row.id === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(row.id) &&
+      typeof row.name === "string" && [...row.name].length <= 24 &&
+      !/[\u0000-\u001f\u007f]/.test(row.name) &&
+      Array.isArray(row.members) && row.members.length <= 64 &&
+      row.members.every((id) => typeof id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(id));
+  });
+}
+
 function validFallenList(value: unknown): boolean {
   return value === undefined || (Array.isArray(value) &&
     value.length <= MAX_PRESENTATION_FALLEN && value.every(validFallenEntry));
@@ -853,6 +873,9 @@ export const validGameplayCommand = (value: unknown): value is GameplayCommand =
       return commandString(command.instanceId) && commandString(command.unitId) &&
         (command.name === undefined || commandString(command.name, 64));
     case "memorial.clear": return commandString(command.instanceId);
+    case "quest.periodic_claim":
+      return (command.scope === "daily" || command.scope === "weekly") &&
+        commandString(command.questId, 64);
     case "tutorial.complete": return true;
     default: return false;
   }
@@ -1021,6 +1044,10 @@ app.put("/presentation", async (c) => {
   // against. Bounded the same way: a hostile client must not be able to inflate the
   // blob, and none of these fields is ever read back as gameplay truth.
   const validFallen = validFallenList(body.data.fallen);
+  // Saved farm line-ups ride the `ui` blob (see the client's SaveManager).
+  const ui = body.data.ui as { teams?: unknown } | undefined;
+  const validUi = ui === undefined ||
+    (!!ui && typeof ui === "object" && !Array.isArray(ui) && validTeamList(ui.teams));
   const objectLayout = body.data.objectLayout as unknown;
   const validObjectLayout = objectLayout === undefined || (Array.isArray(objectLayout) &&
     objectLayout.length <= 512 && objectLayout.every((entry) => {
@@ -1037,7 +1064,7 @@ app.put("/presentation", async (c) => {
     }));
   if (!Object.keys(body.data).every((key) => presentationKeys.has(key)) ||
       !validObjectLayout || !validRosterLayout || !validPot || !validPots || !validAlmanac ||
-      !validFallen) {
+      !validFallen || !validUi) {
     return c.json({ error: "bad_presentation" }, 400);
   }
   const encoded = JSON.stringify(body.data);

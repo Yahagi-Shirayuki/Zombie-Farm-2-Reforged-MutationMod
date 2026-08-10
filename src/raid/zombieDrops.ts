@@ -47,6 +47,24 @@ export const RAID_ZOMBIE_DROPS: Readonly<Record<number, RaidZombieDrop>> = {
   },
 };
 
+/** The generic identity every rare invasion zombie ALSO answers to for quests.
+ *
+ *  It exists so one achievement can ask for "a rare zombie from an invasion" without
+ *  naming which of the four. A blank subject cannot express that — blank is the quest
+ *  format's wildcard, and the drop is announced as ordinary loot, so a wildcard would
+ *  count Bonus Gold and every boost bundle too. */
+export const RARE_INVASION_ZOMBIE_SUBJECT = "Rare Invasion Zombie";
+
+const RARE_ZOMBIE_NAMES = new Set(
+  Object.values(RAID_ZOMBIE_DROPS).map((drop) => drop.name.trim().toLowerCase())
+);
+
+/** Whether a loot name is one of the rare invasion zombies (and so should carry the
+ *  generic alias above). */
+export function isRareInvasionZombieName(name: string): boolean {
+  return RARE_ZOMBIE_NAMES.has(name.trim().toLowerCase());
+}
+
 /** Extra rare-zombie chance per Golden Die spent on the fight, as a multiple of the raid's
  *  base rate: one die doubles it, two dice triple it, and so on. Golden Dice already shift
  *  the ITEM loot roll toward its rare tiers (`LootTable.rollLootTier`), and their own

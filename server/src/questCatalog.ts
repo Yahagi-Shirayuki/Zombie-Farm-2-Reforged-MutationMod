@@ -1,4 +1,5 @@
 import questData from "../../public/assets/quests.json";
+import reforgedQuestData from "../../public/assets/quests_reforged.json";
 
 // Server mirror of public/assets/quests.json reward payouts. GENERATED from that
 // file (96 quests) — KEEP IN SYNC. Only the fields that decide VALUE are mirrored:
@@ -13,6 +14,9 @@ export interface QuestReward {
   rewardType: number;
   rewardValue: number;
   rewardItemKey: string;
+  /** Brains paid on top of the main reward (Reforged achievements). See
+   *  src/quest/types.ts — the imported format cannot express "XP and a brain". */
+  rewardBrains?: number;
 }
 
 export interface QuestRequirement {
@@ -32,7 +36,13 @@ export interface QuestDefinition extends QuestReward {
   seasonal: boolean;
 }
 
-const RAW_QUESTS = questData as Record<string, Omit<QuestDefinition, "rewardItemKey"> & { rewardItemKey?: string }>;
+// The imported catalog plus the Reforged-original achievements. Kept as two files
+// because quests.json is regenerated from the source Quests.plist by
+// tools/prep_quests.py and would drop anything hand-added to it. Ids are disjoint.
+const RAW_QUESTS = {
+  ...(questData as Record<string, unknown>),
+  ...(reforgedQuestData as Record<string, unknown>),
+} as Record<string, Omit<QuestDefinition, "rewardItemKey"> & { rewardItemKey?: string; rewardBrains?: number }>;
 
 /** Full server-owned quest rules. Content categories without a trusted event producer
  * remain dormant even though their definitions are present. */
@@ -47,6 +57,7 @@ export const QUEST_DEFINITIONS: Readonly<Record<string, QuestDefinition>> = Obje
       rewardType: q.rewardType,
       rewardValue: q.rewardValue,
       rewardItemKey: q.rewardItemKey ?? "",
+      rewardBrains: q.rewardBrains ?? 0,
       tutorialQuest: q.tutorialQuest,
       epicEvent: q.epicEvent,
       seasonal: q.seasonal,
@@ -59,48 +70,48 @@ export function questDefinition(id: string): QuestDefinition | undefined {
 }
 
 export const QUEST_REWARDS: Readonly<Record<string, QuestReward>> = {
-  "0": { rewardType: 0, rewardValue: 30, rewardItemKey: "" },
+  "0": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
   "1": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
   "2": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
   "3": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
-  "4": { rewardType: 0, rewardValue: 30, rewardItemKey: "" },
-  "5": { rewardType: 0, rewardValue: 30, rewardItemKey: "" },
-  "6": { rewardType: 0, rewardValue: 30, rewardItemKey: "" },
-  "7": { rewardType: 0, rewardValue: 30, rewardItemKey: "" },
-  "8": { rewardType: 0, rewardValue: 30, rewardItemKey: "" },
+  "4": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
+  "5": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
+  "6": { rewardType: 0, rewardValue: 75, rewardItemKey: "" },
+  "7": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
+  "8": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
   "9": { rewardType: 0, rewardValue: 40, rewardItemKey: "" },
-  "10": { rewardType: 0, rewardValue: 40, rewardItemKey: "" },
-  "11": { rewardType: 0, rewardValue: 40, rewardItemKey: "" },
-  "12": { rewardType: 0, rewardValue: 40, rewardItemKey: "" },
-  "13": { rewardType: 0, rewardValue: 50, rewardItemKey: "" },
-  "14": { rewardType: 0, rewardValue: 75, rewardItemKey: "" },
-  "15": { rewardType: 0, rewardValue: 150, rewardItemKey: "" },
-  "16": { rewardType: 0, rewardValue: 500, rewardItemKey: "" },
-  "17": { rewardType: 0, rewardValue: 50, rewardItemKey: "" },
-  "18": { rewardType: 0, rewardValue: 100, rewardItemKey: "" },
-  "19": { rewardType: 0, rewardValue: 150, rewardItemKey: "" },
-  "20": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
-  "21": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
-  "22": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
-  "23": { rewardType: 0, rewardValue: 50, rewardItemKey: "" },
-  "24": { rewardType: 0, rewardValue: 100, rewardItemKey: "" },
-  "25": { rewardType: 0, rewardValue: 100, rewardItemKey: "" },
-  "26": { rewardType: 0, rewardValue: 250, rewardItemKey: "" },
-  "27": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
-  "28": { rewardType: 0, rewardValue: 50, rewardItemKey: "" },
-  "29": { rewardType: 0, rewardValue: 100, rewardItemKey: "" },
-  "30": { rewardType: 0, rewardValue: 100, rewardItemKey: "" },
-  "31": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
-  "32": { rewardType: 0, rewardValue: 100, rewardItemKey: "" },
-  "33": { rewardType: 0, rewardValue: 75, rewardItemKey: "" },
-  "34": { rewardType: 0, rewardValue: 75, rewardItemKey: "" },
-  "35": { rewardType: 0, rewardValue: 75, rewardItemKey: "" },
+  "10": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
+  "11": { rewardType: 0, rewardValue: 75, rewardItemKey: "" },
+  "12": { rewardType: 0, rewardValue: 25, rewardItemKey: "" },
+  "13": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
+  "14": { rewardType: 0, rewardValue: 400, rewardItemKey: "" },
+  "15": { rewardType: 0, rewardValue: 800, rewardItemKey: "" },
+  "16": { rewardType: 0, rewardValue: 2000, rewardItemKey: "" },
+  "17": { rewardType: 0, rewardValue: 75, rewardItemKey: "" },
+  "18": { rewardType: 0, rewardValue: 150, rewardItemKey: "" },
+  "19": { rewardType: 0, rewardValue: 300, rewardItemKey: "" },
+  "20": { rewardType: 0, rewardValue: 750, rewardItemKey: "" },
+  "21": { rewardType: 0, rewardValue: 675, rewardItemKey: "" },
+  "22": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
+  "23": { rewardType: 0, rewardValue: 90, rewardItemKey: "" },
+  "24": { rewardType: 0, rewardValue: 150, rewardItemKey: "" },
+  "25": { rewardType: 0, rewardValue: 300, rewardItemKey: "" },
+  "26": { rewardType: 0, rewardValue: 750, rewardItemKey: "" },
+  "27": { rewardType: 0, rewardValue: 300, rewardItemKey: "" },
+  "28": { rewardType: 0, rewardValue: 90, rewardItemKey: "" },
+  "29": { rewardType: 0, rewardValue: 150, rewardItemKey: "" },
+  "30": { rewardType: 0, rewardValue: 300, rewardItemKey: "" },
+  "31": { rewardType: 0, rewardValue: 2100, rewardItemKey: "" },
+  "32": { rewardType: 0, rewardValue: 900, rewardItemKey: "" },
+  "33": { rewardType: 0, rewardValue: 300, rewardItemKey: "" },
+  "34": { rewardType: 0, rewardValue: 1350, rewardItemKey: "" },
+  "35": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
   "36": { rewardType: 3, rewardValue: 0, rewardItemKey: "Valentine Gift" },
-  "37": { rewardType: 0, rewardValue: 600, rewardItemKey: "" },
+  "37": { rewardType: 0, rewardValue: 3200, rewardItemKey: "" },
   "38": { rewardType: 3, rewardValue: 0, rewardItemKey: "Golden Dice" },
   "39": { rewardType: 3, rewardValue: 0, rewardItemKey: "Golden Dice" },
   "40": { rewardType: 3, rewardValue: 0, rewardItemKey: "White Bunny" },
-  "41": { rewardType: 0, rewardValue: 700, rewardItemKey: "" },
+  "41": { rewardType: 0, rewardValue: 4000, rewardItemKey: "" },
   "42": { rewardType: 3, rewardValue: 0, rewardItemKey: "Golden Dice" },
   "43": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
   "44": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
@@ -114,21 +125,21 @@ export const QUEST_REWARDS: Readonly<Record<string, QuestReward>> = {
   "52": { rewardType: 3, rewardValue: 0, rewardItemKey: "Poppy" },
   "53": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
   "54": { rewardType: 1, rewardValue: 20, rewardItemKey: "" },
-  "55": { rewardType: 0, rewardValue: 35, rewardItemKey: "" },
-  "56": { rewardType: 0, rewardValue: 40, rewardItemKey: "" },
-  "57": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
-  "58": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
-  "59": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
-  "60": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
-  "61": { rewardType: 0, rewardValue: 200, rewardItemKey: "" },
-  "62": { rewardType: 0, rewardValue: 30, rewardItemKey: "" },
-  "63": { rewardType: 0, rewardValue: 35, rewardItemKey: "" },
-  "64": { rewardType: 0, rewardValue: 50, rewardItemKey: "" },
+  "55": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
+  "56": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
+  "57": { rewardType: 0, rewardValue: 3750, rewardItemKey: "" },
+  "58": { rewardType: 0, rewardValue: 3750, rewardItemKey: "" },
+  "59": { rewardType: 0, rewardValue: 3750, rewardItemKey: "" },
+  "60": { rewardType: 0, rewardValue: 3750, rewardItemKey: "" },
+  "61": { rewardType: 0, rewardValue: 3750, rewardItemKey: "" },
+  "62": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
+  "63": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
+  "64": { rewardType: 0, rewardValue: 150, rewardItemKey: "" },
   "65": { rewardType: 0, rewardValue: 75, rewardItemKey: "" },
-  "67": { rewardType: 0, rewardValue: 30, rewardItemKey: "" },
-  "68": { rewardType: 0, rewardValue: 35, rewardItemKey: "" },
-  "69": { rewardType: 0, rewardValue: 35, rewardItemKey: "" },
-  "70": { rewardType: 0, rewardValue: 10, rewardItemKey: "" },
+  "67": { rewardType: 0, rewardValue: 25, rewardItemKey: "" },
+  "68": { rewardType: 0, rewardValue: 25, rewardItemKey: "" },
+  "69": { rewardType: 0, rewardValue: 25, rewardItemKey: "" },
+  "70": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
   "71": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
   "1000": { rewardType: 5, rewardValue: 0, rewardItemKey: "ZombieActorDrZombie" },
   "1001": { rewardType: 3, rewardValue: 0, rewardItemKey: "Invasion Voucher" },

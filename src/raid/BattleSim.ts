@@ -30,7 +30,8 @@
 // the binary): maxHp = con*100 and cadence = attackCooldownMs (2s zombie / 1s enemy ÷ dex)
 // arrive on the CombatUnit; per-swing damage = finalPower(str*10) * mult, then the player
 // lineup-depth band (1.0/0.85/0.7/0.55; enemies ×1.0). See combatStats.lineupDamageBand.
-import type { BossActionChoice, BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidOutcome } from "./types";
+import type { BossActionChoice, BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidFeats, RaidOutcome } from "./types";
+import { emptyRaidFeats } from "./types";
 import { ACTIVATED_ABILITY, activatedKeyFor, teamAbilitiesIn } from "../zombie/abilities";
 import {
   ALIEN_LASER_DAMAGE,
@@ -49,6 +50,15 @@ import {
 /** Logical field the sim runs in; RaidScene scales this to the viewport. */
 export const FIELD_W = 1000;
 export const FIELD_H = 560;
+
+// The original raid stage is authored at 480x320 cocos2d points (every fightBG*_bg.png is
+// that size, and every position in Enemies.json is in those units). Recovered constants
+// are kept in SOURCE units and converted here, so a number lifted out of the disassembly
+// can be pasted in as-is.
+const SOURCE_STAGE_W = 480;
+const SOURCE_STAGE_H = 320;
+const SIM_PER_SOURCE_X = FIELD_W / SOURCE_STAGE_W;
+const SIM_PER_SOURCE_Y = FIELD_H / SOURCE_STAGE_H;
 
 export const CHARGE_X = 220; // staging slot the front zombie steps into to focus
 export const ENEMY_HOLD_X = 915; // enemies hold in the structure's doorway (not the far edge),
@@ -89,12 +99,56 @@ const ENEMY_EMERGE_GAP_MS = 450; // beat before the next enemy emerges
 const MAX_ACTIVE_ENEMIES = 1; // enemies fight one at a time (raise for a line)
 const MAX_SIM_MS = 4 * 60 * 1000; // hard safety cap (min-damage 1 avoids stalls)
 
-// Front formation: released zombies form up in up to MAX_ROWS rows, filling into
-// depth columns behind. Only the front column (at the line) reaches the enemy, so
-// at most MAX_ROWS zombies fight at once. Headless zombies take front slots.
-const MAX_ROWS = 4;
-const ROW_GAP = 46; // vertical spacing between rows
-const COL_GAP = 52; // depth spacing between columns
+// ---- Front formation (GROUND TRUTH: `-[ZombieActor calculateDestinationPoint]` 0x4c9d4)
+// The army's ORDER *is* the formation — there is no separate layout pass. A zombie's index
+// in `[fightMan zombies]` gives its depth BAND (index / 5, the same divisor the damage and
+// cadence falloffs use — see combatStats.lineupDamageBand), and its rank among that band's
+// engaged members, ordered by BODY TYPE, gives its slot inside the row. The recovered
+// formula, in the source's 480x320 points:
+//
+//   x = zombieAttackPosition.x - 55 - 35*band - standoff(body) + 5*(n - 1 - slot)
+//   y = 4*slot - 2*n + 10
+//
+// `zombieAttackPosition` defaults to (435, 20) and no shipped raid overrides it, so the
+// front row plants at x=380 with the enemy at 435. We keep `frontX` as the anchor (it is
+// derived from the raid's own hold position and engage distance) and apply the recovered
+// geometry RELATIVE to it.
+const BAND_SIZE = 5; // zombies per depth band — `index / 5`, exactly the damage band
+const SRC_BAND_GAP = 35; // each band stands this much further back
+const SRC_SLOT_X_STEP = 5; // slots inside one row fan FORWARD by this much
+const SRC_SLOT_Y_STEP = 4; // ...and step DOWN the screen by this much
+const SRC_GARDEN_SETBACK = 120; // `reorderZombies` shoves every Garden's destination back
+/** Per-body-type standoff, SUBTRACTED from x: a heavy body plants further off the enemy, a
+ *  small one steps in past the line. Bodies not listed take 0. */
+const SRC_BODY_STANDOFF: Record<string, number> = {
+  Large: 15, Garden: 15, Regular: 8, Girl: 4, Headless: -5, Small: -15,
+};
+/** Slot order inside a band, front-most first — the order the bucketed insertion in
+ *  `calculateDestinationPoint` produces (nested prefix counters, smallest bucket first).
+ *  Cupid Gardens bucket with Small, not with Garden. */
+const BODY_ROW_ORDER = ["Small", "Headless", "Girl", "Regular", "Large", "Garden"];
+const BAND_GAP = SRC_BAND_GAP * SIM_PER_SOURCE_X;
+const SLOT_X_STEP = SRC_SLOT_X_STEP * SIM_PER_SOURCE_X;
+const SLOT_Y_STEP = SRC_SLOT_Y_STEP * SIM_PER_SOURCE_Y;
+const GARDEN_SETBACK = SRC_GARDEN_SETBACK * SIM_PER_SOURCE_X;
+/** How much wider than the source the rows are drawn. The recovered 4-point row step packs
+ *  five zombies into a 16-point ribbon — correct, and the reason the source ships an
+ *  explicit per-zombie zOrder rather than sorting on y. Our sprites are drawn larger
+ *  relative to the field, so at 1.0 the army reads as one smear; this is the ONE knob in
+ *  the block that is not ground truth. Set it to 1 for the source's exact spacing. */
+const ROW_SPREAD = 2;
+/** How deep behind the line a zombie can still swing from. The source has NO such band — a
+ *  zombie attacks once it has ARRIVED at its computed destination, however deep — but this
+ *  sim's "everyone in the combat zone attacks" rule needs a number, so there is nothing to
+ *  move it to. Held at exactly the 4x52+12 it has always been: the elite-balance guardrails
+ *  sit close enough to their thresholds that even a 5% change here tips one of them, and
+ *  that would be an unrelated balance edit riding along with a formation fix. */
+const COMBAT_ZONE_DEPTH = 4 * 52 + 12;
+/** Depth one row occupies at the source's own scale: the slot fan plus the spread between
+ *  the heaviest and the lightest standoff — 90 source points, or ~187 sim units. */
+const BAND_ROW_DEPTH = (BAND_SIZE - 1) * SLOT_X_STEP
+  + (Math.max(...Object.values(SRC_BODY_STANDOFF)) - Math.min(...Object.values(SRC_BODY_STANDOFF)))
+    * SIM_PER_SOURCE_X;
 
 // Anti-one-shot safeguard (INFERRED from `-[Actor damage:]` 0x3a064). A single ENEMY hit
 // blow can't take a player zombie from above the floor straight to death or below 10% of max
@@ -155,16 +209,39 @@ const ENRAGE_DMG_MULT = 1.5; // boss melee damage grows
 // spawns a capped reinforcement and wall spawns a single standing blocker — both go
 // through spawnEnemy and join the normal queue. Damage values are all ground truth
 // (see combatStats); only the telekinesis hold below is un-recovered.
-const LASER_SPEED = 900; // straight-bolt speed (sim px/s)
+// Alien laser bolt speed. GROUND TRUTH: `AlienStageBullet init` ends with
+// `setSpeed: 3.0`, and `ZFBulletWrapper bulletTime:` integrates
+// `position += unitVector * (dt * 60 * speed)` — i.e. 180 points/second in the source's
+// 480x320 stage. This field is FIELD_W (1000) wide, so 180 * 1000/480 = 375 sim px/s.
+// (The old 900 was a guess and made the bolt effectively instant.)
+const LASER_SPEED = 3.0 * 60 * SIM_PER_SOURCE_X; // straight-bolt speed (sim px/s)
+/** The saucer's two gun ports, from `AlienStageActor createBullet`'s 50/50 roll. Source
+ *  offsets are cocos2d (y UP) points off the boss, so y is negated into the sim's
+ *  y-down space and both axes are scaled into field units. */
+const LASER_MUZZLE_A = { dx: -55 * SIM_PER_SOURCE_X, dy: -2 * SIM_PER_SOURCE_Y };
+const LASER_MUZZLE_B = { dx: 5 * SIM_PER_SOURCE_X, dy: 5 * SIM_PER_SOURCE_Y };
+/** Sprite key for the bolt, so the renderer draws the authored laser art instead of the
+ *  generic orange "no art" hazard dot every unnamed projectile falls back to. */
+export const ALIEN_LASER_SPRITE = "alienLaser";
 // Telekinesis hold. `stunSelfFor:` takes its duration from the action, which this
 // data doesn't carry, so the sim uses the same 1 s as an ordinary stun attack.
 const TELEKINESIS_STUN_MS = 1000;
 
-// ---- Knockback (Actor knockBackBy:force:) ----
-// A knockback attack interrupts the struck zombie and, in the source, calls
-// `setZombieToLastIndex` — it's sent to the BACK of the line. Here it's shoved back
-// down the lane and re-slotted last, so it must charge to the front again.
-const KNOCKBACK_PX = 150; // how far back the zombie is shoved (sim units)
+// ---- Knockback (`Actor damageIn:` 0x3777a -> `Actor knockBackBy:force:` 0x37e68) ----
+// GROUND TRUTH: `[victim knockBackBy: -(50 + arc4random() % 100) force: 5.0]`. So the shove
+// is 50-149 source points BACKWARD, randomised per hit, and it is a SLIDE at force*60
+// points/second (0.17-0.5 s of travel), not a teleport. See knockBackZombie / stepKnockBack.
+// The shove is expressed in MELEE GAPS rather than raw points, and that is deliberate.
+// Straight unit conversion (x FIELD_W/480) would be wrong here: this sim's lane is 1000
+// wide against the source's 480, but its ENGAGE distance is 60 where the source's melee gap
+// is 55 — so combat distances live at roughly 1:1 while the lane lives at 1:2. Scaling a
+// shove by the lane factor would make it nearly three melee gaps deeper than the source's.
+// Measured against the gap it is a shove away from, 50-149 points is 0.91-2.71 gaps, which
+// is the invariant that survives either scale. The slide DURATION is exact either way — the
+// scale cancels between distance and speed.
+const SRC_MELEE_GAP = 55; // zombieAttackPosition.x - front row x, from calculateDestinationPoint
+const SRC_KNOCKBACK_BASE = 50; // the shove's fixed part; the roll adds 0..99 on top
+const SRC_KNOCKBACK_FORCE = 5; // `force:` — multiplied by 60 for points/second
 
 // ---- Carried-grab hazard (Circus Trapeze Artist `grabZombie`) ----
 // GROUND TRUTH (Enemies.json Trapeze Artist + StageActor doActionsForString:): the actor
@@ -356,6 +433,11 @@ export interface SimUnit {
   abilityRearms: number; // times a revival handed this unit its one-use moves back
   resurrectUsed: boolean; // one-use automatic Resurrect latch
   stunMs: number; // ms of stun left — can't act while > 0 (enemies AND zombies)
+  /** Live knockback slide (`ActorFightData knockBackPoint` / `knockBackSpeed`). While
+   *  `knockBackMs > 0` the zombie is being shoved and is NOT in melee — it can't attack,
+   *  can't be targeted as an engaged unit, and doesn't walk. 0 = no slide. */
+  knockBackToX: number;
+  knockBackSpeed: number; // sim px/s of the slide (0 = not sliding)
   // ---- enemy attack effects inflicted on a struck zombie ----
   knockBack: boolean; // this enemy's attack shoves the zombie back down the lane
   stunInflictMs: number; // stun this enemy applies to a zombie on hit (ms)
@@ -444,6 +526,9 @@ export interface BattleSimSnapshot {
   emergeCooldown: number;
   attacksLanded: number;
   playerDamage: number;
+  /** Absent on a snapshot taken before technique attribution existed; restored as
+   *  empty, which under-reports that fight rather than corrupting it. */
+  feats?: RaidFeats;
   roundLeft: number;
   enraged: boolean;
   specialCast: number;
@@ -564,6 +649,8 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     abilityRearms: 0,
     resurrectUsed: false,
     stunMs: 0,
+    knockBackToX: 0,
+    knockBackSpeed: 0,
     knockBack: !isPlayer && !!u.knockBack,
     stunInflictMs: isPlayer ? 0 : u.stunMs ?? 0,
     attackDamageTiming: u.attackDamageTiming ?? 0.5,
@@ -579,6 +666,10 @@ export class BattleSim {
   readonly projectiles: SimProjectile[] = [];
   /** Presentation-only count; reset at the start of every fixed simulation step. */
   projectileImpactsThisTick = 0;
+  /** Presentation-only: the `sprite` of the last projectile to connect this step, so the
+   *  renderer can pick the authored impact cue (the alien bolt plays stun.wav, not the
+   *  generic splat). Cleared with the count above. */
+  lastProjectileImpactSprite = "";
   private players: SimUnit[];
   private enemies: SimUnit[];
   private boss: SimUnit | null;
@@ -590,6 +681,9 @@ export class BattleSim {
   private emergeCooldown = 0;
   private attacksLanded = 0;
   private playerDamage = 0;
+  /** Technique record for achievement quests — see RaidFeats. Part of the snapshot so
+   *  a sim restored mid-fight keeps what it has already witnessed. */
+  private feats: RaidFeats = emptyRaidFeats();
   finished = false;
   // ---- round timer + enrage ----
   private roundLeft: number;
@@ -619,6 +713,7 @@ export class BattleSim {
   private summonsLeft: number;
   private spawnSeq = 0;
   private engageDistance: number;
+  private rowXFit = 1; // fraction of the recovered in-row depth that fits inside contact
   private frontX: number;
   private supportX: number;
   /** Distinct ACTIVATED moves present in the army (fixed) — the tappable strip. */
@@ -664,6 +759,13 @@ export class BattleSim {
     this.crabTimer = crab?.spawnMs ?? Infinity;
     const enemyHoldX = this.bossFallsFromSky ? EPIC_BOSS_HOLD_X : ENEMY_HOLD_X;
     this.frontX = enemyHoldX - this.engageDistance;
+    // How much of the recovered row depth actually fits. The source's row spans ~90 of its
+    // own points and its enemies reach that far; ours reach `engageDistance`, which is less
+    // than half that, so the standoff/fan is compressed to fit inside contact. The ORDER is
+    // untouched — only the absolute gaps shrink — and this is the one place the recovered
+    // formation does not survive at the source's own scale. Raising `ENGAGE` to the
+    // source's melee gap would let it, at the cost of re-balancing every raid.
+    this.rowXFit = Math.min(1, Math.max(0, this.engageDistance - 8) / BAND_ROW_DEPTH);
     this.supportX = CHARGE_X + (this.frontX - CHARGE_X) * 0.5;
     // Boss always resolves last, after the normal enemies.
     const ordered = [...enemyUnits].sort((a, b) => Number(a.isBoss) - Number(b.isBoss));
@@ -726,6 +828,10 @@ export class BattleSim {
       emergeCooldown: this.emergeCooldown,
       attacksLanded: this.attacksLanded,
       playerDamage: this.playerDamage,
+      feats: {
+        abilityKills: this.feats.abilityKills.map((kill) => ({ ...kill })),
+        resurrections: this.feats.resurrections.map((rez) => ({ ...rez })),
+      },
       roundLeft: this.roundLeft,
       enraged: this._enraged,
       specialCast: this.specialCast,
@@ -764,6 +870,8 @@ export class BattleSim {
       // its protection. New checkpoints persist the explicit latch.
       oneShotProtectionUsed: u.oneShotProtectionUsed ?? (u.team === "player" && u.hp <= 1),
       frontPriority: u.frontPriority ?? false,
+      knockBackToX: u.knockBackToX ?? 0,
+      knockBackSpeed: u.knockBackSpeed ?? 0,
       passedWall: u.passedWall ?? false,
       mirrorsOpponentSpeed: u.mirrorsOpponentSpeed ?? false,
     })));
@@ -781,6 +889,10 @@ export class BattleSim {
     this.emergeCooldown = snapshot.emergeCooldown;
     this.attacksLanded = snapshot.attacksLanded;
     this.playerDamage = snapshot.playerDamage;
+    this.feats = {
+      abilityKills: (snapshot.feats?.abilityKills ?? []).map((kill) => ({ ...kill })),
+      resurrections: (snapshot.feats?.resurrections ?? []).map((rez) => ({ ...rez })),
+    };
     this.roundLeft = snapshot.roundLeft;
     this._enraged = snapshot.enraged;
     this.specialCast = snapshot.specialCast;
@@ -874,7 +986,7 @@ export class BattleSim {
     if (p.state !== "advance" && p.state !== "fight") return false;
     const wall = this.wallInWay(p);
     if (wall) return Math.abs(wall.x - p.x) <= WALL_MELEE_GAP + 2;
-    return p.x >= this.frontX - MAX_ROWS * COL_GAP - 12;
+    return p.x >= this.frontX - COMBAT_ZONE_DEPTH;
   }
 
   /** Whether a move has any carrier inside its DISPLAY window — the span over which
@@ -1020,12 +1132,12 @@ export class BattleSim {
       for (const e of this.enemies) {
         if (!e.alive || e.state === "queued" || e.state === "structure" || e.state === "descending") continue;
         if (e.isBoss && !ab.hitBoss && (key === "explode" || key === "explodeV2")) continue;
-        this.dealDamage(e, dmg, true);
+        this.recordAbilityKill(key, e, () => this.dealDamage(e, dmg, true));
         if (ab.stunMs) e.stunMs = Math.max(e.stunMs, ab.stunMs);
         this.playerDamage += dmg;
       }
     } else if (foe) {
-      this.dealDamage(foe, dmg, true);
+      this.recordAbilityKill(key, foe, () => this.dealDamage(foe, dmg, true));
       if (ab.stunMs) foe.stunMs = Math.max(foe.stunMs, ab.stunMs);
       this.playerDamage += dmg;
     }
@@ -1042,6 +1154,19 @@ export class BattleSim {
     if (ab.suicide) {
       p.explodeFxSeq++;
       this.dealDamage(p, p.hp, false);
+    }
+  }
+
+  /** Run `deal` and note it if it was the blow that finished `target`.
+   *
+   *  Attribution is deliberately "was alive before, dead after" rather than anything
+   *  the damage numbers imply: an area blast can land on an enemy already burning or
+   *  mid-cascade, and only the transition actually identifies the killer. */
+  private recordAbilityKill(key: string, target: SimUnit, deal: () => void): void {
+    const wasAlive = target.alive;
+    deal();
+    if (wasAlive && !target.alive) {
+      this.feats.abilityKills.push({ ability: key, boss: target.isBoss });
     }
   }
 
@@ -1148,12 +1273,54 @@ export class BattleSim {
    *  their damage to this one target (a big/slow hit knocks it back or drops it
    *  rather than chipping the entire line), so losses are more focused. Among the
     *  front column (zombies sharing the lead x) the tiebreak picks the visually
-    *  front-most unit (largest y), matching the renderer's depth order. */
+    *  front-most unit (largest y), matching the renderer's depth order.
+    *
+    *  RANGE IS ASYMMETRIC ON PURPOSE, but not unboundedly so. Zombies attack from
+    *  anywhere in the combat zone — a band COMBAT_ZONE_DEPTH deep — while an enemy strikes
+    *  only what stands within `engageDistance` of it. That is what makes the front row (and
+    *  the Headless zombies that fight for it) matter: the back rows deal damage without
+    *  taking it.
+    *
+    *  What that must NOT become is an enemy DISARMING ITSELF. A knockback attack shoves
+    *  its victim 0.9-2.7 melee gaps down the lane (see knockBackZombie) and re-slots it
+    *  last, which lands it well inside the combat zone it still attacks from but outside the
+    *  60-unit reach of the enemy that just hit it. Such an enemy could
+    *  push every zombie out of its own reach and then stand there being beaten to death,
+    *  punished for using its ability. Old McDonnell (his Lumberjack and the boss) and the
+    *  Video Games knights/monsters/boss are the units that carry knockback, and they had
+    *  no one to hit for ~13% of every fight because of it.
+    *
+    *  So a KNOCKBACK enemy with an empty melee range reaches for the front-most zombie
+    *  that is close enough to be hitting IT: whatever it shoved away, it can still answer.
+    *  With a front row present — the overwhelmingly common case — this changes nothing.
+    *
+    *  Deliberately NOT extended to every enemy. Ordinary units also lose their target for
+    *  a moment (the line refilling after a kill, a zombie carried off by the Circus
+    *  trapeze), but those gaps are brief, not self-inflicted, and already priced into
+    *  every raid's balance — a recorded Circus victory in the server's fixtures flips to
+    *  a defeat if this reach is handed out generally. The bug is an enemy undoing its own
+    *  attack, so only that enemy gets the answer to it. */
   private playerInRange(e: SimUnit): SimUnit | null {
+    // A zombie mid-shove is not a melee target: `-[ZombieActor isInMeleeRange]` returns
+    // false for the whole time `knockBackPoint` is live, and every melee set the fight
+    // manager builds is filtered through it. Without this the shove is a pure penalty —
+    // the victim cannot act, but is still stood inside the reach of the thing that hit it.
+    const inMelee = this.frontMostPlayer(
+      (p) => p.knockBackSpeed <= 0 && Math.abs(p.x - e.x) <= this.engageDistance
+    );
+    if (inMelee || !e.knockBack) return inMelee;
+    // Reach-of-last-resort: a zombie in attack position, with no wall standing between
+    // the two of them (that fight is the wall's, not this enemy's).
+    return this.frontMostPlayer((p) => this.inAttackPosition(p) && !this.wallInWay(p));
+  }
+
+  /** The front-most living, on-lane player satisfying `pick` (null if none). Ties on x
+   *  break to the visually front-most (largest y), matching the renderer's depth order. */
+  private frontMostPlayer(pick: (p: SimUnit) => boolean): SimUnit | null {
     let best: SimUnit | null = null;
     for (const p of this.players) {
       if (!p.alive || p.state === "grabbed") continue; // seized zombies are off the lane
-      if (Math.abs(p.x - e.x) > this.engageDistance) continue; // out of melee lane range
+      if (!pick(p)) continue;
       if (
         !best ||
         p.x > best.x + 0.5 || // more forward (nearer the enemy) wins
@@ -1177,6 +1344,31 @@ export class BattleSim {
     );
     if (!deployed.length) return null;
     return deployed.reduce((a, b) => (b.x < a.x ? b : a));
+  }
+
+  /** Whom the ALIEN LASER aims at — and it is NOT whom a throw aims at.
+   *
+   *  GROUND TRUTH (`ZFFightMan shootBullet:from:` 0x5ea74): the saucer builds a fresh
+   *  candidate array of zombies that are `isInMeleeRange` — which `-[ZombieActor
+   *  isInMeleeRange]` resolves to `actorIsFighting` (state 11/12/13), plus a zombie
+   *  parked at its destination in one of the listed states — OR are in state 10 / 31 /
+   *  32 (the two states `damageIn:` also exempts from the lineup-depth penalty, i.e.
+   *  mid special attack). It then picks ONE AT RANDOM:
+   *      idx = (arc4random() % 100) / 100.0 * count
+   *  and fires at that zombie's position. Empty candidate list -> no bullet at all.
+   *
+   *  So the laser is a FRONT-LINE weapon: it burns whoever is toe-to-toe with the wave,
+   *  never the Garden healers massed back at the support line. That is the opposite of
+   *  the boss THROW (see throwTarget), which is a lob aimed over the tanks — and using
+   *  throwTarget() here was the bug that had every alien bolt land on the healers.
+   *
+   *  `state === "fight"` is this sim's `actorIsFighting`: a zombie in the combat band
+   *  with an arrived foe. Healers hold at supportX, well short of the band, so they stay
+   *  in "advance" and are correctly off the target list. */
+  private laserTarget(): SimUnit | null {
+    const engaged = this.players.filter((p) => p.alive && !p.taken && p.state === "fight");
+    if (!engaged.length) return null;
+    return engaged[Math.floor(hash(this.actionCount * 13 + 7) * engaged.length) % engaged.length];
   }
 
   /** The velocity a throw leads a target by: its MEASURED velocity (how it actually
@@ -1277,23 +1469,94 @@ export class BattleSim {
     u.struckThisTick = true;
     this.attacksLanded++;
     if (u.team === "enemy" && foe.alive && foe.team === "player") {
-      // Enemy attack effects on the struck zombie.
-      if (u.stunInflictMs > 0) foe.stunMs = Math.max(foe.stunMs, u.stunInflictMs);
-      if (u.knockBack) this.knockBackZombie(foe);
+      // Enemy attack effects on the struck zombie — BOTH of which `-[Actor damageIn:]`
+      // (0x37738) refuses while the victim's `fightData.canInterrupt` is NO. See
+      // `uninterruptible`: only the bash and explode families ever set it.
+      if (!this.uninterruptible(foe)) {
+        if (u.stunInflictMs > 0) foe.stunMs = Math.max(foe.stunMs, u.stunInflictMs);
+        if (u.knockBack) this.knockBackZombie(foe);
+      }
     }
   }
 
-  /** Knock a zombie back: interrupt its attack/wind-up, shove it down the lane, and
-   *  send it to the BACK of the formation (source `setZombieToLastIndex`), so it has
-   *  to advance to the front again. */
+  /** Is this zombie mid-swing on a move that cannot be interrupted?
+   *
+   *  GROUND TRUTH: `-[Actor fightAttack:]` (0x36d28) reads `cantInterrupt` off the attack
+   *  variation rolled for the swing and sets `fightData.canInterrupt = !cantInterrupt`;
+   *  `-[Actor doneAttacking:]` (0x37cd8) restores YES when the swing ends. `damageIn:` then
+   *  refuses both the stun and the knockback while it is NO.
+   *
+   *  Attacks.json carries `cantInterrupt` on EXACTLY four attacks — ZombieBash, ZombieBashV2,
+   *  ZombieExplode, ZombieExplodeV2 — which are precisely this sim's wind-up moves. So it is
+   *  super armour on the activated big hits and nothing else: pay for a Smash or light a
+   *  fuse and no enemy shoves you out of it. (It is also why the depth-damage penalty exempts
+   *  states 31/32 — the same two moves; see COMBAT_STATS_RECOVERED.md.) */
+  private uninterruptible(p: SimUnit): boolean {
+    return !!p.windupKey && !!ACTIVATED_ABILITY[p.windupKey]?.cantInterrupt;
+  }
+
+  /** Knock a zombie back. GROUND TRUTH — `-[Actor damageIn:]` 0x3777a rolls the shove and
+   *  `-[Actor knockBackBy:force:]` 0x37e68 applies it:
+   *
+   *      [victim knockBackBy: -(50 + arc4random() % 100) force: 5.0]
+   *
+   *  `knockBackBy:force:` then, for a ZombieActor only:
+   *    * `setZombieToLastIndex` — pull it out of the army array and re-insert it just
+   *      BEFORE the first zombie still in the back group, i.e. at the tail of the DEPLOYED
+   *      block. Not the tail of the roster: it stays ahead of everyone yet to deploy.
+   *    * unschedule `damageIn:` / `fightAttack:` / `attackSFXIn:` — the swing in flight is
+   *      cancelled outright, it does not resume on landing.
+   *    * nudge x by -1 and set state 10 if it was in melee, breaking the position ==
+   *      destination equality `isInMeleeRange` tests.
+   *    * `reorderZombies`, and (ZombieActor override) recompute `destinationPoint` from the
+   *      NEW index — which is why the shove costs depth: a deeper band means a slot further
+   *      back to walk to, softer hits and a slower swing.
+   *
+   *  The shove itself is a SLIDE, not a teleport: `knockBackPoint` is parked at
+   *  `(x + distance, y)` and `-[Actor movementUpdate:]` moves the zombie toward it at
+   *  `force * 60` px/s, clearing the point on arrival (see stepKnockBack). */
   private knockBackZombie(p: SimUnit) {
+    // `damageIn:` gates BOTH the stun and the shove on `[fightData canInterrupt]` (0x37738)
+    // and on `!invincible`. What writes `canInterrupt` was not pinned in this pass, so only
+    // the narrowest reading is applied: a zombie already mid-shove is not shoved again.
+    // Without it a fast knockback attacker re-parks the point every hit and its victim
+    // never lands — which is a compounding buff the source's gate plainly exists to stop.
+    if (p.knockBackSpeed > 0) return;
     p.windupKey = null;
     p.windupMs = 0;
-    p.x = Math.max(CHARGE_X, p.x - KNOCKBACK_PX);
-    p.formOrder = this.releaseSeq++; // last in the formation → back column
+    // Replay-safe stand-in for `arc4random() % 100`: the victim's id and the current tick
+    // are both part of the deterministic transcript, so client and verifier roll alike.
+    const roll = Math.floor(hash(stringSeed(p.id) + this.elapsed * 0.37) * 100) % 100;
+    const gapsPerSourcePoint = this.engageDistance / SRC_MELEE_GAP;
+    const dist = (SRC_KNOCKBACK_BASE + roll) * gapsPerSourcePoint;
+    // The source lets a zombie be shoved anywhere; we floor it at the staging slot so it
+    // cannot be driven back into the milling crowd it was released from. `min(p.x, …)`
+    // keeps that floor from turning the shove into a shove FORWARD for a zombie that is
+    // somehow already behind the slot.
+    p.knockBackToX = Math.min(p.x, Math.max(CHARGE_X, p.x - dist));
+    p.knockBackSpeed = SRC_KNOCKBACK_FORCE * 60 * gapsPerSourcePoint;
+    p.formOrder = this.releaseSeq++; // tail of the deployed block → deeper band
     p.frontPriority = false;
     p.state = "advance";
     p.timerMs = this.cycleMs(p, null);
+  }
+
+  /** Advance a live knockback slide. Returns true while the zombie is still being shoved,
+   *  in which case it neither walks nor fights this step (source: `movementUpdate:` returns
+   *  early, and a non-zero `knockBackPoint` makes `isInMeleeRange` false). */
+  private stepKnockBack(p: SimUnit, dtMs: number): boolean {
+    if (p.knockBackSpeed <= 0) return false;
+    const step = (p.knockBackSpeed * dtMs) / 1000;
+    const dx = p.knockBackToX - p.x;
+    if (Math.abs(dx) <= step) {
+      p.x = p.knockBackToX;
+      p.knockBackSpeed = 0;
+    } else {
+      p.x += Math.sign(dx) * step;
+    }
+    p.state = "advance";
+    p.timerMs = this.cycleMs(p, null);
+    return true;
   }
 
   private dealDamage(foe: SimUnit, dmg: number, fromPlayer: boolean) {
@@ -1341,6 +1604,12 @@ export class BattleSim {
     // that from being free: it sends the unit to the back of the queue those moves are
     // picked from (see activate), so a second Explode spends a zombie that still has
     // one rather than killing the same one twice while its squadmates stand there.
+    // Read BEFORE the list is cleared: a zombie that spent Explode and is standing here
+    // as a casualty is, by definition, the one that blew itself up. That combination —
+    // a Garden holder pulling a Small zombie back out of its own blast — is the
+    // "Recycled" achievement, and this is the only moment it is observable.
+    const exploded = defeated.usedAbilities.some((k) => k === "explode" || k === "explodeV2");
+    this.feats.resurrections.push({ exploded });
     if (defeated.usedAbilities.length) {
       defeated.usedAbilities.length = 0;
       defeated.abilityRearms++;
@@ -1484,43 +1753,102 @@ export class BattleSim {
     }
   }
 
-  /** Assign formation slots back-to-front within each depth column. The first
-   *  combat-priority unit occupies the visually front-most (largest-y) row, and the
-   *  enemy uses that same ordering when choosing a target. Garden healers hold at
-   *  SUPPORT_X while any non-healer remains to maintain the frontline. */
+  /** Which row bucket a zombie falls in — `calculateDestinationPoint` dispatches on the
+   *  concrete ZombieActor subclass, and a Cupid Garden buckets with Small, not Garden. */
+  private bodyOf(p: SimUnit): string {
+    if (/Cupid/i.test(p.sourceKey)) return "Small";
+    if (p.isHeadless) return "Headless";
+    if (p.isGarden) return "Garden";
+    const g = p.group ?? "";
+    if (BODY_ROW_ORDER.includes(g)) return g;
+    if (this.isSmall(p)) return "Small";
+    return "Regular";
+  }
+
+  /** Build the ordered army — the reimpl's stand-in for `[fightMan zombies]`, which is the
+   *  single source of truth for depth band, damage band, deploy order and draw order.
+   *
+   *  Order is deployment order (`formOrder`), then the two mutations `reorderZombies`
+   *  (0x5b554) makes every time it runs:
+   *
+   *   1. HEADLESS PROMOTION — only if NONE of the front five is an engaged Headless does it
+   *      take the LAST engaged Headless anywhere in the array and `insertObject:atIndex:0`.
+   *      It is a repair, not a standing sort: a Headless that is already up front stays
+   *      wherever it is, and a second one is never pulled forward.
+   *   2. GARDEN PUSH-BACK — `setZombieToLastIndex` on every deployed Garden, which lands
+   *      them at the end of the DEPLOYED block (that call inserts before the first zombie
+   *      still in the back group), in their existing relative order. */
+  private armyOrder(): SimUnit[] {
+    const committed = this.players
+      .filter((p) => p.alive && (p.state === "advance" || p.state === "fight"))
+      .sort((a, b) => a.formOrder - b.formOrder);
+
+    const gardens = committed.filter((p) => p.isGarden);
+    const rest = committed.filter((p) => !p.isGarden);
+    const order = gardens.length && rest.length ? [...rest, ...gardens] : committed;
+
+    const engagedHeadless = (p: SimUnit) => p.isHeadless && p.state === "fight";
+    if (!order.slice(0, BAND_SIZE).some(engagedHeadless)) {
+      let last = -1;
+      for (let i = 0; i < order.length; i++) if (engagedHeadless(order[i])) last = i;
+      if (last >= 0) {
+        // The source does `insertObject:atIndex:0` on the real array, so the promotion
+        // STICKS. Write it into formOrder rather than only into this frame's copy —
+        // re-deriving it every tick would satisfy the front-five test on the next frame,
+        // drop the zombie back, and leave it oscillating between two slots forever.
+        order[last].formOrder = Math.min(...order.map((p) => p.formOrder)) - 1;
+        order.unshift(...order.splice(last, 1));
+      }
+    }
+    return order;
+  }
+
+  /** Place the army. Band = index / 5; the slot inside a band is the zombie's rank among
+   *  that band's members ordered by body type (BODY_ROW_ORDER), and both the x fan and the
+   *  y step come from `calculateDestinationPoint`. */
   private assignFormation() {
-    const committed = this.players.filter(
-      (p) => p.alive && (p.state === "advance" || p.state === "fight")
-    );
-    const front = committed.filter((p) => !this.isHealer(p));
-    const support = committed.filter((p) => this.isHealer(p));
-    const frontline = front.length ? front : committed;
-    const rear = front.length ? support : [];
+    const order = this.armyOrder();
 
-    frontline.sort(
-      (a, b) => Number(b.frontPriority) - Number(a.frontPriority) || a.formOrder - b.formOrder
-    );
-    rear.sort((a, b) => a.formOrder - b.formOrder);
-
-    // Lineup index = front-to-back rank across the committed army (front-most = 0), driving
-    // the depth-damage band. Mirrors `[fightMan zombies] indexOfObject:` — knockback bumps a
-    // zombie's formOrder to the back (setZombieToLastIndex), so it re-sorts to a deeper band.
-    [...frontline, ...rear].forEach((p, i) => {
+    // Lineup index = index in the army array. It drives the damage and cadence falloff
+    // bands (combatStats), and now the formation reads from the SAME index, so the visible
+    // rank and the band a zombie is punished for finally agree.
+    order.forEach((p, i) => {
       p.lineupIndex = i;
     });
 
-    const place = (units: SimUnit[], baseX: number) => {
-      const rowsUsed = Math.min(MAX_ROWS, units.length);
-      units.forEach((p, i) => {
-        const col = Math.floor(i / MAX_ROWS);
-        const rowInCol = i % MAX_ROWS;
-        const frontToBackRow = rowsUsed - 1 - rowInCol;
-        p.slotX = baseX - col * COL_GAP;
-        p.slotY = CENTER_Y + (frontToBackRow - (rowsUsed - 1) / 2) * ROW_GAP;
+    for (let start = 0; start < order.length; start += BAND_SIZE) {
+      const band = start / BAND_SIZE;
+      const members = order.slice(start, start + BAND_SIZE);
+      // Row order inside the band: small bodies to the front, healers to the back.
+      const row = members.slice().sort((a, b) => {
+        const d = BODY_ROW_ORDER.indexOf(this.bodyOf(a)) - BODY_ROW_ORDER.indexOf(this.bodyOf(b));
+        return d || a.formOrder - b.formOrder;
       });
-    };
-    place(frontline, this.frontX);
-    place(rear, this.supportX);
+      const n = row.length;
+      // Source x is absolute off `zombieAttackPosition`; ours hangs off `frontX`, which is
+      // derived from the raid's own hold position. Normalising on the row's front-most
+      // member keeps band 0's leading slot exactly ON the old line, so the recovered
+      // standoff/fan only ever adds depth BEHIND it and never pushes the whole army out of
+      // contact.
+      const rel = (p: SimUnit, slot: number) =>
+        -(SRC_BODY_STANDOFF[this.bodyOf(p)] ?? 0) * SIM_PER_SOURCE_X + (n - 1 - slot) * SLOT_X_STEP;
+      const relMax = Math.max(...row.map(rel));
+      row.forEach((p, slot) => {
+        p.slotX = this.frontX
+          - band * BAND_GAP
+          - (relMax - rel(p, slot)) * this.rowXFit
+          - (p.isGarden ? GARDEN_SETBACK : 0);
+        // Source: y = 4*slot - 2*n + 10, whose midpoint is y=8 for ANY n. Two adjustments:
+        // we hang the row off the lane centre instead of the stage's y origin (so the +10
+        // becomes +2 — the formula minus its own fixed centre — and the block stays centred
+        // as the row fills), and the sign FLIPS because cocos2d y grows upward while this
+        // sim's grows downward. Slot 0 therefore takes the largest y, i.e. nearest the
+        // camera and drawn in front, which is what the source's explicit zOrder does too.
+        // ROW_SPREAD widens the whole step for legibility; see its note.
+        p.slotY = CENTER_Y
+          - (SLOT_Y_STEP * slot - (SLOT_Y_STEP / 2) * n + 2 * SIM_PER_SOURCE_Y) * ROW_SPREAD;
+      });
+    }
   }
 
   /** Advance the sim by `dtMs`. Returns false once the battle is over. */
@@ -1528,6 +1856,7 @@ export class BattleSim {
     if (this.finished) return false;
     this.elapsed += dtMs;
     this.projectileImpactsThisTick = 0;
+    this.lastProjectileImpactSprite = "";
     for (const u of this.units) {
       u.struckThisTick = false;
       u.prevX = u.x; // snapshot for this step's velocity measurement (see below)
@@ -1604,6 +1933,12 @@ export class BattleSim {
           break;
         }
         default: {
+          // Being shoved: the slide owns the zombie's position, and it is out of melee for
+          // the duration (`movementUpdate:` returns before the walk, and a live
+          // knockBackPoint makes `isInMeleeRange` false). Checked BEFORE the stun so a
+          // knockback attack that also stuns still travels — the source parks the point on
+          // fightData and slides it regardless of what else the hit applied.
+          if (this.stepKnockBack(p, dtMs)) break;
           // Stunned by an enemy hit — can't move or attack until it wears off.
           if (p.stunMs > 0) {
             p.stunMs -= dtMs;
@@ -1634,7 +1969,7 @@ export class BattleSim {
           // range (the front), so front-row / headless zombies take the hits.
           const foe = this.targetEnemy(p);
           const enemyArrived = !!foe && (foe.state === "hold" || foe.state === "fight");
-          const inCombatZone = p.x >= frontX - MAX_ROWS * COL_GAP - 12;
+          const inCombatZone = p.x >= frontX - COMBAT_ZONE_DEPTH;
           const atSlot = Math.hypot(destinationX - p.x, p.slotY - p.y) <= 2;
           // Knockback and carry/drop effects send a Headless zombie to the rear long
           // enough for another row to fill the open front slot. Once it reaches that
@@ -1902,6 +2237,13 @@ export class BattleSim {
     if (action.special.name === "summonBoss") {
       return !!this.summonTemplate && this.summonsLeft > 0;
     }
+    if (action.special.name === "alienLaser") {
+      // `ZFFightMan allowedToShootBullet` walks `zombies` and refuses the shot unless at
+      // least one is ENGAGED (`isInMeleeRange`, or one of the special-attack states). With
+      // the lane empty of fighters the saucer holds its fire — it never snipes the crowd
+      // still walking up. See laserTarget().
+      return !!this.laserTarget();
+    }
     return true;
   }
 
@@ -1934,9 +2276,17 @@ export class BattleSim {
       case "alienLaser": {
         // Flat 200 per bolt — a hard constant in the source, not a stat-derived value
         // (`AlienStageBullet collidedWith:` passes the immediate 200.0f to `damage:`).
-        const target = this.throwTarget();
+        // The saucer has TWO guns and picks between them 50/50 every shot
+        // (`AlienStageActor createBullet`: a `(arc4random()%100)/100 < 0.5` roll chooses
+        // (-55,+2) or (+5,-5) off the boss, in the source's 480x320 stage points).
+        const target = this.laserTarget();
         if (target) {
-          this.launchProjectile(target, sp.damage || ALIEN_LASER_DAMAGE, "", 20, { straight: true });
+          const muzzle = hash(this.actionCount * 11 + 3) < 0.5 ? LASER_MUZZLE_A : LASER_MUZZLE_B;
+          this.launchProjectile(target, sp.damage || ALIEN_LASER_DAMAGE, ALIEN_LASER_SPRITE, 20, {
+            straight: true,
+            originDx: muzzle.dx,
+            originDy: muzzle.dy,
+          });
         }
         break;
       }
@@ -2373,17 +2723,22 @@ export class BattleSim {
     damage: number,
     sprite: string,
     spriteSize: number,
-    opts: { straight?: boolean } = {}
+    opts: { straight?: boolean; originDx?: number; originDy?: number } = {}
   ) {
-    const x0 = BOSS_STRUCT_X;
-    const y0 = BOSS_STRUCT_Y;
+    const x0 = BOSS_STRUCT_X + (opts.originDx ?? 0);
+    const y0 = BOSS_STRUCT_Y + (opts.originDy ?? 0);
     const grav = opts.straight ? 0 : GRAVITY;
     // Flight time: a straight bolt is range/speed; a ballistic lob scales with range.
     const T = opts.straight
       ? (Math.hypot(target.x - x0, target.y - y0) || 1) / LASER_SPEED
       : clamp(Math.abs(target.x - x0) / 520 + 0.7, 0.85, 1.7);
-    // Aim where the target will be after T, using its speed-capped lead velocity.
-    const { vx: lvx, vy: lvy } = this.leadVelocity(target);
+    // Aim where the target will be after T, using its speed-capped lead velocity — a
+    // LOB only. A straight bolt is fired at wherever the target stood when the trigger
+    // was pulled: `shootBullet:from:` reads `[target position]` once and hands the raw
+    // point to `shootBulletAt:from:`, which just normalizes the difference. No lead.
+    const { vx: lvx, vy: lvy } = opts.straight
+      ? { vx: 0, vy: 0 }
+      : this.leadVelocity(target);
     const tx = target.x + lvx * T;
     const ty = target.y + lvy * T;
     let vx: number;
@@ -2437,6 +2792,7 @@ export class BattleSim {
           this.dealEnemyDamage(p, pr.damage);
           p.struckThisTick = true;
           this.projectileImpactsThisTick++;
+          this.lastProjectileImpactSprite = pr.sprite;
           pr.done = true;
           break;
         }
@@ -2444,6 +2800,9 @@ export class BattleSim {
       if (pr.done) continue;
       // A ballistic throw fizzles (misses) once it reaches the ground.
       if (pr.y >= GROUND_Y) pr.done = true;
+      // A GRAVITY-FREE bolt (the alien laser) never comes down, so the ground test can
+      // never retire one that missed. Fizzle it at the lane edges instead.
+      else if (pr.gravity === 0 && (pr.x < -80 || pr.x > FIELD_W + 80)) pr.done = true;
     }
     // Compact in place (keep the readonly array reference stable).
     let w = 0;
@@ -2478,6 +2837,10 @@ export class BattleSim {
       enemiesBeaten: this.enemies.filter((e) => !e.alive).length,
       playerDamage: this.playerDamage,
       escaped: this.escaped,
+      feats: {
+        abilityKills: this.feats.abilityKills.map((kill) => ({ ...kill })),
+        resurrections: this.feats.resurrections.map((rez) => ({ ...rez })),
+      },
     };
   }
 }

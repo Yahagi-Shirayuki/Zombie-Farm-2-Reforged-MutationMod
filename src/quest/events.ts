@@ -17,6 +17,18 @@ export const QuestEvent = {
   // Raid / social / epic — no emitters yet (quests using these stay dormant):
   InvasionSuccessful: "kInvasionSuccessfulNotification",
   InvasionPerfectGame: "kInvasionPerfectGameNotification",
+  // Elite invasions (the Brain Ticket ladder). Subject is the raid name, exactly as
+  // the two above, so an elite quest can be written for one raid or for any.
+  EliteInvasionSuccessful: "kEliteInvasionSuccessfulNotification",
+  ElitePerfectGame: "kElitePerfectGameNotification",
+  // Combat TECHNIQUE, derived from the fight's RaidFeats (see raid/types). Subject is
+  // the ability's display name ("Explosion", "Smash"), so one event covers every
+  // "defeat X with Y" quest instead of needing an id per ability.
+  EnemyDefeatedByAbility: "kEnemyDefeatedByAbilityNotification",
+  BossDefeatedByAbility: "kBossDefeatedByAbilityNotification",
+  /** A zombie brought back mid-invasion. Aliased to "Exploded Mini" when the revived
+   *  unit was the one that had just blown itself up. */
+  ZombieResurrected: "kZombieResurrectedNotification",
   EpicStageEnemyDefeated: "kEpicStageEnemyDefeatedNotification",
   EpicBossEpicItemWon: "kEpicBossEpicItemWonNotification",
   LootItemWon: "kLootItemWonNotification",

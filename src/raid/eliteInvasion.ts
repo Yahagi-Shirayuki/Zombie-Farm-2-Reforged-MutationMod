@@ -24,26 +24,37 @@
 // fitted:
 //
 //   raid                 normal   elite      the rung it was fitted to
-//   Old McDonnell's        0.10    0.40      Pirates, normally
-//   Summer Break           0.11    0.52      between Pirates and Robots
-//   Tree World             0.10    0.52      between Pirates and Robots
-//   Valentine's Day        0.10    0.52      between Pirates and Robots
+//   Old McDonnell's        0.10    0.54      not a p* target — see below
+//   Summer Break           0.11    0.54      between Pirates and Robots
+//   Tree World             0.10    0.55      between Pirates and Robots
+//   Valentine's Day        0.10    0.56      between Pirates and Robots
 //   Circus                 0.10    0.65      Robots, normally
 //   Lawyers                0.29    0.69      Robots, normally
 //   Pirates                0.39    1.59      Video Games, normally
 //   Ninjas                 0.76    1.71      Video Games, normally
 //   Robots                 0.75    1.93   \
 //   Aliens                 0.81    1.89    >  one shared top tier
-//   Video Games            1.59    1.93   /
+//   Video Games            2.11    2.48   /
 //
 // The top tier is why the three hardest invasions take wildly different multipliers: the
 // Video Games are already almost there (x1.2 on their stats), so the Robots and the
-// Aliens climb to meet them (x2.5 and x3.7).
+// Aliens climb to meet them (x2.5 and x3.7). It is a BAND rather than a point: the Video
+// Games sit at the top of it because their own baseline is the highest on the ladder —
+// they field three knockback units, so BattleSim's reach-of-last-resort fix lifted their
+// NORMAL difficulty from 2.11 where it had been 1.59 — and there is no headroom above.
+//
+// OLD McDONNELL'S IS NOT FITTED TO A p* TARGET, and that is the one place this metric
+// let the tuning down. It was fitted to the Pirates (p* 0.40) and measured there — but p*
+// only asks "can you win", and against a wave that feeble the answer stayed yes whatever
+// the profile did, so the fitted numbers produced a fight that played like the tutorial
+// with a bigger boss. Playtested and rejected as far too soft. It is now specified in HIT
+// POINTS instead — the ordinary Pirates' bulk, 40,000 across the wave with a 12,000 boss
+// — and p* 0.54 is simply where that lands. See its table entry.
 //
 // THE CEILING IS REAL, and it is why the top tier sits where it does rather than higher.
-// A measuring-stick army stops winning the Video Games somewhere around 1.4x their
-// normal difficulty, and 20 zombies barely beat 16 (only the front of the formation
-// engages), so army SIZE is not the answer either. Elite has to fit under that.
+// A measuring-stick army stops winning the Video Games not far above their elite figure,
+// and 20 zombies barely beat 16 (only the front of the formation engages), so army SIZE
+// is not the answer either. Elite has to fit under that.
 //
 // SHAPE, not just size. Each raid spends its budget on the mechanic it is known for, so
 // an elite run feels like more of THAT invasion rather than uniform stat inflation.
@@ -68,6 +79,12 @@ export interface EliteProfile {
    *  what makes a fight LONG, and a fight that outlives the four-minute replay cap
    *  (RAID_MAX_TICKS) cannot settle at all. */
   con: number;
+  /** The BOSS's `con`, when it should not scale with the rest of the wave. Absent means
+   *  "same as `con`". A separate lever because minions and bosses carry very different
+   *  shares of a wave's hit points, so one multiplier cannot place both: Old McDonnell's
+   *  boss is 38% of his wave, the Aliens' is 17%, and asking for "a 40,000 wave with a
+   *  12,000 boss" is simply not expressible with a single number. */
+  bossCon?: number;
   /** Enemy `dex` — attack cadence (interval = 1 / dex seconds). Held to modest values
    *  everywhere: past roughly 1.6x, enemies stop reading as enemies and start reading
    *  as a strobe. */
@@ -97,11 +114,26 @@ export const DEFAULT_ELITE_PROFILE: EliteProfile = {
 };
 
 export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
-  // 1 — Old McDonnell's Farm. Still the tutorial invasion, and it has no signature
-  // mechanic to lean on, so it does exactly what the farmhands would do if they were
-  // any good: everything, harder. The biggest multipliers in the table, because the
-  // wave it scales is the weakest by an order of magnitude.
-  1: { str: 2.9, con: 2.9, dex: 1.6, throwDamage: 2.9, throwRate: 1.5, wallHp: 1, specialDamage: 2.9 },
+  // 1 — Old McDonnell's Farm. No signature mechanic to lean on, so it does what the
+  // farmhands would do if they were any good: everything, harder.
+  //
+  // The con multipliers are the largest in the table BY A MILE, and they are not typos.
+  // His wave is the feeblest in the game — 5,200 hit points total, against 34,500 for the
+  // Pirates and 132,000 for the Video Games — so a merely-proportionate lift still left
+  // every farmhand dying to a single volley and the boss on 5,800 hit points. Playtest
+  // verdict on that version: not tanky enough, by a lot.
+  //
+  // The target is a 40,000 wave with a 12,000 boss — near enough the ORDINARY Pirates
+  // (34,500 / 12,000), which is the rung this raid was aimed at all along. Minions and
+  // boss need different multipliers to land it (see `bossCon`): x8.75 takes the ten
+  // farmhands and lumberjacks from 3,200 to 28,000, and x6 takes the boss from 2,000 to
+  // 12,000.
+  //
+  // Everything ELSE stayed where it was, and that restraint is load-bearing. Lengthening
+  // a fight already multiplies the damage taken; raising str on top of it (x4 was tried)
+  // turned an unmutated 16-strong roster's casualties into a total wipe. The ask was
+  // tankier, so tankiness is the only thing that moved.
+  1: { str: 2.9, con: 8.75, bossCon: 6, dex: 1.6, throwDamage: 2.9, throwRate: 1.5, wallHp: 1, specialDamage: 2.9 },
 
   // 2 — Zombies vs Lawyers. The Corporate boss is the ladder's speed threat: fast
   // punches and the Double Punch stun. So this is the one profile that spends most of
@@ -112,7 +144,14 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
   // attack speed, so speed is explicitly NOT their lever: dex stays at 1.0 and the whole
   // budget goes into raw power. An elite pirate one-shots almost anything it reaches;
   // the counterplay is the same as it always was — do not bring a fast army.
-  3: { str: 5.3, con: 2.85, dex: 1, throwDamage: 4.3, throwRate: 1, wallHp: 1, specialDamage: 4 },
+  //
+  // v23 RE-FIT (x1.3 on every multiplier's distance from 1.0, shape untouched). Faithful
+  // knockback moved the ladder's TOP rung — the ordinary Video Games invasion — from a
+  // measured 1.99 to 2.38, and these three are the profiles the guardrails measure against
+  // it: Pirates-elite has to sit near an ordinary Video Games, and Robots/Aliens-elite have
+  // to share a band with Video Games-elite. Nothing about their character changed; they
+  // moved because the thing they are pinned to did.
+  3: { str: 6.59, con: 3.41, dex: 1, throwDamage: 5.29, throwRate: 1, wallHp: 1, specialDamage: 4.9 },
 
   // 4 — Zombies vs Ninjas. Their mechanic is the carrot WALL, so the wall gets tougher
   // (more taps, and more of the army's damage spent on it) — but only to 1.5x, see
@@ -122,12 +161,26 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
   // 5 — Zombies vs Robots. One of each bot, a random one leading, each with its own
   // special (junk wall, telekinesis). Bots are already the tankiest wave in the game, so
   // con is held back and the budget goes into their specials and their punch.
-  5: { str: 2.5, con: 1.85, dex: 1.4, throwDamage: 2.3, throwRate: 1.4, wallHp: 1.5, specialDamage: 2.9 },
+  //
+  // v23 RE-FIT (x1.3 on every multiplier's distance from 1.0, shape untouched). Faithful
+  // knockback moved the ladder's TOP rung — the ordinary Video Games invasion — from a
+  // measured 1.99 to 2.38, and these three are the profiles the guardrails measure against
+  // it: Pirates-elite has to sit near an ordinary Video Games, and Robots/Aliens-elite have
+  // to share a band with Video Games-elite. Nothing about their character changed; they
+  // moved because the thing they are pinned to did.
+  5: { str: 2.95, con: 2.11, dex: 1.52, throwDamage: 2.69, throwRate: 1.52, wallHp: 1.65, specialDamage: 3.47 },
 
   // 6 — Zombies vs Aliens. Twenty minions, a summoning boss and the laser. Their normal
   // fight is already the longest on the ladder (over two minutes), so con barely moves —
   // an elite alien wave is not a longer grind, it is a far more dangerous one.
-  6: { str: 3.7, con: 1.45, dex: 1.6, throwDamage: 2.75, throwRate: 1.5, wallHp: 1, specialDamage: 4 },
+  //
+  // v23 RE-FIT (x1.3 on every multiplier's distance from 1.0, shape untouched). Faithful
+  // knockback moved the ladder's TOP rung — the ordinary Video Games invasion — from a
+  // measured 1.99 to 2.38, and these three are the profiles the guardrails measure against
+  // it: Pirates-elite has to sit near an ordinary Video Games, and Robots/Aliens-elite have
+  // to share a band with Video Games-elite. Nothing about their character changed; they
+  // moved because the thing they are pinned to did.
+  6: { str: 4.51, con: 1.59, dex: 1.78, throwDamage: 3.28, throwRate: 1.65, wallHp: 1, specialDamage: 4.9 },
 
   // 7 — Summer Break. No signature boss mechanic (the crab is a client-side hazard and
   // is deliberately left alone — see below), so it scales broadly, with heavier beach
@@ -162,13 +215,18 @@ export function eliteProfile(raidId: number, elite: boolean): EliteProfile | nul
 }
 
 /** Scale one enemy's stat template. Only str/con/dex move — attack lists, boss actions
- *  and the loot flags are the raid's own data and stay untouched. */
-export function eliteEnemyStat(stat: EnemyStat, profile: EliteProfile | null): EnemyStat {
+ *  and the loot flags are the raid's own data and stay untouched. `isBoss` selects
+ *  `bossCon` over `con` where a profile sets one. */
+export function eliteEnemyStat(
+  stat: EnemyStat,
+  profile: EliteProfile | null,
+  isBoss = false
+): EnemyStat {
   if (!profile) return stat;
   return {
     ...stat,
     str: (stat.str ?? 1) * profile.str,
-    con: (stat.con ?? 1) * profile.con,
+    con: (stat.con ?? 1) * ((isBoss ? profile.bossCon : undefined) ?? profile.con),
     dex: (stat.dex ?? 1) * profile.dex,
   };
 }

@@ -1,5 +1,7 @@
 /** Wire contract for the authoritative gameplay protocol. Keep this module free of
  * browser and Worker dependencies so both sides compile against the same shapes. */
+import type { PeriodicScopeState } from "../quest/periodic/types";
+
 export const GAMEPLAY_PROTOCOL = 3 as const;
 export const CLIENT_INTEGRITY_VERSION = 5 as const;
 export const COMMAND_BATCH_LIMIT = 64;
@@ -65,6 +67,10 @@ export type GameplayCommand =
   | { type: "memorial.enshrine"; instanceId: string; unitId: string; name?: string }
   /** Take whoever is on this statue back off it, into the graveyard. */
   | { type: "memorial.clear"; instanceId: string }
+  /** Collect a finished daily/weekly quest's XP. Unlike the catalog quests — which
+   *  grant themselves inside the transaction that completes them — a periodic quest
+   *  waits to be claimed, so this is the only command that pays one out. */
+  | { type: "quest.periodic_claim"; scope: "daily" | "weekly"; questId: string }
   | { type: "tutorial.complete" };
 
 export interface SequencedCommand {
@@ -126,6 +132,16 @@ export interface QuestProjection {
   version: number;
   completed: string[];
   progress: { questId: string; counts: number[] }[];
+}
+
+/** Daily/weekly quests. Server-owned like the catalog quests, but with a lifecycle of
+ *  their own: the set is regenerated whenever its UTC period rolls over, and each
+ *  quest's XP is collected by a `quest.periodic_claim` command rather than granted on
+ *  completion. Either scope is null until it unlocks (daily at level 5, weekly at 15). */
+export interface PeriodicQuestProjection {
+  version: number;
+  daily: PeriodicScopeState | null;
+  weekly: PeriodicScopeState | null;
 }
 
 export interface EpicBossProjection {
@@ -201,6 +217,9 @@ export interface GameplayProjection {
   farm: FarmDocumentProjection;
   objects: ObjectDocumentProjection;
   quests: QuestProjection;
+  /** Optional so a client running against a Worker that predates daily/weekly quests
+   *  simply shows no periodic panel instead of failing to parse the bootstrap. */
+  periodicQuests?: PeriodicQuestProjection;
   inventory: Record<string, number>;
   storage: { received: Record<string, number>; stored: Record<string, number> };
   roster: RosterUnitProjection[];

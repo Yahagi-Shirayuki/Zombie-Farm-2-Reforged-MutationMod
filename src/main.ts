@@ -35,17 +35,20 @@ import { epicBossRunToClient, serverTimestampToClient } from "./net/clock";
 import { QuestBus, QuestEvent } from "./quest/events";
 import { objectQuestAliases } from "./quest/objectVariants";
 import { QuestSystem } from "./quest/QuestSystem";
-import { QuestDef, questRewardInfo } from "./quest/types";
+import { PeriodicQuestSystem } from "./quest/periodic/PeriodicQuestSystem";
+import { QuestDef, questBonusRewardInfo, questRewardInfo } from "./quest/types";
 import { RaidManager, RaidResultView, type LootDrop } from "./raid/RaidManager";
 import { RaidScene } from "./raid/RaidScene";
 import { RAID_COOLDOWN_MS } from "./raid/RaidCatalog";
 import { reconcilePartySelection } from "./raid/partySelection";
+import { planTeamAssembly, sanitizeTeams, settleTeamMembers } from "./zombie/teams";
 import { postRaidWinQuests } from "./raid/questEvents";
+import { invasionSettlementNotice } from "./raid/settlementNotice";
 import {
-  isUnsettledInvasion,
-  UNSETTLED_INVASION_NOTICE,
-  UNSETTLED_INVASION_TOAST,
-} from "./raid/settlementNotice";
+  invasionExpiryMessage,
+  invasionExpiryState,
+  type InvasionExpiryState,
+} from "./raid/sessionExpiry";
 import { screenToGrid, tileCenter, TILE_H, TILE_W, HW, HH } from "./iso";
 import { setFootprint } from "./depthSort";
 import { NightLayer, makeLight } from "./lighting";
@@ -960,7 +963,13 @@ async function main() {
   const uiIcon = (name: string) => `${BASE}assets/ui/${name}`;
   const questRewards = (def: QuestDef): QuestReward[] => {
     const reward = questRewardInfo(def);
-    return reward ? [{ icon: uiIcon(reward.icon), label: reward.label }] : [];
+    const bonus = questBonusRewardInfo(def);
+    return [
+      ...(reward ? [{ icon: uiIcon(reward.icon), label: reward.label }] : []),
+      // The completion popup lists every line the quest actually paid, so an
+      // achievement that hands over a brain as well as XP shows both.
+      ...(bonus ? [{ icon: uiIcon(bonus.icon), label: bonus.label }] : []),
+    ];
   };
   const questCompleteQueue: QuestCompleteView[] = [];
   let questCompleteShowing = false;
@@ -1065,6 +1074,32 @@ async function main() {
       render: (views) => hud.setQuests(views),
     }
   );
+
+  // Daily / weekly quests. The SAME generator runs on both sides of the build split:
+  // offline this object is the authority (it generates the board, counts bus events
+  // and pays the XP), online the server owns all three and this only draws what the
+  // latest projection said. `authoritative` is what picks between the two.
+  const periodicQuests = new PeriodicQuestSystem(
+    state,
+    // Seeds the roll. Online that is the account; offline the active profile's save
+    // key, which is the only thing that is stable for the life of a local farm.
+    () => (onlineFarm ? api.getSession()?.accountId ?? "anon" : profiles.activeSaveKey()),
+    questBus,
+    {
+      authoritative: onlineFarm,
+      submitClaim: (scope, questId, xp) => economy?.submitPeriodicQuestClaim(scope, questId, xp) ?? false,
+      claimed: (text, xp) => hud.showToast(`${text} — +${xp} XP`),
+      render: (views) => hud.setPeriodicQuests(views),
+    }
+  );
+  hud.onPeriodicQuestClaim = (scope, questId) => periodicQuests.claim(scope, questId);
+  // The panel's "Resets in …" is minute-resolution, and offline the day has to roll
+  // over inside a long session rather than only at the next launch. One minute covers
+  // both; nothing here is expensive enough to want a tighter or looser tick.
+  setInterval(() => {
+    periodicQuests.refresh();
+    hud.setPeriodicQuests(periodicQuests.views());
+  }, 60_000);
 
   // ---- consumable boosts: buy (into inventory) + use (apply farm effect) ----
   // Gift vouchers are "1 per farm": you can't buy/use one once you already own
@@ -1339,6 +1374,7 @@ async function main() {
     playMode,
     jobs,
   );
+  saveManager.periodicQuests = periodicQuests;
   saveManager.onStorageError = (message) => hud.showToast(message);
   jobs.onQueueChanged = () => saveManager.checkpointJobs();
 
@@ -1449,6 +1485,10 @@ async function main() {
     state.seedFarmerCatalog(assets.farmer);
     applyFarmerAppearance();
     if (!restored) quests.restore(); // fresh farm: activate the opening quests
+    // Same for the daily/weekly board. A restored save installs its own through
+    // SaveManager; a fresh farm has none, and without this the panel would stay empty
+    // until the next event happened to roll it over.
+    if (!restored) periodicQuests.restore();
     // Closedown handoff. The farm is now hydrated from the server — which is the only
     // way to serialise an Online Farm, since one keeps no full blob on the device — so
     // this is the earliest point the export can be produced, and the latest point that
@@ -1846,6 +1886,7 @@ async function main() {
     economy.onPetState = (ownedPets, activePet, penPets) => state.syncPetOwnership(ownedPets, activePet, penPets);
     economy.onQuestState = (serverState) => quests.restoreAuthoritative(serverState);
     economy.onQuestChanges = (changes) => quests.applyAuthoritativeChanges(changes);
+    economy.onPeriodicQuestState = (serverState) => periodicQuests.adoptAuthoritative(serverState);
     economy.onTutorialState = (rewarded) => {
       if (!rewarded) return;
       state.setTutorial(reconcileTutorialCompletion(state.tutorial, true));
@@ -2531,6 +2572,73 @@ async function main() {
   hud.onZombieLocate = (id) => {
     const p = zombies.selectById(id);
     if (p) centerOn(p.x, p.y);
+  };
+  // ---- saved line-ups ("Zombie Teams", opened from the Mausoleum) ----
+  hud.getArmyCap = () => state.zombieMax;
+  hud.getTeams = () => state.zombieTeams;
+  hud.onTeamsChange = (teams) => {
+    state.zombieTeams = sanitizeTeams(teams);
+    saveManager.flushCritical(); // same path a rename takes: teams are presentation data
+  };
+  // Assemble a team: deploy its members, store everyone else. Deliberately built
+  // out of the SAME two moves the Mausoleum's own buttons make (zombies.store /
+  // zombies.deploy + submitRosterStatus), so a team can never move a zombie in a
+  // way a player could not by hand — the server sees an ordinary sequence of
+  // roster.status commands and validates each one itself.
+  hud.onTeamAssemble = async (memberIds) => {
+    if (onlineGameplayBlocked()) return null;
+    let members = memberIds;
+    let settledTeams = false;
+    try {
+      if (economy) {
+        // A harvest settled since the team was saved may have exchanged an
+        // optimistic local id for the server's; rewrite the saved team too, or it
+        // loses that zombie for good the moment the id it remembers stops existing.
+        members = await economy.settleUnitIds(memberIds);
+        const settled = settleTeamMembers(state.zombieTeams, (id) => economy!.authoritativeUnitId(id));
+        settledTeams = settled.some((team, i) => team !== state.zombieTeams[i]);
+        if (settledTeams) state.zombieTeams = settled;
+      }
+    } catch {
+      hud.showToast("Could not confirm your zombies. Please reconnect.");
+      return null;
+    }
+    const plan = planTeamAssembly(members, zombies.roster(), state.zombieMax, zombies.mausoleumCap);
+    let stored = 0;
+    let deployed = 0;
+    // Preserve the planner's interleaving: with a full Mausoleum, a deploy may be the
+    // move that opens the storage slot needed by the following store.
+    for (const operation of plan.operations) {
+      if (operation.type === "store") {
+        if (zombies.store(operation.id)) {
+          economy?.submitRosterStatus(operation.id, true);
+          stored++;
+        }
+      } else if (zombies.deploy(operation.id)) {
+        economy?.submitRosterStatus(operation.id, false);
+        deployed++;
+      }
+    }
+    // The team's order IS an attack order: adopt it for the Army screen so a team
+    // built for one invasion also reopens with its line-up in the right sequence.
+    // Only members that made it onto the farm — the screen shows deployed units.
+    const onFarm = new Set(zombies.roster().filter((unit) => !unit.stored).map((unit) => unit.id));
+    const order = members.filter((id) => onFarm.has(id));
+    if (order.length) state.raidAttackOrder = order;
+    // Rewritten member ids are worth a write of their own: an assembly that moved
+    // nothing (the team is already standing there) still learned the real ids.
+    if (stored || deployed || settledTeams) saveManager.flush();
+    // A move the plan asked for that the field refused (the roster shifted under
+    // us — a crop finished growing mid-assembly) counts as blocked/left too, so
+    // the toast can never claim more than actually happened.
+    return {
+      deployed, stored,
+      missing: plan.missing.length,
+      blocked: plan.blocked.length + (plan.deploy.length - deployed),
+      left: plan.left.length + (plan.store.length - stored),
+      present: plan.present.length,
+      shortfall: plan.shortfall,
+    };
   };
   hud.zombieBaseCost = (key) => zombieDefs.get(key)?.cost ?? 0;
   hud.zombieCostsBrains = (key) => !!zombieDefs.get(key)?.brainsNeeded;
@@ -3399,9 +3507,17 @@ async function main() {
   // Server-owned raid cooldown: the session id from /raid/start, carried to
   // /raid/finish so the server starts the cooldown once the raid is done.
   let raidSessionId: string | null = null;
+  // The live session's TTL, in this browser's clock domain, plus the last state the
+  // player was told about so the ticker check below speaks only on a transition. The
+  // server zeroes anything settled past this instant, and the fight cannot notice on
+  // its own: it runs on the ticker, which stops dead while the page is hidden.
+  let raidExpiresAt: number | null = null;
+  let raidExpiryAnnounced: InvasionExpiryState = "ok";
+  const clearRaidExpiry = () => { raidExpiresAt = null; raidExpiryAnnounced = "ok"; };
   hud.onLaunchRaid = async (raidId, partyIds, opts) => {
     if (raidActive || Date.now() < raidLaunchLockedUntil) return false;
     raidSessionId = null;
+    clearRaidExpiry();
     economy?.setLiveRaid(null);
     // ONLINE: the server owns the between-raids cooldown. Ask it to authorize the
     // launch; if it's still on cooldown (and no voucher bypass), decline so the army
@@ -3456,6 +3572,13 @@ async function main() {
         // its finish is submitted, no bootstrap may retreat it out from under the
         // player (see EconomyClient.recoverResumableRaid).
         economy?.setLiveRaid(raidSessionId);
+        // Adopt the session's deadline. /raid/start has always returned it and the
+        // client has always ignored it, which is why a fight frozen in a background
+        // tab could sail past the TTL and settle for nothing with no warning at all.
+        raidExpiresAt = gate.expiresAt == null
+          ? null
+          : serverTimestampToClient(gate.expiresAt, gate.serverTime ?? Date.now());
+        raidExpiryAnnounced = "ok";
         raidLaunchLockedUntil = Math.max(
           raidLaunchLockedUntil,
           gate.earliestFinishAt == null
@@ -3571,6 +3694,9 @@ async function main() {
       ),
       onCheckpoint: undefined,
       onFinish: (outcome, finalTick, inputs) => {
+        // The fight is over, so the TTL has nothing left to warn about: whatever the
+        // settlement below returns is now the story, told by invasionSettlementNotice.
+        clearRaidExpiry();
         // ONLINE: the server prices the base win gold + first-clear XP AND rolls the
         // loot. finishRaid() credits none of it locally — it hands the reward back as
         // `serverReward`, which we submit through the balance client (POST /raid/finish).
@@ -3597,9 +3723,12 @@ async function main() {
             // with the ALREADY-STORED result, and patching those zeros in silently is
             // what let a won invasion read "0 gold, 0 brains, no loot" with nothing to
             // report. Say what happened instead of quietly overwriting the victory.
-            if (isUnsettledInvasion(outcome, res.outcome)) {
-              hud.setRaidResultNotice(UNSETTLED_INVASION_NOTICE);
-              hud.showToast(UNSETTLED_INVASION_TOAST, 8000);
+            // Pass the WHOLE result: the TTL branch is recognisable only by `expired`,
+            // since its stored body carries no outcome for a rule to compare against.
+            const settlement = invasionSettlementNotice(outcome, res);
+            if (settlement) {
+              hud.setRaidResultNotice(settlement.notice);
+              hud.showToast(settlement.toast, 8000);
             }
             if (res.outcome) zombies.applyServerRaidOutcome(res.outcome.survivors, res.outcome.losses);
             // Online the tutorial's invade beat no longer rides the local quest event,
@@ -3665,10 +3794,14 @@ async function main() {
           raidSessionId = null;
           void api
             .raidFinish(sid, finalTick, inputs, outcome)
-            .then((r) => { state.syncRaidCooldown(serverTimestampToClient(
-              r.lastRaidAt,
-              r.serverTime ?? Date.now(),
-            )); })
+            .then((r) => {
+              // An expired settlement starts no cooldown and sends no stamp to adopt.
+              if (r.lastRaidAt == null) return;
+              state.syncRaidCooldown(serverTimestampToClient(
+                r.lastRaidAt,
+                r.serverTime ?? Date.now(),
+              ));
+            })
             .catch(() => {});
         }
         hud.openRaidResult(view, () => {
@@ -3685,7 +3818,16 @@ async function main() {
           // OFFLINE, advance raid quests only now that we're back on the farm. Online
           // the server already counted this win and its questChanges have been applied,
           // so posting again would count it twice (see src/raid/questEvents.ts).
-          postRaidWinQuests(questBus, view, setup.raid.name, onlineFarm);
+          // `elite` and the fight's technique record ride along from the setup and the
+          // sim outcome rather than through RaidResultView — the result PANEL has no use
+          // for either, and widening its view type to carry quest plumbing would be the
+          // wrong seam.
+          postRaidWinQuests(
+            questBus,
+            { ...view, elite: setup.elite, feats: outcome.feats },
+            setup.raid.name,
+            onlineFarm
+          );
           tutorial?.onRaidResolved(); // finish post-win if the quest event did not
           // Any quest that completed during the battle celebrates now, on the farm.
           flushQuestCompletions();
@@ -3705,7 +3847,9 @@ async function main() {
             // Settlement captured each casualty server-side, so resolving the offer
             // remains safe even if the finish response arrived after the player tapped.
             void settlementPromise.then((settled) => {
-              if (!settled.revival) return;
+              // Both come from a settlement that actually replayed the fight: an
+              // expired one offers no revival and reports no balance to spend from.
+              if (!settled.revival || !settled.balance) return;
               hud.openZombieRevival(revivalViews, settled.balance.brains, async (reviveIds) => {
                 const revived = await economy!.resolveRaidRevival(settled.revival!.sessionId, reviveIds);
                 const accepted = new Set(revived.revivedIds);
@@ -4916,9 +5060,23 @@ async function main() {
     if (document.hidden) advanceFarmJobsToNow(true);
   }, 1000);
 
+  // Watch the live session's TTL on WALL clock, which is the one thing the fight
+  // itself cannot see (its dt is clamped per frame and stops entirely while hidden).
+  // Checked from the ticker on purpose: the first frame after the player comes back
+  // is exactly the moment they need to hear that the session ran out while away.
+  const checkRaidExpiry = () => {
+    if (!raidActive || raidExpiresAt == null) return;
+    const expiry = invasionExpiryState(raidExpiresAt, Date.now());
+    if (expiry === raidExpiryAnnounced) return;
+    raidExpiryAnnounced = expiry;
+    const message = invasionExpiryMessage(expiry, raidExpiresAt - Date.now());
+    if (message) hud.showToast(message, 8000);
+  };
+
   app.ticker.add((ticker) => {
     const dt = Math.min(ticker.deltaMS / 1000, 0.05);
     if (raidScene) raidScene.update(dt); // live battle drives itself
+    checkRaidExpiry();
     advanceFarmJobsToNow(); // wall-clock-safe queued work + farmer movement
     // While a battle owns the screen the farm world is fully hidden, so every
     // visual update below (depth sorts, rig posing, occlusion masks, the night
@@ -5083,7 +5241,7 @@ async function main() {
   // shipped bundle. It was never a security boundary (a determined player can edit
   // browser state regardless), but it must not be handed to every player. Real
   // integrity comes from server-side validation/authority.
-  if (import.meta.env.DEV) (window as any).ZF = { app, world, field, actor, walk, zombies, state, hud, jobs, audio, save: saveManager, quests, questBus, raids, screenToGrid, CARROT,
+  if (import.meta.env.DEV) (window as any).ZF = { app, world, field, actor, walk, zombies, state, hud, jobs, audio, save: saveManager, quests, questBus, periodicQuests, raids, screenToGrid, CARROT,
     placeables: placeCatalog,
     boosts: boostCatalog,
     // Seed/zombie-crop configs by key, so a test can plant one without the menu.

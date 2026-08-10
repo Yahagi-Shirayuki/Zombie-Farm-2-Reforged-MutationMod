@@ -77,6 +77,12 @@ import {
   openZombiesPanel, rosterInfo, type ZombiesPanelTab,
 } from "./ui/panels/zombies";
 import { openMemorialPanel, type MemorialView } from "./ui/panels/memorial";
+import { openTeamsPanel } from "./ui/panels/teams";
+import type { TeamAssembleResult, ZombieTeam } from "./zombie/teams";
+import {
+  openPeriodicQuests, renderPeriodicQuests, type PeriodicQuestPanelView,
+} from "./ui/panels/periodicQuests";
+import type { PeriodicScope, PeriodicScopeView } from "./quest/periodic/types";
 import { openFarmersGuide } from "./ui/panels/farmersGuide";
 import { showTimNotice } from "./ui/TimNotice";
 // View-model types + the grave classifier live in hudTypes so panel modules can
@@ -270,6 +276,11 @@ export class Hud {
   private questViews: QuestView[] = [];
   private questLogModal: ModalHandle | null = null;
   private questDetailModal: { id: string; handle: ModalHandle } | null = null;
+  private periodicViews: PeriodicScopeView[] = [];
+  private periodicModal: ModalHandle | null = null;
+  private periodicButton: HTMLButtonElement | null = null;
+  /** Set by main.ts. Collecting a finished daily/weekly quest. */
+  onPeriodicQuestClaim: ((scope: PeriodicScope, questId: string) => void) | null = null;
   private tools: Record<string, HTMLButtonElement> = {};
   private menuCol!: HTMLElement;
   private toolsBar!: HTMLElement;
@@ -701,6 +712,61 @@ export class Hud {
       more.onclick = () => this.openQuestLog();
       this.questCol.appendChild(more);
     }
+    this.renderPeriodicButton();
+  }
+
+  /** Daily/weekly quests get their own rail button rather than a slot on the quest
+   *  rail: they are a separate board with a separate lifecycle, and mixing them in
+   *  would push the progression quests off a four-slot rail every day. */
+  private renderPeriodicButton() {
+    if (!this.questCol) return;
+    this.periodicButton?.remove();
+    this.periodicButton = null;
+    if (!this.periodicViews.length) return;
+    const claimable = this.periodicViews.reduce(
+      (total, scope) => total + scope.quests.filter((q) => q.done && !q.claimed).length, 0);
+    const button = document.createElement("button");
+    button.className = "quest qperiodic" + (claimable ? " ready" : "");
+    button.title = claimable ? `${claimable} quest reward${claimable === 1 ? "" : "s"} to collect`
+      : "Daily & weekly quests";
+    button.setAttribute("aria-label", button.title);
+    const glyph = document.createElement("span");
+    glyph.className = "qperiodic-glyph";
+    glyph.textContent = "★";
+    button.appendChild(glyph);
+    // Only badge what needs COLLECTING. A count of open quests would sit there all day
+    // saying five, which trains players to ignore it — the point of the badge is that
+    // it means "there is XP waiting for you right now".
+    if (claimable) {
+      const badge = document.createElement("span");
+      badge.className = "qbadge";
+      badge.textContent = String(claimable);
+      button.appendChild(badge);
+    }
+    button.onclick = () => this.openPeriodicQuests();
+    this.questCol.appendChild(button);
+    this.periodicButton = button;
+  }
+
+  /** Push authoritative (or locally generated) daily/weekly state into the HUD. */
+  setPeriodicQuests(views: PeriodicScopeView[]) {
+    this.periodicViews = views;
+    this.renderPeriodicButton();
+    if (this.periodicModal) renderPeriodicQuests(this.periodicModal.panel, this.periodicPanelView());
+  }
+
+  private periodicPanelView(): PeriodicQuestPanelView {
+    return {
+      scopes: this.periodicViews,
+      onClaim: (scope, questId) => this.onPeriodicQuestClaim?.(scope, questId),
+    };
+  }
+
+  private openPeriodicQuests() {
+    this.periodicModal?.close();
+    this.periodicModal = openPeriodicQuests(this.el, this.periodicPanelView(), () => {
+      this.periodicModal = null;
+    });
   }
 
   // Full quest screen: every active quest as a card with its objectives, scrollable.
@@ -756,6 +822,17 @@ export class Hud {
         const rewardLabel = document.createElement("span");
         rewardLabel.textContent = `Reward: ${q.reward.label}`;
         reward.append(rewardIcon, rewardLabel);
+        // A few achievements pay a brain ON TOP of their XP. Shown as a second chip so
+        // the headline reward keeps its usual shape.
+        if (q.bonus) {
+          const bonusIcon = document.createElement("img");
+          bonusIcon.src = UI(q.bonus.icon);
+          bonusIcon.alt = "";
+          bonusIcon.onerror = () => { bonusIcon.style.visibility = "hidden"; };
+          const bonusLabel = document.createElement("span");
+          bonusLabel.textContent = q.bonus.label;
+          reward.append(bonusIcon, bonusLabel);
+        }
         body.appendChild(reward);
       }
       item.append(img, body);
@@ -810,6 +887,16 @@ export class Hud {
       const label = document.createElement("span");
       label.textContent = q.reward.label;
       reward.append(icon, label);
+      // The brain a few achievements pay alongside their XP (see questBonusRewardInfo).
+      if (q.bonus) {
+        const bonusIcon = document.createElement("img");
+        bonusIcon.src = UI(q.bonus.icon);
+        bonusIcon.alt = "";
+        bonusIcon.onerror = () => { bonusIcon.style.visibility = "hidden"; };
+        const bonusLabel = document.createElement("span");
+        bonusLabel.textContent = q.bonus.label;
+        reward.append(bonusIcon, bonusLabel);
+      }
       panel.append(heading, reward);
     }
   }
@@ -1353,6 +1440,17 @@ export class Hud {
   onMausoleumUpgrade: (() => void | Promise<void>) | null = null;
   /** Whether the farm has a free army slot (gates the Deploy action). */
   canDeployZombie: (() => boolean) | null = null;
+  // ---- saved line-ups ("Zombie Teams", opened from the Mausoleum) ----
+  /** The saved teams, newest last. Read on every render — never cached. */
+  getTeams: (() => ZombieTeam[]) | null = null;
+  /** Persist an edited team list (create / rename / re-pick / delete). */
+  onTeamsChange: ((teams: ZombieTeam[]) => void) | null = null;
+  /** Put exactly these zombies on the farm and everyone else in the Mausoleum.
+   *  Returns what actually moved, or null when the move was refused outright
+   *  (offline gameplay gate) — in which case main.ts has already explained why. */
+  onTeamAssemble: ((memberIds: string[]) => Promise<TeamAssembleResult | null>) | null = null;
+  /** How many zombies the farm can field at once (the team picker's cap). */
+  getArmyCap: (() => number) | null = null;
   /** Whether an incoming zombie has anywhere to land — a free army slot, or a free
    *  slot in a Mausoleum that is actually placed. Advisory only: the server decides
    *  for real when the delivery is claimed. */
@@ -4526,8 +4624,18 @@ export class Hud {
         }
       }
 
-      // Upgrade the building in place: each tier adds five slots for brains.
+      // Saved line-ups live with the building that holds the zombies they swap in
+      // and out. Offered even with no teams yet — this is the only door to them.
       foot.innerHTML = "";
+      const teams = document.createElement("button");
+      teams.className = "zbtn store";
+      const savedTeams = this.getTeams?.().length ?? 0;
+      teams.textContent = savedTeams ? `Teams (${savedTeams})` : "Teams";
+      teams.title = "Save and swap farm line-ups";
+      teams.onclick = () => openTeamsPanel(this, render);
+      foot.appendChild(teams);
+
+      // Upgrade the building in place: each tier adds five slots for brains.
       const next = this.getMausoleumUpgrade?.() ?? null;
       if (next) {
         const button = document.createElement("button");

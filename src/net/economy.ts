@@ -1,7 +1,9 @@
 import type { GameState } from "../GameState";
 import * as api from "./api";
 import { CommandQueue } from "./commandQueue";
-import type { BootstrapResponse, CommandBatchResponse, GameplayCommand } from "./protocol";
+import type {
+  BootstrapResponse, CommandBatchResponse, GameplayCommand, PeriodicQuestProjection,
+} from "./protocol";
 import type { RaidOutcome } from "../raid/types";
 import { RAID_RULESET_VERSION } from "../raid/replay";
 import { epicBossRunToClient, serverTimestampToClient } from "./clock";
@@ -92,6 +94,9 @@ export class EconomyClient {
   onPetState: ((ownedPets: string[], activePet: string | null, penPets: string[]) => void) | null = null;
   onQuestState: ((state: api.QuestStateResult) => void) | null = null;
   onQuestChanges: ((changes: api.QuestChange[]) => void) | null = null;
+  /** Authoritative daily/weekly quest state. Null from a Worker that predates the
+   *  feature, which the client reads as "no periodic quests" rather than as empty. */
+  onPeriodicQuestState: ((state: PeriodicQuestProjection | null) => void) | null = null;
   onCropFertilized: ((oc: number, or: number) => void) | null = null;
   onFarmState: ((farm: api.FarmState) => void) | null = null;
   /** Resolving `false` means a newer reconcile superseded this pass before it consumed
@@ -639,6 +644,19 @@ export class EconomyClient {
     // Completion and reward happen inside the accepted command/raid transaction.
   }
 
+  /** Collect a finished daily/weekly quest. Unlike the catalog quests above this IS a
+   *  real command, because a periodic reward is only paid when the player asks for it.
+   *
+   *  Flushed immediately rather than batched: the player pressed a button expecting XP,
+   *  and the reward is refused outright once the period rolls over — so a claim sitting
+   *  in a 30s window near midnight would be silently worth nothing. */
+  submitPeriodicQuestClaim(scope: "daily" | "weekly", questId: string, xp: number): boolean {
+    const sequence = this.enqueue({ type: "quest.periodic_claim", scope, questId }, { xp });
+    if (sequence === null) return false;
+    void this.queue.flush();
+    return true;
+  }
+
   async submitRaid(
     sessionId: string,
     finalTick: number,
@@ -663,15 +681,24 @@ export class EconomyClient {
       }
       throw error;
     }
-    this.base = result.balance;
+    // An EXPIRED session settles with a body carrying none of these — no balance, no
+    // lastRaidAt, no outcome — because the server zeroes it without replaying the
+    // fight. Adopting them unconditionally set `base` to undefined (silently skipping
+    // every later reconcile) and pushed NaN through the cooldown clock. Guard them the
+    // way the other two settlement call sites already do.
+    if (result.balance) this.base = result.balance;
     if (result.inventory) this.serverInv = { ...result.inventory };
     if (result.storage) this.state.syncStorage(result.storage.received, result.storage.stored);
     if (result.raidProgress) this.state.syncRaidProgress(result.raidProgress);
-    this.state.syncRaidCooldown(serverTimestampToClient(
+    if (result.lastRaidAt != null) this.state.syncRaidCooldown(serverTimestampToClient(
       result.lastRaidAt,
       result.serverTime ?? Date.now(),
     ));
     this.onQuestChanges?.(result.questChanges ?? []);
+    // An invasion win is the only thing that can advance an invasion daily, and it
+    // never crosses the command lane — so this settlement is the sole place the
+    // periodic panel learns about it.
+    if (result.periodicQuests !== undefined) this.onPeriodicQuestState?.(result.periodicQuests);
     this.reconcile();
     this.onRaidSettled?.(result);
     return result;
@@ -961,6 +988,10 @@ export class EconomyClient {
     this.state.zombiePotBought = gameplay.zombiePotBought ?? false;
     this.state.syncRaidProgress(gameplay.raids.progress);
     this.state.syncRaidCooldown(serverTimestampToClient(gameplay.raids.lastRaidAt, serverTime));
+    // Outside the deferStructural gate below: periodic quests are pure display state
+    // with no dependency on the farm reconcile, so holding them back would leave the
+    // panel stale for the whole time a structural pass is in flight.
+    this.onPeriodicQuestState?.(gameplay.periodicQuests ?? null);
     const deferStructural = this.commandsBySequence.size > 0;
     const plowed: api.FarmState["plowed"] = [];
     const spent: NonNullable<api.FarmState["spent"]> = [];

@@ -280,6 +280,26 @@ export interface CrabConfig {
 }
 
 /** The outcome of a resolved raid (fed to the Result panel + reward pipeline). */
+/** What the fight can attest to about HOW it was won, beyond who lived and died.
+ *
+ *  This exists so achievement quests about combat TECHNIQUE ("defeat a boss with an
+ *  explosion", "revive a zombie mid-invasion") can be granted authoritatively. The
+ *  server re-runs the whole fight through this same BattleSim when it settles a raid,
+ *  so everything here comes out of the SERVER's own replay — no client claim, and no
+ *  concession path of the kind the client-only hazards needed. */
+export interface RaidFeats {
+  /** One entry per enemy destroyed by an activated ability, in the order they fell.
+   *  `ability` is the ACTIVATED_ABILITY key (explode / explodeV2 / bash / bashV2). */
+  abilityKills: { ability: string; boss: boolean }[];
+  /** One entry per resurrection performed. `exploded` marks the case where the revived
+   *  zombie was the one that had just blown ITSELF up — the Garden/Small combo. */
+  resurrections: { exploded: boolean }[];
+}
+
+export function emptyRaidFeats(): RaidFeats {
+  return { abilityKills: [], resurrections: [] };
+}
+
 export interface RaidOutcome {
   win: boolean;
   rounds: number;
@@ -293,4 +313,7 @@ export interface RaidOutcome {
   playerDamage: number;
   /** Epic Boss only: the hard attempt clock elapsed while the boss still lived. */
   escaped?: boolean;
+  /** How the fight was won, for technique achievements. Optional so an outcome
+   *  produced by an older client (or a hand-built test fixture) still parses. */
+  feats?: RaidFeats;
 }

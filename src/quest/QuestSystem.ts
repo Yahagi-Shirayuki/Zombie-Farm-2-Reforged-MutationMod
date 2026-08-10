@@ -9,7 +9,7 @@
 // advance — dormant, not broken. Epic quests are selected per active boss event.
 import { GameState } from "../GameState";
 import { QuestBus, QuestEvent } from "./events";
-import { QuestDef, QuestView, RewardType, questRewardInfo } from "./types";
+import { QuestDef, QuestView, RewardType, questBonusRewardInfo, questRewardInfo } from "./types";
 import { QuestSave } from "../save/schema";
 import { questSubjectMatches } from "./matching";
 
@@ -26,6 +26,10 @@ const LIVE_EVENTS = new Set<string>([
   QuestEvent.CropHarvested, QuestEvent.ZombieHarvested, QuestEvent.ItemBought,
   // raids / invasions
   QuestEvent.InvasionSuccessful, QuestEvent.InvasionPerfectGame, QuestEvent.LootItemWon,
+  // elite invasions + combat technique (derived from the fight's RaidFeats)
+  QuestEvent.EliteInvasionSuccessful, QuestEvent.ElitePerfectGame,
+  QuestEvent.EnemyDefeatedByAbility, QuestEvent.BossDefeatedByAbility,
+  QuestEvent.ZombieResurrected,
   // mutation combiner (Zombie Pot)
   QuestEvent.CombinerCombined, QuestEvent.CombinerHarvested,
   // Epic Boss events are additionally gated by setEpicBossActive().
@@ -185,6 +189,8 @@ export class QuestSystem {
         if (def.rewardItemKey) this.hooks.grantZombie(def.rewardItemKey);
         break;
     }
+    // Paid on top of whichever reward the switch handled, never instead of it.
+    if (def.rewardBrains) this.state.addBrains(def.rewardBrains);
   }
 
   /** True if any requirement listens to an event that currently has an emitter. */
@@ -209,6 +215,7 @@ export class QuestSystem {
         icon: def.sprite,
         tip: def.tip,
         reward: questRewardInfo(def),
+        bonus: questBonusRewardInfo(def),
         objectives: def.requirements.map((r, i) => ({
           text: r.text,
           count: displayCounts[i],
@@ -217,6 +224,11 @@ export class QuestSystem {
         })),
       });
     }
+    // Playable first, then by id. The id ordering is also what keeps the four-slot rail
+    // showing PROGRESSION: the imported catalog stops at 10011 and the Reforged
+    // achievements start at 20001, so a long-running achievement can never displace the
+    // next authored quest — it waits in the quest log instead. That is a real ordering
+    // guarantee, not a coincidence of the numbers (quest/reforgedQuests.test.ts).
     out.sort((a, b) =>
       (this.actionable(b.id) ? 1 : 0) - (this.actionable(a.id) ? 1 : 0) ||
       Number(a.id) - Number(b.id)

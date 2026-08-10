@@ -61,6 +61,28 @@ function winnableWallSim(): BattleSim {
   );
 }
 
+/** The winnable wall fight with a wall the army cannot simply chew through: at 30,000 HP
+ *  the blocker is genuinely on the critical path, so whether the taps landed decides how
+ *  long the run takes. `winnableWallSim`'s 1,500-HP wall falls to melee well inside the
+ *  fight's own schedule, which makes it useless for measuring an overrun. */
+function wallGatedSim(): BattleSim {
+  const players = Array.from({ length: 4 }, (_, n) => ({
+    ...unit(`p${n}`, "player", n), str: 60, attackCooldownMs: 400,
+  }));
+  const minion = { ...unit("e0", "enemy", 0), str: 1, con: 20, attackCooldownMs: 4000 };
+  const boss = { ...unit("e1", "enemy", 1), isBoss: true, str: 1, con: 20, attackCooldownMs: 4000 };
+  const wallTemplate = {
+    ...unit("wall", "enemy", 2),
+    sourceKey: "carrotWall", str: 0, con: 3000, hp: 30_000, maxHp: 30_000,
+    attacks: [{ name: "", frequency: 1, mult: 0 }],
+  };
+  return new BattleSim(
+    [...players], [minion, boss], null, true,
+    [{ name: "wall", weight: 100, castMs: 0, cooldownMs: 999_999, damage: 0 }],
+    10 * 60 * 1000, null, wallTemplate
+  );
+}
+
 /** Step until the boss's wall stands, returning its id and the tick it was tapped on —
  *  the same bookkeeping RaidScene does (`simTick` counts completed steps). */
 function tapWallOnFirstSight(sim: BattleSim): { unitId: string; tick: number } {
@@ -128,6 +150,7 @@ describe("deterministic raid replay", () => {
     expect(untranscribed.units.find((u) => u.id === tap.unitId)!.hp).toBe(1500);
   });
 
+
   it("verifies a WON fight whose wall the player tapped down", () => {
     // Play it the way a real player does: mash the blocker every frame it stands.
     const client = winnableWallSim();
@@ -157,7 +180,23 @@ describe("deterministic raid replay", () => {
     // Drop the taps (pre-14 behaviour) and the verifier is still stuck behind a wall the
     // player knocked down on screen. It no longer FAILS the settlement over that — it
     // finishes its own slower fight — but the overrun records how far apart they ran.
-    const desynced = replayRaid(winnableWallSim(), steps, []);
+    // Measured on the tank-wall fixture, where the blocker really is what gates the run.
+    const gated = wallGatedSim();
+    const gatedInputs: RaidReplayInput[] = [];
+    let gatedSeq = 0;
+    let gatedSteps = 0;
+    while (gatedSteps < 4000 && !gated.finished) {
+      const wall = gated.units.find((u) => u.isWall && u.alive);
+      if (wall && gated.tapWall(wall.id)) {
+        gatedInputs.push({ seq: ++gatedSeq, tick: gatedSteps, type: "wallTap", unitId: wall.id });
+      }
+      gated.step(RAID_TICK_MS);
+      gatedSteps++;
+    }
+    expect(gated.outcome().win).toBe(true);
+    expect(replayRaid(wallGatedSim(), gatedSteps, gatedInputs)).toMatchObject({ ok: true });
+
+    const desynced = replayRaid(wallGatedSim(), gatedSteps, []);
     expect(desynced).toMatchObject({ ok: true });
     if (desynced.ok) expect(desynced.divergence.overrunTicks).toBeGreaterThan(0);
   });

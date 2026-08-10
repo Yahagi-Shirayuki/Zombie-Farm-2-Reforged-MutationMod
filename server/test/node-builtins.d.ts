@@ -12,7 +12,12 @@ declare module "node:sqlite" {
   export class DatabaseSync {
     constructor(path: string);
     exec(sql: string): void;
-    prepare(sql: string): { get(...params: unknown[]): unknown };
+    prepare(sql: string): {
+      get(...params: unknown[]): unknown;
+      /** Widened for migration0049.test.ts, which binds a JSON board into an UPDATE
+       *  rather than inlining it into an exec() string. */
+      run(...params: unknown[]): { changes: number };
+    };
     close(): void;
   }
 }

@@ -47,6 +47,11 @@ export interface QuestDef {
   requirements: QuestRequirement[];
   rewardType: number;
   rewardValue: number;
+  /** Brains paid ON TOP of the main reward. The original format has a single
+   *  rewardType, so an imported quest can pay XP or brains but never both — which is
+   *  exactly what the Reforged achievements want for their hardest rungs. Absent (the
+   *  case for all 105 imported quests) means no bonus. */
+  rewardBrains?: number;
   rewardItem: string;
   rewardItemKey: string;
   tutorialQuest: boolean;
@@ -62,6 +67,16 @@ export interface QuestRewardInfo {
   /** Filename under assets/ui. */
   icon: string;
   label: string;
+}
+
+/** The brain bonus some Reforged achievements pay alongside their XP, or null. */
+export function questBonusRewardInfo(def: Pick<QuestDef, "rewardBrains">): QuestRewardInfo | null {
+  const brains = def.rewardBrains ?? 0;
+  if (!brains) return null;
+  return {
+    icon: "topbar_brain_icon.png",
+    label: `+${brains} ${brains === 1 ? "Brain" : "Brains"}`,
+  };
 }
 
 /** Convert a quest's encoded reward fields into the text and icon players see. */
@@ -106,6 +121,8 @@ export interface QuestView {
   tip: string;
   /** Reward shown before completion so players can judge whether to pursue it. */
   reward: QuestRewardInfo | null;
+  /** Brain bonus paid alongside `reward` (Reforged achievements only). */
+  bonus?: QuestRewardInfo | null;
   /** Per-objective lines with current/target counts and done flag. */
   objectives: { text: string; count: number; total: number; done: boolean }[];
 }

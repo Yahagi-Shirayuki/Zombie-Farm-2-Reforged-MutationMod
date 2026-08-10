@@ -101,6 +101,22 @@ EXTRA_SIZE_TIERS = [
      "gold": 1_250_000, "brains": 20},
 ]
 
+# ---- Ground skins ---------------------------------------------------------
+# Ground/climate skins Reforged ADDS beyond the six the source ships. `terrain`
+# must name a row emitted by prep_assets.slice_ground — for a derived skin, a key
+# of DERIVED_GROUND_ROWS there.
+#
+# Priced into the existing gold ladder (stone 1000, dirt 2000, snow/sand 5000,
+# water 10000) rather than given a curve of its own, and level 1 like every other
+# skin: the ground is pure cosmetics, so the gate is the price.
+#
+# KEEP IN SYNC with CLIMATE_COST in server/src/shopCatalog.ts, which charges the
+# purchase, and with the theme table in src/surroundings.ts, which dresses the
+# land around a farm wearing the skin.
+EXTRA_CLIMATES = [
+    {"name": "Autumn Ground", "terrain": "autumn", "level": 1, "gold": 3000},
+]
+
 # ---- Mutant zombies -------------------------------------------------------
 # A "mutant" zombie is the pre-mutated unit the market sells: it carries its
 # mutation already grown AND a tier-graded body (Green 2/2/2, Blue 5/2/5,

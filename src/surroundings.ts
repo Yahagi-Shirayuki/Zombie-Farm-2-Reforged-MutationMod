@@ -131,6 +131,33 @@ const SANDY: SurroundingsTheme = {
   treeShare: 0.7,
 };
 
+// "Autumn Ground": the temperate farm in late October — the same woodland as
+// GRASS, but turned. The terrain itself is the grass tile recoloured (see
+// DERIVED_GROUND_ROWS in tools/prep_assets.py), so this theme keeps the same
+// SHAPE of surroundings — a wood with clutter under it — and only changes what
+// season it is. Harvest dressing rather than Halloween: pumpkins earn their place
+// on a farm in autumn, but nothing carved or spooky.
+const AUTUMN: SurroundingsTheme = {
+  key: "autumn",
+  trees: [
+    ...rep(3, { file: "treeAutumn1.png", scale: 0.85 }),
+    ...rep(3, { file: "treeAutumn2.png", scale: 0.85 }),
+    ...rep(3, { file: "treeAutumn3.png", scale: 0.85 }),
+  ],
+  props: [
+    ...rep(4, { file: "leafPile.png", scale: 1.1 }),
+    ...rep(2, { file: "pumpkin.png", scale: 1 }),
+    ...rep(2, { file: "haystack.png", scale: 0.7 }),
+    ...rep(2, { file: "toadStool.png", scale: 1 }),
+    { file: "scarecrowNormal.png", scale: 0.8 },
+    { file: "cornucopia.png", scale: 0.9 },
+    { file: "rocks.png", scale: 0.9 },
+  ],
+  background: "farm_background_autumn.png",
+  filler: 0xdea967,
+  treeShare: 0.7,
+};
+
 // "Snowy Ground": a frozen clearing in an evergreen forest.
 const SNOWY: SurroundingsTheme = {
   key: "snow",
@@ -237,7 +264,8 @@ const LUNAR: SurroundingsTheme = {
 };
 
 const THEMES: Record<string, SurroundingsTheme> = {
-  grass: GRASS, dirt: SANDY, snow: SNOWY, stone: URBAN, sand: DEAD, water: LUNAR,
+  grass: GRASS, dirt: SANDY, autumn: AUTUMN, snow: SNOWY,
+  stone: URBAN, sand: DEAD, water: LUNAR,
 };
 
 /** The surroundings for a ground skin. Unknown terrain keys stay temperate. */

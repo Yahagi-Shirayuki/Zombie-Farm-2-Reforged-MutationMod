@@ -26,7 +26,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -100,7 +100,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 40,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -367,7 +367,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 40,
+  "rewardValue": 75,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -396,7 +396,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 40,
+  "rewardValue": 25,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -425,7 +425,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 50,
+  "rewardValue": 200,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -454,7 +454,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 75,
+  "rewardValue": 400,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -483,7 +483,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 150,
+  "rewardValue": 800,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -512,7 +512,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 500,
+  "rewardValue": 2000,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -541,7 +541,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 50,
+  "rewardValue": 75,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -570,7 +570,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 150,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -599,7 +599,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 150,
+  "rewardValue": 300,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -657,7 +657,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1019,7 +1019,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 675,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1064,7 +1064,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1093,7 +1093,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 50,
+  "rewardValue": 90,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1122,7 +1122,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 150,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1151,7 +1151,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 300,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1180,7 +1180,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 250,
+  "rewardValue": 750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1225,7 +1225,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 300,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1254,7 +1254,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 50,
+  "rewardValue": 90,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1283,7 +1283,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 150,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1341,7 +1341,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 300,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1378,7 +1378,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 2100,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1415,7 +1415,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 900,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1452,7 +1452,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 75,
+  "rewardValue": 300,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1481,7 +1481,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 75,
+  "rewardValue": 1350,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1526,7 +1526,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 75,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1592,7 +1592,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 600,
+  "rewardValue": 3200,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1711,7 +1711,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2086,7 +2086,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 700,
+  "rewardValue": 4000,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2403,7 +2403,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2654,7 +2654,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 35,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2683,7 +2683,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 40,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2720,7 +2720,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 3750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2757,7 +2757,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 3750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2794,7 +2794,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 3750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2823,7 +2823,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 75,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2860,7 +2860,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 3750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2905,7 +2905,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 3750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2934,7 +2934,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2963,7 +2963,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 35,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2992,7 +2992,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 50,
+  "rewardValue": 150,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3050,7 +3050,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 25,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3079,7 +3079,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 35,
+  "rewardValue": 25,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3108,7 +3108,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 35,
+  "rewardValue": 25,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3137,7 +3137,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3166,7 +3166,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 10,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3224,7 +3224,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,

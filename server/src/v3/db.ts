@@ -13,10 +13,12 @@ import {
   applyCommandBatch, freshGameplayState, zombieDefaultMutation,
   MEMORIAL_GRAVEYARD_CAP, MAX_FUNCTIONAL_OBJECTS,
 } from "./engine";
-import { levelForXp } from "../levels";
+import { XP_THRESHOLDS, levelForXp } from "../levels";
 import { projectRun } from "./epicBoss";
 import { RAID_RULESET_VERSION } from "../raidVerifier";
 import { parseRosterColor, serializeRosterColor } from "./rosterColor";
+import { refreshPeriodicState, xpToNextLevel } from "../../../src/quest/periodic/generate";
+import type { PeriodicQuestState } from "../../../src/quest/periodic/types";
 
 interface RuntimeRow {
   account_version: number;
@@ -129,6 +131,9 @@ async function ensureV3(db: D1Database, accountId: string, now: number): Promise
     db.prepare(`INSERT OR IGNORE INTO quest_documents_v3
       (account_id, current_json, updated_at) VALUES (?, ?, ?)`)
       .bind(accountId, JSON.stringify({ completed: [], progress: [] }), now),
+    db.prepare(`INSERT OR IGNORE INTO periodic_quest_documents_v3
+      (account_id, current_json, updated_at) VALUES (?, ?, ?)`)
+      .bind(accountId, JSON.stringify({ daily: null, weekly: null }), now),
     db.prepare(`INSERT OR IGNORE INTO gameplay_documents_v3
       (account_id, current_json, updated_at) VALUES (?, ?, ?)`)
       .bind(accountId, JSON.stringify(coreFrom(fresh)), now),
@@ -141,12 +146,13 @@ async function ensureV3(db: D1Database, accountId: string, now: number): Promise
 
 async function loadRows(db: D1Database, accountId: string, now: number) {
   await ensureV3(db, accountId, now);
-  const [runtime, balance, farm, objects, quests, core, presentation, roster, fallen, raid, raidState, raidRevival, epicBoss] = await Promise.all([
+  const [runtime, balance, farm, objects, quests, periodic, core, presentation, roster, fallen, raid, raidState, raidRevival, epicBoss] = await Promise.all([
     db.prepare("SELECT * FROM account_runtime_v3 WHERE account_id = ?").bind(accountId).first<RuntimeRow>(),
     db.prepare("SELECT gold, brains, xp FROM balances WHERE account_id = ?").bind(accountId).first<BalanceRow>(),
     db.prepare("SELECT * FROM farm_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
     db.prepare("SELECT * FROM object_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
     db.prepare("SELECT * FROM quest_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
+    db.prepare("SELECT * FROM periodic_quest_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<CoreRow>(),
     db.prepare("SELECT version, current_json FROM presentations_v3 WHERE account_id = ?").bind(accountId).first<PresentationRow>(),
     db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, locked_by_raid, from_escrow, color
@@ -175,8 +181,8 @@ async function loadRows(db: D1Database, accountId: string, now: number) {
     db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id = ?")
       .bind(accountId).first<EpicRunRow>(),
   ]);
-  if (!runtime || !balance || !farm || !objects || !quests || !core || !presentation || !raidState) throw new Error("v3_state_init_failed");
-  return { runtime, balance, farm, objects, quests, core, presentation, roster: roster.results ?? [],
+  if (!runtime || !balance || !farm || !objects || !quests || !periodic || !core || !presentation || !raidState) throw new Error("v3_state_init_failed");
+  return { runtime, balance, farm, objects, quests, periodic, core, presentation, roster: roster.results ?? [],
     fallen: fallen.results ?? [], raid, raidState, raidRevival, epicBoss };
 }
 
@@ -228,6 +234,10 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
     farm: { version: rows.farm.version, plots: parse(rows.farm.current_json, {}) },
     objects: { version: rows.objects.version, objects: parse(rows.objects.current_json, []) },
     quests: { version: rows.quests.version, ...parse(rows.quests.current_json, { completed: [], progress: [] }) },
+    periodicQuests: {
+      version: rows.periodic.version,
+      ...parse(rows.periodic.current_json, { daily: null, weekly: null }),
+    },
     inventory: core.inventory ?? {},
     storage: core.storage ?? { received: {}, stored: {} },
     farmSize: core.farmSize ?? 30,
@@ -269,6 +279,35 @@ function resumable(row: RaidRow | null): ResumableRaidProjection | null {
   };
 }
 
+/** Generate or roll over the authoritative periodic board before bootstrap projects it.
+ *
+ * Periodic documents are born with both scopes null. Command batches refresh them before
+ * applying gameplay, but bootstrap is what draws the panel; returning the null document
+ * there makes an eligible player act once before they can even see today's objectives.
+ * This refresh is projection-only. The generator is deterministic, and the next command
+ * or raid settlement performs the same rollover and persists it. Keeping bootstrap free
+ * of a document write avoids racing an in-flight command batch while still showing the
+ * player the exact authoritative board that batch will use.
+ */
+export function refreshPeriodicForBootstrap(
+  accountId: string,
+  rows: Awaited<ReturnType<typeof loadRows>>,
+  now: number,
+): void {
+  const state = parse<PeriodicQuestState>(rows.periodic.current_json, { daily: null, weekly: null });
+  const level = levelForXp(rows.balance.xp);
+  const changed = refreshPeriodicState(state, {
+    accountId,
+    level,
+    xpToNext: xpToNextLevel(level, XP_THRESHOLDS),
+    now,
+  });
+  if (!changed) return;
+
+  const currentJson = JSON.stringify({ daily: state.daily, weekly: state.weekly });
+  rows.periodic = { ...rows.periodic, version: rows.periodic.version + 1, current_json: currentJson };
+}
+
 export async function bootstrap(
   db: D1Database,
   accountId: string,
@@ -278,6 +317,7 @@ export async function bootstrap(
   writer?: WriterProjection
 ): Promise<BootstrapResponse> {
   const rows = await loadRows(db, accountId, now);
+  refreshPeriodicForBootstrap(accountId, rows, now);
   const [friends, incomingRequestCount, inboxCount] = await Promise.all([
     legacyDb.listFriends(db, accountId),
     legacyDb.countIncomingRequests(db, accountId),
@@ -359,10 +399,11 @@ export async function applyBatch(
   if (windowCount > 120) return { status: 429, error: "command_rate_limited", body: { retryAfterMs: Math.max(1, windowStart + 60_000 - now) } };
 
   const before = project(rows);
-  const engine = applyCommandBatch(before, body.commands, { now });
+  const engine = applyCommandBatch(before, body.commands, { now, accountId });
   if (engine.farmChanged) engine.state.farm.version++;
   if (engine.objectChanged) engine.state.objects.version++;
   if (engine.questChanged) engine.state.quests.version++;
+  if (engine.periodicChanged && engine.state.periodicQuests) engine.state.periodicQuests.version++;
   const accountVersion = runtime.account_version + 1;
   const response: CommandBatchResponse = {
     protocolVersion: GAMEPLAY_PROTOCOL,
@@ -411,6 +452,12 @@ export async function applyBatch(
   if (engine.questChanged) statements.push(db.prepare(`UPDATE quest_documents_v3 SET
       version = version + 1, current_json = ?, updated_at = ? WHERE account_id = ? AND ${guard}`)
     .bind(JSON.stringify({ completed: engine.state.quests.completed, progress: engine.state.quests.progress }), now, accountId, accountId, body.batchId));
+  if (engine.periodicChanged) statements.push(db.prepare(`UPDATE periodic_quest_documents_v3 SET
+      version = version + 1, current_json = ?, updated_at = ? WHERE account_id = ? AND ${guard}`)
+    .bind(JSON.stringify({
+      daily: engine.state.periodicQuests?.daily ?? null,
+      weekly: engine.state.periodicQuests?.weekly ?? null,
+    }), now, accountId, accountId, body.batchId));
   if (before.raids.lastRaidAt !== engine.state.raids.lastRaidAt) {
     statements.push(db.prepare(`UPDATE raid_state_v3 SET last_started_at = ?
       WHERE account_id = ? AND ${guard}`)

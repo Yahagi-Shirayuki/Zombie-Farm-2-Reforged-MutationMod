@@ -17,6 +17,8 @@ Run:  python tools/prep_quests.py
 """
 import os, re, io, json, plistlib, shutil
 
+import quest_xp_rebalance
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ = os.path.dirname(HERE)
 APP = os.path.normpath(os.path.join(
@@ -258,6 +260,12 @@ def main():
             if 3000 <= qid < 4000:
                 add_quest(str(qid), q)
 
+    # MUST run before the recovered rewards below are added: this halves every epic
+    # threshold it finds, and those entries are already authored on the 20-rung ladder
+    # (see their comment). Running it afterwards halved them a SECOND time — 20 -> 10,
+    # 5 -> 3 — silently demoting six prize quests on any regeneration.
+    rescale_epic_ladder(out)
+
     # Bosses 8-10 shipped after the last complete quest table. Their art catalogs
     # and named prize rigs survived, so restore the unambiguous milestone rewards.
     # Skunkarella likewise names Madame Zombie as its epic prize even though only
@@ -303,7 +311,11 @@ def main():
     for qid, key in epic_reward_keys.items():
         out[qid]["rewardItemKey"] = key
 
-    rescale_epic_ladder(out)
+    # Reprice every XP reward against the level it unlocks at. The imported values were
+    # authored for the front of the original game and are worth ~1% of a level by the
+    # forties; see tools/quest_xp_rebalance.py for the bands. Applied HERE so a
+    # regeneration cannot silently restore the source numbers.
+    repriced = quest_xp_rebalance.apply(out)
 
     for boss_dir, icon in [
         ("skunkarella", "questicon_skunkarella.png"),
@@ -327,7 +339,8 @@ def main():
         elif not os.path.exists(os.path.join(UI, s)):
             print(f"  WARN missing quest icon: {s}")
 
-    print(f"quests: wrote {len(out)} quests + copied {copied}/{len(icons)} rail icons")
+    print(f"quests: wrote {len(out)} quests ({len(repriced)} XP rewards repriced)"
+          f" + copied {copied}/{len(icons)} rail icons")
 
 
 if __name__ == "__main__":

@@ -346,7 +346,7 @@ export function buildEnemyUnits(
   const add = (key: string, boss: boolean) => {
     const base = stats[key];
     if (!base) return;
-    const st = eliteEnemyStat(base, opts.elite ?? null);
+    const st = eliteEnemyStat(base, opts.elite ?? null, boss);
     const u = unit(
       `e${out.length}`,
       key,

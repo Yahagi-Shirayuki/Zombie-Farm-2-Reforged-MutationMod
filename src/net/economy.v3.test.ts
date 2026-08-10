@@ -259,6 +259,42 @@ describe("v3 raid dependency ids", () => {
     expect(state.lastRaidAt).toBe(123_456);
   });
 
+  it("survives an expired settlement, which carries no balance and no cooldown stamp", async () => {
+    // alt0rion, 2026-08-09: a Robot invasion finished 21 minutes past its 15-minute
+    // session. The server answers 200 with exactly these five keys and nothing else.
+    // Adopting them blindly set `base` to undefined — silently disabling every later
+    // reconcile — and pushed NaN through syncRaidCooldown.
+    const state = new GameState();
+    const economy = new EconomyClient(state, "expired-session-account");
+    state.syncRaidCooldown(111_000);
+    vi.spyOn(api, "raidFinish").mockResolvedValue({
+      expired: true,
+      gold: 0,
+      xp: 0,
+      firstClear: false,
+      loot: null,
+    });
+    const settledHandler = vi.fn();
+    economy.onRaidSettled = settledHandler;
+
+    const settled = await economy.submitRaid("expired-session", 4200, [], {
+      win: true,
+      rounds: 537,
+      survivors: ["z1"],
+      losses: [],
+      enemiesBeaten: 8,
+      playerDamage: 900,
+    }, {});
+
+    expect(settled.expired).toBe(true);
+    // The cooldown clock must not be poisoned by an absent stamp.
+    expect(state.lastRaidAt).toBe(111_000);
+    expect(Number.isNaN(state.lastRaidAt)).toBe(false);
+    // The result still reaches the result panel, which is where the player is finally
+    // told the invasion timed out (see invasionSettlementNotice).
+    expect(settledHandler).toHaveBeenCalledWith(settled);
+  });
+
   it("keeps retrying a fast tutorial invasion until the minimum duration passes", async () => {
     vi.useFakeTimers();
     const economy = new EconomyClient(new GameState(), "tutorial-raid-account");

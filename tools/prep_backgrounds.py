@@ -60,6 +60,22 @@ GREEN_RAMPS: dict[str, list[tuple[int, tuple[int, int, int]]]] = {
         (185, (250, 234, 190)),
         (255, (255, 245, 214)),
     ],
+    # Autumn Ground: orange-tan hills under trees that have turned deep russet.
+    # Unlike the other skins this one keeps a clear light/dark split between the
+    # hill body and its dotted trees — autumn is a foliage colour, so the trees
+    # have to stay legible rather than melting into the ground.
+    "autumn": [
+        (0, (48, 20, 10)),
+        (49, (62, 28, 13)),
+        (96, (134, 58, 24)),
+        (106, (156, 72, 28)),
+        (126, (198, 132, 66)),
+        (140, (214, 158, 92)),
+        (150, (222, 170, 104)),
+        (158, (230, 181, 116)),
+        (185, (240, 202, 148)),
+        (255, (250, 226, 186)),
+    ],
     # Snowy Ground: snow-capped hills with frosted evergreens.
     "snow": [
         (0, (28, 48, 66)),

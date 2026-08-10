@@ -1,8 +1,15 @@
 import { describe, it, expect } from "vitest";
+import groundIndex from "../public/assets/ground_index.json";
+import upgrades from "../public/assets/upgrades.json";
 import { FARM_BG_DENSITY, type FarmBackground } from "./prefs";
 import { pickPiece, surroundingsTheme, themeObjectFiles } from "./surroundings";
 
-const TERRAINS = ["grass", "dirt", "snow", "stone", "sand", "water"];
+// Taken from the generated catalog rather than hand-listed, so adding a ground
+// skin extends every test below instead of needing this line kept up to date.
+const TERRAINS = upgrades.climate.map((c) => c.terrain);
+// The man-made skins, which are deliberately sparse and NOT tree-weighted.
+const BUILT = ["stone", "water"];
+const NATURAL = TERRAINS.filter((t) => !BUILT.includes(t));
 
 // Everything a theme may name, enumerated off the real asset tree at build time.
 // A theme entry with a typo'd filename would otherwise fail only in the browser,
@@ -14,8 +21,20 @@ const SHIPPED_SCENERY = basenames(import.meta.glob("../public/assets/scenery/*.p
 const SHIPPED_BACKDROPS = basenames(import.meta.glob("../public/assets/farm_background*.png"));
 
 describe("surroundingsTheme", () => {
-  it("dresses every ground_index terrain the Market sells", () => {
+  it("dresses every terrain the Market sells", () => {
+    expect(TERRAINS.length).toBeGreaterThanOrEqual(6); // guard against an empty catalog
     for (const t of TERRAINS) expect(surroundingsTheme(t).key).toBe(t);
+  });
+
+  // A skin is three separate assets that must agree: a Market entry, a row of
+  // ground tiles, and a surroundings theme. Miss the tiles and Field.setClimate
+  // silently no-ops — the player buys a skin and the farm never changes.
+  it("every skin on sale has ground tiles to paint the farm with", () => {
+    const rows = groundIndex as Record<string, string[]>;
+    for (const t of TERRAINS) {
+      expect(rows[t], `${t} missing from ground_index.json`).toBeDefined();
+      expect(rows[t].length, `${t} has no tile variants`).toBeGreaterThan(0);
+    }
   });
 
   it("falls back to the temperate theme for an unknown skin", () => {
@@ -53,8 +72,8 @@ describe("surroundingsTheme", () => {
     // bare constant — a change to either side should fail here.
     const at = (t: string, bg: FarmBackground) =>
       (surroundingsTheme(t).density ?? 1) * FARM_BG_DENSITY[bg];
-    for (const built of ["stone", "water"]) {
-      for (const natural of ["grass", "dirt", "snow", "sand"]) {
+    for (const built of BUILT) {
+      for (const natural of NATURAL) {
         expect(at(built, "deep-forest"), `${built} vs ${natural}`)
           .toBeLessThan(at(natural, "woodland"));
         expect(at(built, "deep-forest")).toBeCloseTo(at(natural, "light-meadow"), 1);
@@ -63,12 +82,12 @@ describe("surroundingsTheme", () => {
   });
 
   it("weights the far band toward trees only where the big pieces ARE trees", () => {
-    for (const natural of ["grass", "dirt", "snow", "sand"]) {
+    for (const natural of NATURAL) {
       expect(surroundingsTheme(natural).treeShare ?? 0.5, natural).toBeGreaterThan(0.5);
     }
     // Built environments: their far-band pieces are street lights and rocket
     // wrecks, which read as an installation in any quantity.
-    for (const built of ["stone", "water"]) {
+    for (const built of BUILT) {
       expect(surroundingsTheme(built).treeShare ?? 0.5, built).toBeLessThanOrEqual(0.5);
     }
   });

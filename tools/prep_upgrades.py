@@ -19,7 +19,12 @@ import json
 import os
 import shutil
 
-from reforge_economy import EXTRA_SIZE_TIERS, LEVEL_CAP, brain_price
+from PIL import Image
+
+import prep_assets
+from reforge_economy import (
+    EXTRA_CLIMATES, EXTRA_SIZE_TIERS, LEVEL_CAP, brain_price,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -39,6 +44,36 @@ def copy_icon(sheet, dest_name):
     os.makedirs(ICON_DIR, exist_ok=True)
     shutil.copyfile(src, os.path.join(ICON_DIR, dest_name))
     return dest_name
+
+
+def derived_climate_icon(terrain):
+    """Market thumbnail for a Reforged-added skin: the grassy icon put through the
+    exact same recolour its ground tiles get, so the card matches the terrain."""
+    spec = prep_assets.DERIVED_GROUND_ROWS.get(terrain)
+    if not spec:
+        return ""
+    src = os.path.join(ICON_DIR, "upgrade_ground_grassy.png")
+    if not os.path.exists(src):
+        print(f"  WARN no grassy icon to derive {terrain} from")
+        return ""
+    dest = f"upgrade_ground_{terrain}.png"
+    prep_assets.recolor_terrain(
+        Image.open(src).convert("RGBA"), spec["hue"], spec["sat"], spec["val"]
+    ).save(os.path.join(ICON_DIR, dest))
+    return dest
+
+
+def check_climates(climates):
+    """Every skin must name a terrain the ground slicer actually emits, or the
+    Market sells a card that silently does nothing (Field.setClimate no-ops on an
+    unknown terrain key)."""
+    known = set(prep_assets.GROUND_ROWS) | set(prep_assets.DERIVED_GROUND_ROWS)
+    for c in climates:
+        if c["terrain"] not in known:
+            raise ValueError(f"{c['name']}: unknown terrain {c['terrain']!r}")
+    keys = [c["terrain"] for c in climates]
+    if len(keys) != len(set(keys)):
+        raise ValueError(f"duplicate climate terrains: {keys}")
 
 
 def check_size_progression(tiers):
@@ -132,6 +167,18 @@ def main():
             "name": e["name"], "climateGID": gid, "level": int(e["level"]),
             "gold": int(e["cost"]), "icon": icon, "terrain": terrain,
         })
+
+    # Reforged's own skins, on terrain rows prep_assets derives rather than slices.
+    # climateGID 0 marks "no source entry" — the field is vestigial (nothing at
+    # runtime reads it; a climate card previews the ground tile itself), but the
+    # shape stays uniform across the catalog.
+    for extra in EXTRA_CLIMATES:
+        climate.append({
+            "name": extra["name"], "climateGID": 0, "level": extra["level"],
+            "gold": extra["gold"], "icon": derived_climate_icon(extra["terrain"]),
+            "terrain": extra["terrain"],
+        })
+    check_climates(climate)
 
     os.makedirs(os.path.dirname(OUT_JSON), exist_ok=True)
     # indent=1 and no trailing newline: matches the committed asset (and the other

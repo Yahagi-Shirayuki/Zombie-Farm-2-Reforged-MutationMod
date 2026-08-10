@@ -85,6 +85,14 @@
    "gold": 10000,
    "icon": "upgrade_ground_lunar.png",
    "terrain": "water"
+  },
+  {
+   "name": "Autumn Ground",
+   "climateGID": 0,
+   "level": 1,
+   "gold": 3000,
+   "icon": "upgrade_ground_autumn.png",
+   "terrain": "autumn"
   }
  ]
 }

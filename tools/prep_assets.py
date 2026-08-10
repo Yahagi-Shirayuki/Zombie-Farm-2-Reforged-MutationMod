@@ -4,7 +4,9 @@ Asset-prep for the ZF2R field milestone.
 Reads the extracted ZF2R 1.0 app bundle and produces clean PNGs + JSON under
 zombiefarm/public/assets/ :
 
-  ground/<terrain>_<variant>.png   sliced from tex0000.png (48x24 iso diamonds)
+  ground/<terrain>_<variant>.png   sliced from tex0000.png (48x24 iso diamonds);
+                                   the lunar row is regraded and "autumn" is a
+                                   recolour of grass (see DERIVED_GROUND_ROWS)
   player/<part>.png                sliced from playerSpriteSheet.png (cocos2d fmt 3)
   rig_player.json                  FarmerSprites.plist layout (offset/pivot/z per part)
   ground_index.json                terrain -> [variant filenames]
@@ -12,7 +14,7 @@ zombiefarm/public/assets/ :
 
 Run:  python tools/prep_assets.py
 """
-import os, re, io, json, plistlib, random, shutil
+import colorsys, os, re, io, json, plistlib, random, shutil
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +42,42 @@ def rect(s):
 # the 5 columns are color variants.
 GROUND_ROWS = ["grass", "dirt", "snow", "stone", "sand", "water"]
 TILE_W, TILE_H = 48, 24
+
+# Terrains Reforged ADDS on top of the six source rows, each derived from an
+# existing row by an HSV rotation: hue is replaced outright, saturation and value
+# are scaled. Rotating in HSV (rather than remapping through a luminance ramp, as
+# the backdrops do) preserves the source tile's texture EXACTLY — every
+# grass-blade stroke keeps its relative shading, so the result still reads as the
+# same hand-painted art rather than a flat wash.
+#
+# "autumn": the default grass turned to a warm orange-tan. Deliberately pushed
+# past a plain brown — the palette already has a pale sand ("dirt", the Sandy
+# skin) and a mustard dead grass ("sand", the Dead skin), and a new ground has to
+# be distinguishable from both at a glance.
+#
+# KEEP IN SYNC with: EXTRA_CLIMATES in reforge_economy.py (the market entry),
+# CLIMATE_COST in server/src/shopCatalog.ts (the price the server charges), and
+# the theme in src/surroundings.ts (what the land around the farm looks like).
+DERIVED_GROUND_ROWS = {
+    "autumn": {"source": "grass", "hue": 28 / 360, "sat": 1.05, "val": 1.32},
+}
+
+
+def recolor_terrain(cell, hue, sat, val):
+    """HSV-rotate one ground tile onto a new hue, keeping its texture intact."""
+    out = cell.copy()
+    px = out.load()
+    for y in range(out.height):
+        for x in range(out.width):
+            r, g, b, a = px[x, y]
+            if a == 0:
+                continue
+            _, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+            s = max(0.0, min(1.0, s * sat))
+            v = max(0.0, min(1.0, v * val))
+            nr, ng, nb = colorsys.hsv_to_rgb(hue, s, v)
+            px[x, y] = (round(nr * 255), round(ng * 255), round(nb * 255), a)
+    return out
 
 
 # The source "water" row is the Lunar Ground skin, and as sliced it is a flat,
@@ -111,9 +149,11 @@ def slice_ground():
     cols = im.width // TILE_W
     rows = im.height // TILE_H
     index = {}
+    sliced = {}  # terrain -> [cell, ...], kept so derived rows come off the source
     for r in range(rows):
         terrain = GROUND_ROWS[r] if r < len(GROUND_ROWS) else f"terrain{r}"
         index[terrain] = []
+        sliced[terrain] = []
         for c in range(cols):
             cell = im.crop((c * TILE_W, r * TILE_H,
                             c * TILE_W + TILE_W, r * TILE_H + TILE_H))
@@ -122,8 +162,23 @@ def slice_ground():
             name = f"{terrain}_{c}.png"
             cell.save(os.path.join(OUT, "ground", name))
             index[terrain].append(name)
+            sliced[terrain].append(cell)
+
+    # Reforged's own terrains, recoloured off a source row. Derived from the cells
+    # held above rather than re-read from disk, so re-running can never compound a
+    # previous run's recolour onto itself.
+    for terrain, spec in DERIVED_GROUND_ROWS.items():
+        index[terrain] = []
+        for c, cell in enumerate(sliced[spec["source"]]):
+            name = f"{terrain}_{c}.png"
+            recolor_terrain(cell, spec["hue"], spec["sat"], spec["val"]).save(
+                os.path.join(OUT, "ground", name))
+            index[terrain].append(name)
+
     json.dump(index, open(os.path.join(OUT, "ground_index.json"), "w"), indent=1)
-    print(f"ground: {rows} terrains x {cols} variants -> {rows*cols} tiles")
+    total = sum(len(v) for v in index.values())
+    print(f"ground: {len(index)} terrains ({rows} source + "
+          f"{len(DERIVED_GROUND_ROWS)} derived) x {cols} variants -> {total} tiles")
     return index
 
 

@@ -1,16 +1,20 @@
 import { BRAIN_TICKET_KEY, DICE_KEY, CONCENTRATION_KEY, VOUCHER_KEY, MAX_STACK } from "../boostCatalog";
-import { levelForXp, levelUpBrains } from "../levels";
+import { XP_THRESHOLDS, levelForXp, levelUpBrains } from "../levels";
 import { ownedLootCounter, resolveLoot, rollLoot } from "../loot";
 import { raidEcon, raidUnlocked, winGold } from "../raidCatalog";
 import { applyQuestEvents, MEMORIAL_GRAVEYARD_CAP } from "./engine";
-import type { QuestProjection } from "../../../src/net/protocol";
+import { applyPeriodicEvents, refreshPeriodicState, xpToNextLevel } from "../../../src/quest/periodic/generate";
+import type { PeriodicQuestState } from "../../../src/quest/periodic/types";
+import type { PeriodicQuestProjection, QuestProjection } from "../../../src/net/protocol";
 import type { RaidOutcome } from "../../../src/raid/types";
 import raidRows from "../../../public/assets/raids/raids.json";
 import { activeBonusHeadId, farmerCooldownMs } from "../../../src/farmer";
 import { buildPinnedV3Raid, verifyRaid, RAID_RULESET_VERSION, type PinnedRaidConfig, type RaidReplayInput } from "../raidVerifier";
 import { rollBrainDrop, rollBrainDropWithPity, nextBrainDryStreak } from "../../../src/raid/brainDrops";
 import { ELITE_BRAIN_LUCK } from "../../../src/raid/eliteInvasion";
-import { rollRaidZombieDropWithPity, nextRaidZombieDryWins, hasRaidZombieDrop } from "../../../src/raid/zombieDrops";
+import { rollRaidZombieDropWithPity, nextRaidZombieDryWins, hasRaidZombieDrop,
+  RARE_INVASION_ZOMBIE_SUBJECT } from "../../../src/raid/zombieDrops";
+import { raidFeatQuestEvents } from "../../../src/raid/featQuestEvents";
 import objectRows from "../../../public/assets/placeables.json";
 import { shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
 import { encodeReceivedZombie } from "../../../src/zombie/receivedReward";
@@ -397,11 +401,21 @@ export async function finishRaid(
   const raidId = Number(session.raid_id);
   const econ = raidEcon(raidId);
   if (!econ) return { status: 409, body: { error: "bad_raid" } };
-  const [balance, coreRow, raidState, questRow, casualtyRows, presentationRow, objectRow, rosterCounts] = await Promise.all([
+  // Materialise the daily/weekly document before reading it. Every OTHER writer of it
+  // reaches it through ensureV3 (bootstrap, a command batch, a presentation write); the
+  // raid path deliberately loads no projection, so this is the one place that can meet
+  // an account which has never had the row created. A missing row is read as null below
+  // and answered `state_conflict` — i.e. a won invasion paying nothing — so it is worth
+  // one statement to make impossible. Same INSERT OR IGNORE `startRaid` already does for
+  // raid_state_v3, and a no-op once 0049's backfill has run.
+  await db.prepare(`INSERT OR IGNORE INTO periodic_quest_documents_v3
+    (account_id, updated_at) VALUES (?, ?)`).bind(accountId, now).run();
+  const [balance, coreRow, raidState, questRow, periodicRow, casualtyRows, presentationRow, objectRow, rosterCounts] = await Promise.all([
     db.prepare("SELECT gold, brains, xp, claimed_level FROM balances WHERE account_id = ?").bind(accountId).first<{ gold: number; brains: number; xp: number; claimed_level: number }>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<{ current_json: string }>(),
     db.prepare("SELECT last_started_at, progress_json, brain_dry_streak, zombie_dry_json FROM raid_state_v3 WHERE account_id = ?").bind(accountId).first<RaidStateRow>(),
     db.prepare("SELECT version, current_json FROM quest_documents_v3 WHERE account_id = ?").bind(accountId).first<QuestRow>(),
+    db.prepare("SELECT version, current_json FROM periodic_quest_documents_v3 WHERE account_id = ?").bind(accountId).first<QuestRow>(),
     losses.length
       ? db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, created_at, color FROM roster_v3
           WHERE account_id = ? AND locked_by_raid = ? AND unit_id IN (${losses.map(() => "?").join(",")})`)
@@ -423,7 +437,7 @@ export async function finishRaid(
     db.prepare("SELECT stored, COUNT(*) AS count FROM roster_v3 WHERE account_id = ? GROUP BY stored")
       .bind(accountId).all<{ stored: number; count: number }>(),
   ]);
-  if (!balance || !coreRow || !raidState || !questRow || !objectRow) {
+  if (!balance || !coreRow || !raidState || !questRow || !periodicRow || !objectRow) {
     return { status: 409, body: { error: "state_conflict" } };
   }
   const core = parse<CoreState>(coreRow.current_json, { inventory: {}, storage: { received: {}, stored: {} } });
@@ -512,16 +526,54 @@ export async function finishRaid(
     questRow.current_json, { completed: [], progress: [] }
   );
   const quests: QuestProjection = { version: questRow.version, ...questData };
+  const raidName = raidNames.get(raidId) ?? String(raidId);
   const questEvents = win ? [
-    { type: "kInvasionSuccessfulNotification", subject: raidNames.get(raidId) ?? String(raidId) },
-    ...(losses.length === 0 ? [{ type: "kInvasionPerfectGameNotification", subject: raidNames.get(raidId) ?? String(raidId) }] : []),
+    { type: "kInvasionSuccessfulNotification", subject: raidName },
+    ...(losses.length === 0 ? [{ type: "kInvasionPerfectGameNotification", subject: raidName }] : []),
+    // The rare invasion zombie also answers to a generic alias, so ONE quest can ask for
+    // "a rare zombie from an invasion" without naming which of the four. A blank subject
+    // would not do: it is the format's wildcard and would count Bonus Gold as well.
     ...(loot ? [{ type: "kLootItemWonNotification", subject: loot.name }] : []),
-    ...(newZombieName ? [{ type: "kLootItemWonNotification", subject: newZombieName }] : []),
+    ...(newZombieName
+      ? [{ type: "kLootItemWonNotification", subject: newZombieName, aliases: [RARE_INVASION_ZOMBIE_SUBJECT] }]
+      : []),
+    // Elite + technique events, derived by the SAME shared function the offline build
+    // uses. `outcome.feats` comes from the server's own replay of this fight, so none of
+    // it is client-asserted.
+    ...raidFeatQuestEvents({
+      win: true,
+      perfect: losses.length === 0,
+      elite: !!boosts.elite,
+      raidName,
+      feats: replayOutcome.feats,
+    }),
   ] : [];
   const questChanges = applyQuestEvents(nextBalance, quests, questEvents, {
     inventory: core.inventory,
     storage: core.storage,
   });
+  // Daily/weekly quests count invasions too, and this is the only path a win travels —
+  // raids deliberately bypass the command lane. Roll the sets forward first (a raid can
+  // easily be the first thing a player does after midnight) using the level they held
+  // BEFORE this win, so the board they were playing against is the one that pays.
+  const periodicLevel = levelForXp(balance.xp);
+  const periodic: PeriodicQuestState = parse<PeriodicQuestState>(
+    periodicRow.current_json, { daily: null, weekly: null }
+  );
+  const periodicBefore = JSON.stringify(periodic);
+  refreshPeriodicState(periodic, {
+    accountId,
+    level: periodicLevel,
+    xpToNext: xpToNextLevel(periodicLevel, XP_THRESHOLDS),
+    now,
+  });
+  applyPeriodicEvents(periodic, questEvents);
+  const periodicChanged = periodicBefore !== JSON.stringify(periodic);
+  const periodicQuests: PeriodicQuestProjection = {
+    version: periodicRow.version + (periodicChanged ? 1 : 0),
+    daily: periodic.daily,
+    weekly: periodic.weekly,
+  };
   const levelBefore = levelForXp(balance.xp);
   const levelAfter = levelForXp(nextBalance.xp);
   const lastRaidAt = levelAfter > levelBefore ? 0 : raidState.last_started_at;
@@ -558,7 +610,7 @@ export async function finishRaid(
   const result = { settlementId, lastRaidAt, serverTime: now, balance: nextBalance, gold: baseGold + lootGold,
     brains, xp: nextBalance.xp - balance.xp, firstClear, loot, newZombie, outcome, questChanges,
     inventory: core.inventory, storage: core.storage, raidProgress: progress, revival,
-    rulesetVersion: RAID_RULESET_VERSION };
+    periodicQuests, rulesetVersion: RAID_RULESET_VERSION };
   const resultJson = JSON.stringify(result);
   const guard = "EXISTS (SELECT 1 FROM raid_sessions_v3 s WHERE s.id = ? AND s.result_json = ?)";
   const statements: D1PreparedStatement[] = [
@@ -576,6 +628,10 @@ export async function finishRaid(
     db.prepare(`UPDATE quest_documents_v3 SET version = version + 1, current_json = ?, updated_at = ?
       WHERE account_id = ? AND ${guard}`)
       .bind(JSON.stringify({ completed: quests.completed, progress: quests.progress }), now, accountId, session.id, resultJson),
+    db.prepare(`UPDATE periodic_quest_documents_v3 SET version = version + ?, current_json = ?, updated_at = ?
+      WHERE account_id = ? AND ${guard}`)
+      .bind(periodicChanged ? 1 : 0, JSON.stringify({ daily: periodic.daily, weekly: periodic.weekly }),
+        now, accountId, session.id, resultJson),
     db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
       SELECT ?, ?, 'raid_finish', ?, ? WHERE ${guard}`)
       .bind(settlementId, accountId, JSON.stringify({ sessionId: session.id, raidId, win, survivors, losses,

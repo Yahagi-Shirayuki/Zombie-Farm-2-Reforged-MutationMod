@@ -424,10 +424,13 @@ describe("deployed team ability counts", () => {
 });
 
 describe("Garden healing and formation depth", () => {
-  it("fills a headless zombie's front slot from the next row after knockback", () => {
+  // Knockback costs a zombie its DEPTH BAND, not its slot inside one: `setZombieToLastIndex`
+  // moves it to the tail of the deployed block, and `calculateDestinationPoint` then reads a
+  // band one deeper off its new index. Six zombies, so the tail is in the second band.
+  it("drops a knocked-back zombie into the next depth band, and the row closes up", () => {
     const players = [
       unit({ id: "headless", sourceKey: "ZombieActorHeadlessTier1", team: "player", isHeadless: true }),
-      ...Array.from({ length: 4 }, (_, i) =>
+      ...Array.from({ length: 5 }, (_, i) =>
         unit({ id: `regular-${i}`, sourceKey: "ZombieActorRegularTier1", team: "player" })
       ),
     ];
@@ -447,20 +450,93 @@ describe("Garden healing and formation depth", () => {
 
     sim.step(50);
     const headless = deployed[0];
-    const replacement = deployed[4];
-    expect(headless.slotX).toBeGreaterThan(replacement.slotX);
+    const spare = deployed[5]; // the one sitting alone in band 1
+    // A Headless leans IN (standoff -5), so it takes the front of its row.
+    expect(headless.slotX).toBeGreaterThan(deployed[1].slotX);
+    expect(headless.slotX).toBeGreaterThan(spare.slotX);
+    const headlessFrontX = headless.slotX;
 
-    const replacementStartX = replacement.x;
     (sim as unknown as { knockBackZombie(unit: typeof headless): void }).knockBackZombie(headless);
     sim.step(50);
 
-    expect(replacement.slotX).toBeGreaterThan(headless.slotX);
-    expect(replacement.x).toBeGreaterThan(replacementStartX);
+    // It is now the tail of the deployed block, so band 1 — a whole band behind the line,
+    // and behind the zombie that was the tail before it.
+    expect(headless.slotX).toBeLessThan(headlessFrontX);
+    expect(spare.slotX).toBeGreaterThan(headless.slotX);
+  });
 
-    for (let elapsed = 0; elapsed < 10_000 && !headless.frontPriority; elapsed += 50) sim.step(50);
-    sim.step(50); // apply the restored priority to the next formation assignment
-    expect(headless.frontPriority).toBe(true);
-    expect(headless.slotX).toBeGreaterThan(replacement.slotX);
+  // GROUND TRUTH (`Actor knockBackBy:force:` / `Actor movementUpdate:`): the shove is a
+  // SLIDE toward a parked knockBackPoint at force*60 px/s, not a teleport, and the zombie
+  // is out of melee for its duration.
+  it("slides a knocked-back zombie instead of teleporting it", () => {
+    const p = unit({ id: "p", sourceKey: "ZombieActorRegularTier1", team: "player" });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000, attackCooldownMs: 100_000,
+    });
+    const sim = new BattleSim([p], [enemy], null, true);
+    const live = sim.units.find((u) => u.id === "p")!;
+    live.state = "advance";
+    sim.units.find((u) => u.id === "enemy")!.state = "hold";
+    sim.step(50); // one step to assign the formation slot
+    live.x = live.slotX; // stand it on the line — a shove is measured from where it is
+    const startX = live.x;
+
+    (sim as unknown as { knockBackZombie(u: SimUnit): void }).knockBackZombie(live);
+    expect(live.knockBackSpeed).toBeGreaterThan(0);
+    const target = live.knockBackToX;
+    // 50-149 source points of shove, converted into field units.
+    expect(startX - target).toBeGreaterThan(0);
+
+    sim.step(50);
+    expect(live.x).toBeGreaterThan(target); // still travelling — not snapped
+    expect(live.x).toBeLessThan(startX);
+    expect(live.state).not.toBe("fight"); // out of melee while the point is live
+
+    for (let i = 0; i < 40 && live.knockBackSpeed > 0; i++) sim.step(50);
+    expect(live.knockBackSpeed).toBe(0); // point reached and cleared
+  });
+
+  // `cantInterrupt` in Attacks.json, on exactly ZombieBash/BashV2/Explode/ExplodeV2.
+  // `fightAttack:` writes `canInterrupt = !cantInterrupt` for the swing and `damageIn:`
+  // refuses BOTH the stun and the shove while it is NO — super armour on the moves you
+  // spend a charge on.
+  it("cannot shove or stun a zombie mid-Smash, but can once the swing ends", () => {
+    const p = unit({
+      id: "p", sourceKey: "ZombieActorRegularTier4", team: "player",
+      hp: 1e6, maxHp: 1e6, abilities: ["bashV2"],
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000, knockBack: true, stunMs: 1000,
+    });
+    const sim = new BattleSim([p], [enemy], null, true);
+    const live = sim.units.find((u) => u.id === "p")!;
+    const foe = sim.units.find((u) => u.id === "enemy")!;
+    live.state = "fight";
+    foe.state = "hold";
+    sim.step(50);
+
+    live.windupKey = "bashV2"; // mid-Smash
+    live.knockBackSpeed = 0;
+    live.stunMs = 0;
+    for (let i = 0; i < 200 && live.knockBackSpeed === 0 && live.stunMs === 0; i++) {
+      live.windupKey = "bashV2";
+      live.state = "fight";
+      foe.state = "hold";
+      sim.step(50);
+    }
+    expect(live.knockBackSpeed).toBe(0); // never shoved while the Smash is winding up
+    expect(live.stunMs).toBe(0); // and never stunned out of it
+
+    // Drop the wind-up and the very same enemy lands both effects.
+    for (let i = 0; i < 200 && live.knockBackSpeed === 0; i++) {
+      live.windupKey = null;
+      live.state = "fight";
+      foe.state = "hold";
+      sim.step(50);
+    }
+    expect(live.knockBackSpeed).toBeGreaterThan(0);
   });
 
   it("fills a front slot when its occupant dies", () => {
@@ -484,13 +560,16 @@ describe("Garden healing and formation depth", () => {
     const fallen = deployed[0];
     const replacement = deployed[4];
     expect(fallen.slotX).toBeGreaterThan(replacement.slotX);
-    const openSlotX = fallen.slotX;
+    const replacementSlotX = replacement.slotX;
     const replacementStartX = replacement.x;
     fallen.alive = false;
     fallen.state = "dead";
 
     sim.step(50);
-    expect(replacement.slotX).toBe(openSlotX);
+    // The row is one shorter, so every survivor shuffles one slot forward. (It is a
+    // shuffle, not a promotion to the dead zombie's exact spot: the source recomputes each
+    // slot from the row's CURRENT membership.)
+    expect(replacement.slotX).toBeGreaterThan(replacementSlotX);
     expect(replacement.x).toBeGreaterThan(replacementStartX);
   });
 
@@ -633,10 +712,19 @@ describe("Garden healing and formation depth", () => {
       { name: "alienLaser", weight: 1, castMs: 0, cooldownMs: 100_000, damage: 100 },
     ]);
     const p = sim.units.find((u) => u.id === "player")!;
-    p.state = "advance";
+    // The laser only fires at an ENGAGED zombie (`allowedToShootBullet`), and the boss's
+    // action is resolved before the zombies are stepped, so hold the state across both.
+    // The bolt is NOT led (the source aims at the target's position when the trigger is
+    // pulled), so the zombie has to stand still for it to connect.
+    p.moveSpeed = 0;
+    p.state = "fight";
     sim.step(16); // select the special
+    p.state = "fight";
     sim.step(16); // launch the straight projectile
-    for (let i = 0; i < 200 && p.hp === 100; i++) sim.step(16);
+    for (let i = 0; i < 400 && p.hp === 100; i++) {
+      p.state = "fight";
+      sim.step(16);
+    }
     expect(p.hp).toBe(1);
     expect(p.alive).toBe(true);
   });
@@ -663,7 +751,12 @@ describe("Garden healing and formation depth", () => {
     expect(sim.snapshot().throwCount).toBe(0);
   });
 
-  it("places combat priority from visual front to back within a column", () => {
+  // A row is ordered by BODY TYPE, not by release order: `calculateDestinationPoint`'s
+  // bucketed insertion runs Small -> Headless -> Girl -> Regular -> Large -> Garden, and
+  // each body carries its own standoff (Headless -5, Regular +8) so a light body plants
+  // closer to the enemy. Slot 0 also takes the largest y — nearest the camera, drawn in
+  // front, which is what the source's explicit zOrder does.
+  it("orders a row by body type, lightest to the front", () => {
     const first = unit({ id: "first", sourceKey: "ZombieActorHeadlessTier1", team: "player", isHeadless: true });
     const second = unit({ id: "second", sourceKey: "ZombieActorRegularTier1", team: "player" });
     const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 300 });
@@ -676,8 +769,30 @@ describe("Garden healing and formation depth", () => {
     b.formOrder = 1;
 
     sim.step(50);
-    expect(a.slotX).toBe(b.slotX);
-    expect(a.slotY).toBeGreaterThan(b.slotY);
+    expect(a.slotX).toBeGreaterThan(b.slotX); // the Headless leans in past the Regular
+    expect(a.slotY).toBeGreaterThan(b.slotY); // ...and stands nearest the camera
+  });
+
+  // Release order decides the BAND; body type only decides the slot inside one. A Large
+  // released first still leads the row it is in, because its band is shallower.
+  it("keeps release order as the band, with body type only sorting inside it", () => {
+    const large = unit({ id: "large", sourceKey: "ZombieActorLargeTier1", group: "Large", team: "player" });
+    const smalls = Array.from({ length: 5 }, (_, i) =>
+      unit({ id: `small-${i}`, sourceKey: "ZombieActorSmallTier1", group: "Small", team: "player" })
+    );
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 300 });
+    const sim = new BattleSim([large, ...smalls], [enemy], null, true);
+    const deployed = sim.units.filter((u) => u.team === "player");
+    deployed.forEach((u, i) => { u.state = "advance"; u.formOrder = i; });
+    sim.units.find((u) => u.id === "enemy")!.state = "hold";
+
+    sim.step(50);
+    const big = deployed[0];
+    const bandOneSmall = deployed[5];
+    // Inside band 0 the Smalls outrank the Large...
+    expect(deployed[1].slotX).toBeGreaterThan(big.slotX);
+    // ...but the Small that spilled into band 1 is behind the whole of band 0.
+    expect(bandOneSmall.slotX).toBeLessThan(big.slotX);
   });
 });
 
@@ -870,6 +985,12 @@ describe("enemy cadence and boss hazard damage (ground truth)", () => {
     for (const u of sim.units) u.state = u.team === "enemy" ? "hold" : "advance";
   };
 
+  /** Zombies toe-to-toe with the wave — what `isInMeleeRange` reports, and the only
+   *  state the alien laser will fire at. */
+  const inMelee = (sim: BattleSim) => {
+    for (const u of sim.units) u.state = u.team === "enemy" ? "hold" : "fight";
+  };
+
   it("an enemy strikes on its raw 1/dex clock — twice per equal-dex zombie swing", () => {
     // dex 2: zombie cycle 1000 ms, enemy cycle 500 ms (CombatEngine derives these; here
     // they arrive pre-derived, so assert the sim honours them without a pace multiplier).
@@ -922,9 +1043,63 @@ describe("enemy cadence and boss hazard damage (ground truth)", () => {
     const sim = new BattleSim([p], [boss], null, true, [
       { name: "alienLaser", weight: 1, castMs: 0, cooldownMs: 1e6, damage: 0 },
     ]);
-    onTheLine(sim);
-    for (let i = 0; i < 5 && !sim.projectiles.length; i++) sim.step(50);
+    for (let i = 0; i < 5 && !sim.projectiles.length; i++) {
+      inMelee(sim);
+      sim.step(50);
+    }
     expect(sim.projectiles[0]?.damage).toBe(200);
+  });
+
+  // `ZFFightMan shootBullet:from:` picks a RANDOM zombie out of the ones that are
+  // `isInMeleeRange` (or mid special attack). Garden healers hold at the support line
+  // and never enter that set — aiming the bolt like a THROW (rear-most deployed unit)
+  // had every shot land on them.
+  it("the alien laser burns a FRONT-LINE zombie, never the healers holding back", () => {
+    const front = unit({
+      id: "front", sourceKey: "ZombieActorRegularTier1", team: "player",
+      hp: 1e6, maxHp: 1e6,
+    });
+    const healer = unit({
+      id: "healer", sourceKey: "ZombieActorGardenTier1", team: "player",
+      hp: 1e6, maxHp: 1e6, isGarden: true,
+    });
+    const boss = enemy({ id: "boss", isBoss: true, str: 0, hp: 1e7, maxHp: 1e7 });
+    const sim = new BattleSim([front, healer], [boss], null, true, [
+      { name: "alienLaser", weight: 1, castMs: 0, cooldownMs: 1e6, damage: 0 },
+    ]);
+    const f = sim.units.find((u) => u.id === "front")!;
+    const h = sim.units.find((u) => u.id === "healer")!;
+    for (let i = 0; i < 5 && !sim.projectiles.length; i++) {
+      for (const u of sim.units) u.state = u.team === "enemy" ? "hold" : "advance";
+      f.moveSpeed = 0;
+      h.moveSpeed = 0;
+      f.x = 820; // toe-to-toe with the wave
+      h.x = 520; // Garden support line, well behind
+      f.y = h.y = 280;
+      f.state = "fight"; // only the front zombie is engaged
+      sim.step(50);
+    }
+    const bolt = sim.projectiles[0];
+    expect(bolt).toBeTruthy();
+    // The bolt is aimed at the position of whoever it targeted, so its bearing points at
+    // the engaged zombie up front — not back down the lane at the healer.
+    const bearing = Math.atan2(bolt.vy, bolt.vx);
+    const toFront = Math.atan2(f.y - bolt.y, f.x - bolt.x);
+    const toHealer = Math.atan2(h.y - bolt.y, h.x - bolt.x);
+    expect(Math.abs(bearing - toFront)).toBeLessThan(Math.abs(bearing - toHealer));
+  });
+
+  it("the alien saucer holds its fire when nobody is engaged", () => {
+    const p = player({ hp: 1e6, maxHp: 1e6 });
+    const boss = enemy({ id: "boss", isBoss: true, str: 0, hp: 1e7, maxHp: 1e7 });
+    const sim = new BattleSim([p], [boss], null, true, [
+      { name: "alienLaser", weight: 1, castMs: 0, cooldownMs: 1e6, damage: 0 },
+    ]);
+    for (let i = 0; i < 40; i++) {
+      onTheLine(sim); // everyone still walking up — `allowedToShootBullet` refuses
+      sim.step(50);
+    }
+    expect(sim.projectiles).toHaveLength(0);
   });
 });
 

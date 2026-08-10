@@ -491,6 +491,14 @@ CREATE TABLE IF NOT EXISTS quest_documents_v3 (
   current_json  TEXT NOT NULL DEFAULT '{"completed":[],"progress":[]}',
   updated_at    INTEGER NOT NULL
 );
+-- Daily/weekly quests. Deliberately a separate document from quest_documents_v3 —
+-- see migrations/0049_periodic_quests.sql for why.
+CREATE TABLE IF NOT EXISTS periodic_quest_documents_v3 (
+  account_id    TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  version       INTEGER NOT NULL DEFAULT 0,
+  current_json  TEXT NOT NULL DEFAULT '{"daily":null,"weekly":null}',
+  updated_at    INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS gameplay_documents_v3 (
   account_id    TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
   current_json  TEXT NOT NULL,

@@ -67,25 +67,34 @@ export interface ActivatedAbility {
    *  combat zone with no enemy in front, its wind-up keeps burning down while the
    *  zombie has no target, and it detonates on schedule even into an empty field. */
   suicide?: boolean;
+  /** GROUND TRUTH — `cantInterrupt` in Attacks.json, carried by EXACTLY four attacks:
+   *  ZombieBash, ZombieBashV2, ZombieExplode and ZombieExplodeV2. `-[Actor fightAttack:]`
+   *  (0x36d28) reads it off the attack variation rolled for this swing and writes
+   *  `fightData.canInterrupt = !cantInterrupt`; `-[Actor doneAttacking:]` (0x37cd8) puts it
+   *  back to YES when the swing ends. `-[Actor damageIn:]` (0x37738) refuses BOTH the stun
+   *  and the knockback while it is NO. So committing to a bash or a fuse buys super armour
+   *  for its duration — you cannot be shoved out of the move you paid for. */
+  cantInterrupt?: boolean;
 }
 
 export const ACTIVATED_ABILITY: Record<string, ActivatedAbility> = {
   bash: {
     speedMultiplier: 2.5, damageTiming: 0.975,
-    damageFactor: 2.75, aoe: true, cooldownMs: 10_000,
+    damageFactor: 2.75, aoe: true, cooldownMs: 10_000, cantInterrupt: true,
   },
   bashV2: {
     speedMultiplier: 1.5, damageTiming: 0.975,
-    damageFactor: 1.8, aoe: true, stunMs: 1000, cooldownMs: 10_000,
+    damageFactor: 1.8, aoe: true, stunMs: 1000, cooldownMs: 10_000, cantInterrupt: true,
   },
   explode: {
     speedMultiplier: 6, damageTiming: 1,
     damageFactor: 10, aoe: true, stunMs: 3000, cooldownMs: 0, useOnce: true, suicide: true,
+    cantInterrupt: true,
   },
   explodeV2: {
     speedMultiplier: 6, damageTiming: 1,
     damageFactor: 10, aoe: true, stunMs: 3000, cooldownMs: 0, useOnce: true, suicide: true,
-    hitBoss: true,
+    hitBoss: true, cantInterrupt: true,
   },
   // Mini Buddy is state-driven in BattleSim: mount before deployment, 4× walk,
   // ram-stun, then deploy both units. The generic hit fields are unused.

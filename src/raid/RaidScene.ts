@@ -11,7 +11,7 @@
 // portraits, not side-view stage actors.
 import { AnimatedSprite, Application, Assets, Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
 import { GameAssets, raidImage } from "../assets";
-import { BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX } from "./BattleSim";
+import { ALIEN_LASER_SPRITE, BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX } from "./BattleSim";
 import { RaidActor } from "./RaidActor";
 import { EnemyActor, type EnemyAttackPose } from "./EnemyActor";
 import { ParticleField, ParticleConfig } from "./Particles";
@@ -284,15 +284,48 @@ const PERCH_TWEAK: Record<number, { dx?: number; dy?: number }> = {
 };
 // Alien boss rides a UFO (AlienStageElements bossShip/bossShipBack): the saucer + glass
 // dome sit IN FRONT of the alien (its transparent centre shows the pilot), the small back
-// dome behind. Sizes/offsets in unit-px (scaled with the boss token). Eyeballed.
+// dome behind.
+//
+// GROUND TRUTH — `-[AlienStageActorBoss initSprite]` (0xc68b8) + `movementUpdate:`
+// (0xc6e20) + AlienStageElements.plist. Everything below is transcribed, not eyeballed:
+//
+//   * The rig root is scaled 0.58 (`setScale: 0x3f147ae1`) and the two ship halves are
+//     NOT — they hang off the actor at full size. So the pilot is a SMALL alien inside a
+//     BIG canopy: the 140x128 saucer is the whole silhouette, and the 0.58 pilot (96.8 px
+//     tall) sits entirely inside it. The old eyeballed constants had it the other way up
+//     — a 195 px alien bursting out of a 156 px saucer.
+//   * Both halves are positioned at `actor.position + rigScale * body.position`; the body
+//     attachment rests at AlienStage.json's bossBody offset (0, 3), so the ship anchor is
+//     1.7 px above the boss's feet.
+//   * `bossUpdate:` attaches the front half at the actor's zOrder + 1 and the back half at
+//     zOrder - 1 (state 19), and removes BOTH on state 9 (death) — the saucer does not
+//     outlive its pilot.
 const ALIEN_BOSS_KEY = "AlienStageActorBoss";
 const CIRCUS_BOSS_KEY = "CircusStageActorBoss";
 const NINJA_BOSS_KEY = "NinjaStageActorBoss";
-const UFO_FRONT_H = 156; // saucer rendered height (unit px)
-const UFO_FRONT_DY = -8; // saucer base ~at the boss's feet, so its legs sit inside
-const UFO_BACK_H = 30; // back dome height
-const UFO_BACK_DY = -120; // back dome up behind the pilot
-const UFO_BACK_DX = 6;
+/** `setScale:` on the alien's rig root — the pilot's size RELATIVE to its saucer. */
+const UFO_PILOT_SCALE = 0.58;
+/** The composed boss is exactly the saucer's 140x128 art box. */
+const UFO_GROUP_W = 140;
+const UFO_GROUP_H = 128;
+/** Where the ship halves hang, in source px above the boss's feet (rigScale x bossBody
+ *  offsetY = 0.58 x 3). */
+const UFO_ANCHOR_DY = -UFO_PILOT_SCALE * 3;
+/** Authored cocos anchorPoints (y measured from the BOTTOM) for the two halves. */
+const UFO_FRONT_ANCHOR = { x: 0.53, y: 0.25 };
+const UFO_BACK_ANCHOR = { x: 0.56, y: -0.75 };
+/** The pilot rig's own art box relative to the boss's feet, at the authored 0.58 —
+ *  derived from AlienStage.json's boss parts (pivot + offset), so the rig sits in the
+ *  canopy instead of being naively bottom-aligned to the token origin. */
+const UFO_PILOT_BOX = { left: -24.9, top: -88.7, bottom: 8.1 };
+/** The saucer's art box relative to the same origin (bossShip 140x128 at its anchor). */
+const UFO_SHIP_BOX = { left: -74.2, top: -97.7 };
+/** The idle hover: `startAnim:` state 0 runs a looping CCSequence of two 0.5 s CCMoveTos
+ *  on the body attachment, to (0,-10) and (0,+10) — and `movementUpdate:` drags the ship
+ *  halves along with it, so pilot and saucer bob together. Amplitude is in source px and
+ *  is scaled by the rig root (0.58), like the body position it is applied to. */
+const UFO_HOVER_PX = 10 * UFO_PILOT_SCALE;
+const UFO_HOVER_HALF_PERIOD_SEC = 0.5;
 // Letterbox fill behind the contain-fit stage image (visible only where the screen
 // shape leaves bars around the 480x320 art). Kept DARK so it reads as an inset stage
 // rather than fake sky/grass that never matched the real background art. (The stage
@@ -437,6 +470,7 @@ export class RaidScene {
   private enemyFrames = new Map<string, { idle: Texture[]; attack: Texture[] }>();
   private ufoBackTex: Texture | null = null; // alien boss UFO (back dome)
   private ufoFrontTex: Texture | null = null; // alien boss UFO (saucer + glass dome)
+  private hoverClock = 0; // seconds, drives the alien saucer's idle bob
 
   // Boss projectiles.
   private bossThrow: BossThrowConfig | null;
@@ -735,6 +769,12 @@ export class RaidScene {
     for (const opt of this.bossThrow?.options ?? []) {
       if (this.projTex.has(opt.sprite)) continue;
       this.projTex.set(opt.sprite, await loadTex(raidImage(opt.sprite)));
+    }
+    // The alien laser bolt. Without this it fell through to the generic "no art" hazard
+    // dot — an orange circle. The art is the source's own alienLaser.plist emitter baked
+    // into one sprite (5 additive ring01FX quads fading red -> yellow over 0.2 s).
+    if (this.sim.units.some((u) => u.isBoss && u.sourceKey === ALIEN_BOSS_KEY)) {
+      this.projTex.set(ALIEN_LASER_SPRITE, await loadTex(raidImage(`${ALIEN_LASER_SPRITE}.png`)));
     }
     // Trapeze Artist art; its layer was inserted behind the zombies above.
     if (this.grabberSprite) {
@@ -1046,20 +1086,39 @@ export class RaidScene {
     }
 
     // Alien boss rides a UFO: the small back dome BEHIND the pilot, the saucer + glass
-    // dome IN FRONT (its transparent centre shows the alien through the canopy).
-    if (this.ufoFrontTex && u.isBoss && u.sourceKey === ALIEN_BOSS_KEY) {
+    // dome IN FRONT (its transparent centre shows the alien through the canopy). Laid out
+    // straight from the rig — see the UFO_* constants for the disassembly this comes from.
+    if (this.ufoFrontTex && u.isBoss && u.sourceKey === ALIEN_BOSS_KEY && enemyActor) {
+      // The SAUCER is the boss's silhouette, so it — not the pilot — is what gets fitted
+      // to the boss height. Everything else follows at its authored ratio.
+      const targetH = BOSS_H * (BOSS_H_SCALE[u.sourceKey] ?? 1);
+      const k = targetH / UFO_GROUP_H;
+      const ps = UFO_PILOT_SCALE * k; // the rig is authored at 1.0 px, drawn at 0.58
+
+      const b = enemyActor.container.getLocalBounds();
+      enemyActor.container.scale.set(ps);
+      // Seat the pilot's art box where the rig puts it relative to the boss's feet,
+      // rather than bottom-aligning it to the token origin (its feet parts hang below).
+      enemyActor.container.x = UFO_PILOT_BOX.left * k - b.x * ps;
+      enemyActor.container.y = UFO_PILOT_BOX.bottom * k - (b.y + b.height) * ps;
+
       if (this.ufoBackTex) {
         const back = new Sprite(this.ufoBackTex);
-        back.anchor.set(0.5, 0.5);
-        back.scale.set(UFO_BACK_H / back.texture.height);
-        back.position.set(UFO_BACK_DX, UFO_BACK_DY);
-        root.addChildAt(back, 0); // behind the pilot rig
+        back.anchor.set(UFO_BACK_ANCHOR.x, 1 - UFO_BACK_ANCHOR.y); // cocos y-up -> pixi y-down
+        back.scale.set(k);
+        back.position.set(0, UFO_ANCHOR_DY * k);
+        root.addChildAt(back, 0); // zOrder - 1: behind the pilot rig
       }
       const front = new Sprite(this.ufoFrontTex);
-      front.anchor.set(0.5, 0.78); // near the saucer base
-      front.scale.set(UFO_FRONT_H / front.texture.height);
-      front.position.set(0, UFO_FRONT_DY);
-      root.addChild(front); // in front of the pilot, below the bars added next
+      front.anchor.set(UFO_FRONT_ANCHOR.x, 1 - UFO_FRONT_ANCHOR.y);
+      front.scale.set(k);
+      front.position.set(0, UFO_ANCHOR_DY * k);
+      root.addChild(front); // zOrder + 1: in front of the pilot, below the bars added next
+
+      // Bars and hit-width now belong to the saucer, not the pilot inside it.
+      base = (UFO_GROUP_W * k) / 2;
+      hpCenterX = (UFO_SHIP_BOX.left + UFO_GROUP_W / 2) * k;
+      topY = UFO_SHIP_BOX.top * k;
     }
 
     // Weapon reach should not dictate health-bar width. Enemy bars use compact,
@@ -1290,6 +1349,7 @@ export class RaidScene {
   /** Recompute all screen positions from the current viewport + sim state.
    *  `dtSec` drives the zombie walk animation (0 for a static re-layout). */
   private layout(dtSec = 0) {
+    this.hoverClock += dtSec;
     const W = this.app.screen.width;
     const H = this.app.screen.height;
     const r = this.bgRect();
@@ -1511,6 +1571,14 @@ export class RaidScene {
           sx = this.mapX(c.x);
           sy = this.mapY(c.y) + UNIT_GROUND_NUDGE * this.sizeScale();
         }
+      }
+      // The alien saucer HOVERS: `startAnim:` state 0 loops two 0.5 s CCMoveTos on the
+      // body attachment between (0,-10) and (0,+10), and `movementUpdate:` carries both
+      // ship halves along with it, so the whole boss rides the bob. A triangle wave
+      // reproduces the linear CCMoveTo pair rather than easing it like a sine would.
+      if (u.isBoss && u.alive && u.sourceKey === ALIEN_BOSS_KEY) {
+        const phase = (this.hoverClock / (2 * UFO_HOVER_HALF_PERIOD_SEC)) % 1;
+        sy += (phase < 0.5 ? 4 * phase - 1 : 3 - 4 * phase) * UFO_HOVER_PX * szs;
       }
       // Carried off the field by a crab — gone from this fight (it comes home after).
       tok.root.visible = !u.taken;
@@ -2294,6 +2362,10 @@ export class RaidScene {
         if (!tex) sp.tint = 0xff7a3c;
         this.projLayer.addChild(sp);
         this.projSprites.set(pr.id, sp);
+        // `AlienStageBullet init` plays alienLaser.wav as the bolt is created.
+        if (pr.sprite === ALIEN_LASER_SPRITE) {
+          this.onStrike?.({ team: "enemy", sfxFile: "alienLaser.wav" });
+        }
       }
       // Rendered ~2× the old size (the collision radius in BattleSim is unchanged —
       // this is a visual-legibility bump so thrown items read clearly).
@@ -2441,7 +2513,12 @@ export class RaidScene {
           // Collapse simultaneous hits to one cue so a large army does not stack
           // a painfully loud group of identical one-shots.
           if (this.sim.projectileImpactsThisTick > 0) {
-            this.onStrike?.({ team: "enemy", impact: "projectile" });
+            // `AlienStageBullet collidedWith:` plays stun.wav on the hit, not the generic
+            // thrown-debris splat.
+            const sfxFile = this.sim.lastProjectileImpactSprite === ALIEN_LASER_SPRITE
+              ? "stun.wav"
+              : undefined;
+            this.onStrike?.({ team: "enemy", impact: "projectile", sfxFile });
           } else if (strike) {
             this.onStrike?.({
               team: strike.unit.team,

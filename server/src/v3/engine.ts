@@ -16,7 +16,7 @@ import objectRows from "../../../public/assets/placeables.json";
 import { boostEcon, boostKeyForName, MAX_STACK } from "../boostCatalog";
 import { cropEcon } from "../catalog";
 import { dropEcon } from "../raidLootCatalog";
-import { levelForXp, levelUpBrains } from "../levels";
+import { XP_THRESHOLDS, levelForXp, levelUpBrains } from "../levels";
 import { objectBuyXp, objectEcon, objectRefund } from "../objectCatalog";
 import { planClaim } from "../storage";
 import { QUEST_DEFINITIONS, QUEST_REWARD } from "../questCatalog";
@@ -32,6 +32,10 @@ import { resolveCropMutations, plotsTouch } from "../../../src/zombie/cropMutati
 import { createCombineRandom, isCombinePromotion, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
 import { harvestXp, plowXp } from "../../../src/farmRewards";
 import { questSubjectMatches } from "../../../src/quest/matching";
+import {
+  applyPeriodicEvents, claimPeriodicQuest, refreshPeriodicState, xpToNextLevel,
+} from "../../../src/quest/periodic/generate";
+import type { PeriodicQuestState } from "../../../src/quest/periodic/types";
 import { objectQuestAliases } from "../../../src/quest/objectVariants";
 import { decorAvailable } from "../../../src/decorThemes";
 import {
@@ -242,6 +246,10 @@ export interface EngineOptions {
   now: number;
   random?: () => number;
   id?: () => string;
+  /** Seeds the daily/weekly quest roll, so two farms are not handed the same board on
+   *  the same day. Optional only so the many unit tests that drive the engine directly
+   *  need not invent one — every real call site passes the account id. */
+  accountId?: string;
 }
 
 export interface EngineResult {
@@ -252,6 +260,7 @@ export interface EngineResult {
   farmChanged: boolean;
   objectChanged: boolean;
   questChanged: boolean;
+  periodicChanged: boolean;
   balanceBefore: BalanceProjection;
 }
 
@@ -510,6 +519,9 @@ export function applyQuestEvents(
         received: options.storage?.received,
       });
     }
+    // Paid ON TOP of whichever branch above ran. Only the Reforged achievements carry
+    // one; every imported quest has it at zero.
+    if (def.rewardBrains) balance.brains += def.rewardBrains;
   }
 
   quests.completed = [...completed];
@@ -519,6 +531,31 @@ export function applyQuestEvents(
     counts: progress.get(questId) ?? [],
     completed: completed.has(questId),
   }));
+}
+
+/** The daily/weekly document, materialised on first touch. It is optional on the
+ *  projection (a Worker predating the feature omits it), so everything that reaches for
+ *  it goes through here rather than assuming it exists. */
+export function periodicStateOf(state: MutableGameplayState): PeriodicQuestState {
+  if (!state.periodicQuests) state.periodicQuests = { version: 0, daily: null, weekly: null };
+  return state.periodicQuests;
+}
+
+/** Roll the daily/weekly sets forward to `now` at the player's current level, which is
+ *  what generates a new day's quests and discards an unclaimed old day's. Returns true
+ *  if a set was replaced. */
+export function refreshPeriodic(
+  state: MutableGameplayState,
+  accountId: string,
+  now: number
+): boolean {
+  const level = levelForXp(state.balance.xp);
+  return refreshPeriodicState(periodicStateOf(state), {
+    accountId,
+    level,
+    xpToNext: xpToNextLevel(level, XP_THRESHOLDS),
+    now,
+  });
 }
 
 function reject(sequence: number, error: string): CommandResult {
@@ -1176,6 +1213,15 @@ function applyOne(
       to[command.itemKey] = (to[command.itemKey] ?? 0) + command.quantity;
       return { sequence, status: "applied" };
     }
+    case "quest.periodic_claim": {
+      // The set has already been rolled forward to `now` by applyCommandBatch, so a
+      // quest id belonging to yesterday is simply absent and lands on `no_such_quest`.
+      // That is the expiry rule: an unclaimed daily is worth nothing once its day ends.
+      const claim = claimPeriodicQuest(periodicStateOf(state), command.scope, command.questId);
+      if (!claim.ok) return reject(sequence, claim.error);
+      state.balance.xp += claim.xp;
+      return { sequence, status: "applied" };
+    }
     case "tutorial.complete": {
       if (state.tutorialRewarded) return reject(sequence, "already_claimed");
       state.tutorialRewarded = true;
@@ -1201,7 +1247,13 @@ export function applyCommandBatch(
     now: options.now,
     random: options.random ?? Math.random,
     id: options.id ?? (() => crypto.randomUUID()),
+    accountId: options.accountId ?? "",
   };
+  // Roll the daily/weekly sets over BEFORE anything is applied, so this batch counts
+  // against today's quests and a claim naming yesterday's finds nothing to pay.
+  const periodicBefore = JSON.stringify(state.periodicQuests ?? null);
+  refreshPeriodic(state, required.accountId, required.now);
+  const periodic = periodicStateOf(state);
   const failedResources = new Set<string>();
   const resources = (item: SequencedCommand): string[] => {
     const command = item.command;
@@ -1219,6 +1271,7 @@ export function applyCommandBatch(
     if (command.type === "storage.move") return [`storage:${command.itemKey}`];
     if (command.type === "pet.buy" || command.type === "pet.equip") return [`pet:${command.petKey ?? "active"}`];
     if (command.type === "pet.pen") return ["pet:pen"];
+    if (command.type === "quest.periodic_claim") return [`periodic:${command.scope}:${command.questId}`];
     return [];
   };
   const results: CommandResult[] = [];
@@ -1229,9 +1282,16 @@ export function applyCommandBatch(
       keys.forEach((key) => failedResources.add(key));
       continue;
     }
+    const emitted = events.length;
     const result = applyOne(state, item, required, events, createdZombieIds);
     results.push(result);
     if (result.status === "rejected") keys.forEach((key) => failedResources.add(key));
+    // Count each command's events against the periodic quests IMMEDIATELY rather than
+    // once at the end of the batch. A batch can legitimately hold the harvest that
+    // finishes a daily and the claim for it — the client coalesces up to 30s of play
+    // into one POST — and deferring would make that claim arrive at a quest the server
+    // still saw as incomplete.
+    applyPeriodicEvents(periodic, events.slice(emitted));
   }
   const questChanges = applyQuestEvents(state.balance, state.quests, events, {
     inventory: state.inventory,
@@ -1252,6 +1312,7 @@ export function applyCommandBatch(
     farmChanged: farmBefore !== JSON.stringify(state.farm.plots),
     objectChanged: objectsBefore !== JSON.stringify(state.objects.objects),
     questChanged: questsBefore !== JSON.stringify(state.quests),
+    periodicChanged: periodicBefore !== JSON.stringify(state.periodicQuests ?? null),
     balanceBefore,
   };
 }
@@ -1262,6 +1323,7 @@ export function freshGameplayState(): MutableGameplayState {
     farm: { version: 0, plots: {} },
     objects: { version: 0, objects: [] },
     quests: { version: 0, completed: [], progress: [] } satisfies QuestProjection,
+    periodicQuests: { version: 0, daily: null, weekly: null },
     inventory: {},
     storage: { received: {}, stored: {} },
     roster: [] satisfies RosterUnitProjection[],

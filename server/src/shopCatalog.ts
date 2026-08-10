@@ -44,10 +44,18 @@ export const MAX_FARM_SIZE = SIZE_TIERS.reduce(
   (largest, tier) => Math.max(largest, tier.size), BASE_FARM_SIZE
 );
 
-/** Ground/climate skin prices (gold). "grass" is the free default (always owned). */
+/**
+ * Ground/climate skin prices (gold). "grass" is the free default (always owned).
+ *
+ * "autumn" is Reforged's own skin (a recolour of the grass terrain); the rest come
+ * from the source game. Generated alongside these in EXTRA_CLIMATES in
+ * tools/reforge_economy.py — a skin present in upgrades.json but missing here is
+ * a card the client offers and the server refuses as `bad_climate`.
+ */
 export const CLIMATE_COST: Readonly<Record<string, number>> = {
   stone: 1000,
   dirt: 2000,
+  autumn: 3000,
   snow: 5000,
   sand: 5000,
   water: 10000,

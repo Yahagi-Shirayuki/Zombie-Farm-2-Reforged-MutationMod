@@ -49,6 +49,7 @@ const SAMPLES: Record<GameplayCommand["type"], GameplayCommand> = {
   "pet.pen": { type: "pet.pen", petKeys: ["cat", "dog"] },
   "memorial.enshrine": { type: "memorial.enshrine", instanceId: "obj-1", unitId: "z-1", name: "Bob" },
   "memorial.clear": { type: "memorial.clear", instanceId: "obj-1" },
+  "quest.periodic_claim": { type: "quest.periodic_claim", scope: "daily", questId: "daily_invade" },
   "tutorial.complete": { type: "tutorial.complete" },
 };
 

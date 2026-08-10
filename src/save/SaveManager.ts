@@ -4,6 +4,7 @@ import { objectSpriteFiles, PlaceableDef } from "../assets";
 import { WalkController } from "../WalkController";
 import { ZombieField } from "../zombie/ZombieField";
 import { QuestSystem } from "../quest/QuestSystem";
+import type { PeriodicQuestSystem } from "../quest/periodic/PeriodicQuestSystem";
 import {
   SaveGame, SAVE_VERSION, ONLINE_PRESENTATION_PREFIX, ONLINE_SNAPSHOT_PREFIX,
   type FallenZombieSave,
@@ -17,6 +18,7 @@ import { epicBossRunToClient, serverTimestampToClient } from "../net/clock";
 import { reconcileTutorialCompletion } from "../tutorial/steps";
 import { backfillDiscovered, sanitizeDiscovered } from "../zombie/almanac";
 import { sanitizeFallen, sanitizeFallenUncapped } from "../zombie/memorial";
+import { sanitizeTeams } from "../zombie/teams";
 import type { PlayMode } from "../playMode";
 import type { JobSystem } from "../JobSystem";
 
@@ -41,7 +43,7 @@ type PresentationData = {
   zombiePot?: SaveGame["zombiePot"];
   zombiePots?: SaveGame["zombiePots"];
   tutorial?: SaveGame["tutorial"];
-  ui?: { attackOrder?: string[] };
+  ui?: { attackOrder?: string[]; teams?: unknown };
   /** Zombie Almanac lifetime-discovery counts. Cosmetic and client-authored, so
    * online it rides the presentation blob rather than a server table. */
   almanac?: SaveGame["almanac"];
@@ -83,6 +85,11 @@ export class SaveManager {
   private onlineJobsResumable = false;
   private draining = false;
   onStorageError: ((message: string) => void) | null = null;
+  /** Daily/weekly quests. A settable field rather than a constructor parameter: only
+   *  main.ts ever supplies one, while a dozen tests build a SaveManager positionally
+   *  and have no interest in it. Offline it round-trips through the save; online
+   *  `serialize()` returns undefined and the sets come from the server instead. */
+  periodicQuests: PeriodicQuestSystem | null = null;
 
   constructor(
     private state: GameState,
@@ -209,6 +216,7 @@ export class SaveManager {
       storage: { itemCap: this.state.storageItemCap, items: this.state.storedItems, received: this.state.received },
       boosts: this.state.boostInv,
       quests: this.quests.serialize(),
+      ...(this.periodicQuests?.serialize() ? { periodicQuests: this.periodicQuests.serialize() } : {}),
       raids: { completed: this.state.raidsCompleted, lastRaidAt: this.state.lastRaidAt, attackOrder: this.state.raidAttackOrder,
         brainDryStreak: this.state.brainDryStreak, zombieDryWins: this.state.zombieDryWins },
       epicBoss: this.state.epicBossRun ?? undefined,
@@ -216,6 +224,7 @@ export class SaveManager {
       tutorial: this.state.tutorial,
       almanac: { discovered: this.state.zombieDiscovered },
       fallen: this.state.fallenZombies,
+      teams: this.state.zombieTeams,
       ...(farmJobs ? { farmJobs } : {}),
     };
   }
@@ -250,7 +259,10 @@ export class SaveManager {
       rosterLayout: (blob.ownedZombies ?? []).map((u) => ({ id: u.id, name: u.name, pos: u.pos, stored: u.stored, color: u.color })),
       zombiePots: blob.zombiePots,
       tutorial: blob.tutorial,
-      ui: { attackOrder: blob.raids?.attackOrder ?? [] },
+      // Saved line-ups ride the UI blob beside the attack order for the same
+      // reason: both are lists of the account's own zombie ids that only this
+      // client authors, and neither is ever read back as gameplay truth.
+      ui: { attackOrder: blob.raids?.attackOrder ?? [], teams: blob.teams ?? [] },
       almanac: blob.almanac,
       // The graveyard and each statue's occupant are SERVER-owned (fallen_v3) — a
       // visitor renders the memorial from the authoritative projection, so a copy
@@ -577,6 +589,7 @@ export class SaveManager {
       // Only the unenshrined go in the graveyard list; the rest are already standing
       // on their statues, which carry them (see `enshrined` above).
       fallen: graveyard,
+      teams: sanitizeTeams(p.ui?.teams),
       farmJobs: this.readJobJournal(),
     };
   }
@@ -658,6 +671,10 @@ export class SaveManager {
     // The graveyard. Statues carry their own occupant (restoreObjects below), so
     // this is only the zombies still waiting for one.
     this.state.fallenZombies = sanitizeFallen(data.fallen);
+    // Saved line-ups. Members are NOT checked against the roster here: a team is
+    // resolved when it is shown or assembled, so a zombie that is missing today
+    // simply sits the next assembly out (see zombie/teams.ts).
+    this.state.zombieTeams = sanitizeTeams(data.teams);
     if (data.farm.w && data.farm.h) this.field.resize(data.farm.w, data.farm.h);
     this.state.ownedClimates = data.farm.ownedClimates ?? ["grass"];
     if (!this.state.ownedClimates.includes("grass")) this.state.ownedClimates.unshift("grass");
@@ -678,6 +695,10 @@ export class SaveManager {
     const epicActive = !!epicRun && !epicRun.completedAt && Date.now() < epicRun.expiresAt;
     this.quests.setEpicBossActive(epicActive, epicActive ? epicDef?.questIds ?? [] : []);
     this.quests.restore(data.quests);
+    // Offline only — online this is a no-op and the server's projection installs the
+    // real sets. A missing field (an older save, or any online save) generates a
+    // fresh board for today rather than leaving the panel empty.
+    this.periodicQuests?.restore(data.periodicQuests);
     // restorePending uses the same current-field validation as a fresh tap, so an
     // online intent whose command already committed is safely discarded here.
     if (restoreJobs) {

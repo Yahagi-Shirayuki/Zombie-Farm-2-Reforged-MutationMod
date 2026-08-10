@@ -26,6 +26,8 @@
 import type { Friend } from "../social/friends";
 import type { FarmBackground } from "../prefs";
 import type { EpicBossRun } from "../epicBoss/types";
+import type { PeriodicQuestState } from "../quest/periodic/types";
+import type { ZombieTeam } from "../zombie/teams";
 
 /** Bump when the shape changes in a way that needs a migration. */
 export const SAVE_VERSION = 1;
@@ -70,6 +72,10 @@ export interface SaveGame {
   boosts?: { key: string; count: number }[];
   /** Real quest engine progress (active per-requirement counts + completed ids). */
   quests?: QuestSave;
+  /** Daily/weekly quests. OFFLINE ONLY — online these are server-owned and projected,
+   *  never round-tripped through the save. Absent on saves written before the feature,
+   *  and on every online save; both are read as "generate a fresh board". */
+  periodicQuests?: PeriodicQuestState;
   /** Phase 5: raid/invasion progress (lifetime win count per raid id). */
   raids?: RaidProgressSave;
   /** Active/completed limited Epic Boss run. Absent in saves created before the feature. */
@@ -89,6 +95,10 @@ export interface SaveGame {
   /** Zombies lost for good, kept only so a Memorial Statue can enshrine one.
    *  Absent = nothing has died yet (or the save predates memorials). */
   fallen?: FallenZombieSave[];
+  /** Saved farm line-ups (a name + owned zombie ids). Pure client-side
+   *  presentation — assembling one only issues ordinary store/deploy moves.
+   *  Absent = no teams (or a save written before the feature). */
+  teams?: ZombieTeam[];
 }
 
 /** A zombie that perished and was not revived — what a Memorial Statue remembers.

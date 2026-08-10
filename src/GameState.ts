@@ -12,6 +12,7 @@ import {
 import type { EpicBossRun } from "./epicBoss/types";
 import { parseReceivedZombie } from "./zombie/receivedReward";
 import { releasedToGraveyard, trimFallen, type FallenZombie } from "./zombie/memorial";
+import type { ZombieTeam } from "./zombie/teams";
 
 export const XP_THRESHOLDS = [
   0, 25, 75, 150, 250, 375, 550, 800, 1300, 1800, 2300, 2800, 3300, 3900, 4500,
@@ -91,6 +92,11 @@ export class GameState {
   // The player's chosen attack order (deployed zombie ids, first attacks first).
   // Persisted so the Army screen reopens with the same ordering after a raid.
   raidAttackOrder: string[] = [];
+  // ---- saved farm line-ups ("teams") ----
+  // A name plus owned zombie ids (see zombie/teams.ts). Assembling one is nothing
+  // but a batch of the store/deploy moves the Mausoleum already offers, so this
+  // list is presentation data: it confers no zombie, slot or bonus of its own.
+  zombieTeams: ZombieTeam[] = [];
   // ---- limited Epic Boss run ----
   epicBossRun: EpicBossRun | null = null;
   // ---- friends (local offline-fallback list) ----

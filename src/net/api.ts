@@ -25,6 +25,7 @@ import {
   type BlackMarketSummary,
   type FriendActivity,
   type GiftReward,
+  type PeriodicQuestProjection,
   type PresentationProjection,
   type PresentationRequest,
 } from "./protocol";
@@ -911,6 +912,11 @@ export const raidStart = (
     serverTime?: number;
     /** Earliest server time at which a non-retreat result may be settled. */
     earliestFinishAt?: number;
+    /** Server time at which this session dies. A finish posted after it is answered
+     *  200 with `expired` and zero rewards, WITHOUT replaying the fight — so the
+     *  client has to watch this itself: the battle runs on the ticker, which stops
+     *  while the page is hidden, and the TTL does not. */
+    expiresAt?: number;
   }>("POST", "/raid/start", {
     useVoucher,
     raidId,
@@ -922,17 +928,27 @@ export const raidStart = (
   });
 
 /** The server's authoritative raid-finish result: the cooldown clock, the resulting
- *  balance, and the amounts CREDITED this call (0 on a loss / idempotent replay). */
+ *  balance, and the amounts CREDITED this call (0 on a loss / idempotent replay).
+ *
+ *  NOT every field survives every branch. An EXPIRED session is answered with a body
+ *  of five keys — `{expired, gold, xp, firstClear, loot}` — and nothing else, because
+ *  the server zeroes it without replaying the fight or touching the ledger. The
+ *  optionality below is that branch: this interface used to promise `lastRaidAt` and
+ *  `balance` unconditionally, which is precisely why the settlement path adopted
+ *  `undefined` into the balance and pushed NaN through the cooldown clock. */
 export interface RaidFinishResult {
-  lastRaidAt: number;
+  /** Absent on an expired settlement, which starts no cooldown. */
+  lastRaidAt?: number;
   serverTime?: number;
-  balance: Balance;
+  /** Absent on an expired settlement, which credits nothing. */
+  balance?: Balance;
   gold: number;
   /** Invasion brains credited by this verified boss win. */
   brains?: number;
   xp: number;
   firstClear: boolean;
-  /** The session had already expired (not settled within its TTL) — nothing credited. */
+  /** The session had already expired (not settled within its TTL) — nothing credited.
+   *  The rest of this body is the zeroed shell described above. */
   expired?: boolean;
   /** The SERVER's loot roll for this win (the client no longer rolls its own online):
    *  the drop's name + what it became, plus `qty` for a bundled boost drop (Insta-Grow
@@ -945,6 +961,9 @@ export interface RaidFinishResult {
   inventory?: Record<string, number>;
   storage?: { received: Record<string, number>; stored: Record<string, number> };
   raidProgress?: Record<string, number>;
+  /** Daily/weekly quest state after this settlement — an invasion win advances it, and
+   *  /raid/finish is the only path a win travels. Absent on a Worker predating them. */
+  periodicQuests?: PeriodicQuestProjection | null;
   rulesetVersion?: number;
   revival?: {
     sessionId: string;

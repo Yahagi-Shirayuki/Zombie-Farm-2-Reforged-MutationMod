@@ -108,14 +108,64 @@ import type { RaidOutcome } from "./types";
 // squadmates stand there. All three change who is standing and who acts, so a v20 client
 // and a v21 Worker diverge from the first revival. Same cost as v15: an invasion in
 // flight at deploy time settles as stale_ruleset and pays nothing.
-// 22: the Brain Ticket adds ELITE invasions (src/raid/eliteInvasion.ts) — an authorized
+// 22: two changes, either of which alone would force the bump.
+// (a) The Brain Ticket adds ELITE invasions (src/raid/eliteInvasion.ts) — an authorized
 // launch may now pin a wave whose enemy str/con/dex, boss projectiles, boss specials and
 // summoned wall are all multiplied by that raid's elite profile. A v21 Worker ignores
 // `brainTicket` entirely, so it would pin the ordinary wave against a v22 client fighting
 // the scaled one and diverge on the very first tick; `/raid/start` also gained a
-// `no_brain_ticket` refusal a v21 client cannot interpret. Same cost as v15: an invasion
-// in flight at deploy time settles as stale_ruleset and pays nothing.
-export const RAID_RULESET_VERSION = 22;
+// `no_brain_ticket` refusal a v21 client cannot interpret.
+// (b) A KNOCKBACK enemy with nothing inside `engageDistance` now strikes the front-most
+// zombie close enough to be hitting IT (BattleSim.playerInRange). Knockback shoves its
+// victim 150 units back and re-slots it last, landing it inside the 220-deep band it
+// still attacks from but far outside the enemy's 60-unit reach — so an enemy could clear
+// its own melee range and then stand there being killed, punished for using its ability.
+// This changes the transcript of every fight against a knockback unit from its first
+// shove: Old McDonnell's Lumberjack and boss, and the Video Games knights, monsters and
+// boss. Only those units, deliberately — handing the longer reach to every enemy also
+// re-balances the raids that merely lose a target for a beat, and flips a recorded Circus
+// victory in the server's fixtures into a defeat. It does make the ORDINARY Video Games
+// invasion materially harder (measured difficulty 1.59 -> 2.11), which is the fix landing
+// rather than a balance pass. Same cost as v15: an invasion in flight at deploy time
+// settles as stale_ruleset and pays nothing.
+// 23: the ZOMBIE FORMATION and KNOCKBACK, plus the alien boss's laser, are now the ones in
+// the binary rather than this sim's approximations. Four transcript-changing pieces, any
+// one of which forces the bump (see docs/mechanics/ZOMBIE_FORMATION_RECOVERED.md and
+// ALIEN_RAID_RECOVERED.md):
+// (a) FORMATION. `-[ZombieActor calculateDestinationPoint]` derives a zombie's slot from
+// its index in `[fightMan zombies]`: depth band = index / FIVE (the same divisor the damage
+// and cadence falloffs already used, where the layout used four), and the slot inside a band
+// is its rank by BODY TYPE — Small, Headless, Girl, Regular, Large, Garden — each with its
+// own standoff, so a light body plants closer to the enemy than a heavy one. Gardens take a
+// further fixed setback. The old layout filled 4-deep columns in release order with the
+// Headless sorted to the front; the new one changes who is standing where, and therefore who
+// the enemy's front-most-target rule picks, from the first frame of every fight.
+// (b) HEADLESS PROMOTION is now the source's repair rather than a standing sort: only when
+// NO engaged Headless is in the front five is the last one pulled to index 0.
+// (c) KNOCKBACK. `-[Actor damageIn:]` rolls `-(50 + arc4random() % 100)` at `force: 5.0`, and
+// `movementUpdate:` SLIDES the victim there at force*60 — it is not the old fixed 150-unit
+// teleport. For the 0.17-0.5 s the slide lasts the zombie neither walks nor fights and is not
+// a melee target, because a live `knockBackPoint` makes `isInMeleeRange` false.
+// (d) The alien boss's laser picks a RANDOM ENGAGED zombie (`shootBullet:from:`) instead of
+// the rear-most deployed one, holds fire when nobody is engaged, flies at the recovered 180
+// points/second instead of a guessed 900, and leaves from one of the saucer's two gun ports.
+//
+// (d2) SUPER ARMOUR. `cantInterrupt` in Attacks.json is carried by exactly four attacks —
+// ZombieBash, ZombieBashV2, ZombieExplode, ZombieExplodeV2 — and `-[Actor fightAttack:]`
+// turns it into `fightData.canInterrupt = NO` for that swing, which `damageIn:` checks before
+// applying EITHER the stun or the knockback. So a zombie mid-Bash/Smash/Explode can no longer
+// be shoved or stunned out of the move it spent a charge on. Previously nothing was immune.
+// (e) BALANCE RE-FIT, forced by (c). The Video Games invasion is built out of knockback
+// enemies, so it absorbs nearly all of the new shove: its measuring-stick difficulty goes
+// 1.99 -> 2.38 ORDINARY. That is the ladder's top rung, and three elite profiles are pinned
+// to it, so ELITE_PROFILES 3 / 5 / 6 are re-fitted x1.3 on each multiplier's distance from
+// 1.0 (shape untouched) to hold the rungs and the top band. ELITE_PROFILES[9] is NOT
+// touched: flattening it was tried and cannot buy back the winnability, because the problem
+// was never its own multipliers. The balance suite's "maxed roster" stick also moves 2.2 ->
+// 3.0, since at 2.2 it was consumed by the ORDINARY Video Games fight alone and so measured
+// its own ceiling rather than the tuning. Same cost as v15: an invasion in flight at deploy
+// time settles as stale_ruleset and pays nothing.
+export const RAID_RULESET_VERSION = 23;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

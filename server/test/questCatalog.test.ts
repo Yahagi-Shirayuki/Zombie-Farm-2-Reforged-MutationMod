@@ -9,12 +9,14 @@ describe("questCatalog — mirror of quests.json rewards", () => {
     for (const [id, r] of Object.entries(QUEST_REWARDS)) {
       expect(Number.isInteger(r.rewardValue), id).toBe(true);
       expect(r.rewardValue, id).toBeGreaterThanOrEqual(0);
-      expect(r.rewardValue, id).toBeLessThanOrEqual(1000); // catalog max is 700
+      // Repriced against the level curve (tools/quest_xp_rebalance.py): the top of
+      // the catalog is now the 40% invasion band at level 36.
+      expect(r.rewardValue, id).toBeLessThanOrEqual(5000);
       expect([0, 1, 2, 3, 5], id).toContain(r.rewardType);
     }
   });
   it("resolves known quest rewards and rejects unknown ids", () => {
-    expect(questReward("0")).toEqual({ rewardType: QUEST_REWARD.Xp, rewardValue: 30, rewardItemKey: "" });
+    expect(questReward("0")).toEqual({ rewardType: QUEST_REWARD.Xp, rewardValue: 20, rewardItemKey: "" });
     expect(questReward("54")).toMatchObject({ rewardType: QUEST_REWARD.Gold, rewardValue: 20 });
     expect(questReward("99999")).toBeUndefined();
     expect(questReward("")).toBeUndefined();
