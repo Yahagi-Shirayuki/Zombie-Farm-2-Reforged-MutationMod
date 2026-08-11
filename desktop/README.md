@@ -60,6 +60,27 @@ The handler also does the boring-but-necessary parts: MIME types by extension,
 seeking), percent-decoding, and containment — paths are canonicalised and checked
 against the game root, so `..` can't escape the folder.
 
+## Forking this
+
+The workflow needs nothing configured — it runs on `secrets.GITHUB_TOKEN`, and
+the offline guard derives the API origin from your own `.env.production`, so a
+fork pointing at its own Worker is checked against its own URL.
+
+Two values must change, because they are **shared state on the player's PC**, not
+just names:
+
+- **`identifier` in `tauri.conf.json`.** WebView2 keys its profile folder on it
+  (`%LOCALAPPDATA%\<identifier>`), so a fork that keeps
+  `com.zombiefarmreforged.desktop` shares one storage partition with upstream's
+  app. Anyone with both installed gets one farm fought over by two apps.
+- **The launcher's port** (`$PORTS` in `launcher/package/launcher/launcher.ps1`)
+  for the same reason: saves are keyed by origin, and two launchers on 8722 are
+  the same origin.
+
+Also worth changing: `productName` / `mainBinaryName` if you want a different exe
+name, and the download links in the root README, which point at this repo's
+releases.
+
 ## Saves do not carry over from the browser
 
 A native webview gets its own storage partition. A farm played in Chrome, or via

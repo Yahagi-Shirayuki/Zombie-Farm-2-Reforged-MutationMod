@@ -62,6 +62,23 @@ prompt this is trying to avoid. So it speaks HTTP over a plain loopback socket.
 - **Second double-click doesn't start a second server.** It finds the first one
   via `/__zflauncher` and just reopens the browser.
 
+## Neither package updates itself
+
+Both are frozen at the version that was downloaded. There is no updater in the
+launcher and no Tauri updater plugin in the app, so a new release means
+downloading the new zip. Settings shows `Version <package.json version> (<commit
+sha>)` so a player can say which build they have, and Settings → Check for
+Updates reports *"Update checks aren't available in this build"* — that string is
+honest here, because the service worker these packages rely on for update
+detection is deliberately disabled.
+
+If that changes, note two things before reaching for the Tauri updater: it
+replaces the executable, which is the part that almost never changes, while the
+content that does change lives in `game/` outside the binary. And anything that
+overwrites `game/` wholesale **deletes the player's mods** — which is the reason
+these packages exist. A version check that *tells* the player, rather than one
+that replaces files underneath them, is the shape that fits.
+
 ## Packaging
 
 CI does it: [`.github/workflows/release-windows.yml`](../.github/workflows/release-windows.yml),

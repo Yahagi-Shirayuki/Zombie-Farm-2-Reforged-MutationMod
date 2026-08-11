@@ -66,9 +66,13 @@ jobs:
       # and a support nightmare. Prove the online layer really is compiled out.
       - name: Verify the bundle is offline-only
         run: |
-          if grep -rqF "zombiefarm-server.zombiefarm.workers.dev" dist/; then
-            echo "::error::The built client still references the live Worker - this is not an offline build."
-            grep -rlF "zombiefarm-server.zombiefarm.workers.dev" dist/ | head -20
+          # The origin is DERIVED from .env.production, never hardcoded: a fork
+          # pointing at its own Worker has to be checked against ITS url, and a
+          # hardcoded upstream one would wave every fork through.
+          API=$(grep -E '^VITE_API_URL=' .env.production | cut -d= -f2- | tr -d '"' | tr -d "'" | sed 's:/*$::')
+          if [ -n "$API" ] && grep -rqF "$API" dist/; then
+            echo "::error::The built client still references $API - this is not an offline build."
+            grep -rlF "$API" dist/ | head -20
             exit 1
           fi
           # Assert connect-src carries nothing beyond the offline-safe tokens,
@@ -160,10 +164,23 @@ jobs:
 
       - run: npm run build
 
+      # Same guard as the launcher job, deliberately duplicated rather than
+      # skipped: this job builds its own dist, so it has to prove its own bundle.
       - name: Verify the bundle is offline-only
         run: |
-          if grep -rqF "zombiefarm-server.zombiefarm.workers.dev" dist/; then
-            echo "::error::The built client still references the live Worker - this is not an offline build."
+          API=$(grep -E '^VITE_API_URL=' .env.production | cut -d= -f2- | tr -d '"' | tr -d "'" | sed 's:/*$::')
+          if [ -n "$API" ] && grep -rqF "$API" dist/; then
+            echo "::error::The built client still references $API - this is not an offline build."
+            grep -rlF "$API" dist/ | head -20
+            exit 1
+          fi
+          CONNECT=$(grep -o "connect-src [^;]*" dist/index.html)
+          echo "$CONNECT"
+          EXTRA=$(printf '%s' "$CONNECT" \
+            | sed "s/connect-src //; s/'self'//; s/data://; s|https://accounts.google.com||" \
+            | tr -d ' ')
+          if [ -n "$EXTRA" ]; then
+            echo "::error::connect-src allowlists an unexpected origin: $EXTRA"
             exit 1
           fi
           echo "Offline build confirmed."
