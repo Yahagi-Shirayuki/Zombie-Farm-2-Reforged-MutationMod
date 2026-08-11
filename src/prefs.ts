@@ -42,7 +42,6 @@ const FRIEND_SORT_KEY = "zf2r.friendSort";
 const ZOMBIE_SORT_KEY = "zf2r.zombieSort";
 const HAZARD_TIP_KEY = "zf2r.seenHazardTip";
 const RAID_TIP_KEY = "zf2r.seenRaidTip."; // + raid id
-const ELITE_TIP_KEY = "zf2r.seenEliteTip";
 const BODY_COLOR_KEY = "zf2r.zombieBodyColor";
 const SHOW_MUTATIONS_KEY = "zf2r.showZombieMutations";
 
@@ -198,28 +197,6 @@ export function hasSeenRaidTip(raidId: number): boolean {
 export function markRaidTipSeen(raidId: number): void {
   try {
     localStorage.setItem(RAID_TIP_KEY + raidId, "1");
-  } catch {
-    /* preference is optional */
-  }
-}
-
-/** Whether Tim has already warned the player about elite invasions. A Brain Ticket is
- *  bought for its brain odds, and nothing about buying one says the fight it starts is
- *  several rungs harder than the invasion the player picked — so Tim says it out loud
- *  the FIRST time one is spent, before the battle begins. Once only: after that the
- *  player knows what an elite invasion is, and a warning on every ticket would just be
- *  a button to click past. Device-local like the other two tips. */
-export function hasSeenEliteTip(): boolean {
-  try {
-    return localStorage.getItem(ELITE_TIP_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-export function markEliteTipSeen(): void {
-  try {
-    localStorage.setItem(ELITE_TIP_KEY, "1");
   } catch {
     /* preference is optional */
   }

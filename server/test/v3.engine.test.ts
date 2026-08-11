@@ -3,6 +3,7 @@ import type { RosterUnitProjection, SequencedCommand } from "../../src/net/proto
 import { EPIC_BOSSES } from "../../src/epicBoss/catalog";
 import { COMBINE_SPECIAL_CHANCE, createCombineRandom } from "../../src/zombie/combineSpecies";
 import { encodeReceivedZombie } from "../../src/zombie/receivedReward";
+import { EPIC_PRIZE_SELL, RAID_DROP_SELL } from "../../src/awardSellValue";
 import plantRows from "../../public/assets/plants.json";
 import {
   applyCommandBatch,
@@ -1886,15 +1887,17 @@ describe("protocol v3 command engine", () => {
     expect(result.results.map((entry) => entry.status)).toEqual(["applied", "applied"]);
     expect(result.state.storage.received["Circus Tent"]).toBe(0);
     expect(result.state.objects.objects).toEqual([]);
-    expect(result.state.balance.gold).toBe(initialGold + 1);
+    // An invasion prize sells for its authored value (src/raidDropValue.ts), not the
+    // one-gold floor a cost-0 catalog row would otherwise produce.
+    expect(result.state.balance.gold).toBe(initialGold + RAID_DROP_SELL.circusTent);
   });
 
-  it("can sell every Epic Boss prize, for the same one gold as any other reward", () => {
+  it("can sell every Epic Boss prize, at a quarter of its brain price", () => {
     // Two gaps met here. The prizes had no drops.json/raidLootCatalog row, so claiming
     // one was refused as a "bad item"; and 40 of the 50 had no objectCatalog row, so
-    // object.refund refused the sale even once the claim worked. They are priced at
-    // cost 0 like every other earned decoration, so a free prize sells for the game's
-    // one-gold minimum rather than minting its source brain price (1,000/brain).
+    // object.refund refused the sale even once the claim worked. They still carry
+    // cost 0 (they are never bought), so the payout comes from the authored table:
+    // a quarter of the prize's Reforged brain price, at 1,000 gold per brain.
     const prizes = EPIC_BOSSES.flatMap((boss) => boss.loot.filter((prize) => !prize.stageActor));
     expect(prizes.length).toBe(50);
     const state = freshGameplayState();
@@ -1912,7 +1915,8 @@ describe("protocol v3 command engine", () => {
       .map(({ entry, prize }) => `${prize}: ${JSON.stringify(entry)}`);
     expect(refused).toEqual([]);
     expect(result.state.objects.objects).toEqual([]);
-    expect(result.state.balance.gold).toBe(initialGold + prizes.length);
+    const expected = prizes.reduce((sum, prize) => sum + EPIC_PRIZE_SELL[prize.tile!], 0);
+    expect(result.state.balance.gold).toBe(initialGold + expected);
   });
 
   it("cannot claim a Received reward twice", () => {

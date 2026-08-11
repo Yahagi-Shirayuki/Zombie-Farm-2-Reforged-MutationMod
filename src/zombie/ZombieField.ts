@@ -440,7 +440,9 @@ export class ZombieField {
       else this.onCasualty?.([idA, idB]);
     }
     return pot.start(
-      { id: a.id, key: a.key, mutation: a.mutation, color: this.colorOf(a), ...this.speciesTraits(a) },
+      // Slot 1's NAME rides along with its species: the child is the zombie the player
+      // put in the first slot, so it keeps that zombie's name (see ZombiePotSave.nameA).
+      { id: a.id, key: a.key, name: a.name, mutation: a.mutation, color: this.colorOf(a), ...this.speciesTraits(a) },
       { id: b.id, key: b.key, mutation: b.mutation, color: this.colorOf(b), ...this.speciesTraits(b) },
       this.field.hasCombineMonolith(), // Clay Monolith → 15-min combine
       baseDurationMs,
@@ -571,7 +573,11 @@ export class ZombieField {
     const def = this.resolve(result.key);
     if (!def) return abandon();
     const mutation = def.mutation ? addMutation(result.mutation, def.mutation) : result.mutation;
-    const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutation, result.color);
+    // `result.name` is slot 1's name (see ZombiePot.preview). A job started before the
+    // pot recorded it passes undefined, which is the old id-derived random name.
+    const data = makeOwned(
+      `z${this.nextId++}`, def, col, row, 0, mutation, result.color, result.name
+    );
     // A combine result is granted via onCombineCollect (server validates it against the
     // two parents), NOT the generic onGrant — so suppress the latter while adding.
     this.combining = true;

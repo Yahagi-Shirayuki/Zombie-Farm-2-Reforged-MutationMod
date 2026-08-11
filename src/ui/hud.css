@@ -891,6 +891,12 @@
 #hud .cmb-go.cmb-store { background: linear-gradient(#5b93cf, #3b6ea8); color: #f2f8ff;
   padding: 10px 20px; font-size: 14px; }
 #hud .cmb-go:disabled { opacity: .45; cursor: not-allowed; filter: grayscale(.5); }
+/* Spend an Insta-Grow on the running combine. A consumable, not a collect, so it
+   reads amber and sits beside the (disabled) Collect rather than replacing it. */
+#hud .cmb-go.cmb-hurry { background: linear-gradient(#e8b757, #b8811f); color: #22190a;
+  padding: 10px 18px; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; }
+#hud .cmb-hurry-i { width: 18px; height: 18px; object-fit: contain; }
+#hud .cmb-hurry-ct { font-size: 12px; opacity: .8; }
 #hud .cmb-empty { text-align: center; opacity: .85; font-style: italic; padding: 22px 12px; }
 #hud .cmb-rule-note { text-align: center; font-size: 11px; line-height: 1.35; color: #d8c9a0;
   background: rgba(255,255,255,.045); border-radius: 8px; padding: 7px 9px; }
@@ -1403,6 +1409,12 @@
   border-radius: 7px; padding: 5px; background: linear-gradient(#79b94b,#438326); color: white;
   font-weight: 800; cursor: pointer; }
 #hud .bm-card button.cancel { background: linear-gradient(#c66b59,#913b31); }
+/* Bump sits above Cancel on your own post: a secondary, keep-it-alive action, so it
+   reads amber rather than competing with the green trade buttons. */
+#hud .bm-card button.bm-repost { background: linear-gradient(#e0a844,#a9701f); }
+/* Only ever your own sale, still holding a zombie it could not hand back because your
+   farm and crypt are full. It needs to look like it needs attention. */
+#hud .bm-card.bm-expired { border-color: #b0492f; background: #f0d8c6; }
 #hud .bm-card button:disabled, #hud .bm-compose button:disabled { opacity: .5; cursor: default; }
 #hud .bm-compose { border: 2px solid #aa7a3d; border-radius: 10px; background: rgba(239,228,191,.8);
   padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow: auto; color: #49300f; }

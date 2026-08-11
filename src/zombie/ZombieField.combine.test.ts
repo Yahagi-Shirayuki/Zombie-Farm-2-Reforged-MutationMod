@@ -381,6 +381,31 @@ describe("Zombie Pot and the Mausoleum", () => {
     expect(full.zombies.potFor("pot").ready).toBe(true);
   });
 
+  it("hands the child slot 1's name", () => {
+    const { zombies } = fieldWith(5);
+    zombies.restore([
+      { id: "z1", key: green.key, name: "Gravy" },
+      { id: "z2", key: green.key, name: "Mildred" },
+    ]);
+
+    expect(zombies.combine("z1", "z2", 0, "pot")).toBe(true);
+    // Slot 1 already decides the species; the name is recorded with it, so it
+    // survives a reload of the running job.
+    expect(zombies.potFor("pot").pending).toMatchObject({ nameA: "Gravy" });
+    expect(zombies.collectCombine(0, 0, "pot")!.name).toBe("Gravy");
+  });
+
+  it("falls back to a rolled name for a job started before names were recorded", () => {
+    const { zombies } = fieldWith(5);
+    zombies.restorePots({ pot: {
+      parentAId: "a", parentBId: "b", keyA: green.key, keyB: green.key,
+      maskA: 0, maskB: 0, startedAt: 0, finishAt: 0,
+    } });
+    // No nameA on the persisted job: the child is named the old way rather than
+    // arriving nameless.
+    expect(zombies.collectCombine(0, 0, "pot")!.name).toBeTruthy();
+  });
+
   it("tells the server where the child landed", () => {
     const { zombies } = fieldWith(5);
     zombies.restorePots({ pot: {

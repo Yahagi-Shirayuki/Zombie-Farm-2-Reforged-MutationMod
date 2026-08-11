@@ -476,6 +476,12 @@ export const fulfillBlackMarketOrder = (
   operationId, expectedAccountVersion, ...(unitId ? { unitId } : {}),
 });
 
+/** Bump one of your own open posts back to the top of "newest" and restart the three
+ *  days before it expires. Rate-limited server-side by how long the post has sat, so
+ *  no CAS version is needed: nothing about the account's economy changes. */
+export const repostBlackMarketOrder = (id: string) =>
+  req<BlackMarketMutationResponse>("POST", `/black-market/orders/${encodeURIComponent(id)}/repost`, {});
+
 export const blackMarketFulfillments = () =>
   req<BlackMarketFulfillmentsResponse>("GET", "/black-market/fulfillments");
 

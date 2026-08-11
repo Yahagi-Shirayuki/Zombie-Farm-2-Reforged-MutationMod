@@ -53,6 +53,7 @@ import { screenToGrid, tileCenter, TILE_H, TILE_W, HW, HH } from "./iso";
 import { setFootprint } from "./depthSort";
 import { NightLayer, makeLight } from "./lighting";
 import { buyXp, sellBack, zombieSellValue } from "./economy";
+import { awardedSellValue } from "./awardSellValue";
 import { farmerHeadXp } from "./farmer";
 import { purchaseXpFeedback } from "./purchaseFeedback";
 import { harvestXp, plowXp } from "./farmRewards";
@@ -60,7 +61,7 @@ import {
   DEFAULT_FARM_BACKGROUND, getFarmBackground, isFarmBackground, setFarmBackground,
   FARM_BG_DENSITY, type FarmBackground, getDayNightMode, setDayNightMode,
   isLocalNight, type DayNightMode, hasSeenHazardTip, markHazardTipSeen,
-  hasSeenRaidTip, markRaidTipSeen, hasSeenEliteTip, markEliteTipSeen,
+  hasSeenRaidTip, markRaidTipSeen,
   zombieAppearancePrefs, setZombieBodyColorMode, setShowZombieMutations,
 } from "./prefs";
 import { raidTip } from "./raid/raidTips";
@@ -77,6 +78,7 @@ import {
 import {
   appendHarvestTarget, harvestTargetKey, sampleStrokeSegment, type HarvestTarget,
 } from "./harvestStroke";
+import { appendInstaGrowTarget, type InstaGrowTarget } from "./instaGrowStroke";
 import { mutationMarketDescription } from "./zombie/statDisplay";
 import {
   combineSubject, combineSubjectAliases, mutantSubjectIndex, unitQuestSubjects,
@@ -1194,33 +1196,54 @@ async function main() {
     return { name: def.name, icon: `${BASE}assets/boosts/${def.icon}`, count: () => state.boostCount(def.key) };
   };
 
-  // The Insta-Grow tool (mode "instagrow") ripens exactly the tapped crop or an
-  // active Zombie Pot and spends one use. A stray tap is ignored (no wasted use).
-  // When the last use is spent the tool auto-unequips back to the select tool.
-  const tryInstaGrow = (col: number, row: number, wx: number, wy: number) => {
-    const def = growBoostDef();
-    if (!def) return;
-    if (state.boostCount(def.key) <= 0) { hud.setMode("walk"); return; }
+  /** The eligible Insta-Grow target beneath one world point. Resolve the 4x4 plot to
+   * its origin so crossing several of its tiles during a drag still spends one use. */
+  const instaGrowTargetAtWorld = (
+    col: number, row: number, wx: number, wy: number,
+  ): InstaGrowTarget | null => {
     const objectId = field.objectAtPoint(wx, wy);
-    const objectDef = objectId ? field.objectDefOf(objectId) : null;
-    if (objectDef?.zombiePot && objectId && zombies.finishCombineNow(objectId)) {
+    const selectedPot = objectId && field.objectDefOf(objectId)?.zombiePot
+      ? zombies.potFor(objectId)
+      : null;
+    if (objectId && selectedPot?.busy && !selectedPot.ready)
+      return { kind: "pot", instanceId: objectId };
+    const origin = field.plotOriginAt(col, row);
+    const crop = origin ? field.cropInfoAt(origin.oc, origin.or) : null;
+    return origin && crop && !crop.ripe ? { kind: "crop", ...origin } : null;
+  };
+
+  // Ripen exactly one resolved crop or active Zombie Pot and spend one use. A stale
+  // target is ignored, which makes backtracking and state changes during a stroke safe.
+  // When the last use is spent the tool auto-unequips back to the select tool.
+  const applyInstaGrowTarget = (target: InstaGrowTarget): boolean => {
+    const def = growBoostDef();
+    if (!def) return false;
+    if (state.boostCount(def.key) <= 0) { hud.setMode("walk"); return false; }
+    if (target.kind === "pot" && zombies.finishCombineNow(target.instanceId)) {
       if (state.onInventory) state.onInventory({ type: "use", key: def.key, target: "zombie_pot" }, { count: -1 });
       else state.useBoost(def.key);
       audio.play("instaGrow");
-      const p = field.objectWorkPoint(objectId!);
+      const p = field.objectWorkPoint(target.instanceId);
       if (p) floatText(p.x, p.y - 48, "Ready!");
       saveManager.save();
       if (state.boostCount(def.key) <= 0) hud.setMode("walk");
-      return;
+      return true;
     }
-    const grown = field.growCropAt(col, row);
-    if (!grown) return; // not a growing crop -> keep tool equipped
+    if (target.kind !== "crop") return false;
+    const grown = field.growCropAt(target.oc, target.or);
+    if (!grown) return false; // no longer growing -> keep tool equipped
     if (state.onInventory) state.onInventory({ type: "use", key: def.key, oc: grown.oc, or: grown.or }, { count: -1 });
     else state.useBoost(def.key);
     audio.play("instaGrow");
-    const c = tileCenter(col, row);
+    const c = field.plotCenterOf(grown.oc, grown.or);
     floatText(c.x, c.y, "Grew!");
     if (state.boostCount(def.key) <= 0) hud.setMode("walk"); // used up -> unequip
+    return true;
+  };
+
+  const tryInstaGrow = (col: number, row: number, wx: number, wy: number): boolean => {
+    const target = instaGrowTargetAtWorld(col, row, wx, wy);
+    return target ? applyInstaGrowTarget(target) : false;
   };
 
   // Set by applyBoost when a GIFT voucher spawns its zombie: the new unit's id, which
@@ -2009,6 +2032,14 @@ async function main() {
   const touchGestureTiles: { col: number; row: number }[] = [];
   const touchGestureTileKeys = new Set<string>();
   const touchPlantPreviews = new Map<string, Graphics>();
+  // Where the plant drag-paint last sampled. The stroke between two pointermove
+  // events is walked tile by tile from here (see the "plant" branch of pointermove),
+  // so a fast swipe cannot jump over a plot.
+  const plantStrokeLast = new Point();
+  let instaGrowStrokeActive = false;
+  const instaGrowStrokeLast = new Point();
+  const instaGrowStrokeTargets: InstaGrowTarget[] = [];
+  const instaGrowStrokeKeys = new Set<string>();
   let plowStrokeAnchor: { oc: number; or: number } | null = null;
   const plowStrokeLast = new Point();
   const plowStrokeTargets: { oc: number; or: number }[] = [];
@@ -2029,6 +2060,11 @@ async function main() {
     touchGestureTileKeys.clear();
     touchToolStartTile = null;
     clearTouchPlantPreview();
+  };
+  const clearInstaGrowStroke = () => {
+    instaGrowStrokeActive = false;
+    instaGrowStrokeTargets.length = 0;
+    instaGrowStrokeKeys.clear();
   };
   const clearHarvestStroke = () => {
     for (const preview of harvestStrokePreviews.values()) preview.destroy();
@@ -2092,6 +2128,7 @@ async function main() {
     pressPointerId = -1;
     touchOutsideFarmPan = false;
     clearTouchToolStroke();
+    clearInstaGrowStroke();
     clearPlowStroke();
     field.clearTillSelection();
     touchPinch = false;
@@ -2121,6 +2158,7 @@ async function main() {
       // Nothing has committed yet: discard the pending paint stroke and let the
       // two fingers control the camera instead.
       clearTouchToolStroke();
+      clearInstaGrowStroke();
       clearHarvestStroke();
       lastPlot = "";
       clearPlowStroke();
@@ -2160,6 +2198,52 @@ async function main() {
     const w = toWorld(e);
     const g = screenToGrid(w.x, w.y);
     return { col: Math.round(g.col), row: Math.round(g.row), wx: w.x, wy: w.y };
+  };
+  /** The same tile resolution as `tileAt`, for an interpolated point along a stroke
+   *  rather than a real pointer event. */
+  const tileAtGlobal = (x: number, y: number) => {
+    const w = world.toLocal(new Point(x, y));
+    const g = screenToGrid(w.x, w.y);
+    return { col: Math.round(g.col), row: Math.round(g.row) };
+  };
+
+  const instaGrowTargetAtGlobal = (x: number, y: number): InstaGrowTarget | null => {
+    const worldPoint = world.toLocal(new Point(x, y));
+    const grid = screenToGrid(worldPoint.x, worldPoint.y);
+    return instaGrowTargetAtWorld(
+      Math.round(grid.col), Math.round(grid.row), worldPoint.x, worldPoint.y,
+    );
+  };
+
+  const recordInstaGrowStrokeTarget = (target: InstaGrowTarget) => {
+    if (!appendInstaGrowTarget(target, instaGrowStrokeTargets, instaGrowStrokeKeys)) return;
+    // A touch stroke stays pending until release, so a second finger can cancel it
+    // into a pinch without having spent inventory. Mouse strokes apply as they cross.
+    if (!isTouchPointer(pressPointerType)) applyInstaGrowTarget(target);
+  };
+
+  const collectInstaGrowStrokeSegment = (x: number, y: number) => {
+    for (const point of sampleStrokeSegment(instaGrowStrokeLast, { x, y })) {
+      const target = instaGrowTargetAtGlobal(point.x, point.y);
+      if (target) recordInstaGrowStrokeTarget(target);
+    }
+    instaGrowStrokeLast.set(x, y);
+  };
+
+  const beginInstaGrowStroke = (x: number, y: number) => {
+    clearInstaGrowStroke();
+    instaGrowStrokeActive = true;
+    instaGrowStrokeLast.set(x, y);
+    const target = instaGrowTargetAtGlobal(x, y);
+    if (target) recordInstaGrowStrokeTarget(target);
+  };
+
+  const commitTouchInstaGrowStroke = () => {
+    const targets = [...instaGrowStrokeTargets];
+    clearInstaGrowStroke();
+    for (const target of targets) {
+      if (!applyInstaGrowTarget(target) && state.boostCount(GROW_BOOST_KEY) <= 0) break;
+    }
   };
   const tileKey = (col: number, row: number) => `${col},${row}`;
 
@@ -2688,6 +2772,25 @@ async function main() {
       result: zombies.combinePreview(activePotId ?? undefined),
     };
   };
+  // The Zombie Pot panel's own Insta-Grow. Deliberately the SAME steps the tool takes
+  // when you tap the building (see tryInstaGrow): finish the job, spend the use through
+  // the server when online, play the cue, save. Nothing is spent unless the pot really
+  // had a running combine to finish.
+  hud.onPotInstaGrow = () => {
+    if (onlineGameplayBlocked()) return false;
+    const def = growBoostDef();
+    if (!def || state.boostCount(def.key) <= 0) return false;
+    const potId = activePotId ?? field.zombiePotId();
+    if (!potId || !zombies.finishCombineNow(potId)) return false;
+    if (state.onInventory) {
+      state.onInventory({ type: "use", key: def.key, target: "zombie_pot" }, { count: -1 });
+    } else state.useBoost(def.key);
+    audio.play("instaGrow");
+    const point = field.objectWorkPoint(potId);
+    if (point) floatText(point.x, point.y - 48, "Ready!");
+    saveManager.save();
+    return true;
+  };
   hud.canCombineZombie = (key, slot) => {
     const def = zombieDefs.get(key);
     return !def?.rewardOnly && !(slot === "B" && def?.category === "special");
@@ -3083,6 +3186,13 @@ async function main() {
     await economy.refreshAuthoritative();
     saveManager.flushCritical();
     return result;
+  };
+  // A repost only re-dates the caller's own listing — no escrow, no currency, no
+  // roster — so unlike every other market action it needs no CAS boundary and no
+  // authoritative refresh afterwards.
+  hud.onRepostBlackMarketOrder = async (orderId) => {
+    if (!economy) throw new Error("online_gameplay_unavailable");
+    return api.repostBlackMarketOrder(orderId);
   };
   hud.onFulfillBlackMarketOrder = async (order, unitId) => {
     if (!economy) throw new Error("online_gameplay_unavailable");
@@ -3635,19 +3745,12 @@ async function main() {
       economy?.setLiveRaid(null);
       return false; // gated (cooldown/army) — the army screen stays up
     }
-    // First Brain Ticket ever spent. Buying one advertises brains; nothing about it
-    // says the invasion it starts is several rungs harder than the one on the card, and
-    // by the time the player finds out their army is already on the field and its
-    // casualties are permanent. Tim says it plainly, once — `setup.elite` rather than
-    // the request, so this only fires when a ticket was really charged.
-    if (setup.elite && !hasSeenEliteTip()) {
-      markEliteTipSeen();
-      await hud.timSays(
-        "Whoa there — that's a BRAIN TICKET. It'll pay out four times the brains,\n" +
-        "sure, but it turns the invasion ELITE. They hit a whole lot harder than\n" +
-        "anything you've faced here. Bring your best, and don't say I didn't warn you!"
-      );
-    }
+    // NOTE: the elite warning is NOT here. It used to be a one-off Tim notice fired at
+    // this point — after the ticket was charged and the session opened — so its only
+    // button was OK and the player was marched into the fight either way. It is now a
+    // real confirm on the Army screen, asked before this function is ever called (see
+    // Hud.openRaidArmy), where "no" still means no.
+    //
     // First invasion that actually fields a hazard: hazards are the one part of a
     // fight the player has to handle by hand, and nothing on screen says so. Ask the
     // resolved setup rather than the raid's data flags — raids 2/10/11 declare a grab
@@ -4175,7 +4278,11 @@ async function main() {
   };
 
   // Gold paid when selling a placed object. Brain prices convert at 1,000g each.
-  const sellRefund = (def: PlaceableDef) => sellBack(def.cost, !!def.brainsNeeded);
+  // An award-only invasion prize has no price to derive a refund from (cost 0, which
+  // floors at one gold), so its authored value wins — see raidDropValue.ts. The
+  // server prices the same sale from its own copy of that table.
+  const sellRefund = (def: PlaceableDef) =>
+    awardedSellValue(def.key) ?? sellBack(def.cost, !!def.brainsNeeded);
 
   /** Functional items are permanent — except the Memorial Statue, which is bought
    *  in quantity and has to be reversible: a player who buys ten and wants two back
@@ -4523,6 +4630,7 @@ async function main() {
     zombieLongPressActivated = false;
     clearHarvestStroke();
     clearPlowStroke();
+    clearInstaGrowStroke();
     pressStart.copyFrom(e.global);
     clearTouchToolStroke();
     if (visiting) {
@@ -4574,6 +4682,13 @@ async function main() {
       harvestStrokeLast.copyFrom(e.global);
     }
     if (touch && hud.mode === "walk") beginWorldLongPress(wx, wy, e.pointerId);
+    if (hud.mode === "instagrow") {
+      dragging = true;
+      moved = false;
+      last.copyFrom(e.global);
+      beginInstaGrowStroke(e.global.x, e.global.y);
+      return;
+    }
     if (isDeferredTouchMode(hud.mode)) {
       if (touch) {
         // Wait for pointer-up. A second finger may still convert this tap into a
@@ -4606,6 +4721,9 @@ async function main() {
     dragging = true;
     moved = false;
     last.copyFrom(e.global);
+    // The drag-paint stroke starts here, so interpolation has somewhere to measure
+    // its first segment from.
+    plantStrokeLast.copyFrom(e.global);
     if (hud.mode !== "walk") {
       // Plant preserves immediate mouse click/drag painting. Touch waits for either a
       // confirmed tap or movement beyond its larger finger-jitter threshold.
@@ -4678,7 +4796,9 @@ async function main() {
       else field.setCursor(col, row, "remove");
       return;
     }
-    if (hud.mode === "instagrow") {
+    if (instaGrowStrokeActive && dragging)
+      collectInstaGrowStrokeSegment(e.global.x, e.global.y);
+    if (hud.mode === "instagrow" || instaGrowStrokeActive) {
       const id = field.objectAtPoint(wx, wy);
       const selectedPot = id && field.objectDefOf(id)?.zombiePot ? zombies.potFor(id) : null;
       const isActivePot = !!selectedPot?.busy && !selectedPot.ready;
@@ -4707,16 +4827,25 @@ async function main() {
       } else if (hud.mode === "plant" && moved) {
         // Drag-paint plants across the field. Touch records the stroke and commits
         // on finger-up; mouse queues each new tile immediately.
-        const tk = tileKey(col, row);
-        if (tk !== lastPlot) {
+        //
+        // INTERPOLATED, like the plow and harvest strokes. Reading only the raw
+        // pointermove positions meant a swipe fast enough to travel more than a plot
+        // between two events planted neither of them — and a gesture is fastest in
+        // its MIDDLE, which is exactly where players reported a handful of plots
+        // being left behind while the ends of the drag came out fine.
+        for (const point of sampleStrokeSegment(plantStrokeLast, { x: e.global.x, y: e.global.y })) {
+          const tile = tileAtGlobal(point.x, point.y);
+          const tk = tileKey(tile.col, tile.row);
+          if (tk === lastPlot) continue;
           if (isTouchPointer(pressPointerType)) {
             if (!touchGestureTiles.length && touchToolStartTile)
               recordTouchPlantTile(touchToolStartTile.col, touchToolStartTile.row);
-            recordTouchPlantTile(col, row);
+            recordTouchPlantTile(tile.col, tile.row);
           }
-          else enqueueTool(col, row);
+          else enqueueTool(tile.col, tile.row);
           lastPlot = tk;
         }
+        plantStrokeLast.set(e.global.x, e.global.y);
       }
     }
     const tool = hud.mode === "till" || hud.mode === "plant" ? hud.mode : null;
@@ -4895,6 +5024,21 @@ async function main() {
       clearPlowStroke();
       return;
     }
+    if (instaGrowStrokeActive) {
+      collectInstaGrowStrokeSegment(e.global.x, e.global.y);
+      if (isTouchPointer(pressPointerType)) commitTouchInstaGrowStroke();
+      else clearInstaGrowStroke();
+      dragging = false;
+      moved = false;
+      lastPlot = "";
+      pressPointerId = -1;
+      field.hideCursor();
+      field.setObjectHighlight(null);
+      clearTouchToolStroke();
+      clearHarvestStroke();
+      clearPlowStroke();
+      return;
+    }
     if (dragging && hud.mode === "till" && plowStrokeTargets.length) {
       collectPlowStrokeSegment(e.global.x, e.global.y);
       if (isTouchPointer(pressPointerType)) commitTouchPlowStroke();
@@ -4932,6 +5076,7 @@ async function main() {
     clearTouchToolStroke();
     clearHarvestStroke();
     clearPlowStroke();
+    clearInstaGrowStroke();
   };
   app.stage.on("pointerup", onPointerUp);
   app.stage.on("pointerupoutside", onPointerUp);

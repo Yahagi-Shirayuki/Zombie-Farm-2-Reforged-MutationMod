@@ -17,7 +17,7 @@ import { boostEcon, boostKeyForName, MAX_STACK } from "../boostCatalog";
 import { cropEcon } from "../catalog";
 import { dropEcon } from "../raidLootCatalog";
 import { XP_THRESHOLDS, levelForXp, levelUpBrains } from "../levels";
-import { objectBuyXp, objectEcon, objectRefund } from "../objectCatalog";
+import { objectBuyXp, objectEcon, objectSellGold } from "../objectCatalog";
 import { planClaim } from "../storage";
 import { QUEST_DEFINITIONS, QUEST_REWARD } from "../questCatalog";
 import { isHeadlessZombie, legalMutation, zombieSell } from "../rosterCatalog";
@@ -840,7 +840,11 @@ function applyOne(
       releaseMemorial(state, obj.instanceId, options.now);
       state.objects.objects.splice(index, 1);
       const boughtWithBrains = (obj.purchaseCurrency ?? (econ.brains ? "brains" : "gold")) === "brains";
-      state.balance.gold += objectRefund(obj.purchaseCost ?? econ.cost, boughtWithBrains);
+      // An invasion prize has no purchase price, so it sells for its authored value
+      // rather than the one-gold floor a cost-0 item would otherwise refund.
+      state.balance.gold += objectSellGold(
+        obj.catalogKey, econ, obj.purchaseCost ?? null, boughtWithBrains
+      );
       return { sequence, status: "applied" };
     }
     case "object.upgrade": {

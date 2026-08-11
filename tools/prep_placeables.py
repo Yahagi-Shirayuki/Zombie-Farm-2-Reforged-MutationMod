@@ -167,8 +167,13 @@ def is_reward_only(tile):
     Reforged does not (category "reward" is absent from the Market's tabs), so
     carrying the source's brain price gave those rows a sell-back value they were
     never paid for — selling a free prize minted 1,000-4,000 gold. Priced like every
-    other earned decoration instead: cost 0, so the refund is the game's one-gold
-    minimum. KEEP IN SYNC with server/src/objectCatalog.ts.
+    other earned decoration instead: cost 0, which also makes them unpurchasable
+    server-side (planObjectBuy refuses cost <= 0).
+
+    What they SELL for is decided separately, by the authored table in
+    src/awardSellValue.ts (a quarter of the brain price for an Epic Boss prize), so
+    do not give these rows a real `cost` to raise their sale value — that would put
+    them back on the market. KEEP IN SYNC with server/src/objectCatalog.ts.
     """
     return tile in REWARD_ONLY_DECOR or tile in EPIC_REWARD_TILES
 
@@ -192,6 +197,19 @@ MAUSOLEUM_TIERS = [
     ("mausoleum5", "Mausoleum III", 6, MAUSOLEUM_BASE_SLOTS + 10),
     ("mausoleum6", "Mausoleum IV", 8, MAUSOLEUM_BASE_SLOTS + 15),
     ("mausoleum7", "Mausoleum V", 10, MAUSOLEUM_BASE_SLOTS + 20),
+]
+
+# ---- Extra storage-shed rungs (design override, NOT source data) -------------
+# The source's shed ladder stops at storage08 (McDonnell's Barn, 64 slots), which a
+# long-running farm outgrows with nothing left to spend gold on. These rungs continue
+# the same ladder: +8 slots each, keeping the source's roughly x1.5 price step. Each
+# clones the top source shed's row, so it reuses that art until it gets its own —
+# only key/name/cost/xp/storageSlots differ. KEEP IN SYNC with
+# server/src/objectCatalog.ts (OBJECTS + SHED_SLOTS).
+EXTRA_SHED_BASE = "storage08"
+EXTRA_SHED_TIERS = [
+    # key, market name, gold cost, item storage slots
+    ("storage09", "Zombie Warehouse", 525_000, 72),
 ]
 
 # ---- Recolor variants --------------------------------------------------------
@@ -898,6 +916,17 @@ def main():
         for key, name, cost, slots in MAUSOLEUM_TIERS:
             tier = dict(base_mausoleum)
             tier.update({"key": key, "name": name, "cost": cost, "zombieSlots": slots})
+            catalog.append(tier)
+
+    # Storage sheds above the source's top rung: clones of the biggest source shed
+    # (same sprite/footprint) that the Market offers one at a time above the placed
+    # shed's capacity, exactly like the Mausoleum ladder above.
+    base_shed = next((c for c in catalog if c["key"] == EXTRA_SHED_BASE), None)
+    if base_shed:
+        for key, name, cost, slots in EXTRA_SHED_TIERS:
+            tier = dict(base_shed)
+            tier.update({"key": key, "name": name, "cost": cost,
+                         "xp": cost // 100, "storageSlots": slots})
             catalog.append(tier)
 
     # Memorial Statue: a reimplementation addition with no source row, whose art is

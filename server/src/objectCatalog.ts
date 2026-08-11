@@ -16,6 +16,8 @@
 // other earned decorations — see objectRefund on why a free item must not refund the
 // source's brain price.
 
+import { awardedSellValue } from "../../src/awardSellValue";
+
 export const SELL_BACK_RATIO = 0.2; // mirrors src/economy.ts ECONOMY.SELL_BACK_RATIO
 export const BRAIN_SELL_GOLD_RATE = 1_000; // mirrors src/economy.ts
 
@@ -427,6 +429,7 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "storage06": { cost: 145000, brains: false, xp: 1450, level: 1, purchaseLimit: 1 },
   "storage07": { cost: 225000, brains: false, xp: 2250, level: 1, purchaseLimit: 1 },
   "storage08": { cost: 350000, brains: false, xp: 3500, level: 1, purchaseLimit: 1 },
+  "storage09": { cost: 525000, brains: false, xp: 5250, level: 1, purchaseLimit: 1 },
   "streetLight": { cost: 3000, brains: false, xp: 30, level: 28 },
   "sugarSkull": { cost: 4000, brains: false, xp: 40, level: -1 },
   "sundial": { cost: 2, brains: true, xp: 0, level: 37 },
@@ -507,6 +510,26 @@ export function objectRefund(cost: number, brains = false): number {
   return Math.max(1, Math.floor(cost * SELL_BACK_RATIO));
 }
 
+/** Gold paid for selling ONE placeable of `key`, priced the way the client prices it.
+ *
+ *  An award-only invasion prize was never bought, so it has no `cost` to take a
+ *  fraction of and `objectRefund` floors it at one gold. Those carry an authored
+ *  value instead (src/raidDropValue.ts — the single definition both sides read).
+ *  `purchaseCost` is the price actually paid where the object records one (the Zombie
+ *  Pot's dual pricing); it always wins, since a bought object is not an award. */
+export function objectSellGold(
+  key: string,
+  econ: ObjectEcon,
+  purchaseCost?: number | null,
+  boughtWithBrains = econ.brains
+): number {
+  if (purchaseCost == null) {
+    const awarded = awardedSellValue(key);
+    if (awarded !== undefined) return awarded;
+  }
+  return objectRefund(purchaseCost ?? econ.cost, boughtWithBrains);
+}
+
 /** XP granted for buying a placeable. Binary ground truth
  * (`+[MarketDataManager xpFromItem:]`): decor/tree purchases grant binary-era
  * cost*10 and functional/special purchases grant binary-era cost*8. Reforged
@@ -542,6 +565,10 @@ export const SHED_SLOTS: Readonly<Record<string, number>> = {
   storage06: 48,
   storage07: 56,
   storage08: 64,
+  // Above the source ladder's top rung (see tools/prep_placeables.py
+  // EXTRA_SHED_TIERS): the same +8 step, so a maxed-out farm still has something
+  // to upgrade.
+  storage09: 72,
 };
 
 /** The starter shed's capacity — what an account holds before buying a bigger one. Every

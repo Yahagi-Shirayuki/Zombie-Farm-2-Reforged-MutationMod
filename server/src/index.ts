@@ -548,6 +548,23 @@ app.post("/dev/fixture/gift-backdate", requireAuth, async (c) => {
   return c.json({ ok: true, moved: res.meta.changes ?? 0, days });
 });
 
+// Age one of MY OWN open Black Market posts, so the suite can exercise the three-day
+// expiry and the repost cooldown without waiting for them. `created_at` is the single
+// column both rules read, which is exactly why this fixture is one UPDATE. Dev-only:
+// with DEV_AUTH="0" (the deployed value) this route does not exist.
+app.post("/dev/fixture/market-backdate", requireAuth, async (c) => {
+  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
+  const body = await c.req.json<{ orderId?: string; ageMs?: number }>()
+    .catch((): { orderId?: string; ageMs?: number } => ({}));
+  if (typeof body.orderId !== "string") return c.json({ error: "bad_request" }, 400);
+  const ageMs = Math.max(0, Math.floor(Number(body.ageMs ?? 0)));
+  if (!Number.isSafeInteger(ageMs)) return c.json({ error: "bad_request" }, 400);
+  const res = await c.env.DB.prepare(
+    `UPDATE black_market_orders SET created_at = ? WHERE id = ? AND creator_account_id = ?`
+  ).bind(Date.now() - ageMs, body.orderId, c.get("accountId")).run();
+  return c.json({ ok: true, moved: res.meta.changes ?? 0 });
+});
+
 // Overwrite the contents a gift in MY inbox was sent with, so the integration suite can
 // exercise a known payout instead of whatever the send-time roll produced. Dev-only:
 // with DEV_AUTH="0" (the deployed value) this route does not exist.
@@ -1077,13 +1094,40 @@ app.put("/presentation", async (c) => {
 
 const marketEnabled = (env: Bindings): boolean => env.BLACK_MARKET_ENABLED === "1";
 
+// Posts expire after three days. The board hides a stale one from everybody the
+// moment it ages out; this is where its OWNER's escrow comes back, so it runs on the
+// reads they make on the way in. Failing to sweep must never fail the read itself —
+// the worst case is that the escrow waits for the next visit.
+//
+// It is deliberately NOT run from POST /black-market/orders. The sweep bumps
+// `account_version`, and create() CAS-checks the version the client fetched moments
+// earlier — so sweeping there would make the very post that triggered it fail with
+// `state_conflict`. Nothing is lost by leaving it out: both active-limit checks
+// already ignore stale posts, so one can never block a new listing.
+const sweepStaleMarketPosts = async (
+  c: Context<{ Bindings: Bindings; Variables: Vars }>
+): Promise<void> => {
+  // The sweep returns escrow and bumps the account version — it is a MUTATION that
+  // happens to hang off a read, so the closedown switch has to stop it too. Without
+  // this, a frozen service would still be moving zombies and currency around, and a
+  // player's export could stop matching their account.
+  if (await mutationsHalted(c)) return;
+  try {
+    await blackMarket.expireStalePosts(c.env.DB, c.get("accountId"), Date.now());
+  } catch (error) {
+    slog("black_market_sweep_failed", { error: String(error) }, "warn");
+  }
+};
+
 app.get("/black-market/orders", async (c) => {
   if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
+  await sweepStaleMarketPosts(c);
   return c.json(await blackMarket.list(c.env.DB, c.get("accountId"), c.req.query(), Date.now()));
 });
 
 app.get("/black-market/summary", async (c) => {
   if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
+  await sweepStaleMarketPosts(c);
   return c.json(await blackMarket.summary(c.env.DB, c.get("accountId"), Date.now()));
 });
 
@@ -1104,6 +1148,16 @@ app.post("/black-market/orders/:id/collect", async (c) => {
   if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const result = await blackMarket.collect(c.env.DB, c.get("accountId"), c.req.param("id"), Date.now());
   if (!("ok" in result)) return c.json({ error: result.error }, result.status);
+  return c.json(result);
+});
+
+app.post("/black-market/orders/:id/repost", async (c) => {
+  if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
+  const started = performance.now();
+  const result = await blackMarket.repost(c.env.DB, c.get("accountId"), c.req.param("id"), Date.now());
+  if (!("ok" in result)) return c.json({ error: result.error }, result.status);
+  metric("black_market_repost", c.get("accountId"), started);
   return c.json(result);
 });
 

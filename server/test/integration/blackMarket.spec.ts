@@ -957,4 +957,192 @@ describe("Black Market gold pricing", () => {
       .toEqual(["ZombieActorGardenTier1", "ZombieActorGirlTier1"]);
     expect(await browse("")).toHaveLength(3);
   });
+
+  // ---- expiry + repost ------------------------------------------------------
+  // Both rules read one column, `created_at`, so the fixture that ages a post is the
+  // only lever either of them needs.
+
+  it("takes an expired sale off the board and hands the zombie back", async () => {
+    const seller = await signIn(uniqueSub("market-expiry-sale"));
+    const unitId = `market-expire-${crypto.randomUUID()}`;
+    await grantRoster(seller, [{ id: unitId, key: "ZombieActorRegularTier1" }]);
+    const before = await bootstrap(seller);
+    const created = await call<any>("POST", "/black-market/orders", seller.token, {
+      operationId: operation("expire-create"), expectedAccountVersion: before.accountVersion,
+      kind: "SELL_ZOMBIE", unitId, price: 5, currency: "BRAINS",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    // The post advertises its own deadline, three days out.
+    expect(created.body.order.expiresAt - created.body.order.createdAt).toBe(3 * 86_400_000);
+    const orderId = created.body.order.id as string;
+
+    const aged = await call<any>("POST", "/dev/fixture/market-backdate", seller.token,
+      { orderId, ageMs: 3 * 86_400_000 + 60_000 });
+    expect(aged.status, JSON.stringify(aged.body)).toBe(200);
+
+    // A stale post is gone from the board and stops holding an active-post slot...
+    const board = await call<any>("GET", "/black-market/orders?kind=SELL_ZOMBIE&mine=true", seller.token);
+    expect(board.status, JSON.stringify(board.body)).toBe(200);
+    expect((board.body.orders as Array<{ id: string }>).map((order) => order.id)).not.toContain(orderId);
+    expect(board.body.summary.activePosts).toBe(0);
+
+    // ...and the escrowed zombie is back in the roster under a fresh id, exactly as a
+    // cancel would have returned it. Nothing about an expiry costs the player anything.
+    const after = await bootstrap(seller);
+    const restored = (after.gameplay.roster as Array<{ zombieKey?: string; key?: string }>)
+      .filter((unit) => (unit.key ?? unit.zombieKey) === "ZombieActorRegularTier1");
+    expect(restored).toHaveLength(1);
+  });
+
+  it("refunds an expired request's escrowed payment", async () => {
+    const buyer = await signIn(uniqueSub("market-expiry-request"));
+    await grantBalance(buyer, { brains: 40 });
+    const before = await bootstrap(buyer);
+    const created = await call<any>("POST", "/black-market/orders", buyer.token, {
+      operationId: operation("expire-request"), expectedAccountVersion: before.accountVersion,
+      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated: false,
+      price: 7, currency: "BRAINS",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    const escrowed = await bootstrap(buyer);
+    expect(escrowed.gameplay.balance.brains).toBe(33); // 40 held, 7 in escrow
+
+    await call<any>("POST", "/dev/fixture/market-backdate", buyer.token,
+      { orderId: created.body.order.id, ageMs: 4 * 86_400_000 });
+    const summary = await call<any>("GET", "/black-market/summary", buyer.token);
+    expect(summary.status, JSON.stringify(summary.body)).toBe(200);
+    expect(summary.body.activePosts).toBe(0);
+    expect((await bootstrap(buyer)).gameplay.balance.brains).toBe(40);
+  });
+
+  it("bumps a post to the top once it is old enough, and not before", async () => {
+    const poster = await signIn(uniqueSub("market-repost"));
+    await grantBalance(poster, { brains: 20 });
+    const before = await bootstrap(poster);
+    const created = await call<any>("POST", "/black-market/orders", poster.token, {
+      operationId: operation("repost-create"), expectedAccountVersion: before.accountVersion,
+      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated: false,
+      price: 1, currency: "BRAINS",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    const orderId = created.body.order.id as string;
+    expect(created.body.order.repostableAt - created.body.order.createdAt).toBe(6 * 3_600_000);
+
+    // Fresh: the cooldown is the whole point, so a just-made post cannot be bumped.
+    const tooSoon = await call<any>("POST", `/black-market/orders/${orderId}/repost`, poster.token, {});
+    expect(tooSoon).toMatchObject({ status: 409, body: { error: "repost_cooldown" } });
+
+    await call<any>("POST", "/dev/fixture/market-backdate", poster.token,
+      { orderId, ageMs: 7 * 3_600_000 });
+    const bumped = await call<any>("POST", `/black-market/orders/${orderId}/repost`, poster.token, {});
+    expect(bumped.status, JSON.stringify(bumped.body)).toBe(200);
+    // The bump re-dates the post: it leads "newest" again AND its three days restart.
+    expect(bumped.body.order.createdAt).toBeGreaterThan(created.body.order.createdAt);
+    expect(bumped.body.order.expiresAt).toBeGreaterThan(created.body.order.expiresAt);
+
+    // And immediately afterwards it is on cooldown again — no spamming the front page.
+    const again = await call<any>("POST", `/black-market/orders/${orderId}/repost`, poster.token, {});
+    expect(again).toMatchObject({ status: 409, body: { error: "repost_cooldown" } });
+  });
+
+  it("refuses to bump a post that is not the caller's, or already stale", async () => {
+    const owner = await signIn(uniqueSub("market-repost-owner"));
+    const stranger = await signIn(uniqueSub("market-repost-stranger"));
+    await grantBalance(owner, { brains: 20 });
+    const before = await bootstrap(owner);
+    const created = await call<any>("POST", "/black-market/orders", owner.token, {
+      operationId: operation("repost-guard"), expectedAccountVersion: before.accountVersion,
+      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated: false,
+      price: 1, currency: "BRAINS",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    const orderId = created.body.order.id as string;
+
+    const notMine = await call<any>("POST", `/black-market/orders/${orderId}/repost`, stranger.token, {});
+    expect(notMine).toMatchObject({ status: 403, body: { error: "not_order_owner" } });
+
+    // Past its life, a post belongs to the sweep that returns its escrow — bumping it
+    // would resurrect a listing the board stopped showing days ago.
+    await call<any>("POST", "/dev/fixture/market-backdate", owner.token,
+      { orderId, ageMs: 5 * 86_400_000 });
+    const dead = await call<any>("POST", `/black-market/orders/${orderId}/repost`, owner.token, {});
+    expect(dead).toMatchObject({ status: 409, body: { error: "order_expired" } });
+  });
+
+  it("still lists an expired sale to its owner when there is nowhere to return it", async () => {
+    // The sweep refuses to force-deliver a zombie into a farm and crypt that are both
+    // full, so that one post stays OPEN past its life. It must remain visible on the
+    // owner's own board: otherwise their zombie is in no roster, on no board and
+    // behind no button, and reads as lost. (Everyone else stops seeing it either way.)
+    const seller = await signIn(uniqueSub("market-expiry-stuck"));
+    const stranger = await signIn(uniqueSub("market-expiry-stuck-watcher"));
+    // 17 units: one goes into escrow, and the 16 left over fill the army cap. With no
+    // Mausoleum placed the crypt holds nothing, so there is no second destination.
+    // 17 ACTIVE units (the fixture stores them by default): one goes into escrow, and
+    // the 16 left over fill the army cap. With no Mausoleum placed the crypt holds
+    // nothing, so there is no second destination for the zombie to come home to.
+    const units = Array.from({ length: 17 }, (_, index) => ({
+      id: `stuck-${index}-${crypto.randomUUID()}`,
+      key: "ZombieActorRegularTier1",
+      stored: false,
+    }));
+    await grantRoster(seller, units);
+    const before = await bootstrap(seller);
+    const created = await call<any>("POST", "/black-market/orders", seller.token, {
+      operationId: operation("stuck-create"), expectedAccountVersion: before.accountVersion,
+      kind: "SELL_ZOMBIE", unitId: units[0].id, price: 3, currency: "BRAINS",
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    const orderId = created.body.order.id as string;
+    await call<any>("POST", "/dev/fixture/market-backdate", seller.token,
+      { orderId, ageMs: 4 * 86_400_000 });
+
+    const mine = await call<any>("GET",
+      "/black-market/orders?kind=SELL_ZOMBIE&mine=true", seller.token);
+    expect(mine.status, JSON.stringify(mine.body)).toBe(200);
+    const stuck = (mine.body.orders as any[]).find((order) => order.id === orderId);
+    expect(stuck, "an unreturnable expired sale must stay on its owner's board").toBeTruthy();
+    expect(stuck.expiresAt).toBeLessThanOrEqual(mine.body.summary.serverTime);
+    // It holds no active-post slot, and it cannot be bumped back onto the front page.
+    expect(mine.body.summary.activePosts).toBe(0);
+    const bump = await call<any>("POST", `/black-market/orders/${orderId}/repost`, seller.token, {});
+    expect(bump).toMatchObject({ status: 409, body: { error: "order_expired" } });
+
+    // Nobody else sees it.
+    const theirs = await call<any>("GET", "/black-market/orders?kind=SELL_ZOMBIE", stranger.token);
+    expect((theirs.body.orders as any[]).some((order) => order.id === orderId)).toBe(false);
+
+    // The card's Cancel Post button is the escape hatch, and it says exactly what is
+    // wrong rather than failing silently — the same answer a manual cancel has always
+    // given when there is nowhere to put the zombie.
+    const boot = await bootstrap(seller);
+    const cancelled = await call<any>("POST", `/black-market/orders/${orderId}/cancel`, seller.token,
+      { operationId: operation("stuck-cancel"), expectedAccountVersion: boot.accountVersion });
+    expect(cancelled).toMatchObject({ status: 409, body: { error: "no_room" } });
+  });
+
+  it("does not reject a new post because another one just expired", async () => {
+    // Regression: the create route used to sweep first. The sweep bumps
+    // account_version, and create() CAS-checks the version the client fetched moments
+    // earlier — so the very post that triggered the sweep failed with state_conflict.
+    const poster = await signIn(uniqueSub("market-expiry-create"));
+    await grantBalance(poster, { brains: 20 });
+    const first = await bootstrap(poster);
+    const stale = await call<any>("POST", "/black-market/orders", poster.token, {
+      operationId: operation("expiry-create-stale"), expectedAccountVersion: first.accountVersion,
+      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated: false,
+      price: 1, currency: "BRAINS",
+    });
+    expect(stale.status, JSON.stringify(stale.body)).toBe(200);
+    await call<any>("POST", "/dev/fixture/market-backdate", poster.token,
+      { orderId: stale.body.order.id, ageMs: 4 * 86_400_000 });
+
+    const boot = await bootstrap(poster);
+    const fresh = await call<any>("POST", "/black-market/orders", poster.token, {
+      operationId: operation("expiry-create-fresh"), expectedAccountVersion: boot.accountVersion,
+      kind: "BUY_ZOMBIE", zombieKey: "ZombieActorRegularTier1", mutated: false,
+      price: 1, currency: "BRAINS",
+    });
+    expect(fresh.status, JSON.stringify(fresh.body)).toBe(200);
+  });
 });

@@ -32,6 +32,22 @@ const DAILY_LIMIT = 50 as const;
 const MAX_PRICE = 10_000_000;
 const PAGE_SIZE = 30;
 
+/** How long an OPEN post stays on the board. Past this it is off every board
+ *  immediately (see the freshness clause in `list`) and the next time its creator
+ *  touches the market it is closed and its escrow handed back (`expireStalePosts`).
+ *  Nothing here ever deletes a listing behind a player's back: the zombie or the
+ *  payment always comes home, exactly as a manual cancel would return it. */
+export const POST_LIFETIME_MS = 3 * 86_400_000; // 3 days
+/** How long a post must have sat before its creator may bump it back to the top of
+ *  "newest" (which also restarts its lifetime). Long enough that reposting is
+ *  housekeeping rather than a way to hold the front page. */
+export const REPOST_COOLDOWN_MS = 6 * 3_600_000; // 6 hours
+/** Posts older than this are expired. */
+const freshAfter = (now: number): number => now - POST_LIFETIME_MS;
+/** How many stale posts one sweep closes. A player cannot hold more than
+ *  ACTIVE_LIMIT open at a time, so this covers every case with room to spare. */
+const SWEEP_LIMIT = 16;
+
 /** The `balances` column a post's currency is paid out of and into. Every currency-aware
  *  statement interpolates this rather than binding it: a column name cannot be a bound
  *  parameter, so the value must come from the closed union — never from request text.
@@ -254,6 +270,10 @@ const toView = (row: OrderRow, accountId: string): BlackMarketOrderView => ({
   priceBrains: row.price_brains,
   status: row.status,
   createdAt: row.created_at,
+  // Both are pure functions of `created_at`, which a repost resets — so the card can
+  // count down to "expires" and to "can be bumped again" without a second round-trip.
+  expiresAt: row.created_at + POST_LIFETIME_MS,
+  repostableAt: row.created_at + REPOST_COOLDOWN_MS,
   creatorName: row.creator_name ?? "Player",
   mine: row.creator_account_id === accountId,
 });
@@ -265,8 +285,12 @@ async function orderRow(db: D1Database, id: string): Promise<OrderRow | null> {
 
 export async function summary(db: D1Database, accountId: string, now: number): Promise<BlackMarketSummary> {
   const [active, daily, held] = await Promise.all([
-    db.prepare("SELECT COUNT(*) n FROM black_market_orders WHERE creator_account_id=? AND status='OPEN'")
-      .bind(accountId).first<{ n: number }>(),
+    // Only posts still on the board count against the active limit. A stale one is
+    // already invisible to every other player and is closed by the next sweep, so
+    // holding a slot for it would lock the player out of the market for three days.
+    db.prepare(`SELECT COUNT(*) n FROM black_market_orders
+      WHERE creator_account_id=? AND status='OPEN' AND created_at>?`)
+      .bind(accountId, freshAfter(now)).first<{ n: number }>(),
     db.prepare("SELECT COUNT(*) n FROM black_market_orders WHERE creator_account_id=? AND created_day=?")
       .bind(accountId, dayBucket(now)).first<{ n: number }>(),
     // What the market is holding for this account: every sale of theirs that has
@@ -300,8 +324,21 @@ export async function list(
   now: number
 ): Promise<BlackMarketListResponse> {
   const kind: BlackMarketOrderKind = query.kind === "BUY_ZOMBIE" ? "BUY_ZOMBIE" : "SELL_ZOMBIE";
+  // The freshness clause is what actually clears the board: a post past its lifetime
+  // stops being listed for EVERYONE the moment it ages out, whether or not its
+  // creator has been back to trigger the sweep that closes it.
+  //
+  // ...with one exception: the creator's OWN "My posts" view. The sweep normally
+  // closes a stale post before this query runs, so the only OPEN stale rows that can
+  // still show up here are the ones it could not finish — a sale whose owner has no
+  // room for the zombie coming back. Hiding those would leave the seller with a
+  // zombie that is in no roster, on no board, and behind no button: an invisible
+  // post they cannot cancel and a unit that reads as lost. They stay listed for
+  // their owner (flagged `expired`) so Cancel Post is still reachable.
+  const mineOnly = query.mine === "true";
   const where = ["o.status='OPEN'", "o.kind=?"];
   const binds: unknown[] = [kind];
+  if (!mineOnly) { where.push("o.created_at>?"); binds.push(freshAfter(now)); }
   // The toolbar's two dropdowns. A bucket can span dozens of keys, so the list is
   // inlined rather than bound — D1 caps bound parameters per query, and these are
   // catalog constants, never request text (blackMarketFilterKeys resolves a bucket
@@ -818,11 +855,13 @@ export async function create(
     (id,creator_account_id,kind,zombie_key,mutated_required,mutation_required,price_brains,currency,status,created_day,created_at,
      source_unit_id,escrow_mutation,escrow_invasions,escrow_brains,escrow_color)
     SELECT ?,?,?,?,?,?,?,?,'OPEN',?,?,?,?,?,?,? WHERE ${guard}
-      AND (SELECT COUNT(*) FROM black_market_orders WHERE creator_account_id=? AND status='OPEN')<?
+      AND (SELECT COUNT(*) FROM black_market_orders
+        WHERE creator_account_id=? AND status='OPEN' AND created_at>?)<?
       AND (SELECT COUNT(*) FROM black_market_orders WHERE creator_account_id=? AND created_day=?)<?`)
     .bind(orderId, accountId, kind, zombieKey, mutated, mutationRequired, price, currency, dayBucket(now), now,
       unitId, mutation, invasions, kind === "BUY_ZOMBIE" ? price : 0, escrowColor,
-      accountId, expectedVersion, accountId, ACTIVE_LIMIT, accountId, dayBucket(now), DAILY_LIMIT)];
+      accountId, expectedVersion, accountId, freshAfter(now), ACTIVE_LIMIT,
+      accountId, dayBucket(now), DAILY_LIMIT)];
   if (kind === "SELL_ZOMBIE") {
     statements.push(db.prepare(`DELETE FROM roster_v3 WHERE account_id=? AND unit_id=? AND locked_by_raid IS NULL
       AND EXISTS(SELECT 1 FROM black_market_orders WHERE id=?)`).bind(accountId, unitId, orderId));
@@ -913,6 +952,121 @@ export async function cancel(
   const committed = await db.batch(statements);
   if ((committed[0]?.meta.changes ?? 0) !== 1) return { status: 409, error: "state_conflict" };
   return response(db, accountId, orderId, now);
+}
+
+/** Bump one of the caller's own posts back to the top of "newest" and restart its
+ *  three-day life.
+ *
+ *  `created_at` IS the bump time — every ordering, the expiry cutoff and this
+ *  cooldown all read that one column — so a repost is a single guarded UPDATE and
+ *  needs no schema of its own. The same guard is what rate-limits it: a post must
+ *  have sat for REPOST_COOLDOWN_MS, so a listing can be kept alive by tending it,
+ *  never by hammering the button.
+ *
+ *  Deliberately does NOT touch `created_day`: the daily post allowance is about how
+ *  many listings a player CREATES in a day, and re-dating an old post into today's
+ *  bucket would spend an allowance they never used.
+ *
+ *  Nothing moves between accounts here — no escrow, no balance, no roster — so this
+ *  is also the one market mutation that leaves `account_version` alone. */
+export async function repost(
+  db: D1Database, accountId: string, orderId: string, now: number
+): Promise<BlackMarketMutationResponse | MarketFailure> {
+  if (!validId(orderId)) return { status: 400, error: "bad_market_repost" };
+  const row = await orderRow(db, orderId);
+  if (!row) return { status: 404, error: "order_not_found" };
+  if (row.creator_account_id !== accountId) return { status: 403, error: "not_order_owner" };
+  if (row.status !== "OPEN") return { status: 409, error: "order_closed" };
+  // An already-stale post is not bumped back to life: it belongs to the sweep, which
+  // is about to hand its escrow back. Reposting it would resurrect a listing the
+  // board stopped showing days ago.
+  if (row.created_at <= freshAfter(now)) return { status: 409, error: "order_expired" };
+  if (now - row.created_at < REPOST_COOLDOWN_MS) return { status: 409, error: "repost_cooldown" };
+  const bumped = await db.prepare(`UPDATE black_market_orders SET created_at=?
+    WHERE id=? AND creator_account_id=? AND status='OPEN' AND created_at<=? AND created_at>?`)
+    .bind(now, orderId, accountId, now - REPOST_COOLDOWN_MS, freshAfter(now)).run();
+  // Losing the race means another device bumped it (or it just closed); either way the
+  // caller's view is stale, so say so rather than reporting a bump that did not happen.
+  if ((bumped.meta.changes ?? 0) !== 1) return { status: 409, error: "repost_cooldown" };
+  await db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
+    VALUES (?,?,'black_market_repost',?,?)`)
+    .bind(`${accountId}:repost:${orderId}:${now}`, accountId,
+      JSON.stringify({ orderId, previousCreatedAt: row.created_at }), now)
+    .run();
+  return response(db, accountId, orderId, now);
+}
+
+/** Close the caller's OPEN posts that have outlived POST_LIFETIME_MS and hand their
+ *  escrow back — the zombie to the roster, the offered payment to the wallet. This is
+ *  exactly what `cancel` does, performed for the player instead of by them, so a post
+ *  that ages out costs them nothing.
+ *
+ *  Lazy rather than scheduled: it runs whenever the owner touches the market. Other
+ *  players never see a stale post either way (`list` filters by age), so the only
+ *  thing waiting on this pass is the owner getting their own escrow back — and they
+ *  have to be here to receive it.
+ *
+ *  A sale whose owner has NO room for the zombie is skipped, not force-delivered: the
+ *  post stays open (invisible, and not counting against their active limit) until a
+ *  later sweep finds them a slot. Same rule as a manual cancel, which is refused
+ *  outright in that state.
+ *
+ *  Every statement is guarded on the CLAIM landing, so two concurrent sweeps — two
+ *  devices, or a list and a create at once — can never return the same escrow twice.
+ *  Returns how many posts were actually closed. */
+export async function expireStalePosts(
+  db: D1Database, accountId: string, now: number
+): Promise<number> {
+  const stale = await db.prepare(`SELECT * FROM black_market_orders
+    WHERE creator_account_id=? AND status='OPEN' AND created_at<=?
+    ORDER BY created_at LIMIT ?`)
+    .bind(accountId, freshAfter(now), SWEEP_LIMIT).all<OrderRow>();
+  const rows = stale.results ?? [];
+  if (!rows.length) return 0;
+  let closed = 0;
+  for (const row of rows) {
+    // A distinct, deterministic marker per post: it doubles as this expiry's operation
+    // id, so the guard below matches only the statement that actually closed it.
+    const operationId = `expire:${row.id}`;
+    const restoredId = crypto.randomUUID();
+    const roomGuard = row.kind === "SELL_ZOMBIE"
+      ? { sql: ` AND ${hasRoomSql}`, binds: hasRoomBinds(accountId) }
+      : { sql: "", binds: [] as unknown[] };
+    const claim = db.prepare(`UPDATE black_market_orders SET status='CANCELLED',closed_at=?,closed_operation_id=?
+      WHERE id=? AND creator_account_id=? AND status='OPEN'${roomGuard.sql}`)
+      .bind(now, operationId, row.id, accountId, ...roomGuard.binds);
+    const guard = "EXISTS(SELECT 1 FROM black_market_orders WHERE id=? AND status='CANCELLED' AND closed_operation_id=?)";
+    const statements: D1PreparedStatement[] = [claim];
+    if (row.kind === "SELL_ZOMBIE") {
+      // from_escrow=1 for the same reason a cancel sets it: this is the seller's own
+      // zombie coming home under a new id, not a species they just acquired.
+      statements.push(db.prepare(`INSERT INTO roster_v3
+        (account_id,unit_id,zombie_key,mutation,invasions,stored,from_escrow,created_at,color)
+        SELECT ?,?,?,?,?,${claimDestinationSql},1,?,? WHERE ${guard}`)
+        .bind(accountId, restoredId, row.zombie_key, row.escrow_mutation ?? 0,
+          row.escrow_invasions ?? 0, ...claimDestinationBinds(accountId), now,
+          row.escrow_color ?? null, row.id, operationId));
+    } else {
+      const wallet = BALANCE_COLUMN[currencyOf(row)];
+      statements.push(db.prepare(`UPDATE balances SET ${wallet}=${wallet}+? WHERE account_id=? AND ${guard}`)
+        .bind(row.price_brains, accountId, row.id, operationId));
+    }
+    statements.push(
+      db.prepare(`UPDATE account_runtime_v3 SET account_version=account_version+1,updated_at=?
+        WHERE account_id=? AND ${guard}`).bind(now, accountId, row.id, operationId),
+      db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
+        SELECT ?,?,'black_market_expire',?,? WHERE ${guard}`)
+        .bind(`${accountId}:expire:${row.id}`, accountId, JSON.stringify({
+          orderId: row.id, kind: row.kind, zombieKey: row.zombie_key,
+          restoredId: row.kind === "SELL_ZOMBIE" ? restoredId : null,
+          refunded: row.kind === "BUY_ZOMBIE" ? row.price_brains : 0,
+          currency: currencyOf(row),
+        }), now, row.id, operationId)
+    );
+    const committed = await db.batch(statements);
+    if ((committed[0]?.meta.changes ?? 0) === 1) closed++;
+  }
+  return closed;
 }
 
 export async function fulfill(

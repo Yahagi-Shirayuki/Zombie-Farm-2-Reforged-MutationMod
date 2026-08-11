@@ -377,6 +377,12 @@ export interface BlackMarketOrderView {
   priceBrains: number;
   status: BlackMarketOrderStatus;
   createdAt: number;
+  /** When this post drops off the board and its escrow goes home (createdAt + three
+   *  days). A repost restarts it. Absent from an older Worker's response. */
+  expiresAt?: number;
+  /** The earliest its creator may bump it back to the top of "newest" (createdAt +
+   *  the repost cooldown). Only meaningful on `mine`. Absent from an older Worker. */
+  repostableAt?: number;
   creatorName: string;
   mine: boolean;
 }

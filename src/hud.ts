@@ -6,6 +6,7 @@ import { GameState } from "./GameState";
 import { farmerHeadHasEffect, farmerHeadXp } from "./farmer";
 import { CropConfig } from "./Field";
 import { harvestXp } from "./farmRewards";
+import { buyXp } from "./economy";
 import { PlaceableDef, BoostDef, FarmSizeUpgrade, ClimateUpgrade, upgradeIcon, placeablePurchaseLimit } from "./assets";
 import type { FarmerBodyDef, FarmerCatalog, FarmerHeadDef, PetCatalog, PetDef } from "./assets";
 import { EPIC_BOSS_FIGHT_BRAIN_COST, type EpicBossPayment } from "./epicBoss/tokens";
@@ -107,7 +108,11 @@ interface MktEntry {
   level: number;
   brains?: boolean; // priced in brains rather than gold
   sell?: number; // harvest value (plants and fruit trees)
-  xp?: number; // experience granted per harvest (crops)
+  // Experience the card is advertising. Two different things wear the same badge:
+  // a crop's per-harvest XP and, for anything BOUGHT, the XP the purchase itself
+  // pays out. `xpHint` is what tells them apart on hover.
+  xp?: number;
+  xpHint?: string;
   timeLabel?: string; // catalog grow/regrowth time
   qty?: number; // how many units the listed price buys (boost packs)
   graveNeeded?: "Blue" | "Red" | "Silver"; // locked until this colored grave is owned
@@ -230,6 +235,17 @@ const MARKET_MAX_PRICE = 10_000_000;
 function marketPrice(amount: number, currency: BlackMarketCurrency): string {
   if (currency === "GOLD") return `${amount.toLocaleString()} gold`;
   return `${amount.toLocaleString()} brain${amount === 1 ? "" : "s"}`;
+}
+
+/** "2d 4h" / "5h 12m" / "18m" — how long until a Black Market post expires, or until
+ *  its owner may bump it again. Deliberately coarser than fmtCooldown, which is built
+ *  to tick down a two-hour raid timer and would render three days as "71h 59m". */
+function fmtMarketWait(ms: number): string {
+  const minutes = Math.max(0, Math.ceil(ms / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
 /** A 0..1 chance as a short percentage. Drop rates run from 0.8% to ~15%, so keep enough
@@ -1475,6 +1491,9 @@ export class Hud {
         price: number; currency: BlackMarketCurrency }
   ) => Promise<BlackMarketMutationResponse>) | null = null;
   onCancelBlackMarketOrder: ((orderId: string) => Promise<BlackMarketMutationResponse>) | null = null;
+  /** Bump one of the player's own open posts back to the top of "newest" and restart
+   *  its three-day life. Rejects with `repost_cooldown` when it is bumped too soon. */
+  onRepostBlackMarketOrder: ((orderId: string) => Promise<BlackMarketMutationResponse>) | null = null;
   onFulfillBlackMarketOrder: ((order: BlackMarketOrderView, unitId?: string) => Promise<BlackMarketMutationResponse>) | null = null;
   /** The caller's settled-but-uncollected trades (both sides). */
   getBlackMarketFulfillments: (() => Promise<BlackMarketFulfillmentView[]>) | null = null;
@@ -1535,6 +1554,10 @@ export class Hud {
   /** Collect a finished combine; returns the new zombie's name (or null).
    *  `stored` sends the child straight to the Mausoleum instead of the farm. */
   onCollectCombine: ((stored?: boolean) => string | null | Promise<string | null>) | null = null;
+  /** Spend one Insta-Grow on the open pot's running combine. The tool has always been
+   *  able to do this by tapping the pot; this is the same action offered from the panel
+   *  the player is already looking at. Returns false when nothing was spent. */
+  onPotInstaGrow: (() => boolean) | null = null;
   /** Tears down the open combiner's countdown ticker. Held on the instance because
    *  openCombiner can replace a panel it did not build, and dropping that panel's
    *  DOM does not stop the interval its closure owns. */
@@ -1856,7 +1879,8 @@ export class Hud {
       if (tab === "Crops" && sub === "Plants")
         return this.plantCards.map((c) => ({
           name: c.name, portrait: c.portrait, cost: c.cost, level: c.level, sell: c.sell,
-          xp: this.cropXp(c.cfg), timeLabel: c.timeLabel,
+          xp: this.cropXp(c.cfg), xpHint: "Experience each time you harvest it",
+          timeLabel: c.timeLabel,
           onPick: () => { this.setPlanting(c.cfg); bg.remove(); },
         }));
       if (tab === "Crops" && sub === "Zombies")
@@ -1912,6 +1936,17 @@ export class Hud {
             cost: potPriced ? 3 : c.cost, level: c.level,
             brains: potPriced ? true : c.brainsNeeded,
             sell: c.category === "tree" ? c.def.harvestValue : undefined,
+            // Buying an item pays XP, and until now the only way to find out how much
+            // was to buy one. Deliberately the same call the PURCHASE makes (main.ts
+            // tryPlaceObject), against the price actually shown — so a repeat Zombie
+            // Pot advertises what its 3-brain charge really pays, not the first one's.
+            xp: buyXp(
+              potPriced ? 3 : c.cost,
+              c.def.xp,
+              potPriced ? true : !!c.brainsNeeded,
+              c.def.category,
+            ) || undefined,
+            xpHint: "Experience for buying it",
             timeLabel: c.category === "tree" && c.def.growMs
               ? fmtCooldown(c.def.growMs)
               : undefined,
@@ -1960,6 +1995,7 @@ export class Hud {
             // Unowned heads advertise the XP the purchase itself pays out, the same
             // way a crop card advertises its harvest XP.
             xp: owned ? undefined : farmerHeadXp(head) || undefined,
+            xpHint: "Experience for buying it",
             owned,
             equipped: this.state.farmerHeadId === head.id,
             onPick: async () => {
@@ -2029,6 +2065,11 @@ export class Hud {
             level: pet.level,
             brains: pet.brains,
             description: pet.description,
+            // What buying it pays out, on the card rather than after the fact. An
+            // owned pet has nothing left to earn, so it shows none (same rule the
+            // Farmer heads use).
+            xp: owned ? undefined : pet.xp || undefined,
+            xpHint: "Experience for buying it",
             owned,
             equipped: this.state.activePet === pet.key,
             onPick: async () => {
@@ -2438,12 +2479,14 @@ export class Hud {
       s.innerHTML = `<img src="${UI("topbar_money_icon.png")}">+${en.sell}`;
       body.appendChild(s);
     }
-    // Harvest XP, so a plant's payoff can be judged on level progress and not just
-    // gold. Zombie crops deliberately don't set it (see the Crops/Zombies entries).
+    // XP, so a card's payoff can be judged on level progress and not just gold: a
+    // crop's per-harvest award, or what BUYING the item pays out. Zombie crops
+    // deliberately don't set it (see the Crops/Zombies entries).
     if (en.xp) {
       const x = document.createElement("div");
       x.className = "mkt-xp";
       x.innerHTML = `<img src="${UI("topbar_exp_icon.png")}">+${en.xp}`;
+      x.title = en.xpHint ?? "Experience";
       body.appendChild(x);
     }
     // Pack size: how many uses the price below buys (Insta-Grow sells 20 at a time).
@@ -3533,6 +3576,10 @@ export class Hud {
           sort: sort.value as "newest" | "price_asc" | "price_desc", mine: mine.checked,
         });
         if (generation !== renderGeneration || !bg.isConnected) return;
+        // Both countdowns are differences between two SERVER timestamps, so they are
+        // measured against the server's clock. Reading the device's would let a
+        // skewed phone report a fresh post as expired (or the reverse).
+        const serverNow = result.summary?.serverTime ?? Date.now();
         list.replaceChildren();
         if (!result.orders.length) {
           const empty = document.createElement("div"); empty.className = "bm-empty";
@@ -3570,7 +3617,25 @@ export class Hud {
             : `Mutated: ${order.mutated
               ? `Yes${order.mutation ? ` — ${mutationLabelFor(order.zombieKey, order.mutation)}` : ""}`
               : "No"}${order.invasions ? ` · ${veterancy(order.invasions)}` : ""}`;
-          meta.textContent = `${mutationText}\n${order.mine ? "Your post" : order.creatorName}`;
+          // Every post now has a shelf life, so every card says how much of it is
+          // left — a listing quietly vanishing three days on would otherwise look
+          // like it had been taken down. An older Worker sends no `expiresAt`, and
+          // then the line is simply omitted.
+          //
+          // An EXPIRED post can only reach this board one way: it is the caller's own
+          // sale, and the sweep could not hand the zombie back because their farm and
+          // Mausoleum are both full (see blackMarket.list). Say exactly that, because
+          // the fix is theirs to make and Cancel Post is the button that finishes it.
+          const expiresIn = order.expiresAt === undefined
+            ? ""
+            : order.expiresAt <= serverNow
+              ? " · EXPIRED — free a farm or Mausoleum slot to take this zombie back"
+              : ` · expires in ${fmtMarketWait(order.expiresAt - serverNow)}`;
+          marketCard.classList.toggle(
+            "bm-expired", order.expiresAt !== undefined && order.expiresAt <= serverNow
+          );
+          meta.textContent =
+            `${mutationText}\n${order.mine ? "Your post" : order.creatorName}${expiresIn}`;
           const cost = document.createElement("div"); cost.className = "bm-price";
           cost.append(order.price.toLocaleString());
           const coin = document.createElement("img"); coin.src = UI(MARKET_COIN[order.currency]); cost.appendChild(coin);
@@ -3579,6 +3644,37 @@ export class Hud {
           let inspectLock: string | undefined;
           let inspectTrade: (() => Promise<void>) | undefined;
           if (order.mine) {
+            // Bump: re-dates the post so it leads "newest" again and its three days
+            // start over. Offered only once the cooldown has passed — a disabled
+            // button that names the wait is clearer than hiding it and leaving the
+            // player to guess whether the feature exists. An already-expired post is
+            // NOT bumpable (the server refuses it): it is waiting to be cancelled,
+            // not to be put back on the front page.
+            const expired = order.expiresAt !== undefined && order.expiresAt <= serverNow;
+            if (this.onRepostBlackMarketOrder && order.repostableAt !== undefined && !expired) {
+              const wait = order.repostableAt - serverNow;
+              const bump = document.createElement("button");
+              bump.className = "bm-repost";
+              bump.textContent = wait > 0 ? `Bump in ${fmtMarketWait(wait)}` : "Bump to Top";
+              bump.disabled = wait > 0;
+              bump.title = "Move this post back to the top of Newest and restart its three days.";
+              bump.onclick = async (event) => {
+                event.stopPropagation();
+                bump.disabled = true;
+                try {
+                  await this.onRepostBlackMarketOrder?.(order.id);
+                  this.showToast("Post bumped to the top — it has three more days.");
+                  await renderOrders();
+                } catch (error) {
+                  const code = error instanceof Error ? error.message : "";
+                  this.showToast(code.startsWith("repost_cooldown")
+                    ? "That post was bumped too recently — try again later."
+                    : "Could not bump that post. Refresh and try again.");
+                  await renderOrders();
+                }
+              };
+              marketCard.appendChild(bump);
+            }
             const action = document.createElement("button");
             action.className = "cancel"; action.textContent = "Cancel Post";
             action.onclick = async (event) => {
@@ -4875,6 +4971,18 @@ export class Hud {
       toCrypt.textContent = "To Mausoleum";
       toCrypt.onclick = () => void collect(toCrypt, true);
 
+      // Finish the wait from the panel you are already looking at. The Insta-Grow tool
+      // has always worked on a running pot, but only by closing this panel, equipping
+      // the tool and tapping the building. Only offered while the combine is still
+      // RUNNING and the player owns a use — there is nothing to hurry once it is ready.
+      const growBoost = this.getSpeedGrowBoost?.();
+      const hurry = document.createElement("button");
+      hurry.className = "cmb-go cmb-hurry";
+      hurry.onclick = () => {
+        if (!this.onPotInstaGrow?.()) return;
+        renderBusy(); // the job is ready now: swap straight to the collect layout
+      };
+
       let fill: HTMLElement | null = null;
       if (done) {
         // Nothing goes in the pot any more — show only what came out of it.
@@ -4923,6 +5031,7 @@ export class Hud {
         const buttons = document.createElement("div");
         buttons.className = "cmb-actions";
         buttons.append(go, toCrypt);
+        if (growBoost && this.onPotInstaGrow) buttons.appendChild(hurry);
         wrap.append(head, slots, bar, note, buttons);
       }
 
@@ -4949,6 +5058,16 @@ export class Hud {
         // reads as a bug, and the crypt is a real choice only once one is placed.
         toCrypt.style.display = s.canStore ? "" : "none";
         toCrypt.disabled = collecting || !s.ready;
+        if (growBoost) {
+          // The count is live: spending the last one elsewhere (or here) retires the
+          // button rather than leaving an offer the player can no longer take.
+          const held = growBoost.count();
+          hurry.innerHTML =
+            `<img class="cmb-hurry-i" src="${growBoost.icon}" alt=""> ${growBoost.name}` +
+            `<span class="cmb-hurry-ct">x${held}</span>`;
+          hurry.title = `Finish this combine now for one ${growBoost.name}.`;
+          hurry.style.display = held > 0 && !s.ready ? "" : "none";
+        }
       };
       tick();
       stop();
@@ -5622,6 +5741,19 @@ export class Hud {
       // while the gate is in flight. If it declines (cooldown, or a raid already
       // running), leave this screen up so the player can retry.
       if (!this.onLaunchRaid || start.disabled) return;
+      // ELITE is the one launch the player can't back out of once it starts: the
+      // ticket is charged, the wave is scaled several rungs above the card, and the
+      // casualties are permanent. Ask HERE — before onLaunchRaid opens a server
+      // session — so the warning is a decision rather than an announcement. (It used
+      // to be a post-launch Tim notice with an OK button: by the time it was read the
+      // army was already on the field. See main.ts.)
+      if (useBrainTicket && !await this.confirmInGame(
+        "Start an ELITE invasion?",
+        `This spends a Brain Ticket. ${raid.name} will be fought at ELITE strength — ` +
+        "far above its usual line — for 4x brain and rare-zombie odds. Zombies lost " +
+        "are gone for good.",
+        "Invade (Elite)"
+      )) return;
       start.disabled = true;
       const launched = await this.onLaunchRaid(raid.id, [...order], launchOpts());
       if (launched) bg.remove();

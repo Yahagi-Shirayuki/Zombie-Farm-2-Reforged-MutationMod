@@ -343,6 +343,12 @@ export interface ZombiePotSave {
   keyA: string;
   /** Species key of parent B. */
   keyB: string;
+  /** Parent A's display NAME at combine time. Slot 1 already decides the child's
+   *  species, so it decides its name too: the zombie you fed into the first slot
+   *  comes back out, renamed only if the player renamed it. Absent on jobs started
+   *  before this (and on any job whose slot-1 parent had no name), which fall back
+   *  to the usual id-derived random name. */
+  nameA?: string;
   /** Parent A's mutation mask at combine time. */
   maskA: number;
   /** Parent B's mutation mask at combine time. */
