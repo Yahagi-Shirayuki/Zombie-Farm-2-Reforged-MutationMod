@@ -211,9 +211,17 @@ fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     // 1399 bytes after a reload while 1585 sat on disk.
     //
     // So answer /sw.js with a worker that empties the caches and unregisters
-    // itself. It is byte-different from the shipped one, so an install that
-    // already has the old worker adopts this on its next launch and the old one
-    // dies rather than lingering forever.
+    // itself. On a first run this registers instead of the real worker and the
+    // problem never starts.
+    //
+    // It does NOT rescue a profile that already ran a build without this:
+    // WebView2 doesn't route service-worker script fetches through the custom
+    // protocol handler, so the browser's update check for /sw.js fails outright
+    // ("An unknown error occurred when fetching the script") and the old worker
+    // stays active forever. Measured against v0.2.1 -> v0.2.2 over one profile.
+    // The only cure there is deleting %LOCALAPPDATA%\com.zombiefarmreforged.desktop,
+    // which also deletes that farm, so it is a documented last resort rather
+    // than something the app does behind the player's back.
     if path == "/sw.js" {
         return Response::builder()
             .status(StatusCode::OK)

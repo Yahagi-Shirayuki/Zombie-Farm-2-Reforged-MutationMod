@@ -56,6 +56,11 @@ originals.
   * Close and reopen the app to see the change - nothing is cached.
   * If the game stops loading after a mod, delete the "game" folder and
     re-extract it from the zip.
+  * If a replaced picture stubbornly doesn't change, you may be on a very old
+    build that cached it. Export your farm first (Settings > Local Save >
+    Export), then paste this into Explorer's address bar and delete the folder
+    it opens, which resets the app: %LOCALAPPDATA%\com.zombiefarmreforged.desktop
+    Reopen the app and use Settings > Local Save > Import to get your farm back.
 
 Only install mods from someone you trust. Modded files are code and art that
 run on your PC.

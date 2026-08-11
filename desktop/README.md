@@ -35,6 +35,17 @@ Two things follow, both of which matter more than they look:
   shipped build's service worker cache-firsts art, and v0.2.1 shipped without
   this — a replaced PNG kept serving its old bytes across reloads. A 404 would
   not have been enough, because that leaves an already-installed worker running.
+
+  **This only protects a clean profile.** WebView2 does not route service-worker
+  script fetches through the custom protocol handler, so on a profile that
+  already registered the real worker the browser's update check fails outright
+  (`An unknown error occurred when fetching the script`) and the old worker stays
+  active — measured across a v0.2.1 → v0.2.2 upgrade on one profile: still 1
+  registration and 4 caches after 90 s and repeated launches. The page can't fix
+  it either, since the stale worker serves `index.html` from its own precache, so
+  nothing injected into that file ever runs. The cure is deleting
+  `%LOCALAPPDATA%\com.zombiefarmreforged.desktop` — **which deletes that farm
+  too**, so export first.
 - **The origin can never move.** There is no HTTP server and no port to collide
   with. Saves live in `localStorage`, which is keyed by origin, so a shifting
   origin would silently mean a lost farm — the exact trap the browser launcher
@@ -103,9 +114,10 @@ in, since Tauri enables devtools for debug builds only):
 - Page URL is `http://zfgame.localhost/index.html`, `isSecureContext` is `true`.
 - **The game fully boots**: canvas 1600×1000, 59 requests, **0 failures**, and
   the boot bar reaches *Click to Start*.
-- **Mods take effect**: a file edited on disk is served changed on the next
-  fetch, `Cache-Control: no-store`. Under v0.2.1 this held for uncached types but
-  **not** for art — the fix is the `/sw.js` kill switch above.
+- **Mods take effect** (v0.2.2, clean profile): `button_plow.png` swapped on disk
+  for a 1585-byte file served 1585 bytes immediately and after a reload, with
+  `registrations: 0` and no caches. The same test against v0.2.1 kept serving the
+  cached 1399 bytes — that is the bug the `/sw.js` kill switch fixes.
 - **Audio decodes**: a 285 KB mp3 arrives byte-intact (291,717 bytes,
   `audio/mpeg`) and `decodeAudioData` yields 15.36 s stereo at 48 kHz.
 - Missing files return 404; `/../../ZombieFarm.exe` returns 404, so the

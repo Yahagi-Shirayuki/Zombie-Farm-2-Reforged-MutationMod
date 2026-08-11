@@ -23,6 +23,31 @@ export const EPIC_QUEST_ZOMBIE_REWARDS: Readonly<Record<string, string>> = {
 export const epicQuestZombieReward = (questId: string): string | null =>
   EPIC_QUEST_ZOMBIE_REWARDS[questId] ?? null;
 
+/** Activating an event re-opens its own quests, so a boss the player has already
+ *  finished can be run — and paid out — again. An epic quest is otherwise complete
+ *  forever, which retired the event's signature zombie after one clear.
+ *
+ *  Only quests that are ALREADY COMPLETE are touched, and their stored progress goes
+ *  with the completion flag. Both halves matter:
+ *   - Progress must go, or the reopened quest sits at its target and re-completes on
+ *     the very first win of the new run, whatever level that win was on.
+ *   - Incomplete quests must be left alone, because epic progress is deliberately
+ *     LIFETIME progress: "win all 8 of this boss's prizes" is meant to survive the
+ *     event expiring and be resumed by a later activation (QuestSystem.restore).
+ *
+ *  Returns null when nothing was completed, so callers can skip the write. */
+export function reopenEpicQuests<
+  T extends { completed: string[]; progress: { questId: string; counts: number[] }[] }
+>(quests: T, questIds: readonly string[]): { completed: string[]; progress: T["progress"] } | null {
+  const done = new Set(quests.completed);
+  const reopened = new Set(questIds.filter((id) => done.has(id)));
+  if (!reopened.size) return null;
+  return {
+    completed: quests.completed.filter((id) => !reopened.has(id)),
+    progress: quests.progress.filter((entry) => !reopened.has(entry.questId)),
+  };
+}
+
 /** Farm first; once the authoritative deployed cap is full, the earned unit is filed
  * in Received instead of being destroyed. It is not yet in the roster — claiming it
  * from Received later takes a real Mausoleum slot (see storage.claim). */
