@@ -496,5 +496,17 @@
     "weight": 0.7
    }
   ]
+ },
+ {
+  "key": "malakale",
+  "name": "Malakale",
+  "cost": 220,
+  "sell": 300,
+  "growMs": 43200000,
+  "stage1": "malakale_stage1.png",
+  "stage2": "malakale_stage2.png",
+  "level": 23,
+  "xp": 1,
+  "icon": "kale_icon.png"
  }
 ]
