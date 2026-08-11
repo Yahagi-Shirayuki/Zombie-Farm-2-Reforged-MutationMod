@@ -1,3 +1,8 @@
 # The built game is dropped in here at packaging time (CI, or build-package.ps1).
 # Never committed: it's ~90 MB of build output.
 game/
+
+# The update channel is written at packaging time from the building repository
+# (CI, or build-package.ps1 -UpdateRepo/-UpdateVersion). Never committed: a
+# checked-in one would point every fork's package at whoever committed it.
+update.json

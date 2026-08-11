@@ -62,9 +62,12 @@ against the game root, so `..` can't escape the folder.
 
 ## Forking this
 
-The workflow needs nothing configured — it runs on `secrets.GITHUB_TOKEN`, and
-the offline guard derives the API origin from your own `.env.production`, so a
-fork pointing at its own Worker is checked against its own URL.
+The workflow needs nothing configured. It runs on `secrets.GITHUB_TOKEN`; the
+offline guard derives the API origin from your own `.env.production`, so a fork
+pointing at its own Worker is checked against its own URL; and the update channel
+is written from `$GITHUB_REPOSITORY` at packaging time, so **your** package
+offers **your** releases without a line of configuration. Tag `v*` and both zips
+build.
 
 Two values must change, because they are **shared state on the player's PC**, not
 just names:

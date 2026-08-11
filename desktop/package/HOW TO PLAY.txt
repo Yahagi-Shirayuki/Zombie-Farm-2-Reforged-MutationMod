@@ -28,6 +28,19 @@ anything is wrong with this one. Nothing is installed and nothing is sent
 anywhere - the app only reads files from this folder.
 
 
+CHECKING FOR UPDATES
+--------------------
+
+Settings (cog icon) > Updates > "Check for Updates" asks whether a newer
+version has been released. Nothing else ever contacts the internet - the game
+does not check on its own, and you can play with no connection at all.
+
+If something newer exists, you're asked first. Saying yes opens the download
+page in your browser and does nothing else: your current copy, your saved farm
+and any mods are left exactly as they are. You download the new zip and extract
+it yourself, whenever you feel like it.
+
+
 YOUR FARM DOES NOT CARRY OVER FROM THE BROWSER
 ----------------------------------------------
 

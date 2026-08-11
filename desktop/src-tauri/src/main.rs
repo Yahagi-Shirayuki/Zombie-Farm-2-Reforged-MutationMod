@@ -53,6 +53,50 @@ fn game_dir() -> &'static Option<PathBuf> {
     })
 }
 
+/// Update channel for this package: the repository it was built from and the tag
+/// it was built at, read from `update.json` beside the executable.
+///
+/// Written at packaging time from the building repository, so a fork's package
+/// asks the FORK's releases. Missing or malformed means no channel at all: the
+/// game's Settings row then says update checks aren't available, and nothing here
+/// ever touches the network. That matters — these packages are for playing
+/// entirely offline, so reaching out has to be something the player asks for.
+fn update_channel() -> &'static Option<(String, String)> {
+    static CHANNEL: OnceLock<Option<(String, String)>> = OnceLock::new();
+    CHANNEL.get_or_init(|| {
+        let exe = std::env::current_exe().ok()?;
+        let text = fs::read_to_string(exe.parent()?.join("update.json")).ok()?;
+        let repo = json_string_field(&text, "repo")?;
+        let version = json_string_field(&text, "version")?;
+        // Constrained rather than trusted: `repo` is pasted into a URL that gets
+        // handed to the shell, and `version` into a script the page evaluates.
+        let repo_ok = !repo.is_empty()
+            && repo.matches('/').count() == 1
+            && repo.split('/').all(|part| {
+                !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+            });
+        let version_ok = !version.is_empty()
+            && version.len() <= 40
+            && version.chars().all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c));
+        (repo_ok && version_ok).then_some((repo, version))
+    })
+}
+
+/// Pull one `"key": "value"` string out of flat JSON without taking a parser
+/// dependency. The file is written by our own packaging step, so it is a known
+/// two-field object rather than arbitrary input.
+fn json_string_field(text: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let after_key = text.find(&needle)? + needle.len();
+    let rest = &text[after_key..];
+    let colon = rest.find(':')? + 1;
+    let rest = &rest[colon..];
+    let open = rest.find('"')? + 1;
+    let rest = &rest[open..];
+    let close = rest.find('"')?;
+    Some(rest[..close].to_string())
+}
+
 /// Percent-decode a URL path (`%20` and friends) without pulling in a crate.
 /// Invalid escapes are left as-is rather than dropped, so a filename with a
 /// stray `%` still resolves.
@@ -231,6 +275,46 @@ fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
             .expect("static script response is always valid");
     }
 
+    // Tells the game it is packaged, and which repository to ask about updates.
+    // Served as a file rather than inlined because the build's CSP has no
+    // 'unsafe-inline' for scripts.
+    if path == "/__zfshell.js" {
+        let (repo, version) = match update_channel() {
+            Some((repo, version)) => (repo.as_str(), version.as_str()),
+            None => ("", ""),
+        };
+        let script = format!(
+            "window.__ZF_SHELL__ = {{\"kind\":\"app\",\"repo\":\"{repo}\",\"version\":\"{version}\"}};\n"
+        );
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/javascript; charset=utf-8")
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(Cow::Owned(script.into_bytes()))
+            .expect("static script response is always valid");
+    }
+
+    // The player said yes to an update. There is no browser in this window, so the
+    // shell opens one. The URL is built HERE from the packaged configuration - the
+    // page never supplies one, so nothing it could be tricked into saying can send
+    // the player somewhere else.
+    if path == "/__open-release" {
+        let opened = match update_channel() {
+            Some((repo, _)) => open_in_browser(&format!("https://github.com/{repo}/releases/latest")),
+            None => false,
+        };
+        let (status, body) = if opened {
+            (StatusCode::OK, "{\"opened\":true}")
+        } else {
+            (StatusCode::SERVICE_UNAVAILABLE, "{\"opened\":false}")
+        };
+        return Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Cow::Borrowed(body.as_bytes()))
+            .expect("static json response is always valid");
+    }
+
     let Some(file) = resolve(root, &path) else {
         return error_page(
             StatusCode::NOT_FOUND,
@@ -242,6 +326,39 @@ fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
             ),
         );
     };
+
+    // index.html is rewritten on the way out: the shell declaration is added, and
+    // api.github.com is allowed in connect-src ONLY when an update channel exists,
+    // so a package without one keeps exactly the policy the web build ships.
+    if file.file_name().and_then(|n| n.to_str()) == Some("index.html") {
+        if let Ok(html) = fs::read_to_string(&file) {
+            let mut html = if html.contains("__zfshell.js") {
+                html
+            } else {
+                // A classic script still runs before the deferred module bundle, so
+                // the flag is set before the game reads it.
+                match html.find("</head>") {
+                    Some(at) => {
+                        let mut out = String::with_capacity(html.len() + 48);
+                        out.push_str(&html[..at]);
+                        out.push_str("    <script src=\"/__zfshell.js\"></script>\n  ");
+                        out.push_str(&html[at..]);
+                        out
+                    }
+                    None => format!("<script src=\"/__zfshell.js\"></script>{html}"),
+                }
+            };
+            if update_channel().is_some() {
+                html = html.replace("connect-src 'self'", "connect-src 'self' https://api.github.com");
+            }
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .header(header::CACHE_CONTROL, "no-store")
+                .body(Cow::Owned(html.into_bytes()))
+                .expect("html response is always valid");
+        }
+    }
 
     let Ok(bytes) = fs::read(&file) else {
         return error_page(
@@ -298,6 +415,18 @@ self.addEventListener('activate', function (event) {
   })());
 });
 "#;
+
+/// Hand a URL to the shell so it opens in the player's real browser.
+///
+/// `cmd /C start` rather than a Tauri plugin: it needs no extra dependency and no
+/// capability, and this only ever receives a URL this process built itself. The
+/// empty "" is the title argument `start` would otherwise take the URL as.
+fn open_in_browser(url: &str) -> bool {
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn()
+        .is_ok()
+}
 
 fn html_escape(raw: &str) -> String {
     raw.replace('&', "&amp;")

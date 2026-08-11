@@ -62,22 +62,35 @@ prompt this is trying to avoid. So it speaks HTTP over a plain loopback socket.
 - **Second double-click doesn't start a second server.** It finds the first one
   via `/__zflauncher` and just reopens the browser.
 
-## Neither package updates itself
+## Updates: asked for, never applied
 
-Both are frozen at the version that was downloaded. There is no updater in the
-launcher and no Tauri updater plugin in the app, so a new release means
-downloading the new zip. Settings shows `Version <package.json version> (<commit
-sha>)` so a player can say which build they have, and Settings → Check for
-Updates reports *"Update checks aren't available in this build"* — that string is
-honest here, because the service worker these packages rely on for update
-detection is deliberately disabled.
+Both packages can *check* for a newer release. Neither ever installs one.
 
-If that changes, note two things before reaching for the Tauri updater: it
-replaces the executable, which is the part that almost never changes, while the
-content that does change lives in `game/` outside the binary. And anything that
-overwrites `game/` wholesale **deletes the player's mods** — which is the reason
-these packages exist. A version check that *tells* the player, rather than one
-that replaces files underneath them, is the shape that fits.
+The shell writes `update.json` at packaging time — `{"repo": "...", "version":
+"..."}` — from the repository that built the zip. It then tells the game about
+itself by serving `/__zfshell.js` and injecting that one tag into `index.html`,
+so Settings → **Check for Updates** asks *that* repository's releases instead of
+the service worker it no longer has. Three properties are deliberate:
+
+- **Nothing happens until the player presses the button.** No check on launch, no
+  background poll. These packages exist to be played entirely offline, and a
+  call home on every start would quietly break that.
+- **No package without a channel can reach the network at all.** With no
+  `update.json`, the shell declares empty values, refuses `/__open-release` with
+  503, and does **not** add `api.github.com` to the page's `connect-src` —
+  verified by removing the file and re-checking all three.
+- **Accepting an update opens the download page and stops there.** Nothing is
+  downloaded, and nothing on disk is touched. Overwriting `game/` would delete
+  the player's mods, which is the reason these packages exist at all.
+
+The player sees a note (`v0.3.0 is available — you have v0.2.2.`) and, only if
+something newer exists, a confirmation dialog whose Cancel really does nothing.
+`api.github.com` is added to `connect-src` only when a channel is configured, so
+a package built without one keeps exactly the policy the web build ships.
+
+This is also why the Tauri updater isn't used: it replaces the executable — the
+part that almost never changes — while everything that does change lives in
+`game/`, outside the binary, next to the player's mods.
 
 ## Packaging
 

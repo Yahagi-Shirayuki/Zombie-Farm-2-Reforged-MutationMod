@@ -103,6 +103,10 @@ jobs:
           test -f "$root/Play Zombie Farm.cmd"
           test -f "$root/launcher/launcher.ps1"
           test -f "$root/game/index.html"
+          # The update channel is DERIVED from the repository doing the building, so
+          # a fork's package checks the fork's own releases with nothing to configure.
+          # The game only ever reads this when the player presses Check for Updates.
+          printf '{"repo":"%s","version":"%s"}\n' "$GITHUB_REPOSITORY" "$TAG" > "$root/update.json"
           # .gitattributes already checks these out with CRLF; normalise anyway so
           # a runner with odd git config can't ship an LF-only .cmd (cmd.exe
           # mis-parses multi-line blocks in one). Idempotent: strips \r, re-adds it.
@@ -224,6 +228,9 @@ jobs:
           cp -r dist/. "$root/game/"
           test -f "$root/ZombieFarm.exe"
           test -f "$root/game/index.html"
+          # Same derived update channel as the launcher package: a fork's exe checks
+          # the fork's own releases, with nothing for its maintainer to configure.
+          printf '{"repo":"%s","version":"%s"}\n' "$GITHUB_REPOSITORY" "$TAG" > "$root/update.json"
           sed -i 's/\r$//; s/$/\r/' "$root/HOW TO PLAY.txt" "$root/Create Desktop Shortcut.cmd"
 
       # 7z, not PowerShell's Compress-Archive: that writes backslash separators

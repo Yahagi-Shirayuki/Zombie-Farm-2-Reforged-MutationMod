@@ -44,6 +44,23 @@ $PORTS     = 8722, 8723, 8724, 8725, 8726
 $launcherDir = $PSScriptRoot
 $packageRoot = Split-Path -Parent $launcherDir
 
+# Written at packaging time from the repo that built this zip, so a fork's package
+# checks the FORK's releases. Absent (or blank) simply means no update channel:
+# the game's Settings row then says checks aren't available, and nothing ever
+# reaches out to the network.
+$updateRepo = ''
+$updateVersion = ''
+try {
+    $updateFile = Join-Path $packageRoot 'update.json'
+    if (Test-Path -LiteralPath $updateFile) {
+        $config = Get-Content -LiteralPath $updateFile -Raw | ConvertFrom-Json
+        if ($config.repo -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') { $updateRepo = $config.repo }
+        if ($config.version -match '^[A-Za-z0-9._+-]{1,40}$') { $updateVersion = $config.version }
+    }
+} catch {
+    # A malformed update.json must never stop the game from starting.
+}
+
 # Logs and the "shortcut already offered" marker go to LOCALAPPDATA, not next to
 # the game: the folder may sit somewhere unwritable (Program Files), and modders
 # get a clean game folder with nothing of ours dropped into it.
@@ -112,6 +129,7 @@ function Find-GameFolder {
 $serverSource = @'
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net;
@@ -145,15 +163,21 @@ namespace ZFLauncher
     {
         private readonly string _root;
         private readonly int _port;
+        private readonly string _updateRepo;
+        private readonly string _updateVersion;
         private readonly TcpListener _listener;
         private volatile bool _stopping;
 
-        public Server(string root, int port)
+        public Server(string root, int port, string updateRepo, string updateVersion)
         {
             _root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar);
             _port = port;
+            _updateRepo = updateRepo ?? "";
+            _updateVersion = updateVersion ?? "";
             _listener = new TcpListener(IPAddress.Loopback, port);
         }
+
+        private bool HasUpdateChannel { get { return _updateRepo.Length > 0 && _updateVersion.Length > 0; } }
 
         public int Port { get { return _port; } }
 
@@ -260,6 +284,31 @@ namespace ZFLauncher
                 keepAlive = false;
             }
 
+            int cutEarly = target.IndexOfAny(new char[] { '?', '#' });
+            string earlyPath = cutEarly >= 0 ? target.Substring(0, cutEarly) : target;
+
+            // The player accepted an update: open the release page in their browser.
+            // The URL is built HERE from the packaged configuration - the page never
+            // supplies one, so nothing it could be tricked into saying can redirect
+            // this somewhere else.
+            if (earlyPath == "/__open-release" && method == "POST")
+            {
+                bool opened = false;
+                if (HasUpdateChannel)
+                {
+                    try
+                    {
+                        Process.Start("https://github.com/" + _updateRepo + "/releases/latest");
+                        opened = true;
+                    }
+                    catch (Exception) { }
+                }
+                byte[] body = Encoding.UTF8.GetBytes(opened ? "{\"opened\":true}" : "{\"opened\":false}");
+                Send(output, opened ? 200 : 503, opened ? "OK" : "Service Unavailable",
+                     "application/json", body, true, keepAlive, null);
+                return keepAlive;
+            }
+
             bool bodyWanted = method != "HEAD";
             if (method != "GET" && method != "HEAD")
             {
@@ -298,7 +347,31 @@ namespace ZFLauncher
                 return keepAlive;
             }
 
+            // Tells the game it is running inside a package, and which repository
+            // that package came from. An external file, not an inline script: the
+            // build's CSP has no 'unsafe-inline' for scripts, on purpose.
+            if (path == "/__zfshell.js")
+            {
+                string declaration = "window.__ZF_SHELL__ = " + ShellJson() + ";\n";
+                byte[] script = Encoding.UTF8.GetBytes(declaration);
+                Send(output, 200, "OK", "text/javascript; charset=utf-8", script,
+                     bodyWanted, keepAlive, null);
+                return keepAlive;
+            }
+
             string full = Resolve(path);
+            if (full != null && full.EndsWith("index.html", StringComparison.OrdinalIgnoreCase)
+                && File.Exists(full))
+            {
+                byte[] transformed = TransformIndex(full);
+                if (transformed != null)
+                {
+                    Send(output, 200, "OK", "text/html; charset=utf-8", transformed,
+                         bodyWanted, keepAlive, null);
+                    return keepAlive;
+                }
+            }
+
             if (full == null || !File.Exists(full))
             {
                 byte[] page = Encoding.UTF8.GetBytes(NotFoundPage(path));
@@ -308,6 +381,48 @@ namespace ZFLauncher
             }
 
             return SendFile(output, full, headers, bodyWanted, keepAlive);
+        }
+
+        /// <summary>index.html with the shell declaration added, so the game knows
+        /// it is packaged and which repository to ask about updates. Returns null on
+        /// any read problem, so the caller just serves the file untouched.</summary>
+        private byte[] TransformIndex(string file)
+        {
+            try
+            {
+                string html = File.ReadAllText(file, Encoding.UTF8);
+                if (html.IndexOf("__zfshell.js", StringComparison.Ordinal) < 0)
+                {
+                    string tag = "<script src=\"/__zfshell.js\"></script>";
+                    int head = html.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
+                    // After the bundle's own tags but before </head>: a classic script
+                    // still runs before the deferred module, so the flag is set in time.
+                    html = head >= 0 ? html.Substring(0, head) + "    " + tag + "\n  " + html.Substring(head)
+                                     : tag + html;
+                }
+                // Widened ONLY when there is a channel to check, so a package with no
+                // update.json keeps exactly the policy the web build ships with.
+                if (HasUpdateChannel)
+                {
+                    html = html.Replace("connect-src 'self'", "connect-src 'self' https://api.github.com");
+                }
+                return Encoding.UTF8.GetBytes(html);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        private string ShellJson()
+        {
+            return "{\"kind\":\"launcher\",\"repo\":\"" + JsonEscape(_updateRepo)
+                 + "\",\"version\":\"" + JsonEscape(_updateVersion) + "\"}";
+        }
+
+        private static string JsonEscape(string raw)
+        {
+            return raw.Replace("\\", "\\\\").Replace("\"", "\\\"");
         }
 
         /// <summary>Maps a URL path to a file inside the game folder, or null if it
@@ -626,7 +741,7 @@ $($_.Exception.Message)
 
     $server = $null
     foreach ($candidate in $PORTS) {
-        $attempt = New-Object ZFLauncher.Server($gameDir, $candidate)
+        $attempt = New-Object ZFLauncher.Server($gameDir, $candidate, $updateRepo, $updateVersion)
         try {
             $attempt.Start()
             $server = $attempt

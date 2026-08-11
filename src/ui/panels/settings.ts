@@ -10,6 +10,13 @@ import { getSpriteSet, setSpriteSet, FARM_BACKGROUNDS } from "../../prefs";
 import { ABILITY_POOL, ABILITY_TIER, TIER_BOSS } from "../../zombie/traits";
 import { otherPlayMode, playModeDestinationLabel } from "../../playMode";
 import { updateCheckMessage, type UpdateCheckResult } from "../../updateCheck";
+import {
+  checkShellUpdate,
+  openReleasePage,
+  releasesUrl,
+  shellInfo,
+  shellUpdateMessage,
+} from "../../shellUpdate";
 
 export async function confirmLocalFarmReset(
   hud: Pick<Hud, "confirmInGame" | "onResetLocal">,
@@ -405,20 +412,47 @@ export function openSettings(hud: Hud): void {
   const updatesButton = document.createElement("button");
   updatesButton.className = "set-action";
   updatesButton.textContent = "Check for Updates";
-  const updatesNote = noteEl("Look for a newer version of the game.");
+  // In a downloaded package there is no service worker to ask (it is disabled so
+  // it can't mask modded files), so the shell that serves the game tells us which
+  // repository it came from and we ask that for its newest release.
+  const shell = shellInfo();
+  const updatesNote = noteEl(shell
+    ? `Ask ${shell.repo} whether a newer version has been released. Nothing is downloaded or changed without asking you.`
+    : "Look for a newer version of the game.");
   updatesButton.onclick = async () => {
     updatesButton.disabled = true;
     updatesButton.textContent = "Checking…";
     updatesNote.textContent = "Checking for updates…";
-    let result: UpdateCheckResult;
     try {
-      result = (await hud.onCheckForUpdate?.()) ?? "unavailable";
-    } catch {
-      result = "error";
+      if (shell) {
+        const result = await checkShellUpdate(shell);
+        updatesNote.textContent = shellUpdateMessage(result);
+        if (result.status === "update-available") {
+          // Deliberately a question, and deliberately the end of our involvement:
+          // replacing game/ would delete the player's mods, so accepting opens the
+          // download page and leaves the files alone.
+          const wanted = await hud.confirmInGame(
+            `${result.latest} is available`,
+            `You're playing ${result.current}. Opening the download page won't change anything on this PC — you'll get a new zip to extract yourself, and your current copy, saves and mods stay exactly as they are.`,
+            "Open download page",
+          );
+          if (wanted && !(await openReleasePage(shell))) {
+            updatesNote.textContent = `Couldn't open a browser. The download is at ${releasesUrl(shell)}`;
+          }
+        }
+      } else {
+        let result: UpdateCheckResult;
+        try {
+          result = (await hud.onCheckForUpdate?.()) ?? "unavailable";
+        } catch {
+          result = "error";
+        }
+        updatesNote.textContent = updateCheckMessage(result);
+      }
+    } finally {
+      updatesButton.textContent = "Check for Updates";
+      updatesButton.disabled = false;
     }
-    updatesNote.textContent = updateCheckMessage(result);
-    updatesButton.textContent = "Check for Updates";
-    updatesButton.disabled = false;
   };
   updates.append(updatesLabel, updatesButton);
 
@@ -544,7 +578,13 @@ export function buildAccountBlock(hud: Hud): HTMLElement | null {
   info.className = "set-acct-info";
   const who = document.createElement("div");
   who.className = "set-acct-who";
-  who.innerHTML = `Signed in as <b>${acct.name}</b>`;
+  // textContent for the display name, never innerHTML — the same rule the friends
+  // list and the nameplate follow. The server's username allowlist happens to exclude
+  // markup today, so this was building HTML from account-controlled text and getting
+  // away with it; the safety then lived in a regex three modules away rather than here.
+  const whoName = document.createElement("b");
+  whoName.textContent = acct.name;
+  who.append("Signed in as ", whoName);
   info.append(who);
   const out = document.createElement("button");
   out.className = "set-signout";

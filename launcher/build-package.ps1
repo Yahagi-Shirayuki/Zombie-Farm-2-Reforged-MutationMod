@@ -20,7 +20,13 @@ param(
     # Don't run npm; just package $GameFolder as it stands.
     [switch]$SkipBuild,
     # Package even if the build still talks to the live server (mods shouldn't).
-    [switch]$AllowOnlineBuild
+    [switch]$AllowOnlineBuild,
+    # Update channel baked into the package: "owner/name" and the release tag it
+    # corresponds to. CI fills these from the building repository; leave them off
+    # and the package simply has no update check, which is the right answer for a
+    # private or unreleased build.
+    [string]$UpdateRepo = '',
+    [string]$UpdateVersion = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -82,6 +88,14 @@ Get-ChildItem -LiteralPath $packageSource -Force |
     Where-Object { $_.Name -ne 'game' -and $_.Name -ne '.gitignore' } |
     ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $root -Recurse -Force }
 Copy-Item -Path $GameFolder -Destination (Join-Path $root 'game') -Recurse -Force
+
+if ($UpdateRepo -and $UpdateVersion) {
+    $channel = '{{"repo":"{0}","version":"{1}"}}' -f $UpdateRepo, $UpdateVersion
+    Set-Content -LiteralPath (Join-Path $root 'update.json') -Value $channel -Encoding UTF8
+    Write-Host "Update channel: $UpdateRepo @ $UpdateVersion" -ForegroundColor Cyan
+} else {
+    Write-Host 'No update channel (pass -UpdateRepo/-UpdateVersion to add one).' -ForegroundColor DarkGray
+}
 
 foreach ($required in @('Play Zombie Farm.cmd', 'launcher\launcher.ps1', 'launcher\zombiefarm.ico', 'game\index.html')) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $required))) { throw "Package is missing $required" }
