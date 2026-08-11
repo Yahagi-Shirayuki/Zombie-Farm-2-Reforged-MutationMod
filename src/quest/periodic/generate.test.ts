@@ -6,7 +6,7 @@ import {
   claimPeriodicQuest, claimablePeriodicCount, dailyUnitXp, generatePeriodicSet,
   refreshPeriodicState, xpToNextLevel,
 } from "./generate";
-import { DAILY_MAX_GROW_MS } from "./templates";
+import { DAILY_MAX_GROW_MS, WEEKLY_COUNT_MULTIPLIER } from "./templates";
 import { dayIndex } from "./periods";
 import { emptyPeriodicState, type PeriodicQuestState } from "./types";
 
@@ -95,6 +95,122 @@ describe("periodic quest generation", () => {
         }
       }
     }
+  });
+
+  // The weekly counts are DERIVED from the daily ones, so this is the property that
+  // keeps "a weekly is five dailies" true after either is tuned.
+  it("asks a weekly for exactly five times its daily counterpart", () => {
+    const pairs: [string, string][] = [
+      ["daily_harvest_any", "weekly_harvest_any"],
+      ["daily_harvest_crop", "weekly_harvest_crop"],
+      ["daily_harvest_zombies", "weekly_harvest_zombies"],
+      ["daily_invade", "weekly_invade"],
+    ];
+    for (let level = 20; level <= 45; level += 5) {
+      const dailies = new Map<string, number>();
+      const weeklies = new Map<string, number>();
+      // Walk a full rotation so every template in every slot gets built at this level.
+      for (let period = 0; period < 12; period++) {
+        for (const q of daily(level, 20670 + period).quests) dailies.set(q.template, q.countTotal);
+        for (const q of weekly(level, 2953 + period).quests) weeklies.set(q.template, q.countTotal);
+      }
+      for (const [dailyKey, weeklyKey] of pairs) {
+        const one = dailies.get(dailyKey);
+        const five = weeklies.get(weeklyKey);
+        if (one === undefined || five === undefined) continue;
+        // Invasions carry a ceiling (see WEEKLY_MAX) because five times the daily
+        // target would exceed what a week is meant to ask for.
+        const expected = Math.min(one * WEEKLY_COUNT_MULTIPLIER, weeklyKey === "weekly_invade" ? 8 : Infinity);
+        expect(five, `${weeklyKey} at level ${level}`).toBe(expected);
+      }
+    }
+  });
+
+  // Invasions are the one objective bounded by a real-time cooldown rather than by the
+  // farm, so these ceilings are a design constraint and not a tuning preference.
+  it("never asks for more than 2 invasions a day or 8 a week", () => {
+    const INVASION_EVENTS = new Set([
+      "kInvasionSuccessfulNotification", "kInvasionPerfectGameNotification",
+    ]);
+    for (let level = DAILY_UNLOCK_LEVEL; level <= 45; level++) {
+      for (let period = 0; period < 12; period++) {
+        for (const quest of daily(level, 20670 + period).quests) {
+          if (INVASION_EVENTS.has(quest.notificationID)) {
+            expect(quest.countTotal, `daily ${quest.template} at level ${level}`).toBeLessThanOrEqual(2);
+          }
+        }
+        if (level < WEEKLY_UNLOCK_LEVEL) continue;
+        for (const quest of weekly(level, 2953 + period).quests) {
+          if (INVASION_EVENTS.has(quest.notificationID)) {
+            expect(quest.countTotal, `weekly ${quest.template} at level ${level}`).toBeLessThanOrEqual(8);
+          }
+        }
+      }
+    }
+  });
+
+  // The weekly counts are derived from the daily ones, and a derivation carries a
+  // template's NUMBER across without its reasons. `daily_invade_clean` withholds itself
+  // below level 20 because a farm that cannot absorb a stage should not be asked for a
+  // flawless win — and 5x of a quest that was never offered is how a level-15 board came
+  // to demand five of them. Both scopes answer the level question the same way now.
+  it("asks neither scope for a flawless invasion before the daily would offer one", () => {
+    const FLAWLESS = "kInvasionPerfectGameNotification";
+    for (let level = WEEKLY_UNLOCK_LEVEL; level < 20; level++) {
+      for (let period = 0; period < 12; period++) {
+        for (const quest of daily(level, 20670 + period).quests) {
+          expect(quest.notificationID, `daily at level ${level}`).not.toBe(FLAWLESS);
+        }
+        for (const quest of weekly(level, 2953 + period).quests) {
+          expect(quest.notificationID, `weekly at level ${level}`).not.toBe(FLAWLESS);
+        }
+      }
+    }
+  });
+
+  // Withholding the flawless variant must not cost the slot — it falls through to the
+  // ordinary win rather than leaving the board a quest short.
+  it("still fills the invasion slot in both scopes below that gate", () => {
+    const INVASION_EVENTS = new Set([
+      "kInvasionSuccessfulNotification", "kInvasionPerfectGameNotification",
+    ]);
+    const hasInvasion = (quests: { notificationID: string }[]) =>
+      quests.some((q) => INVASION_EVENTS.has(q.notificationID));
+    for (let level = WEEKLY_UNLOCK_LEVEL; level < 20; level++) {
+      for (let period = 0; period < 12; period++) {
+        expect(hasInvasion(daily(level, 20670 + period).quests), `daily at level ${level}`).toBe(true);
+        expect(hasInvasion(weekly(level, 2953 + period).quests), `weekly at level ${level}`).toBe(true);
+      }
+    }
+  });
+
+  // Above the gate the derivation applies as it does everywhere else: one a day, five a
+  // week. Pinned because this pair is the one the 5x property test above cannot cover —
+  // the daily does not exist at every band, so it is excluded from `pairs` there.
+  it("asks a weekly for five flawless wins once the daily asks for one", () => {
+    for (const level of [20, 30, 45]) {
+      const dailies = new Map<string, number>();
+      const weeklies = new Map<string, number>();
+      for (let period = 0; period < 12; period++) {
+        for (const q of daily(level, 20670 + period).quests) dailies.set(q.template, q.countTotal);
+        for (const q of weekly(level, 2953 + period).quests) weeklies.set(q.template, q.countTotal);
+      }
+      expect(dailies.get("daily_invade_clean"), `daily at level ${level}`).toBe(1);
+      expect(weeklies.get("weekly_perfect_invade"), `weekly at level ${level}`).toBe(5);
+    }
+  });
+
+  it("lets a planting objective name a crop no harvest daily could", () => {
+    const grows: number[] = [];
+    for (let period = 0; period < 12; period++) {
+      for (const quest of daily(40, 20670 + period).quests) {
+        if (quest.notificationID !== "kCropPlantedNotification") continue;
+        const crop = cropByName.get(quest.notificationObject);
+        if (crop) grows.push(crop.growMs);
+      }
+    }
+    expect(grows.length).toBeGreaterThan(0);
+    expect(grows.some((growMs) => growMs > DAILY_MAX_GROW_MS)).toBe(true);
   });
 
   it("lets weeklies name the long crops a daily cannot", () => {

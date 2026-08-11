@@ -13,7 +13,16 @@ export const QuestEvent = {
   ZombieHarvested: "kCropHarvestedZombieNotification",
   ItemBought: "kItemBoughtNotification",
   CombinerCombined: "kCombinerCombinedNotification",
+  /** PROMOTION only: the Pot produced a species neither parent was. The imported
+   *  "Combine for a <silver>" quests are written against exactly that meaning — a
+   *  re-cook that hands slot 1's own species back must not close them — so this event
+   *  deliberately does NOT fire for an ordinary combine. Use CombinerCollected for
+   *  "collect N zombies from the Pot". */
   CombinerHarvested: "kCombinerHarvestedNotification",
+  /** EVERY successful collection from the Zombie Pot, whether the child was a
+   *  promotion or not, and whether it went to the farm or straight to the Mausoleum.
+   *  The destination is a placement choice; the combine happened either way. */
+  CombinerCollected: "kCombinerCollectedNotification",
   // Raid / social / epic — no emitters yet (quests using these stay dormant):
   InvasionSuccessful: "kInvasionSuccessfulNotification",
   InvasionPerfectGame: "kInvasionPerfectGameNotification",

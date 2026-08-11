@@ -9,10 +9,15 @@ import { objectTint } from "../../assets";
 import type { ReceivedView } from "../hudTypes";
 import { setTintedSrc } from "../tintedSprite";
 import { storageBoostRows } from "../storageBoosts";
+import { keepScroll, recallOneOf, remember } from "../viewState";
 
 const INSTA_PLOW_DELAY_MS = 500;
 
-export function openStorage(hud: Hud, initialTab: string = "Items", managePen = false): void {
+const TABS = ["Items", "Pets", "Boosts", "Received"];
+
+// `initialTab` is a deliberate destination (the Boosts hotkey, the Pet Pen's
+// "Pets"); opening Storage with no argument returns to the tab last used.
+export function openStorage(hud: Hud, initialTab?: string, managePen = false): void {
   document.querySelector("#hud .st-bg")?.remove();
   const bg = document.createElement("div");
   bg.className = "st-bg";
@@ -48,10 +53,12 @@ export function openStorage(hud: Hud, initialTab: string = "Items", managePen = 
 
   const cardOf = (key: string) => hud.objectCards.find((c) => c.def.key === key);
 
-  let tab = ["Items", "Pets", "Boosts", "Received"].includes(initialTab) ? initialTab : "Items";
+  let tab = initialTab && TABS.includes(initialTab)
+    ? initialTab
+    : recallOneOf("storage.tab", TABS, "Items");
   const render = () => {
     body.innerHTML = "";
-    body.scrollTop = 0;
+    remember("storage.tab", tab);
     if (tab === "Items") {
       const used = hud.state.storedItemTotal();
       count.textContent = `${used} / ${hud.state.storageItemCap} slots`;
@@ -225,6 +232,9 @@ export function openStorage(hud: Hud, initialTab: string = "Items", managePen = 
         body.appendChild(grid);
       }
     }
+    // Each tab keeps its own place, so selling from a long Items grid or claiming a
+    // reward re-renders where the player was rather than at the top.
+    keepScroll(body, `storage.scroll.${tab}`);
   };
 
   const tabBtns: Record<string, HTMLButtonElement> = {};

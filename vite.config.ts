@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
@@ -38,6 +40,42 @@ function cspPlugin(apiUrl: string): Plugin {
   };
 }
 
+/** DEV ONLY (`apply: "serve"`): let /zombie-review.html write a rig capture straight to
+ *  disk, so an art pass can diff "before" and "after" without a browser download dialog
+ *  per shot. Accepts a PNG data URL and writes it under tmp/review-shots/ — the name is
+ *  reduced to [A-Za-z0-9._-] and the write is pinned to that one directory, so nothing
+ *  a page sends can escape it. Never present in a build. */
+function captureEndpointPlugin(): Plugin {
+  return {
+    name: "zombie-review-capture",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use("/__capture", (req, res) => {
+        if (req.method !== "POST") { res.statusCode = 405; res.end(); return; }
+        let body = "";
+        req.on("data", (chunk) => { body += chunk; });
+        req.on("end", async () => {
+          try {
+            const { name, dataUrl } = JSON.parse(body) as { name: string; dataUrl: string };
+            const png = /^data:image\/png;base64,(.+)$/.exec(dataUrl);
+            if (!png) throw new Error("expected a PNG data URL");
+            const safe = (name || "shot").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80);
+            const dir = path.resolve(process.cwd(), "tmp/review-shots");
+            await fs.mkdir(dir, { recursive: true });
+            const file = path.join(dir, `${safe}.png`);
+            await fs.writeFile(file, Buffer.from(png[1], "base64"));
+            res.setHeader("content-type", "application/json");
+            res.end(JSON.stringify({ ok: true, file }));
+          } catch (error) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ ok: false, error: String(error) }));
+          }
+        });
+      });
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   // Read VITE_* so the CSP's connect-src can allowlist the exact API origin.
   const env = loadEnv(mode, process.cwd(), "");
@@ -65,6 +103,7 @@ export default defineConfig(({ mode }) => {
       sourcemap: true,
     },
     plugins: [
+      captureEndpointPlugin(),
       cspPlugin(env.VITE_API_URL),
       // PWA service worker (build-only) for offline-tolerant caching + auto-update.
       // Deliberately NOT a full-offline precache: the dist is ~88MB (64MB of it is

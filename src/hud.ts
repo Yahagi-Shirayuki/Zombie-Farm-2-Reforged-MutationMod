@@ -65,6 +65,7 @@ import {
 } from "./ui/Modal";
 import type { ModalHandle } from "./ui/Modal";
 import { onFirstVisible } from "./ui/onFirstVisible";
+import { keepScroll, recallNumber, recallOneOf, remember } from "./ui/viewState";
 import { renderLevelUp, renderQuestComplete, renderObjectActions, renderInfoPanel } from "./ui/panels/dialogs";
 import {
   openSettings as openSettingsPanel, openDevMenu as openDevMenuPanel,
@@ -1736,7 +1737,10 @@ export class Hud {
     document.querySelector("#hud .mkt-bg")?.remove();
   }
 
-  openMarket(initialTab: string = "Crops") {
+  // `initialTab` is a deliberate destination (Storage's "Buy", an Epic Boss card, the
+  // tutorial) and always wins; opening the Market with no argument returns to
+  // whichever shelf it was last left on.
+  openMarket(initialTab?: string) {
     this.closeMarket();
     const tutorialBoostMarket = this.el.classList.contains("tutorial") &&
       this.tutorialMenuTarget === "Market";
@@ -1828,8 +1832,25 @@ export class Hud {
       name === "Farmer" && this.state.hasBonusHead()
         ? [...SUBTABS.Farmer, "Bonus"]
         : SUBTABS[name];
-    let tab = SUBTABS[initialTab] ? initialTab : "Crops";
-    let sub = subsFor(tab)[0] ?? "";
+    let tab = initialTab && SUBTABS[initialTab]
+      ? initialTab
+      : recallOneOf("market.tab", Object.keys(SUBTABS), "Crops");
+    const firstSub = subsFor(tab);
+    let sub = firstSub.length ? recallOneOf(`market.sub.${tab}`, firstSub, firstSub[0]) : "";
+
+    // One key per (tab, sub-tab, search) view: the page the player was on and how far
+    // that page was scrolled are remembered per shelf, so page 15 of Decors is still
+    // page 15 of Decors after a trip through Boosts. The tutorial's single-card
+    // Market is a scripted view, never a place to come back to, so it records nothing.
+    const viewKey = () => `${tab}|${sub}|${search.trim().toLowerCase()}`;
+    const pageKey = () => `market.page.${viewKey()}`;
+    const scrollKey = () => `market.scroll.${viewKey()}|${page}`;
+    const recordView = tutorialBoostMarket ? () => {} : () => {
+      remember("market.tab", tab);
+      if (sub) remember(`market.sub.${tab}`, sub);
+      remember(pageKey(), page);
+    };
+    if (!tutorialBoostMarket) page = recallNumber(pageKey(), 0);
 
     const entriesFor = (): MktEntry[] => {
       if (tab === "Crops" && sub === "Plants")
@@ -2055,7 +2076,6 @@ export class Hud {
 
     const renderGrid = () => {
       grid.innerHTML = "";
-      grid.scrollTop = 0;
       // Farm Size lays out as 2 columns so each row is one tier (gold | brains);
       // Ground uses the normal card grid.
       grid.classList.toggle("mkt-grid--upgrade", tab === "Upgrade" && sub === "Farm Size");
@@ -2067,11 +2087,15 @@ export class Hud {
         pager.style.display = "none";
         if (sub === "Ground") this.renderGroundGrid(grid, refreshCur, renderGrid);
         else this.renderUpgradeGrid(grid, refreshCur, renderGrid);
+        recordView();
+        keepScroll(grid, scrollKey());
         return;
       }
       if (tab === "Epic Boss") {
         pager.style.display = "none";
         this.renderEpicBossGrid(grid, refreshCur, renderGrid);
+        recordView();
+        keepScroll(grid, scrollKey());
         return;
       }
       const all = entriesFor();
@@ -2109,6 +2133,10 @@ export class Hud {
         prevBtn.disabled = page <= 0;
         nextBtn.disabled = page >= pages - 1;
       }
+      // Recorded after the clamp above, so a remembered page that no longer exists
+      // (a narrower window, a shorter catalog) is corrected rather than kept.
+      recordView();
+      keepScroll(grid, scrollKey());
     };
 
     prevBtn.onclick = () => { if (page > 0) { page--; this.audio.play("menuClick"); renderGrid(); } };
@@ -2146,7 +2174,8 @@ export class Hud {
       if (searchInput.value) {
         searchInput.value = "";
         search = "";
-        page = 0;
+        // Back to the unfiltered shelf — and to the page it was left on.
+        page = recallNumber(pageKey(), 0);
         searchRow.classList.remove("has-query");
         renderGrid();
       } else {
@@ -2169,7 +2198,13 @@ export class Hud {
         const b = document.createElement("button");
         b.className = "mkt-subtab" + (s === sub ? " sel" : "");
         b.textContent = s;
-        b.onclick = () => { this.audio.play("menuClick"); sub = s; page = 0; renderSubs(); renderGrid(); };
+        b.onclick = () => {
+          this.audio.play("menuClick");
+          sub = s;
+          page = recallNumber(pageKey(), 0);
+          renderSubs();
+          renderGrid();
+        };
         subsEl.appendChild(b);
       }
     };
@@ -2183,11 +2218,13 @@ export class Hud {
       b.onclick = () => {
         this.audio.play("menuClick");
         tab = name;
-        sub = subsFor(name)[0] ?? "";
-        page = 0;
+        // Each category reopens on the sub-tab and page it was last browsing.
+        const subs = subsFor(name);
+        sub = subs.length ? recallOneOf(`market.sub.${name}`, subs, subs[0]) : "";
         // A new category starts a fresh search.
         search = "";
         searchInput.value = "";
+        page = recallNumber(pageKey(), 0);
         searchRow.classList.remove("has-query");
         tabsEl.querySelectorAll(".mkt-tab").forEach((e) => e.classList.remove("sel"));
         b.classList.add("sel");
@@ -2640,7 +2677,7 @@ export class Hud {
   // comes from the placed shed's tier; pets and received are unlimited.
   // Opened by clicking the shed, Pet Pen, or the Storage button.
   // Storage panel (Items/Pets/Boosts/Received) lives in ui/panels/storage.ts.
-  openStorage(initialTab: string = "Items", managePen = false) {
+  openStorage(initialTab?: string, managePen = false) {
     openStoragePanel(this, initialTab, managePen);
   }
 
@@ -2674,31 +2711,41 @@ export class Hud {
     const list = document.createElement("div");
     list.className = "pm-list";
 
-    let zcat: "normal" | "special" | "mutant" = "normal";
+    // The tutorial's constrained menu is a scripted view, so it neither reads nor
+    // writes the remembered screen/category.
+    const CATS = ["normal", "special", "mutant"] as const;
+    let zcat: "normal" | "special" | "mutant" =
+      onlyKey ? "normal" : recallOneOf("plantmenu.cat", CATS, "normal");
 
     const pick = (card: MenuCard) => {
       onPick(card.cfg);
       bg.remove();
     };
-    const renderList = (cards: MenuCard[]) => {
+    const renderList = (cards: MenuCard[], view: string) => {
       list.innerHTML = "";
-      list.scrollTop = 0;
       // In tutorial mode, lock every card except the target so only it is tappable.
       for (const c of cards)
         list.appendChild(this.buildCard(c, pick, !!onlyKey && c.cfg.key !== onlyKey));
+      if (onlyKey) list.scrollTop = 0;
+      else keepScroll(list, `plantmenu.scroll.${view}`);
     };
     const showZombieTabs = (on: boolean) => (subtabs.style.display = on ? "flex" : "none");
 
     const showPlants = () => {
       showZombieTabs(false);
-      renderList(this.plantCards);
+      if (!onlyKey) remember("plantmenu.screen", "Plants");
+      renderList(this.plantCards, "Plants");
     };
     const showZombies = () => {
       showZombieTabs(true);
       subtabs.querySelectorAll(".pm-subtab").forEach((e) =>
         e.classList.toggle("sel", (e as HTMLElement).dataset.cat === zcat)
       );
-      renderList(this.zombieCards.filter((z) => z.category === zcat));
+      if (!onlyKey) {
+        remember("plantmenu.screen", "Zombies");
+        remember("plantmenu.cat", zcat);
+      }
+      renderList(this.zombieCards.filter((z) => z.category === zcat), `Zombies.${zcat}`);
     };
 
     const screenBtns: Record<string, HTMLButtonElement> = {};
@@ -2742,9 +2789,11 @@ export class Hud {
       subtabs.style.display = "none";
       return;
     }
-    // Open on the Plants screen.
-    screenBtns["Plants"].classList.add("sel");
-    showPlants();
+    // Open on whichever screen was last used (Plants the first time).
+    const screen = recallOneOf("plantmenu.screen", ["Plants", "Zombies"] as const, "Plants");
+    screenBtns[screen].classList.add("sel");
+    if (screen === "Zombies") showZombies();
+    else showPlants();
   }
 
   /** XP one harvest of this crop pays out — the same number JobSystem awards, so a
@@ -4572,7 +4621,7 @@ export class Hud {
 
   // The "Zombies" tab (right bar): the My Zombies roster + the Zombie Almanac
   // collection, both rendered by ui/panels/zombies.ts.
-  openZombieList(tab: ZombiesPanelTab = "roster") {
+  openZombieList(tab?: ZombiesPanelTab) {
     openZombiesPanel(this, tab);
   }
 
@@ -4650,6 +4699,9 @@ export class Hud {
         };
         foot.appendChild(button);
       }
+      // Deploying or inspecting a zombie rebuilds every slot; an upgraded crypt is
+      // dozens of tiles long, so hold the player's place in it.
+      keepScroll(grid, "mausoleum.grid");
     };
     render();
   }
@@ -5021,6 +5073,11 @@ export class Hud {
         else renderIdle();
       };
       wrap.append(head, slots, ruleNote, list, go);
+      // Picking a zombie re-renders this whole view, and the picker is as long as the
+      // roster — without this, every tap threw a player scrolled deep into their army
+      // back to the first tile. Restored after the list is in the document: an
+      // unattached element cannot be scrolled.
+      keepScroll(list, "pot.picker");
     };
 
     const st0 = this.getPotStatus?.();

@@ -31,7 +31,7 @@ const LIVE_EVENTS = new Set<string>([
   QuestEvent.EnemyDefeatedByAbility, QuestEvent.BossDefeatedByAbility,
   QuestEvent.ZombieResurrected,
   // mutation combiner (Zombie Pot)
-  QuestEvent.CombinerCombined, QuestEvent.CombinerHarvested,
+  QuestEvent.CombinerCombined, QuestEvent.CombinerHarvested, QuestEvent.CombinerCollected,
   // Epic Boss events are additionally gated by setEpicBossActive().
   QuestEvent.EpicStageEnemyDefeated, QuestEvent.EpicBossEpicItemWon,
 ]);

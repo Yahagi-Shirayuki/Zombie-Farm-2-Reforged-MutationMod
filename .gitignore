@@ -4,3 +4,6 @@ dist/
 .DS_Store
 __pycache__/
 *.pyc
+
+# Rig captures written by /zombie-review.html via the dev-only /__capture endpoint
+tmp/review-shots/

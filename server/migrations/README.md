@@ -132,6 +132,10 @@ wrangler d1 execute zombiefarm --remote --command \
 - For Black Market sale cancellation, verify `roster_v3.from_escrow` exists after
   migration `0039` — the bootstrap roster projection selects it, and the cancel that
   returns the escrowed zombie writes it, so both fail without it.
+- For daily/weekly quests, verify `periodic_quest_documents_v3` exists after migration
+  `0049` — `ensureV3` writes it and `loadRows` selects it on every bootstrap, so the whole
+  game 500s without it (not just one feature). Apply it BEFORE deploying the Worker; see
+  "Applying migration `0049_periodic_quests`" in `../RUNBOOK.md`.
 - After migration `0044`, verify the rebuild kept everything: `SELECT COUNT(*) FROM
   black_market_orders` and `... FROM black_market_receipts` should match the
   pre-migration snapshot, no `black_market_orders_0044` / `black_market_receipts_0044`

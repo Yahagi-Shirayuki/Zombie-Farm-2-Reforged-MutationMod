@@ -424,6 +424,21 @@ external `ZF1_extracted` tree, not into `public/`, and is groundwork toward the 
 hands-on drag/rotate/pivot editor for hand-authoring zombie `models.json`; its
 export round-trips the same schema the runtime reads.
 
+**Zombie Review** (`npm run dev`, then <http://localhost:5173/zombie-review.html>) is the
+companion viewer: every assembled zombie in one place, with mutations to add and remove and
+the basic animations to play. Where the assembler reimplements the rig so it can be
+double-clicked offline, this page imports the game's own `loadAssets()`, `RaidActor`,
+mutation catalog and display prefs — so what it draws is by construction what the game
+draws. Single view inspects one rig (idle / walk / bite / scratch / wind-up / heal / smash /
+death, plus the focus pose and either facing); the contact sheet renders the whole roster at
+one scale. Mutation legality is the game's: one per slot, and the headless family refuses
+every head mutation but Pumpking. Sizing switches between the farm's `zombieFarmScale`, the
+raid's contain-fit, and the raw rig. It is a dev page only — `vite build` ships `index.html`
+alone, so it never reaches the bundle. `zfReview.capture(name)` in the console writes a tight
+shot of the current rig to `tmp/review-shots/` through a dev-server-only `/__capture` endpoint
+(see `captureEndpointPlugin` in `vite.config.ts`), which is how an art pass diffs before and
+after without a download dialog per shot; the Export PNG button downloads normally.
+
 ## Layout
 
 | Path | Role |
@@ -443,6 +458,7 @@ export round-trips the same schema the runtime reads.
 | `src/quest/` | Quest bus and data-driven quest engine |
 | `src/tutorial/` | First-run tutorial controller, beats, and DOM overlay |
 | `src/social/` | Local friend-list fallback + gifting helpers |
+| `src/devtools/` | Dev-only pages served by `vite dev` and excluded from the build (`zombieReview.ts` ↔ `zombie-review.html`) |
 | `src/audio.ts` | Opt-in BGM/SFX |
 | `src/platform.ts`, `src/touchInput.ts` | Phone/desktop capability detection, pinch-zoom and pan, tap/hold gesture rules |
 | `src/plowSelection.ts` | Drag-select plow rectangle geometry |

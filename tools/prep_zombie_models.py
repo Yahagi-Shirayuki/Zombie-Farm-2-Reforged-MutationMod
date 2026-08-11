@@ -135,10 +135,16 @@ FACE_FEATURES: set = set()
 # grey skeleton parts with NO opt-out, so they tint too (they were rendering grey on a
 # coloured body). vikingJaw is the one Large jaw that explicitly setInheritColor:0, so
 # it stays as designed and is NOT tinted.
+# The goblin/imp EAR and the leprechaun's EAR are skeleton parts too, confirmed against
+# the binary: -[ZombieActorSmallTier3 initSprite] makes no setInheritColor call at all,
+# and -[ZombieActorSmallTier5 initSprite] opts out only tag 0x13 (leprachaunHatFeature)
+# and tag 0xf (leprachaunJaw) — the ear it adds at tag 0x12 keeps inheriting. Untinted
+# they rendered SILVER beside a coloured head.
 TINTABLE = {"defaultArmB", "defaultBody", "defaultHead", "defaultEyeL", "defaultEyeR",
             "defaultJaw", "defaultUpperTeeth", "defaultLowerTeeth", "defaultScar",
             "defaultFootF", "defaultFootB", "defaultArmF", "amazonBody",
-            "browFeature", "bruteJaw", "barbarianJaw"}
+            "browFeature", "bruteJaw", "barbarianJaw",
+            "goblinEarFeature", "leprachaunEarFeature"}
 
 # Per-part display scale, applied about the part's own pivot (the runtime reads
 # `scale` off each part; a missing entry means 1). This is the one place the rig
@@ -229,6 +235,11 @@ HEADLESS = {"ZombieActorHeadlessTier1", "ZombieActorHeadlessTier2",
             "ZombieActorHeadlessTier3", "ZombieActorHeadlessTier4",
             "ZombieActorHeadlessTier5"}
 
+# Themed heads whose art already contains a mouth (see compose). Note the Diver,
+# ZombieActorHeadless2Tier5, is NOT in HEADLESS above — it is a second headless LINE
+# whose helmet is the head — so this is what keeps the default mouth off its faceplate.
+COMPLETE_HEADS = {"diverHead", "skullHead"}
+
 
 def group_of(key):
     body = re.sub(r"^ZombieActor", "", key)
@@ -300,6 +311,15 @@ def compose(key, strip_mut=False):
     if any(SLOT.get(p) == "Head" for p in add):
         for s in ("EyeL", "EyeR", "Scar"):
             slots.pop(s, None)
+    # ...and a head that is a COMPLETE face takes the mouth with it. The vegetable
+    # heads deliberately do not: an Onionhead wears the onion AROUND its own jaw and
+    # teeth, which is the whole reason head parts are re-layered rather than hidden.
+    # The diving helmet is not one of those — its faceplate had a mouth and a set of
+    # teeth floating on the glass. (Skull Head reaches the same result through the
+    # HEADLESS branch above, which drops the whole default head group.)
+    if any(p in COMPLETE_HEADS for p in add):
+        for s in ("Jaw", "UpperTeeth", "LowerTeeth"):
+            slots.pop(s, None)
     # A facial feature covers the eyes.
     if any(p in FACE_FEATURES for p in add):
         slots.pop("EyeL", None)
@@ -309,6 +329,89 @@ def compose(key, strip_mut=False):
         if SLOT.get(p) is None and p not in parts:  # additive overlays
             parts.append(p)
     return parts
+
+
+# Brightness above which a jaw pixel counts as one of the TEETH painted into its art.
+# The skeleton jaw sits near 127 grey and its teeth are near-white, so the split is
+# wide; a themed jaw with no teeth of its own simply yields no cluster and keeps the
+# authored overlay position.
+TEETH_LUMA = 200
+
+
+def _bbox(atlas, layout, bright=False):
+    """Pixel bounds of a frame's opaque (or, with `bright`, its near-white) pixels."""
+    x, y = int(layout["x"]), int(layout["y"])
+    w, h = int(round(layout["width"])), int(round(layout["height"]))
+    px = atlas.crop((x, y, x + w, y + h)).load()
+    xs, ys = [], []
+    for iy in range(h):
+        for ix in range(w):
+            r, g, b, a = px[ix, iy]
+            if a > 128 and (not bright or (r + g + b) / 3 > TEETH_LUMA):
+                xs.append(ix)
+                ys.append(iy)
+    if not xs:
+        return None
+    return (min(xs), min(ys), max(xs) + 1, max(ys) + 1)
+
+
+def baked_teeth_box(atlas, layout):
+    """Bounds of the teeth painted INTO a jaw sprite, in sprite pixels, or None.
+
+    Every jaw in the sheet — default, brute, barbarian, leprachaun, robocop, viking —
+    has teeth drawn into it, and `defaultLowerTeeth` is a white overlay meant to land on
+    them: on the DEFAULT jaw the authored offsets put the two within a pixel of each
+    other, which is what makes the pairing legible. The themed jaws are different sizes
+    and shapes, so the shared overlay offset missed, leaving the jaw's own (body-tinted,
+    therefore green) teeth showing beside the white ones. Measuring the art is how the
+    overlay gets re-fitted per model without hand-tuning six offsets.
+    """
+    return _bbox(atlas, layout, bright=True)
+
+
+def _fit_lower_teeth(parts, lay, atlas):
+    """Fit this model's `defaultLowerTeeth` over its jaw's own painted teeth.
+
+    The overlay is the one part drawn in true white (the runtime pins it — see
+    zombiePartTint), while the jaw carries the body tint, so any baked tooth the overlay
+    misses shows up as a second, GREEN set. Position alone is not enough: the themed
+    jaws' teeth are up to 13% wider than the 24x7 overlay, so it is also grown to cover
+    them. It is never SHRUNK — on the default and robocop jaws the overlay is already
+    the larger of the two and shrinking it would change the face of every ordinary
+    zombie to fix nothing.
+
+    No-op for a model with no jaw or no lower teeth (the headless families, the named
+    specials that bring their own face).
+    """
+    jaw = next((p for p in parts if p["file"].endswith("Jaw")), None)
+    teeth = next((p for p in parts if p["file"] == "defaultLowerTeeth"), None)
+    if not jaw or not teeth:
+        return
+    jaw_layout = lay(jaw["file"])
+    baked = baked_teeth_box(atlas, jaw_layout)
+    if not baked:
+        return
+    teeth_layout = lay(teeth["file"])
+    ink = _bbox(atlas, teeth_layout)
+    if not ink:
+        return
+    tw = int(round(teeth_layout["width"]))
+    th = int(round(teeth_layout["height"]))
+
+    scale = max(1.0, (baked[2] - baked[0]) / (ink[2] - ink[0]),
+                (baked[3] - baked[1]) / (ink[3] - ink[1]))
+    scale = round(scale + 0.005, 2)  # round UP to the pixel-hundredth, never under
+    # Where the overlay's ink sits relative to the point it is anchored (and scaled)
+    # about, so growing it keeps the ink centred on the jaw's teeth rather than drifting.
+    ink_dx = (ink[0] + ink[2]) / 2 - teeth["ax"] * tw
+    ink_dy = (ink[1] + ink[3]) / 2 - teeth["ay"] * th
+    jaw_x = jaw["px"] - jaw["ax"] * int(round(jaw_layout["width"]))
+    jaw_y = jaw["py"] - jaw["ay"] * int(round(jaw_layout["height"]))
+
+    teeth["px"] = round(jaw_x + (baked[0] + baked[2]) / 2 - scale * ink_dx, 2)
+    teeth["py"] = round(jaw_y + (baked[1] + baked[3]) / 2 - scale * ink_dy, 2)
+    if scale != 1:
+        teeth["scale"] = scale
 
 
 def main():
@@ -323,6 +426,8 @@ def main():
     os.makedirs(os.path.join(OUT, "portrait"), exist_ok=True)
     # One atlas image for the whole set; runtime slices it.
     shutil.copy(os.path.join(APP, "ZombieSheet.png"), os.path.join(OUT, "ZombieSheet.png"))
+    from PIL import Image
+    atlas = Image.open(os.path.join(APP, "ZombieSheet.png")).convert("RGBA")
 
     def lay(p):
         return frames.get(p) or frames.get(p + ".png")
@@ -354,6 +459,7 @@ def main():
             if p in PART_SCALE:
                 part["scale"] = PART_SCALE[p]
             mp.append(part)
+        _fit_lower_teeth(mp, lay, atlas)
         mp.sort(key=lambda m: m["z"])
         return {
             "name": name_of.get(key, key),
@@ -447,9 +553,16 @@ def main():
         L = lay(p)
         used_frames[p] = {"x": int(L["x"]), "y": int(L["y"]),
                           "w": int(round(L["width"])), "h": int(round(L["height"]))}
-    json.dump(used_frames, open(os.path.join(OUT, "frames.json"), "w"), indent=1)
-    json.dump(models, open(os.path.join(OUT, "models.json"), "w"), indent=1)
-    json.dump(mutations, open(os.path.join(OUT, "mutations.json"), "w"), indent=1)
+    # Trailing newline on every emitted file: without it a re-run shows up as a diff
+    # against the committed copy even when nothing about the rig changed.
+    def dump(obj, name):
+        with open(os.path.join(OUT, name), "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, indent=1)
+            fh.write("\n")
+
+    dump(used_frames, "frames.json")
+    dump(models, "models.json")
+    dump(mutations, "mutations.json")
 
     # Flat tinted portraits for menus (stat panel / market cards) — WITH mutations.
     _portraits(frames, full_models)

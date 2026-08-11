@@ -1072,6 +1072,15 @@ function applyOne(
       state.roster.push({ id, key: resultKey, mutation, invasions: 0, stored });
       created.push(id);
       if (!reserved) events.push(combinerCombined(a, b));
+      // EVERY collection, promotion or not, farm or crypt. "Collect N zombies from the
+      // Zombie Pot" needs a signal that fires whenever the Pot hands something over;
+      // the promotion-gated event below cannot serve that, and gating on `stored` would
+      // punish the player for the one destination a full farm leaves them.
+      events.push({
+        type: "kCombinerCollectedNotification",
+        subject: zombieNames.get(resultKey) ?? resultKey,
+        aliases: unitSubjectAliases(zombieNames.get(resultKey) ?? resultKey, mutation, mutantSubjects),
+      });
       // The harvest notification (the "Combine for a <silver>" quests) is only
       // earned by a species neither parent was — re-cooking a silver hands slot 1's
       // own species back and must not close the objective. See isCombinePromotion.

@@ -190,9 +190,10 @@ export class RaidActor {
       sp.anchor.set(p.ax, p.ay);
       sp.position.set(p.px, p.py);
       sp.scale.set(p.scale ?? 1);
-      sp.zIndex = replacements.has("head") && isMutationForegroundPart(p.file)
-        ? MUT_BASE_FOREGROUND_Z + p.z
-        : p.z;
+      // A head mutation pushes the face in FRONT of the new skull; anything that stays
+      // at its authored z would end up behind it.
+      const foreground = replacements.has("head") && isMutationForegroundPart(p.file);
+      sp.zIndex = foreground ? MUT_BASE_FOREGROUND_Z + p.z : p.z;
       if (p.tint) sp.tint = zombiePartTint(p.file, tint, group);
       this.root.addChild(sp);
       if (p.group === "head") {
@@ -216,7 +217,10 @@ export class RaidActor {
         eyeball.position.set(p.px, p.py);
         eyeball.scale.set((p.scale ?? 1) * BRUTE_EYEBALL_SCALE);
         eyeball.tint = DEFAULT_ZOMBIE_EYE_TINT;
-        eyeball.zIndex = p.z + 0.1;
+        // Track the disk's own z, INCLUDING the head-mutation bump — the eyeball is the
+        // only light thing in a Large zombie's eye, so leaving it at the authored z put
+        // it behind an onion/pumpkin head and the eyes read as solid black.
+        eyeball.zIndex = sp.zIndex + 0.1;
         this.root.addChild(eyeball);
         this.headParts.push({ sp: eyeball, bx: p.px, by: p.py });
         this.eyes.push({ sp: eyeball, baseScaleY: eyeball.scale.y });

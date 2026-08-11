@@ -11,7 +11,13 @@ import {
   mutationPartZIndex,
   type MutationReplacement,
 } from "./mutationVisual";
-import { displayedAppearance, zombiePartTint } from "./appearance";
+import {
+  BRUTE_EYEBALL_SCALE,
+  DEFAULT_ZOMBIE_EYE_TINT,
+  displayedAppearance,
+  isBruteEyeball,
+  zombiePartTint,
+} from "./appearance";
 import { classify } from "./taxonomy";
 
 const MUT_BASE_FOREGROUND_Z = 30;
@@ -79,6 +85,22 @@ export function buildZombiePortraitRig(
     }
     if (part.group === "head" && isMutationForegroundPart(part.file)) {
       headForeground.push(sprite);
+    }
+
+    // Large zombies keep their dark full-size eye disks with a small light eyeball
+    // centered inside — the farm and raid rigs both build it, and a portrait without
+    // it showed every brute with flat black eyes. Registering it as a foreground part
+    // keeps it in front when a head mutation re-layers the face (see below).
+    if (isBruteEyeball(group, part.file)) {
+      const eyeball = new Sprite(texture);
+      eyeball.label = part.file;
+      eyeball.anchor.set(part.ax, part.ay);
+      eyeball.position.set(part.px, part.py);
+      eyeball.scale.set((part.scale ?? 1) * BRUTE_EYEBALL_SCALE);
+      eyeball.tint = DEFAULT_ZOMBIE_EYE_TINT;
+      eyeball.zIndex = part.z + 0.1;
+      root.addChild(eyeball);
+      headForeground.push(eyeball);
     }
   }
 

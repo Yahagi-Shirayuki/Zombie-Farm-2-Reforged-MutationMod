@@ -4,6 +4,7 @@ import {
   BACK_ARM_TINT,
   backArmPlacement,
   EYE_MUTATION_FOREGROUND_Z,
+  hidesHeadMutationArt,
   matchesMutationReplacement,
   mutationBitsForRendering,
   mutationPartFor,
@@ -28,6 +29,27 @@ describe("mutation visual replacements", () => {
 
     expect(mutationBitsForRendering(zombies, "regular", 4 | 8)).toEqual([4, 8]);
     expect(mutationBitsForRendering(zombies, "special", 4 | 8)).toEqual([8]);
+  });
+
+  it("draws no head mutation on a masked face, but still draws its other slots", () => {
+    // The mask (a beard, a space helmet, a wall of leaves) sits over an ordinary head,
+    // so a head mutation would hide that head and float the face parts over the
+    // vegetable. The bit is still WORN — only the art is skipped.
+    const zombies = [{ key: "ZombieActorZastronaut", category: "special" as const }];
+    const mask = bitOf("onion") | bitOf("celery");
+
+    expect(hidesHeadMutationArt("ZombieActorZastronaut")).toBe(true);
+    expect(mutationBitsForRendering(zombies, "ZombieActorZastronaut", mask))
+      .toEqual([bitOf("celery")]);
+    // Pumpking is a head mutation too, and goes the same way.
+    expect(mutationBitsForRendering(zombies, "ZombieActorForest", bitOf("pumpking")))
+      .toEqual([]);
+  });
+
+  it("leaves every other species' head mutations alone", () => {
+    expect(hidesHeadMutationArt("ZombieActorRegularTier1")).toBe(false);
+    expect(mutationBitsForRendering([], "ZombieActorRegularTier1", bitOf("onion")))
+      .toEqual([bitOf("onion")]);
   });
 
   it("matches every base body silhouette without hiding unrelated decorations", () => {

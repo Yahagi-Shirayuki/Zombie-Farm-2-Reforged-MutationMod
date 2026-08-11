@@ -30,13 +30,18 @@ export const WEEKLY_UNLOCK_LEVEL = 15;
  *  abstract but paid far too little where it matters: the XP curve steepens ~28x from
  *  level 10 to level 40 while the farm's own XP income barely doubles, so a flat share
  *  produces a daily worth a rounding error early and a windfall late. Interpolating
- *  between these two endpoints lands a single daily at roughly 30 XP around level 10
- *  and roughly 600 XP around level 40, which is the intended feel at both ends. */
+ *  between these two endpoints lands a single daily at roughly 28 XP around level 10,
+ *  390 around level 40 and 600 at the cap, which is the intended feel across the range. */
 const DAILY_SHARE_AT_UNLOCK = 0.18;
 const DAILY_SHARE_AT_MAX_LEVEL = 0.08;
 const MAX_LEVEL = 45;
 
-/** One weekly quest is worth seven dailies — literally "a week of showing up". */
+/** One weekly quest PAYS seven dailies — literally "a week of showing up".
+ *
+ *  It only COSTS five (templates.WEEKLY_COUNT_MULTIPLIER), and the gap is the point: a
+ *  weekly has to survive a missed day or two to be worth starting, so it asks for five
+ *  days of play across seven and pays the whole week for finishing it. Keep the two
+ *  numbers apart — collapsing them to one would silently price that slack out. */
 export const WEEKLY_MULTIPLIER = 7;
 
 /** Per-slot reward weights, summing to the slot count so the pool is preserved. The

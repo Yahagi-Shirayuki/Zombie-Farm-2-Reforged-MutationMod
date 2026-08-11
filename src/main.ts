@@ -2714,6 +2714,9 @@ async function main() {
       if (combined?.subject) {
         questBus.post(QuestEvent.CombinerCombined, combined.subject, 1, combined.aliases);
       }
+      // Fires for every collection — promotion or not, farm or Mausoleum — so a
+      // "collect N from the Pot" objective counts what its wording says.
+      questBus.post(QuestEvent.CombinerCollected, z.typeName, 1, unitSubjectAliasesOf(z));
       // Only a species neither parent was counts as "combined for" — see
       // isCombinePromotion. A job with no snapshot to compare against keeps the
       // old unconditional behavior rather than silently losing quest progress.
@@ -5277,6 +5280,7 @@ async function main() {
         if (combined?.subject) {
           questBus.post(QuestEvent.CombinerCombined, combined.subject, 1, combined.aliases);
         }
+        questBus.post(QuestEvent.CombinerCollected, z.typeName, 1, unitSubjectAliasesOf(z));
         if (!pending || isCombinePromotion(z.key, pending.keyA, pending.keyB)) {
           questBus.post(QuestEvent.CombinerHarvested, z.typeName, 1, unitSubjectAliasesOf(z));
         }

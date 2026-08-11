@@ -22,6 +22,7 @@ import { statBreakdown } from "../../zombie/statDisplay";
 import { classTierRank } from "../../zombie/taxonomy";
 import { ZOMBIE_SORTS, isZombieSort, sortZombies, type ZombieSort } from "../../zombie/rosterSort";
 import { getZombieSort, setZombieSort } from "../../prefs";
+import { keepScroll, recallOneOf, remember } from "../viewState";
 
 // A closeable modal: the zombie's trading-card (portrait, name board, veterancy /
 // type / invasions) on the LEFT, and its stats (icon row) over abilities (icon
@@ -468,7 +469,9 @@ export type ZombiesPanelTab = "roster" | "almanac";
 // The "Zombies" tab (right bar): "My Zombies" lists every owned zombie as its
 // full inspect card (the same one shown when tapping a zombie); the "Zombie
 // Almanac" is the species collection, in three groups — Normal, Special, Epic.
-export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster") {
+// `initialTab` is a deliberate destination (reopening after a zombie action);
+// opening with no argument returns to whichever tab was last read.
+export function openZombiesPanel(hud: Hud, initialTab?: ZombiesPanelTab) {
   // position:relative host (zl-panel) for card tooltips
   const { panel, close } = openModal({
     host: hud.el, bgClass: "zl-bg", panelClass: "zl-panel", replaceSelector: ".zl-bg",
@@ -488,9 +491,12 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
     (Object.keys(tabButtons) as ZombiesPanelTab[]).forEach((key) =>
       tabButtons[key].classList.toggle("sel", key === tab));
     body.innerHTML = "";
-    body.scrollTop = 0;
+    remember("zombies.tab", tab);
     if (tab === "roster") renderRoster();
     else renderAlmanac();
+    // Both lists are long, and both are rebuilt by ordinary actions (a sale, a
+    // deploy, opening an Almanac entry), so each keeps its own place.
+    keepScroll(body, `zombies.scroll.${tab}`);
   };
   const mkTab = (tab: ZombiesPanelTab, label: string) => {
     const b = document.createElement("button");
@@ -545,9 +551,9 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
         if (!isZombieSort(select.value)) return;
         rosterSort = select.value;
         setZombieSort(rosterSort);
-        body.innerHTML = "";
-        body.scrollTop = 0;
-        renderRoster();
+        // A new ordering is a new list: go back to the top of it deliberately.
+        remember("zombies.scroll.roster", 0);
+        show("roster");
       };
       label.appendChild(select);
       head.appendChild(label);
@@ -600,7 +606,7 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
     }
   };
 
-  show(initialTab);
+  show(initialTab ?? recallOneOf("zombies.tab", ["roster", "almanac"] as const, "roster"));
 }
 
 // Undiscovered portraits must not expose the real art: a CSS filter only blacks

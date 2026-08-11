@@ -1,5 +1,5 @@
 import type { MutationPart, ZombieDef, ZombieModel } from "../assets";
-import { bitOf, bitsOf, mutationOf } from "./mutations";
+import { bitOf, bitsOf, mutationOf, slotOf } from "./mutations";
 
 /** The base silhouette a mutation takes over. `"armF"` is the authored NAME of the
  *  arm slot (it is what mutations.json and every mod write) — a crop arm claims the
@@ -62,6 +62,35 @@ export function mutationPartZIndex(
 }
 
 /**
+ * Species whose head-slot mutations are worn but never DRAWN.
+ *
+ * Their face is a mask — Old McZombie's beard, the Zastronaut's helmet, the Forest
+ * Zombie's wall of leaves — layered over an ordinary head. A head mutation hides that
+ * head and pushes the face parts in front of the vegetable, so the mask ends up behind
+ * a pumpkin with a spare set of eyes floating on it. There is no layer order that
+ * reads correctly, so these keep the silhouette they were drawn with.
+ *
+ * The mask is unchanged data: the bit stays on the zombie, and its stats, its Pot
+ * inheritance and its market description are all exactly as they would be otherwise.
+ * Only the rig skips the art.
+ *
+ * This is the SINGLE list of masked actors. It answers two questions that must never
+ * disagree: whether head-mutation art is drawn (here) and whether the actor inherits the
+ * default mouth that would show below its mask (assets.mergeSpecialZombieModel, which
+ * reads it through hidesHeadMutationArt). Add a masked actor once, here.
+ */
+const MASKED_FACE_KEYS: ReadonlySet<string> = new Set([
+  "ZombieActorOldMcZombie",
+  "ZombieActorZastronaut",
+  "ZombieActorForest",
+]);
+
+/** Does this species hide (but still wear) head-slot mutations? */
+export function hidesHeadMutationArt(key: string): boolean {
+  return MASKED_FACE_KEYS.has(key);
+}
+
+/**
  * Mutation bits that should contribute artwork for this species. Named special
  * zombies already have authored faces, so the generic carrot-eye attachment is
  * intentionally omitted there. The bit remains on the zombie and still affects
@@ -75,7 +104,11 @@ export function mutationBitsForRendering(
   const isSpecial = zombies?.some((zombie) =>
     zombie.key === key && zombie.category === "special"
   ) ?? false;
-  return bitsOf(mutation).filter((bit) => !(isSpecial && bit === CARROT_MUTATION_BIT));
+  const maskedFace = hidesHeadMutationArt(key);
+  return bitsOf(mutation).filter((bit) =>
+    !(isSpecial && bit === CARROT_MUTATION_BIT)
+    && !(maskedFace && slotOf(bit) === "head")
+  );
 }
 
 /**

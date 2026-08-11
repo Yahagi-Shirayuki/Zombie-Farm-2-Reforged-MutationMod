@@ -7,6 +7,7 @@
   "description": "Zombie Farm Reforged - browser reimplementation with optional online mode",
   "scripts": {
     "dev": "vite",
+    "review:zombies": "vite --open /zombie-review.html",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",

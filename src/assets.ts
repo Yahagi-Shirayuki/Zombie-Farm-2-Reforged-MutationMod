@@ -4,6 +4,8 @@ import { makeCropTopTexture } from "./cropTop";
 import type { QuestDef } from "./quest/types";
 import type { RaidDef, EnemyStat, AttackDef } from "./raid/types";
 import { setZombieNames } from "./zombie/names";
+// Value import, and safe from a cycle: mutationVisual takes only TYPES from this module.
+import { hidesHeadMutationArt } from "./zombie/mutationVisual";
 import { BASE } from "./base";
 import { fetchJson, mapConcurrent } from "./assetLoading";
 import { MAX_ZOMBIE_POTS } from "./placementLimit";
@@ -139,14 +141,34 @@ const SPECIAL_GROUP_SCALE: Record<string, number> = {
 };
 
 // These actors paint their complete face into their dedicated head attachments.
-// Keeping the ordinary facial details produces a second face over the authored one.
+// Keeping the ordinary facial details produces a second face over the authored one:
+// a mouth floating on a diving helmet, eyes on top of a ninja mask, a green jaw under
+// a robot's grille. Each one here supplies a Head (or, for the Diver, a whole helmet)
+// with its expression already drawn on.
 const COMPLETE_SPECIAL_FACES = new Set([
   "ZombieActorZombug",
   "ZombieActorZwampThing",
+  "ZombieActorMasterNinjombie",
+  "ZombieActorNinjombie",
+  "ZombieActorMerZombie",
+  "ZombieActorProto",
+  "ZombieActorZombieBot",
+  "ZombieActorOmegaZombieBot",
+  "ZombieActorZomtar",
+  "ZombieActorZomdini",
 ]);
+// A named actor whose face is a MASK — a beard, a space helmet, a wall of leaves —
+// keeps the ordinary head and eyes behind it (they read through or around the mask by
+// design), but must not inherit the mouth that would show below it.
+//
+// The membership itself lives in zombie/mutationVisual, because the SAME set of actors
+// has to suppress head-mutation art for the same reason (a pumpkin drawn over a beard
+// has nowhere to sit). Two lists would be two chances to add the fourth masked actor to
+// one rule and not the other, and the failure would be silent art.
 const DEFAULT_FACE_SLOTS = new Set([
-  "EyeL", "EyeR", "UpperTeeth", "LowerTeeth", "Scar",
+  "EyeL", "EyeR", "UpperTeeth", "LowerTeeth", "Scar", "Jaw",
 ]);
+const MASKED_FACE_SLOTS = new Set(["LowerTeeth"]);
 
 /** Merge a named actor's replacement attachments over the ordinary skeleton.
  *  The source special-zombie plists are deltas, not complete actors: for example,
@@ -160,14 +182,21 @@ export function mergeSpecialZombieModel(
   const slot = (file: string) => file.replace(/^default/, "").replace(/\.png$/i, "");
   const replaced = new Set(manifest.parts.map((part) => slot(part.file)));
   const hasCompleteSpecialFace = COMPLETE_SPECIAL_FACES.has(def.key);
+  const isMasked = hidesHeadMutationArt(def.key);
+  // An actor that brings its OWN jaw brings its own mouth line with it: the default
+  // lower teeth are placed against the DEFAULT jaw and land wrong on any other shape,
+  // which is what put a second set of teeth on the Dapper Zombie's chin.
+  const ownJaw = replaced.has("Jaw");
   const headDx = replaced.has("Head") ? manifest.neck.x - base.neck.x : 0;
   const headDy = replaced.has("Head") ? manifest.neck.y - base.neck.y : 0;
   const inherited = manifest.floatingHead
     ? []
     : base.parts.filter((part) => {
       const partSlot = slot(part.file);
-      return !replaced.has(partSlot)
-        && !(hasCompleteSpecialFace && DEFAULT_FACE_SLOTS.has(partSlot));
+      if (replaced.has(partSlot)) return false;
+      if (hasCompleteSpecialFace && DEFAULT_FACE_SLOTS.has(partSlot)) return false;
+      if (isMasked && MASKED_FACE_SLOTS.has(partSlot)) return false;
+      return !(ownJaw && partSlot === "LowerTeeth");
     }).map((part) => ({
       ...part,
       px: part.px + (part.group === "head" ? headDx : 0),

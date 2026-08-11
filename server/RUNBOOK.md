@@ -292,3 +292,36 @@ wrangler d1 execute zombiefarm --remote --json --command \
   "SELECT (SELECT COUNT(*) FROM black_market_receipts) AS receipts, \
           (SELECT COUNT(*) FROM black_market_orders WHERE currency NOT IN ('BRAINS','GOLD')) AS bad_currency"
 ```
+
+### Applying migration `0049_periodic_quests`
+
+Adds `periodic_quest_documents_v3` (daily/weekly quests) and backfills a row for every
+existing account. **Migrate first, then deploy — and this one is not a partial outage.**
+
+`ensureV3` writes this table and `loadRows` selects from it on EVERY `/bootstrap`, with no
+guard around either. The two orders are not comparable:
+
+* Migration before Worker: the table sits there unread — the old Worker never names it —
+  and the backfill means the new Worker finds a row for everyone the moment it goes live.
+  Nothing behaves differently in between.
+* Worker before migration: `no such table` on every bootstrap, so **nobody can play at
+  all** until the migration lands. 0043 and 0045 only 500'd the Black Market; this one
+  takes the whole game down.
+
+The backfill is what makes the order forgiving in the safe direction, and it also closes a
+narrower hole: `/raid/finish` reads this row DIRECTLY (it loads no v3 projection) and
+answers `state_conflict` when it is missing, which is a WON invasion paying nothing. That
+path additionally does its own `INSERT OR IGNORE`, so it is covered even on a database
+where the backfill was skipped. Rehearsed against real SQLite in
+`test/migration0049.test.ts`.
+
+After applying, every account should have exactly one board and no account should be
+missing one:
+
+```sh
+wrangler d1 execute zombiefarm --remote --json --command \
+  "SELECT (SELECT COUNT(*) FROM accounts) AS accounts, \
+          (SELECT COUNT(*) FROM periodic_quest_documents_v3) AS boards, \
+          (SELECT COUNT(*) FROM accounts a WHERE NOT EXISTS ( \
+             SELECT 1 FROM periodic_quest_documents_v3 p WHERE p.account_id = a.id)) AS missing"
+```
