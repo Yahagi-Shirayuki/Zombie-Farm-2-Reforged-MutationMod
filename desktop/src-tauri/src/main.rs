@@ -203,6 +203,26 @@ fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     };
 
     let path = request.uri().path().to_string();
+
+    // The shipped build registers a PWA service worker that cache-firsts art and
+    // audio. In a browser that's a feature. Here it is pure harm: everything is
+    // already on local disk, and the cache silently outlives a modded file -
+    // measured, before this existed, as a replaced PNG still serving its old
+    // 1399 bytes after a reload while 1585 sat on disk.
+    //
+    // So answer /sw.js with a worker that empties the caches and unregisters
+    // itself. It is byte-different from the shipped one, so an install that
+    // already has the old worker adopts this on its next launch and the old one
+    // dies rather than lingering forever.
+    if path == "/sw.js" {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/javascript; charset=utf-8")
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(Cow::Borrowed(KILL_SWITCH_WORKER.as_bytes()))
+            .expect("static script response is always valid");
+    }
+
     let Some(file) = resolve(root, &path) else {
         return error_page(
             StatusCode::NOT_FOUND,
@@ -254,6 +274,22 @@ fn serve(request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
         .body(Cow::Owned(bytes))
         .expect("ok response is always valid")
 }
+
+/// Served in place of the build's real service worker. Deliberately not a 404:
+/// a 404 leaves an already-installed worker in charge, still serving stale art.
+const KILL_SWITCH_WORKER: &str = r#"// Replaced by the Zombie Farm Reforged desktop app.
+// The shipped service worker caches art forever, which hides modded files.
+self.addEventListener('install', function () { self.skipWaiting(); });
+self.addEventListener('activate', function (event) {
+  event.waitUntil((async function () {
+    try {
+      var keys = await caches.keys();
+      await Promise.all(keys.map(function (k) { return caches.delete(k); }));
+    } catch (e) {}
+    try { await self.registration.unregister(); } catch (e) {}
+  })());
+});
+"#;
 
 fn html_escape(raw: &str) -> String {
     raw.replace('&', "&amp;")

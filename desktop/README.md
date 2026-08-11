@@ -3,12 +3,9 @@
 `ZombieFarm.exe` — the same web build as everywhere else, in its own window. No
 browser chrome, no console, no local web server, nothing installed.
 
-> **Status: not yet run.** This was written on a machine with no Rust toolchain,
-> so it has never been compiled or launched. The first real proof is a CI build
-> and someone opening the artifact. Everything in [What is already
-> verified](#what-is-already-verified) below *was* checked; everything else is
-> waiting on that first run. See [If the first build
-> fails](#if-the-first-build-fails).
+> **Status: built and verified.** Compiled clean on the first CI run (v0.2.1)
+> and was then driven through the published artifact — see [What is
+> verified](#what-is-verified).
 
 What players get:
 
@@ -34,6 +31,10 @@ Two things follow, both of which matter more than they look:
 
 - **Mods work.** Drop a file into `game/assets`, reopen the app, see it. Nothing
   is baked into the binary and nothing is cached (`Cache-Control: no-store`).
+  `/sw.js` is answered with a self-unregistering worker for the same reason: the
+  shipped build's service worker cache-firsts art, and v0.2.1 shipped without
+  this — a replaced PNG kept serving its old bytes across reloads. A 404 would
+  not have been enough, because that leaves an already-installed worker running.
 - **The origin can never move.** There is no HTTP server and no port to collide
   with. Saves live in `localStorage`, which is keyed by origin, so a shifting
   origin would silently mean a lost farm — the exact trap the browser launcher
@@ -90,32 +91,49 @@ handler falls back to the repo's `dist-offline/` then `dist/`, so a plain
 The CI job uploads the lock file it produces as an artifact; commit it after the
 first green build so later releases pin the same transitive crate versions.
 
-## What is already verified
+## What is verified
 
-Checked against a real offline build served on a `.localhost` origin, before any
-of this Rust was written:
+Driven through the **published release artifact** — downloaded, unzipped and run
+like a player would — with WebView2 remote debugging attached over CDP
+(`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=…`, the only way
+in, since Tauri enables devtools for debug builds only):
 
-- `isSecureContext` is `true`, and `crypto.randomUUID()`, `crypto.subtle` and
-  `localStorage` all work there.
-- The game boots on that origin: canvas up at 1280×720, 56 requests, 0 failures,
-  `[save] fresh farm`, `field 30x30 ready`.
-- Relative asset paths resolve (the build uses `base: "./"`).
+- Window opens titled *Zombie Farm Reforged*, 13 WebView2 helper processes,
+  stable at ~19.5 MB; still running at 120 s.
+- Page URL is `http://zfgame.localhost/index.html`, `isSecureContext` is `true`.
+- **The game fully boots**: canvas 1600×1000, 59 requests, **0 failures**, and
+  the boot bar reaches *Click to Start*.
+- **Mods take effect**: a file edited on disk is served changed on the next
+  fetch, `Cache-Control: no-store`. Under v0.2.1 this held for uncached types but
+  **not** for art — the fix is the `/sw.js` kill switch above.
+- **Audio decodes**: a 285 KB mp3 arrives byte-intact (291,717 bytes,
+  `audio/mpeg`) and `decodeAudioData` yields 15.36 s stereo at 48 kHz.
+- Missing files return 404; `/../../ZombieFarm.exe` returns 404, so the
+  containment check holds.
 - `Create Desktop Shortcut.cmd` refuses politely with no exe present, and writes
   a shortcut with the right target and working directory when it is.
 
-## If the first build fails
+Checked earlier, against the same build served on a `.localhost` origin in a
+browser, before any of this Rust existed: `crypto.randomUUID()`, `crypto.subtle`
+and `localStorage` all work there, and relative asset paths resolve.
 
-Most likely spots, roughly in order:
+### Known gaps
 
-1. **`register_uri_scheme_protocol` signature.** Written against tauri 2.11.5,
-   where the handler is `Fn(UriSchemeContext<'_, R>, Request<Vec<u8>>) ->
-   Response<T>`. Older 2.x took `(&AppHandle, Request)`; if the runner resolves
-   an older minor, that's the mismatch.
-2. **The window URL.** `http://zfgame.localhost/index.html` assumes Windows'
-   scheme mapping. If the window opens on the placeholder page instead of the
-   game, this is why — check `app.windows[0].url`.
-3. **`mainBinaryName` vs the Cargo `[[bin]]` name.** Both say `ZombieFarm`; they
-   have to agree.
+- **`Range` requests come back 200, not 206.** The handler implements 206
+  correctly, but a `Range` header set on `fetch` never reached it — the webview
+  does not appear to forward it for custom schemes. Harmless today: the game's
+  music and one-shots both go through Web Audio, which fetches whole files and
+  decodes them (verified above). It would matter only if something switched to
+  `<audio>` seeking.
+- **Export (Settings → Local Save) is unverified in the app.** It builds a blob
+  URL and clicks `<a download>` ([main.ts:125](../src/main.ts:125)); WebView2
+  download handling was not exercised. Import — a plain file input — is native
+  and fine.
+
+## If a future build fails
 
 A white or blank window with no error usually means the WebView2 Runtime is
-missing, not that the app is broken.
+missing, not that the app is broken. If the window opens on the placeholder page
+instead of the game, `app.windows[0].url` no longer matches the scheme mapping.
+`mainBinaryName` and the Cargo `[[bin]]` name both say `ZombieFarm` and have to
+stay in step.
