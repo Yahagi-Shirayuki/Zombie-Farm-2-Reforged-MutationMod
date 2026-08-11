@@ -50,8 +50,8 @@ asset is committed, so a clone is self-contained — no extraction step, no Pyth
 no database, no account, no server.
 
 ```bash
-git clone https://github.com/actualdoctornerd-ai/Zombie-Farm-2-Reforged.git
-cd Zombie-Farm-2-Reforged
+git clone https://github.com/Yahagi-Shirayuki/Zombie-Farm-2-Reforged-MutationMod.git
+cd Zombie-Farm-2-Reforged-MutationMod
 npm install
 npm run dev
 ```
