@@ -14,7 +14,7 @@ import { makeOwned } from "../../../src/zombie/types";
 import { ABILITY_TIER, abilityTierOf } from "../../../src/zombie/traits";
 import { activeBonusHeadId, farmerMultiplier } from "../../../src/farmer";
 import { levelForXp } from "../levels";
-import { epicBossCurrencyReward, epicLootWeight, epicQuestZombieReward, shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
+import { epicBossCurrencyReward, epicLootWeight, epicQuestZombieReward, reopenEpicQuests, shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
 import objectRows from "../../../public/assets/placeables.json";
 import { EPIC_BOSS_FIGHT_BRAIN_COST } from "../../../src/epicBoss/tokens";
 import { ARMY_CAP } from "../../../src/raid/RaidCatalog";
@@ -93,10 +93,12 @@ export async function activate(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const def = bossId === undefined ? DEFAULT_DEF : typeof bossId === "string" ? defFor(bossId) : null;
   if (!def) return { status: 400, body: { error: "unknown_boss" } };
-  const [balance, current] = await Promise.all([
+  const [balance, current, questRow] = await Promise.all([
     db.prepare("SELECT gold, brains, xp FROM balances WHERE account_id = ?").bind(accountId)
       .first<{ gold: number; brains: number; xp: number }>(),
     db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id = ?").bind(accountId).first<RunRow>().then(clampRun),
+    db.prepare("SELECT version,current_json FROM quest_documents_v3 WHERE account_id = ?")
+      .bind(accountId).first<{ version: number; current_json: string }>(),
   ]);
   if (!balance) return { status: 409, body: { error: "state_conflict" } };
   if (current?.run_id === activationId) return { status: 200, body: { event: projectRun(current), balance } };
@@ -111,6 +113,14 @@ export async function activate(
   if (balance.brains < def.costBrains) return { status: 409, body: { error: "insufficient_brains", balance } };
   const hp = epicBossHp(def, 1);
   const expiresAt = now + def.durationMs;
+  // A new run re-offers this boss's quest chain, so its prizes — the signature zombie
+  // above all — are earnable once per run instead of once per account. Guarded by the
+  // same EXISTS as the brain charge: if the activation loses its race, nothing here
+  // lands either, and the quests stay as they were.
+  const questData = parse<{ completed: string[]; progress: QuestProjection["progress"] }>(
+    questRow?.current_json, { completed: [], progress: [] }
+  );
+  const reopened = questRow ? reopenEpicQuests(questData, def.questIds) : null;
   const statements = await db.batch([
     db.prepare(`INSERT INTO epic_boss_runs_v3
       (account_id,run_id,boss_id,activated_at,expires_at,level,max_hp,current_hp)
@@ -124,13 +134,18 @@ export async function activate(
     db.prepare(`UPDATE balances SET brains = brains - ? WHERE account_id = ? AND brains >= ?
       AND EXISTS(SELECT 1 FROM epic_boss_runs_v3 WHERE account_id=? AND run_id=?)`)
       .bind(def.costBrains, accountId, def.costBrains, accountId, activationId),
+    ...(reopened ? [db.prepare(`UPDATE quest_documents_v3 SET version=version+1,current_json=?,updated_at=?
+      WHERE account_id=? AND EXISTS(SELECT 1 FROM epic_boss_runs_v3 WHERE account_id=? AND run_id=?)`)
+      .bind(JSON.stringify(reopened), now, accountId, accountId, activationId)] : []),
   ]);
   if ((statements[0]?.meta.changes ?? 0) !== 1 || (statements[1]?.meta.changes ?? 0) !== 1) {
     return { status: 409, body: { error: "activation_conflict" } };
   }
+  const reopenCommitted = !!reopened && (statements[2]?.meta.changes ?? 0) === 1;
   return { status: 200, body: {
     event: await readRun(db, accountId),
     balance: { ...balance, brains: balance.brains - def.costBrains },
+    ...(reopenCommitted ? { quests: { version: questRow!.version + 1, ...reopened } } : {}),
   } };
 }
 

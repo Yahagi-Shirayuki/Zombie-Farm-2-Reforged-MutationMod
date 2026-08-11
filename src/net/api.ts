@@ -1036,6 +1036,9 @@ export interface EpicBossFinishResult {
 export const epicBossActivate = (activationId: string, bossId: string) => req<{
   event: import("./protocol").EpicBossProjection;
   balance: Balance;
+  /** Present only when activating re-opened quests this boss had already finished,
+   *  so a repeat run can pay its prizes again. */
+  quests?: import("./protocol").QuestProjection;
   serverTime?: number;
 }>("POST", "/epic-boss/activate", { activationId, bossId });
 

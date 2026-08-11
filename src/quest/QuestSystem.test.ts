@@ -214,4 +214,46 @@ describe("QuestSystem client-paced progress", () => {
     const saved = system.serialize();
     expect(saved.active.find((active) => active.id === "1000")?.counts).toEqual([0]);
   });
+
+  it("re-offers a finished Epic quest on the next run of that boss", () => {
+    const bus = new QuestBus();
+    const epic = { ...quest(), id: "1000", epicEvent: true, rewardType: RewardType.Zombie,
+      rewardItemKey: "ZombieActorDrZombie", requirements: [{
+        ...quest().requirements[0], notificationID: QuestEvent.EpicStageEnemyDefeated,
+        notificationObject: "5", countTotal: 1,
+      }] };
+    const grantZombie = vi.fn();
+    const system = new QuestSystem(new Map([[epic.id, epic]]), new GameState(), bus, {
+      grantItem: vi.fn(), grantZombie, completed: vi.fn(), render: vi.fn(),
+    });
+    system.setEpicBossActive(true, ["1000"]);
+    bus.post(QuestEvent.EpicStageEnemyDefeated, "5");
+    expect(grantZombie).toHaveBeenCalledTimes(1);
+    expect(system.views()).toEqual([]);
+    expect(system.serialize().completed).toEqual(["1000"]);
+
+    // A second activation of the same boss.
+    system.reopenEpicQuests(["1000"]);
+    expect(system.serialize().completed).toEqual([]);
+    // Back on the rail at ZERO — carrying the old count over would re-complete it on
+    // the first win of the new run, whatever level that win was on.
+    expect(system.views()[0].objectives[0]).toMatchObject({ count: 0, done: false });
+    bus.post(QuestEvent.EpicStageEnemyDefeated, "5");
+    expect(grantZombie).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves an unfinished Epic quest's lifetime progress alone when a run reopens", () => {
+    const bus = new QuestBus();
+    const epic = { ...quest(), id: "1010", epicEvent: true, requirements: [{
+      ...quest().requirements[0], notificationID: QuestEvent.EpicStageEnemyDefeated,
+      notificationObject: "5", countTotal: 3,
+    }] };
+    const system = new QuestSystem(new Map([[epic.id, epic]]), new GameState(), bus, {
+      grantItem: vi.fn(), grantZombie: vi.fn(), completed: vi.fn(), render: vi.fn(),
+    });
+    system.setEpicBossActive(true, ["1010"]);
+    bus.post(QuestEvent.EpicStageEnemyDefeated, "5");
+    system.reopenEpicQuests(["1010"]);
+    expect(system.views()[0].objectives[0].count).toBe(1);
+  });
 });

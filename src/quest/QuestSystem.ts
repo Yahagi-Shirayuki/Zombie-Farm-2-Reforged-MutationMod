@@ -296,6 +296,29 @@ export class QuestSystem {
     this.hooks.render(this.views());
   }
 
+  /** Put an event's finished quests back on the rail for a new run of it.
+   *
+   *  Activating an Epic Boss again re-offers its quest chain, prizes included, so the
+   *  event's signature zombie is earnable on every run rather than once per account.
+   *  Offline this IS the reset; online the Worker does the same to the authoritative
+   *  document and this applies its answer (see reopenEpicQuests in epicBoss/rewards).
+   *  Untouched quests keep their lifetime progress, which is why only completed ids
+   *  are cleared here. */
+  reopenEpicQuests(questIds: readonly string[]): void {
+    let changed = false;
+    for (const id of questIds) {
+      if (!this.completed.delete(id)) continue;
+      changed = true;
+      this.active.delete(id);
+      this.authoritativePreview.delete(id);
+      this.optimisticallyCelebrated.delete(id);
+      this.authoritativeCompletionRequested.delete(id);
+    }
+    if (!changed) return;
+    this.tryActivate();
+    this.hooks.render(this.views());
+  }
+
   // ---- persistence ----
   serialize(): QuestSave {
     return {

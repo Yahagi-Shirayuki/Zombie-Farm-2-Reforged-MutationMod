@@ -781,9 +781,14 @@ export class EconomyClient {
     event: NonNullable<BootstrapResponse["gameplay"]["epicBoss"]>,
     balance: api.Balance,
     serverTime = Date.now(),
+    /** Sent when the activation re-opened this boss's finished quests. */
+    quests?: import("./protocol").QuestProjection,
   ): void {
     this.base = balance;
     this.onEpicBossState?.(epicBossRunToClient(event, serverTime));
+    // After onEpicBossState, never before: that call is what marks the event active,
+    // and a reopened epic quest is only eligible for the rail while it is.
+    if (quests) this.onQuestState?.({ completed: quests.completed, progress: quests.progress, questChanges: [] });
     this.reconcile();
   }
 

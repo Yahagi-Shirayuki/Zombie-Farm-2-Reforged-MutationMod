@@ -7,6 +7,7 @@ import {
   EPIC_QUEST_ZOMBIE_REWARDS,
   epicBossCurrencyReward,
   epicQuestZombieReward,
+  reopenEpicQuests,
   shouldStoreEpicReward,
 } from "./rewards";
 
@@ -31,6 +32,40 @@ describe("Epic Boss zombie rewards", () => {
   it("delivers to the farm until its cap is full, then uses storage", () => {
     expect(shouldStoreEpicReward(15, 16)).toBe(false);
     expect(shouldStoreEpicReward(16, 16)).toBe(true);
+  });
+});
+
+describe("reopening an Epic Boss's quests for a new run", () => {
+  const quests = () => ({
+    completed: ["7", "1000", "1002"],
+    progress: [
+      { questId: "7", counts: [3] },
+      { questId: "1000", counts: [1] },
+      { questId: "1002", counts: [1] },
+      { questId: "1010", counts: [4] },
+    ],
+  });
+
+  it("clears a finished quest's completion AND its finished progress", () => {
+    // Progress must go with it: left at its target, the reopened quest re-completes on
+    // the first win of the new run regardless of which level that win was on.
+    expect(reopenEpicQuests(quests(), ["1000", "1002", "1010"])).toEqual({
+      completed: ["7"],
+      progress: [{ questId: "7", counts: [3] }, { questId: "1010", counts: [4] }],
+    });
+  });
+
+  it("keeps unfinished lifetime progress and other bosses' completions", () => {
+    // 1010 ("win all 8 of this boss's prizes") is meant to be resumable across events,
+    // and another boss's chain is none of this activation's business.
+    const reopened = reopenEpicQuests(quests(), ["1000"])!;
+    expect(reopened.completed).toEqual(["7", "1002"]);
+    expect(reopened.progress).toContainEqual({ questId: "1010", counts: [4] });
+  });
+
+  it("reports no write when the boss has nothing finished to reopen", () => {
+    expect(reopenEpicQuests(quests(), ["1010", "9999"])).toBeNull();
+    expect(reopenEpicQuests({ completed: [], progress: [] }, ["1000"])).toBeNull();
   });
 });
 

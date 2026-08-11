@@ -2944,7 +2944,9 @@ async function main() {
         await economy?.settleBeforeDependency();
         const activated = await api.epicBossActivate(crypto.randomUUID(), def.id);
         const activatedRun = epicBossRunToClient(activated.event, activated.serverTime ?? Date.now());
-        economy?.adoptEpicBossActivation(activated.event, activated.balance, activated.serverTime);
+        // `activated.quests` is the Worker's reopen of this boss's finished quests —
+        // a repeat run earns its prizes, signature zombie included, all over again.
+        economy?.adoptEpicBossActivation(activated.event, activated.balance, activated.serverTime, activated.quests);
         state.setEpicBossRun(activatedRun);
         syncEpicBossUi();
         saveManager.flush();
@@ -2961,7 +2963,11 @@ async function main() {
     }
     if (!state.spendBrains(def.costBrains, "epic_boss_activate")) return false;
     state.setEpicBossRun(epicBoss.activate(crypto.randomUUID()));
+    // Offline twin of the Worker's reopen (v3/epicBoss.activate): a new run puts this
+    // boss's finished quests back on the rail so they pay out again. After
+    // setEpicBossRun, so syncEpicBossUi's setEpicBossActive can surface them.
     syncEpicBossUi();
+    quests.reopenEpicQuests(def.questIds);
     saveManager.flush();
     audio.play("buy");
     return true;
