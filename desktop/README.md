@@ -84,9 +84,18 @@ Locally you need Rust 1.77.2+ and the MSVC C++ build tools (Rust's Windows
 toolchain links with them). Then:
 
 ```powershell
-npm run build                                                    # produces dist/
+Set-Content .env.production.local "VITE_API_URL=`nVITE_GOOGLE_CLIENT_ID="
+npm run build
+Remove-Item .env.production.local
 cargo build --release --manifest-path desktop\src-tauri\Cargo.toml
 ```
+
+**Do not skip the env file.** A plain `npm run build` reads the committed
+`.env.production` and points the bundle at the live Worker; from the app's
+`zfgame.localhost` origin every call to it is refused by CORS, and you get a
+title screen stuck on the service probe rather than the game. It looks like the
+shell is broken when it isn't. `.env.production.local` is gitignored and
+outranks `.env.production`, which is why it's the switch.
 
 `cargo build` is enough — there is no Tauri CLI dependency. `build.rs` calls
 `tauri_build::build()`, which reads `tauri.conf.json`, embeds the icon, and
@@ -95,8 +104,11 @@ for `tauri dev` and for building installers, and this ships a portable folder
 rather than an installer.
 
 Running from a source checkout: with no `game/` folder beside the binary, the
-handler falls back to the repo's `dist-offline/` then `dist/`, so a plain
-`cargo run --release` after `npm run build` works.
+handler falls back to the repo's `dist-offline/` and then `dist/`, so
+`cargo run --release` picks up whichever you built. `dist-offline/` is nothing
+special — it's just `npx vite build --outDir dist-offline` with the env file
+above, useful when you want an offline bundle without overwriting the `dist/`
+you use for the live site.
 
 **`Cargo.lock` is not committed** — there was no toolchain here to generate one.
 The CI job uploads the lock file it produces as an artifact; commit it after the

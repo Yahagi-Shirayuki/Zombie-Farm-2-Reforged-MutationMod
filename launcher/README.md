@@ -94,9 +94,20 @@ survives into the bundle.
 ## Testing a change to the launcher
 
 `launcher.ps1` runs straight from a source checkout — with no `game/` folder it
-falls back to the repo's `dist/`, so `npm run build` then run the script.
+falls back to the repo's `dist/`, so build once and run the script:
 
-Two switches exist for automation:
+```powershell
+Set-Content .env.production.local "VITE_API_URL=`nVITE_GOOGLE_CLIENT_ID="
+npm run build
+Remove-Item .env.production.local
+```
+
+The env file matters: a plain `npm run build` bakes in the live Worker, and the
+served page then logs CORS failures and offers the online chooser instead of
+going straight into Local Farm. Fine for testing the launcher itself, misleading
+for anything else.
+
+These switches exist for automation:
 
 - `-NoBrowser` — serve without opening a browser tab.
 - `-SelfTestSeconds N` — close on its own after N seconds.

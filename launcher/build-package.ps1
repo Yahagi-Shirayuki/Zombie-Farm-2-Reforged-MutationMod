@@ -73,9 +73,14 @@ $root = Join-Path $staging $folderName
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 
 Write-Host "Assembling $folderName..." -ForegroundColor Cyan
-Copy-Item -Path (Join-Path $packageSource '*') -Destination $root -Recurse -Force
-Remove-Item -LiteralPath (Join-Path $root '.gitignore') -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath (Join-Path $root 'game') -Recurse -Force -ErrorAction SilentlyContinue
+# `game` is EXCLUDED from this copy rather than copied and deleted afterwards.
+# It's gitignored, so a working copy usually has one from a previous package or
+# a test run: copying it duplicates ~90 MB for nothing, and if it happens to be
+# a junction whose target has since gone (an easy state to end up in while
+# testing), Copy-Item -Recurse fails outright.
+Get-ChildItem -LiteralPath $packageSource -Force |
+    Where-Object { $_.Name -ne 'game' -and $_.Name -ne '.gitignore' } |
+    ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $root -Recurse -Force }
 Copy-Item -Path $GameFolder -Destination (Join-Path $root 'game') -Recurse -Force
 
 foreach ($required in @('Play Zombie Farm.cmd', 'launcher\launcher.ps1', 'launcher\zombiefarm.ico', 'game\index.html')) {
