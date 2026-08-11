@@ -2,6 +2,15 @@
 
 ## Unreleased (working tree)
 
+### Windows downloads
+- New **launcher** package (`launcher/`): unzip, double-click `Play Zombie Farm.cmd`, and the offline build opens in the default browser with a Desktop shortcut. Zero install — Windows PowerShell and the in-box C# compiler are enough. Serves `game/` from a loopback-only socket on a pinned port (saves are per-origin, so the port cannot drift), replaces the shipped service worker with a self-unregistering one, and sends everything `no-store` so modded files show up on reload.
+- New **desktop app** (`desktop/`): `ZombieFarm.exe`, the same offline build in a Tauri window — no browser, no console, no local server, no port. A custom URI scheme serves `game/` off disk so mods keep working instead of being compiled into the binary. Not yet compiled or run; see `desktop/README.md`.
+- `.github/workflows/release-windows.yml` publishes both zips on a `v*` tag. Both jobs refuse to package a bundle that still references the live Worker, so a moddable local client can never reach production.
+- The two packages keep separate saves (a native webview gets its own storage); the app's instructions cover Export/Import.
+
+### Fixes (client)
+- Production CSP now allows `data:` in `connect-src`. PixiJS probes for worker ImageBitmap support by fetching a 1x1 data-URL PNG; blocking it made the probe report "unsupported", which silently moved every texture fetch and decode onto the main thread (202 of them during boot) and logged two CSP errors per page load.
+
 ### Memorial Statue
 - New buyable object (3,000g, unlimited copies, sellable/storable) that enshrines one perished zombie as a stone statue on its plinth.
 - Server-owned graveyard: new `fallen_v3` table (migration 0047), written at raid settlement, cleared again if the zombie is bought back at the revival offer.

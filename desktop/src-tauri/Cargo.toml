@@ -1,0 +1,30 @@
+[package]
+name = "zombie-farm-desktop"
+version = "0.2.1"
+edition = "2021"
+# Tauri 2 requires 1.77.2 or newer.
+rust-version = "1.77.2"
+description = "Desktop shell for Zombie Farm Reforged"
+license = "MIT"
+publish = false
+
+# Named so a plain `cargo build --release` already produces the file the release
+# zip ships. tauri.conf.json's mainBinaryName matches.
+[[bin]]
+name = "ZombieFarm"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# No default-features change and no plugins: the game calls no Tauri APIs, it
+# just needs a window and the custom URI scheme.
+tauri = { version = "2", features = [] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

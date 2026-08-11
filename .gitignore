@@ -7,3 +7,10 @@ __pycache__/
 
 # Rig captures written by /zombie-review.html via the dev-only /__capture endpoint
 tmp/review-shots/
+
+# Local output of launcher/build-package.ps1 (the ~90 MB Windows zip).
+launcher/out/
+
+# Rust build output for the desktop shell (desktop/README.md).
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

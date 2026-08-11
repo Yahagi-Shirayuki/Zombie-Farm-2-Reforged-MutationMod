@@ -1,0 +1,81 @@
+ZOMBIE FARM REFORGED - desktop app
+==================================
+
+HOW TO PLAY
+-----------
+
+1. Make sure you extracted this whole folder out of the zip.
+   (Right-click the zip > "Extract All...". Do not run anything from inside
+   the zip window itself - it will not work.)
+
+2. Double-click:  ZombieFarm.exe
+
+That's it. The game opens in its own window. There is no browser, no console
+window, and nothing gets installed.
+
+To get an icon on your Desktop, double-click "Create Desktop Shortcut.cmd"
+once. (Or right-click ZombieFarm.exe > Send to > Desktop.)
+
+
+WINDOWS MIGHT WARN YOU THE FIRST TIME
+-------------------------------------
+
+Because this was downloaded from the internet, Windows may show a blue
+"Windows protected your PC" box. Click "More info", then "Run anyway".
+
+That warning appears for any program without a paid certificate, not because
+anything is wrong with this one. Nothing is installed and nothing is sent
+anywhere - the app only reads files from this folder.
+
+
+YOUR FARM DOES NOT CARRY OVER FROM THE BROWSER
+----------------------------------------------
+
+The desktop app keeps its own save, separate from any farm you played in a web
+browser (including the one from "Play Zombie Farm.cmd"). Your old farm is not
+gone - it's still in the browser - but you have to move it across by hand:
+
+  1. Open your farm the old way, in the browser.
+  2. Settings (cog icon) > Local Save > Export. A .json file is saved to
+     your Downloads folder.
+  3. Open ZombieFarm.exe.
+  4. Settings > Local Save > Import, and pick that .json file.
+
+Do this once. After that, play in whichever one you prefer - but note they
+stay separate from then on, so pick one and stick to it.
+
+
+INSTALLING MODS
+---------------
+
+Everything the game shows lives in the "game" folder next to ZombieFarm.exe.
+A mod is normally a set of files you drop into "game\assets", replacing the
+originals.
+
+  * Back up any file you replace, so you can undo it.
+  * Close and reopen the app to see the change - nothing is cached.
+  * If the game stops loading after a mod, delete the "game" folder and
+    re-extract it from the zip.
+
+Only install mods from someone you trust. Modded files are code and art that
+run on your PC.
+
+
+IT DIDN'T WORK
+--------------
+
+  * Nothing happened at all -> you are probably still inside the zip.
+    Extract it properly first.
+  * "Game files are missing" -> the "game" folder must sit next to
+    ZombieFarm.exe. Extract the whole zip, keeping the folder together.
+  * The window is white or blank -> your PC may be missing the Microsoft Edge
+    WebView2 Runtime, which the app uses to draw the game. It comes with
+    Windows 10 and 11, but if it's missing you can get it free from Microsoft:
+    https://developer.microsoft.com/microsoft-edge/webview2/
+
+You can also play in your browser with nothing to download:
+
+  https://zombiefarmreforged.com
+
+That version is the online one, with accounts and friends. It cannot run mods,
+and its farm is separate from this one.

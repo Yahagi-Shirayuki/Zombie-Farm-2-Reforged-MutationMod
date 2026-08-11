@@ -1,0 +1,229 @@
+name: Release Windows downloads
+
+# Publishes the two things a player can download, both built from the OFFLINE
+# client, both attached to the same GitHub Release:
+#
+#   ZombieFarmReforged-Windows-App.zip  - ZombieFarm.exe, its own window (Tauri)
+#   ZombieFarmReforged-Windows.zip      - the launcher: opens the default browser
+#
+# Both unzip-and-double-click, with no Node, no npm and no admin rights needed.
+# They keep SEPARATE saves (a native webview gets its own storage), which is why
+# the app's instructions cover exporting and importing a farm.
+#
+# Deliberately the offline build (no VITE_API_URL): the local client is meant to
+# be modded, and a modded client must never be able to talk to the live Worker.
+# Both jobs FAIL if the Worker origin leaks into the bundle.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish the zip under (created if it doesn't exist), e.g. v0.2.1"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark the release as a pre-release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      ZIP_NAME: ZombieFarmReforged-Windows.zip
+      FOLDER_NAME: Zombie Farm Reforged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Test
+        run: npm test
+
+      # .env.production.local outranks .env.production in Vite and is gitignored,
+      # so this switches the build to offline without touching a tracked file.
+      - name: Configure an offline build
+        run: |
+          printf 'VITE_API_URL=\nVITE_GOOGLE_CLIENT_ID=\n' > .env.production.local
+
+      - run: npm run build
+
+      # A local client that can still reach production would be a cheating vector
+      # and a support nightmare. Prove the online layer really is compiled out.
+      - name: Verify the bundle is offline-only
+        run: |
+          if grep -rqF "zombiefarm-server.zombiefarm.workers.dev" dist/; then
+            echo "::error::The built client still references the live Worker - this is not an offline build."
+            grep -rlF "zombiefarm-server.zombiefarm.workers.dev" dist/ | head -20
+            exit 1
+          fi
+          # Assert connect-src carries nothing beyond the offline-safe tokens,
+          # rather than matching the whole directive: pinning the exact string
+          # meant an unrelated CSP edit silently failed the release instead of
+          # reporting a leaked API origin.
+          CONNECT=$(grep -o "connect-src [^;]*" dist/index.html)
+          echo "$CONNECT"
+          EXTRA=$(printf '%s' "$CONNECT" \
+            | sed "s/connect-src //; s/'self'//; s/data://; s|https://accounts.google.com||" \
+            | tr -d ' ')
+          if [ -n "$EXTRA" ]; then
+            echo "::error::connect-src allowlists an unexpected origin: $EXTRA"
+            exit 1
+          fi
+          echo "Offline build confirmed."
+
+      - name: Assemble the package
+        run: |
+          set -euo pipefail
+          root="staging/$FOLDER_NAME"
+          mkdir -p "$root"
+          cp -r launcher/package/. "$root/"
+          rm -f "$root/.gitignore"
+          mkdir -p "$root/game"
+          cp -r dist/. "$root/game/"
+          # Sanity: the three things a player's double-click depends on.
+          test -f "$root/Play Zombie Farm.cmd"
+          test -f "$root/launcher/launcher.ps1"
+          test -f "$root/game/index.html"
+          # .gitattributes already checks these out with CRLF; normalise anyway so
+          # a runner with odd git config can't ship an LF-only .cmd (cmd.exe
+          # mis-parses multi-line blocks in one). Idempotent: strips \r, re-adds it.
+          sed -i 's/\r$//; s/$/\r/' "$root/HOW TO PLAY.txt" "$root/Play Zombie Farm.cmd"
+
+      - name: Zip it
+        run: |
+          set -euo pipefail
+          cd staging
+          zip -qr "../$ZIP_NAME" "$FOLDER_NAME"
+          cd ..
+          ls -lh "$ZIP_NAME"
+          echo "SHA256=$(sha256sum "$ZIP_NAME" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Publish the release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "$(printf '%s\n' \
+                'Two Windows downloads, both unzip-and-double-click, nothing to install:' '' \
+                '- **ZombieFarmReforged-Windows-App.zip** — the game in its own window. Run `ZombieFarm.exe`.' \
+                '- **ZombieFarmReforged-Windows.zip** — opens the game in your browser instead. Run `Play Zombie Farm.cmd`.' '' \
+                'They keep separate saves. To move a farm across, use Settings → Local Save → Export, then Import in the other one.')" \
+              ${{ inputs.prerelease && '--prerelease' || '' }}
+          fi
+          gh release upload "$TAG" "$ZIP_NAME" --clobber
+          echo "Published $ZIP_NAME (sha256 $SHA256) to release $TAG"
+
+  # The standalone app: same web build, but in a Tauri window instead of a
+  # browser. Needs a Windows runner for the MSVC toolchain and WebView2 headers.
+  #
+  # `needs: package` is the test gate - that job runs the suite, and there is no
+  # point compiling a 5-minute Rust binary against a red build.
+  desktop:
+    needs: package
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      ZIP_NAME: ZombieFarmReforged-Windows-App.zip
+      FOLDER_NAME: Zombie Farm Reforged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+
+      - name: Configure an offline build
+        run: printf 'VITE_API_URL=\nVITE_GOOGLE_CLIENT_ID=\n' > .env.production.local
+
+      - run: npm run build
+
+      - name: Verify the bundle is offline-only
+        run: |
+          if grep -rqF "zombiefarm-server.zombiefarm.workers.dev" dist/; then
+            echo "::error::The built client still references the live Worker - this is not an offline build."
+            exit 1
+          fi
+          echo "Offline build confirmed."
+
+      # Rust ships preinstalled on the windows runner image; print it so a
+      # toolchain change shows up in the log rather than as a mystery failure.
+      - name: Toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      # No Cargo.lock is committed (the repo has no Rust toolchain to generate
+      # one), so the cache key follows the manifest instead.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Build ZombieFarm.exe
+        run: cargo build --release --manifest-path desktop/src-tauri/Cargo.toml
+
+      # Worth keeping: committing this pins transitive crate versions so a later
+      # release rebuilds byte-for-byte instead of drifting with the ecosystem.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cargo.lock
+          path: desktop/src-tauri/Cargo.lock
+          if-no-files-found: warn
+
+      - name: Assemble the package
+        run: |
+          set -euo pipefail
+          root="staging/$FOLDER_NAME"
+          mkdir -p "$root/game"
+          cp desktop/src-tauri/target/release/ZombieFarm.exe "$root/"
+          cp "desktop/package/HOW TO PLAY.txt" "desktop/package/Create Desktop Shortcut.cmd" "$root/"
+          cp -r dist/. "$root/game/"
+          test -f "$root/ZombieFarm.exe"
+          test -f "$root/game/index.html"
+          sed -i 's/\r$//; s/$/\r/' "$root/HOW TO PLAY.txt" "$root/Create Desktop Shortcut.cmd"
+
+      # 7z, not PowerShell's Compress-Archive: that writes backslash separators
+      # into the zip, which some extractors read as one long filename.
+      - name: Zip it
+        run: |
+          set -euo pipefail
+          cd staging
+          7z a -tzip -mx=7 "../$ZIP_NAME" "$FOLDER_NAME" >/dev/null
+          cd ..
+          ls -lh "$ZIP_NAME"
+          echo "SHA256=$(sha256sum "$ZIP_NAME" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Publish the release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" "$ZIP_NAME" --clobber
+          echo "Published $ZIP_NAME (sha256 $SHA256) to release $TAG"

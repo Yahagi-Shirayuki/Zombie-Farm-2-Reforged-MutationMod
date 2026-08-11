@@ -23,7 +23,16 @@ function cspPlugin(apiUrl: string): Plugin {
     `style-src 'self' 'unsafe-inline' https://accounts.google.com`,
     `img-src 'self' data: https:`,
     `font-src 'self' data:`,
-    `connect-src 'self' https://accounts.google.com${api ? ` ${api}` : ""}`,
+    // `data:` is for PixiJS, not for us. Before loading any texture it probes
+    // whether ImageBitmap works inside a worker by fetching a 1x1 data-URL PNG
+    // from a blob worker (assets/loader/workers/checkImageBitmap.worker). Blocking
+    // that fetch doesn't fail loudly — the probe catches the error, reports "not
+    // supported", and every texture is then fetched and decoded on the MAIN
+    // THREAD instead of the worker pool (202 of them during our boot), plus two
+    // CSP errors per page load. Allowing it is close to free: a data: URL is
+    // self-contained, so fetching one sends nothing anywhere and reaches no
+    // origin. img-src and font-src already allow `data:` for the same reason.
+    `connect-src 'self' data: https://accounts.google.com${api ? ` ${api}` : ""}`,
     `frame-src https://accounts.google.com`,
     `worker-src 'self' blob:`,
     `form-action 'self'`,

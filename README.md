@@ -20,6 +20,21 @@ combat numbers) with new "Reforged" additions (the online/social layer).
 **Nothing to install — the game is live at <https://zombiefarmreforged.com>.**
 Choose **Local Farm** on the title screen to play without an account.
 
+### Or download it for Windows
+
+For playing offline, or for running someone's modded build, there are two zips.
+Neither needs Node, a terminal, or admin rights — unzip and double-click:
+
+| Download | What you get |
+|---|---|
+| **[App](https://github.com/actualdoctornerd-ai/Zombie-Farm-2-Reforged/releases/latest/download/ZombieFarmReforged-Windows-App.zip)** | `ZombieFarm.exe` — the game in its own window, no browser ([desktop/README.md](desktop/README.md)) |
+| **[Launcher](https://github.com/actualdoctornerd-ai/Zombie-Farm-2-Reforged/releases/latest/download/ZombieFarmReforged-Windows.zip)** | `Play Zombie Farm.cmd` — opens the game in your default browser ([launcher/README.md](launcher/README.md)) |
+
+Both run the same offline build and take mods the same way: drop files into the
+`game` folder. They keep **separate saves** — a native app window gets its own
+storage — so to move a farm across use Settings → Local Save → **Export**, then
+**Import** in the other one.
+
 ## Quick start (run it yourself)
 
 You need [Node.js](https://nodejs.org) 18 or newer, and nothing else. Every game
@@ -74,6 +89,8 @@ Everything a contributor needs is in this repo:
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to set up, test, and open a pull request |
 | [SECURITY.md](SECURITY.md) | Anti-cheat posture, threat model, release gates |
 | [PROVENANCE.md](PROVENANCE.md) | What this is derived from, and what it is not |
+| [launcher/README.md](launcher/README.md) | The double-click Windows package: how it works, how to build one |
+| [desktop/README.md](desktop/README.md) | `ZombieFarm.exe`, the Tauri window build (and why the game isn't embedded in it) |
 | [server/README.md](server/README.md) | API surface, local Worker setup, ops notes |
 | [server/RUNBOOK.md](server/RUNBOOK.md) | Incident response and operational procedures |
 | [docs/](docs/) | Per-system deep dives (Epic Bosses, Black Market, protocol rollout, recovered mechanics) |
@@ -264,6 +281,32 @@ Then `npm run build` as usual. With no API URL, `isConfigured()` is false: the c
 never appears and the build opens Local Farm directly. `npm run preview` then serves it
 on <http://localhost:4173>.
 
+### Windows launcher package
+
+The offline build above is what ships to players who don't want a toolchain —
+wrapped with a double-click launcher that serves it on `127.0.0.1` and opens a
+browser, since an ES-module build can't run from `file://`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File launcher\build-package.ps1
+```
+
+That writes `launcher/out/ZombieFarmReforged-Windows.zip`. Releases publish the
+same zip from [`.github/workflows/release-windows.yml`](.github/workflows/release-windows.yml)
+on a `v*` tag. Both refuse to package a bundle that still points at the live
+Worker. Details, including why the launcher pins port 8722 and disables the
+service worker, are in [launcher/README.md](launcher/README.md).
+
+### Desktop app (`ZombieFarm.exe`)
+
+The same offline build in a Tauri window instead of a browser — one process, no
+local web server, no port. It deliberately does **not** embed the frontend in the
+binary: a custom URI scheme serves `game/` off disk so mods still work. Needs
+Rust 1.77.2+ and the MSVC C++ build tools locally; the `desktop` job in the
+release workflow builds it on a Windows runner. See
+[desktop/README.md](desktop/README.md) — including the note that it has not been
+run yet, and what to check first if the first build fails.
+
 ### Troubleshooting
 
 **Cryptic errors during `npm install` or `npm run dev`.** Check your Node version with
@@ -362,7 +405,9 @@ reintroduce hardcoded `/assets/...` paths or subpath hosting will 404.
 
 The build also injects a strict Content-Security-Policy `<meta>` tag (`vite.config.ts`),
 allowlisting `script-src 'self'` plus the Google Sign-In origins, `worker-src 'self' blob:`,
-and the configured API origin in `connect-src`. There is no `unsafe-inline`, which is why
+and the configured API origin in `connect-src`. `connect-src` also allows `data:` — PixiJS
+probes for worker ImageBitmap support by fetching a 1x1 data-URL PNG, and blocking it
+silently demotes every texture load to the main thread. There is no `unsafe-inline`, which is why
 `public/boot.js` is an external file and `src/pwa.ts` registers the service worker manually.
 **Write UI code accordingly: no inline `<script>`, no inline `onclick` handlers** — build
 elements with `addEventListener` and `element.style`. The CSP is applied on build only, so a
