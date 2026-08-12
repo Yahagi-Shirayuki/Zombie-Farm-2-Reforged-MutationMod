@@ -11,15 +11,6 @@ import {
 import { UI } from "../uiAsset";
 import { onFirstVisible } from "../onFirstVisible";
 
-function tintOverlay(src: string, tint: number): HTMLElement {
-  const overlay = document.createElement("span");
-  overlay.className = "zcm-color";
-  overlay.style.backgroundColor = `#${tint.toString(16).padStart(6, "0")}`;
-  overlay.style.mask = `url("${src}") center / contain no-repeat`;
-  overlay.style.webkitMask = `url("${src}") center / contain no-repeat`;
-  return overlay;
-}
-
 function rgbOf(hud: Hud, zombie: RosterEntry): [number, number, number] {
   return zombie.color ?? hud.zombieBaseColorOf?.(zombie.key) ?? [255, 255, 255];
 }
@@ -52,16 +43,11 @@ function powderIcon(colorKey: PowderColor, extraClass = ""): HTMLElement {
   const color = POWDER_COLORS[colorKey];
   const icon = document.createElement("div");
   icon.className = `zcm-powder-icon${extraClass ? ` ${extraClass}` : ""}`;
-  const bag = document.createElement("img");
-  bag.className = "zcm-bag";
-  bag.src = `${BASE}assets/ui/storage/powder_bag.png`;
-  bag.alt = "";
-  const powderSrc = `${BASE}assets/ui/storage/powder.png`;
   const powder = document.createElement("img");
   powder.className = "zcm-powder";
-  powder.src = powderSrc;
+  powder.src = `${BASE}assets/ui/storage/${color.powderIcon}`;
   powder.alt = "";
-  icon.append(bag, powder, tintOverlay(powderSrc, color.tint));
+  icon.append(powder);
   return icon;
 }
 

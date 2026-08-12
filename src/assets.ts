@@ -640,7 +640,7 @@ export async function loadAssets(): Promise<GameAssets> {
   // Load crop-stage textures: every plant's two stages + the generic grown zombie.
   // The shared seed stage reuses the "planted" soil texture (set below).
   const crop: Record<string, Texture> = {};
-  const cropFiles = new Set<string>([ZOMBIE_GROWN, ...ZOMBIE_STAGES]);
+  const cropFiles = new Set<string>([ZOMBIE_GROWN, ...ZOMBIE_STAGES, "invading_stage1.png", "invading_stage2.png"]);
   for (const p of plants) {
     cropFiles.add(p.stage1);
     cropFiles.add(p.stage2);

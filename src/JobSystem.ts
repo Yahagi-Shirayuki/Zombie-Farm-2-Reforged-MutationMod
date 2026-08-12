@@ -13,7 +13,7 @@ import { QuestBus, QuestEvent } from "./quest/events";
 import { Sfx } from "./audio";
 import { harvestXp, plowXp } from "./farmRewards";
 import type { FarmJobQueueSave, FarmJobSave } from "./save/schema";
-import { rollPomegraniteCrystalHarvest } from "./powderMachine";
+import { rollCropCrystalHarvest } from "./powderMachine";
 
 export type JobKind = "till" | "plant" | "harvest";
 export type JobCurrency = "gold" | "brains";
@@ -413,8 +413,9 @@ export class JobSystem {
         this.workTotal = fast ? WORK_MS / 2 : WORK_MS;
         this.workMs = this.workTotal;
         this.actor.setWorking(true, fast ? 2 : 1);
-        this.playSfx(fast ? "harvest" : (next.kind as JobKind)); // hoe sound
-        next.bar = this.makeBar(fast ? "Harvest" : LABEL[next.kind as JobKind], next.cx, next.cy);
+        const invasiveMint = next.kind === "harvest" && this.field.isInvasiveMintAt(next.oc, next.or);
+        this.playSfx(invasiveMint ? "till" : fast ? "harvest" : (next.kind as JobKind)); // hoe sound
+        next.bar = this.makeBar(invasiveMint ? "Plowing" : fast ? "Harvest" : LABEL[next.kind as JobKind], next.cx, next.cy);
       });
       // A malformed/off-field destination must not leave this job active forever
       // and block every queued action behind its persistent green marker.
@@ -524,7 +525,17 @@ export class JobSystem {
     } else {
       const r = this.field.harvestAt(job.oc, job.or);
       if (r) {
-        this.onHarvestFx(r, job.cx, job.cy);
+        if (!r.invasiveMint) this.onHarvestFx(r, job.cx, job.cy);
+        if (r.invasiveMint) {
+          const fee = r.removalFee ?? Math.abs(r.sell);
+          this.state.addGold(-fee, "invasive_mint_clear");
+          if (r.xp) this.state.addXp(r.xp, "invasive_mint_clear");
+          this.float(job.cx, job.cy, `-${fee}g`);
+          if (r.xp) this.float(job.cx, job.cy, `+${r.xp}xp`, 0.42);
+          this.playSfx("till");
+          this.quest.post(QuestEvent.SoilPlowed, "Plow");
+          return;
+        }
         if (!r.zombieKey) r.sell = this.state.farmerHarvestGold(r.sell);
         const xp = harvestXp(r.xp, this.field.hasPlowFree());
         const online = !!this.state.onFarm;
@@ -545,13 +556,13 @@ export class JobSystem {
           }
         } else if (online) {
           // Veggie crop: the server credits the EXACT sell + xp, grow-gated by its clock.
-          const crystal = rollPomegraniteCrystalHarvest(r.cropKey, r.variant, r.fertilized);
+          const crystal = rollCropCrystalHarvest(r.cropKey, r.fertilized);
           this.state.onFarm!(
             { type: "harvest", oc: job.oc, or: job.or },
             { gold: r.sell, xp, powderCrystals: crystal ? { [crystal.color]: crystal.count } : undefined }
           );
         } else {
-          const crystal = rollPomegraniteCrystalHarvest(r.cropKey, r.variant, r.fertilized);
+          const crystal = rollCropCrystalHarvest(r.cropKey, r.fertilized);
           if (crystal) this.state.addPowderCrystals(crystal.color, crystal.count);
           if (r.sell) this.state.addGold(r.sell);
           this.state.addXp(xp);

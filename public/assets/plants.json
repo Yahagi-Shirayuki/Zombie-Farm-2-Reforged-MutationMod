@@ -454,59 +454,63 @@
   "icon": "melon_icon.png"
  },
  {
-  "key": "pomegranite",
-  "name": "Pomegranite",
-  "cost": 220,
-  "sell": 310,
-  "growMs": 86400000,
-  "stage1": "Pomegranite_4_stage1.png",
-  "stage2": "Pomegranite_4_stage2.png",
+  "key": "spinalch",
+  "name": "Spinalch",
+  "cost": 110,
+  "sell": 150,
+  "growMs": 43200000,
+  "stage1": "spinalch_stage1.png",
+  "stage2": "spinalch_stage2.png",
   "level": 23,
   "xp": 1,
-  "icon": "pome_4_icon.png",
-  "variants": [
-   {
-   "stage1": "Pomegranite_0_stage1.png",
-   "stage2": "Pomegranite_0_stage2.png",
-    "icon": "pome_0_icon.png",
-    "weight": 0.6
-   },
-   {
-   "stage1": "Pomegranite_1_stage1.png",
-   "stage2": "Pomegranite_1_stage2.png",
-    "icon": "pome_1_icon.png",
-    "weight": 1
-   },
-   {
-   "stage1": "Pomegranite_2_stage1.png",
-   "stage2": "Pomegranite_2_stage2.png",
-    "icon": "pome_2_icon.png",
-    "weight": 1
-   },
-   {
-   "stage1": "Pomegranite_3_stage1.png",
-   "stage2": "Pomegranite_3_stage2.png",
-    "icon": "pome_3_icon.png",
-    "weight": 1
-   },
-   {
-   "stage1": "Pomegranite_4_stage1.png",
-   "stage2": "Pomegranite_4_stage2.png",
-    "icon": "pome_4_icon.png",
-    "weight": 0.7
-   }
-  ]
+  "icon": "spinach_icon.png"
  },
  {
   "key": "malakale",
   "name": "Malakale",
-  "cost": 220,
-  "sell": 300,
+  "cost": 160,
+  "sell": 200,
   "growMs": 43200000,
   "stage1": "malakale_stage1.png",
   "stage2": "malakale_stage2.png",
   "level": 23,
   "xp": 1,
   "icon": "kale_icon.png"
+ },
+ {
+  "key": "blueberyl",
+  "name": "Blueberyl",
+  "cost": 195,
+  "sell": 230,
+  "growMs": 86400000,
+  "stage1": "blueberyl_stage1.png",
+  "stage2": "blueberyl_stage2.png",
+  "level": 23,
+  "xp": 1,
+  "icon": "blueberry_icon.png"
+ },
+ {
+  "key": "oatnyx",
+  "name": "Oatnyx",
+  "cost": 260,
+  "sell": 420,
+  "growMs": 129600000,
+  "stage1": "oatnyx_stage1.png",
+  "stage2": "oatnyx_stage2.png",
+  "level": 24,
+  "xp": 1,
+  "icon": "oat_icon.png"
+ },
+ {
+  "key": "diamint",
+  "name": "Diamint",
+  "cost": 350,
+  "sell": 365,
+  "growMs": 2700000,
+  "stage1": "diamint_stage1.png",
+  "stage2": "diamint_stage2.png",
+  "level": 25,
+  "xp": 1,
+  "icon": "mint_icon.png"
  }
 ]

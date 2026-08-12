@@ -7,6 +7,10 @@ export interface PowderColorInfo {
   key: PowderColor;
   name: string;
   tint: number;
+  crystalCropKey: string;
+  crystalName: string;
+  crystalIcon: string;
+  powderIcon: string;
 }
 
 export interface PowderStorage {
@@ -22,21 +26,72 @@ export interface PowderGrindJob {
 }
 
 export const POWDER_COLORS: Record<PowderColor, PowderColorInfo> = {
-  black: { key: "black", name: "Black", tint: 0x16192b },
-  green: { key: "green", name: "Green", tint: 0x36e30b },
-  blue: { key: "blue", name: "Blue", tint: 0x024ce0 },
-  red: { key: "red", name: "Red", tint: 0xff003f},
-  white: { key: "white", name: "White", tint: 0xc1bfd1 },
+  black: {
+    key: "black",
+    name: "Black",
+    tint: 0x16192b,
+    crystalCropKey: "oatnyx",
+    crystalName: "Oatnyx",
+    crystalIcon: "oat_icon.png",
+    powderIcon: "powder_black.png",
+  },
+  green: {
+    key: "green",
+    name: "Green",
+    tint: 0x36e30b,
+    crystalCropKey: "malakale",
+    crystalName: "Malakale",
+    crystalIcon: "kale_icon.png",
+    powderIcon: "powder_green.png",
+  },
+  blue: {
+    key: "blue",
+    name: "Blue",
+    tint: 0x024ce0,
+    crystalCropKey: "blueberyl",
+    crystalName: "Blueberyl",
+    crystalIcon: "blueberry_icon.png",
+    powderIcon: "powder_blue.png",
+  },
+  red: {
+    key: "red",
+    name: "Red",
+    tint: 0xff003f,
+    crystalCropKey: "spinalch",
+    crystalName: "Spinalch",
+    crystalIcon: "spinach_icon.png",
+    powderIcon: "powder_red.png",
+  },
+  white: {
+    key: "white",
+    name: "White",
+    tint: 0xc1bfd1,
+    crystalCropKey: "diamint",
+    crystalName: "Diamint",
+    crystalIcon: "mint_icon.png",
+    powderIcon: "powder_white.png",
+  },
 };
 
 export const POWDER_STORAGE_DISPLAY: readonly PowderColor[] = ["red", "green", "blue", "white", "black"];
-export const POMEGRANITE_CRYSTAL_BY_VARIANT: readonly PowderColor[] = ["black", "green", "blue", "red", "white"];
 export const GRIND_TIME_PER_CRYSTAL = 3 * 60 * 1000;
-export const GRIND_CRYSTAL_CAPACITY = 20;
+export const GRIND_CRYSTAL_CAPACITY = 40;
 export const POWDER_PER_CRYSTAL_MIN = 7;
 export const POWDER_PER_CRYSTAL_MAX = 9;
 
 const POWDER_COLOR_KEYS: readonly PowderColor[] = ["black", "green", "blue", "red", "white"];
+
+export const CRYSTAL_CROP_HARVESTS: Readonly<Record<string, {
+  color: PowderColor;
+  min: number;
+  max: number;
+}>> = {
+  spinalch: { color: "red", min: 5, max: 7 },
+  malakale: { color: "green", min: 6, max: 8 },
+  blueberyl: { color: "blue", min: 8, max: 10 },
+  diamint: { color: "white", min: 10, max: 13 },
+  oatnyx: { color: "black", min: 12, max: 15 },
+};
 
 const POWDER_MACHINE_PRICES = [
   { cost: 25_000, brains: false },
@@ -147,19 +202,13 @@ export function rollPowderGrindJob(
   };
 }
 
-export function pomegraniteCrystalColor(variant?: number): PowderColor | null {
-  return Number.isInteger(variant) ? POMEGRANITE_CRYSTAL_BY_VARIANT[variant!] ?? null : null;
-}
-
-export function rollPomegraniteCrystalHarvest(
+export function rollCropCrystalHarvest(
   cropKey: string,
-  variant: number | undefined,
   fertilized: boolean,
   random: () => number = Math.random
 ): { color: PowderColor; count: number } | null {
-  if (cropKey !== "pomegranite") return null;
-  const color = pomegraniteCrystalColor(variant ?? 4);
-  if (!color) return null;
-  const base = randomInt(5, 10, random);
-  return { color, count: fertilized ? base * 2 : base };
+  const rule = CRYSTAL_CROP_HARVESTS[cropKey];
+  if (!rule) return null;
+  const base = randomInt(rule.min, rule.max, random);
+  return { color: rule.color, count: fertilized ? base * 2 : base };
 }

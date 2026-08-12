@@ -33,7 +33,7 @@ import {
   powderMachinePrice,
   POWDER_MACHINE_PURCHASE_LIMIT,
   rollPowderGrindJob,
-  rollPomegraniteCrystalHarvest,
+  rollCropCrystalHarvest,
   sanitizePowderCounts,
   sanitizePowderGrinds,
   sanitizePowderStorage,
@@ -428,7 +428,7 @@ function rewardHarvest(
   const harvestValue = plot.sell * (plot.fertilized ? 2 : 1);
   state.balance.gold += farmerGold(harvestValue, bonusHeadOf(state));
   state.balance.xp += harvestXp(plot.xp, hasPlowingMonolith(state));
-  const crystal = rollPomegraniteCrystalHarvest(key, plot.variant, plot.fertilized, random);
+  const crystal = rollCropCrystalHarvest(key, plot.fertilized, random);
   if (crystal) {
     state.powderStorage = sanitizePowderStorage(state.powderStorage);
     state.powderStorage.crystals[crystal.color] += crystal.count;

@@ -314,38 +314,36 @@ describe("protocol v3 command engine", () => {
     expect(result.state.farm.plots["4:0"]).toMatchObject({ fertilized: false, zombie: true });
   });
 
-  it("persists a rolled plant variant on variant crops", () => {
+  it("plants crystal crops at their level 23 unlock", () => {
     const state = freshGameplayState();
     state.balance.gold = 1_000;
-    state.balance.xp = 1_000_000;
+    state.balance.xp = 15_500;
     state.farm.plots["0:0"] = { state: "plowed" };
 
     const result = applyCommandBatch(
       state,
-      commands({ type: "farm.plant", oc: 0, or: 0, cropKey: "pomegranite" }),
-      { now: 1_000, random: () => 0.62 },
+      commands({ type: "farm.plant", oc: 0, or: 0, cropKey: "spinalch" }),
+      { now: 1_000 },
     );
 
     expect(result.results[0]).toMatchObject({ status: "applied" });
     expect(result.state.farm.plots["0:0"]).toMatchObject({
       state: "planted",
-      cropKey: "pomegranite",
-      variant: 3,
+      cropKey: "spinalch",
     });
   });
 
-  it("awards pomegranite crystals from the harvested variant", () => {
+  it("awards crystal crops from the harvested crop key", () => {
     const state = freshGameplayState();
     state.farm.plots["0:0"] = {
       state: "planted",
-      cropKey: "pomegranite",
+      cropKey: "spinalch",
       plantedAt: 0,
       growMs: 1,
-      sell: 310,
+      sell: 320,
       xp: 1,
       fertilized: false,
       zombie: false,
-      variant: 0,
     };
 
     const result = applyCommandBatch(
@@ -355,21 +353,20 @@ describe("protocol v3 command engine", () => {
     );
 
     expect(result.results[0]).toMatchObject({ status: "applied" });
-    expect(result.state.powderStorage.crystals.black).toBe(5);
+    expect(result.state.powderStorage.crystals.red).toBe(5);
   });
 
-  it("doubles pomegranite crystal harvests when fertilized", () => {
+  it("doubles crystal crop harvests when fertilized", () => {
     const state = freshGameplayState();
     state.farm.plots["0:0"] = {
       state: "planted",
-      cropKey: "pomegranite",
+      cropKey: "oatnyx",
       plantedAt: 0,
       growMs: 1,
-      sell: 310,
+      sell: 320,
       xp: 1,
       fertilized: true,
       zombie: false,
-      variant: 3,
     };
 
     const result = applyCommandBatch(
@@ -379,7 +376,7 @@ describe("protocol v3 command engine", () => {
     );
 
     expect(result.results[0]).toMatchObject({ status: "applied" });
-    expect(result.state.powderStorage.crystals.red).toBe(20);
+    expect(result.state.powderStorage.crystals.black).toBe(30);
   });
 
   it("starts and collects a Powder Machine grind", () => {

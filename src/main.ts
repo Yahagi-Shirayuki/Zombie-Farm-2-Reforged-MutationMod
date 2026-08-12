@@ -7,7 +7,7 @@ import { snapPlowOrigin } from "./plowSelection";
 import "pixi.js/unsafe-eval";
 import { loadAssets, ensureObjectTexture, ensureObjectTextures, objectSpriteFiles, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
 import { MAX_ZOMBIE_POTS, noRoomForAnother } from "./placementLimit";
-import { Field, CARROT, CropConfig, PLOT } from "./Field";
+import { Field, CARROT, CropConfig, INVADING_MINT, PLOT } from "./Field";
 import { Actor } from "./Actor";
 import { PetActor } from "./PetActor";
 import { WalkController } from "./WalkController";
@@ -54,7 +54,7 @@ import { harvestXp, plowXp } from "./farmRewards";
 import {
   isPowderMachineKey,
   powderMachinePrice,
-  rollPomegraniteCrystalHarvest,
+  rollCropCrystalHarvest,
   type PowderColor,
 } from "./powderMachine";
 import {
@@ -206,7 +206,7 @@ function installLocalFarmHotkeys(playMode: PlayMode, state: GameState, saves: Sa
 
       case "KeyJ":
         saves.flush();
-        skipLocalFarmTime(playMode, saves, 3 * 60);
+        skipLocalFarmTime(playMode, saves, 1 * 60);
         break;
 
       case "KeyK":
@@ -321,6 +321,7 @@ async function main() {
   // rebuild planted crops from their saved key). Seed it with the quick-plant CARROT.
   const catalog = new Map<string, CropConfig>();
   catalog.set(CARROT.key, CARROT);
+  catalog.set(INVADING_MINT.key, INVADING_MINT);
   const plantCards = assets.plants.map((p) => {
     const cfg: CropConfig = {
       key: p.key, name: p.name, stages: [SEED_FILE, p.stage1, p.stage2],
@@ -900,7 +901,7 @@ async function main() {
     dx: number; rise: number; spin: number; baseScale: number;
   }[] = [];
   const popHarvestIcon = (result: import("./Field").HarvestResult, x: number, y: number) => {
-    if (result.zombieKey) return;
+    if (result.zombieKey || result.invasiveMint) return;
     const texture = assets.cropIcon[result.icon];
     if (!texture) return;
     const count = Math.random() < 0.5 ? 4 : 5;
@@ -1271,7 +1272,7 @@ async function main() {
         // farmer-adjusted gold for a vegetable, XP for both kinds.
         const gold = r.zombieKey ? 0 : state.farmerHarvestGold(r.sell);
         const xp = harvestXp(r.xp, field.hasPlowFree());
-        const crystal = rollPomegraniteCrystalHarvest(r.cropKey, r.variant, r.fertilized);
+        const crystal = rollCropCrystalHarvest(r.cropKey, r.fertilized);
         let harvestAliases: readonly string[] = [];
         if (state.onFarm) {
           if (crystal) powerCrystals[crystal.color] = (powerCrystals[crystal.color] ?? 0) + crystal.count;
@@ -1341,15 +1342,29 @@ async function main() {
       // The boost replaces only the gold cost: its XP matches the same plots being
       // plowed manually. Online the server credits it authoritatively; the total
       // rides along as the power command's optimistic delta (see onUseBoost).
-      if (plowed.length && !state.onInventory) state.addXp(xp * plowed.length);
-      powerXp += xp * plowed.length;
       for (const pl of plowed) {
-        questBus.post(QuestEvent.SoilPlowed, "Plow");
-        questBus.post(QuestEvent.NewSoilPlowed, "Plow");
-        // Same as harvest: every plot shows its own reward in this one frame.
         const at = field.plotCenterOf(pl.oc, pl.or);
-        floatText(at.x, at.y, "Plowed!");
-        if (xp) floatText(at.x, at.y, `+${xp}xp`, 0.42);
+        if (pl.invasiveMint) {
+          const fee = pl.removalFee ?? 0;
+          const clearXp = pl.xp ?? 0;
+          if (!state.onInventory) {
+            if (fee) state.addGold(-fee, "invasive_mint_clear");
+            if (clearXp) state.addXp(clearXp, "invasive_mint_clear");
+          }
+          powerGold -= fee;
+          powerXp += clearXp;
+          questBus.post(QuestEvent.SoilPlowed, "Plow");
+          floatText(at.x, at.y, fee ? `-${fee}g` : "Plowed!");
+          if (clearXp) floatText(at.x, at.y, `+${clearXp}xp`, 0.42);
+        } else {
+          if (!state.onInventory && xp) state.addXp(xp);
+          powerXp += xp;
+          questBus.post(QuestEvent.SoilPlowed, "Plow");
+          questBus.post(QuestEvent.NewSoilPlowed, "Plow");
+          // Same as harvest: every plot shows its own reward in this one frame.
+          floatText(at.x, at.y, "Plowed!");
+          if (xp) floatText(at.x, at.y, `+${xp}xp`, 0.42);
+        }
       }
       if (plowed.length) floatText(c.x, c.y, `Plowed ${plowed.length}!`);
       return plowed.length > 0;
@@ -1385,6 +1400,7 @@ async function main() {
   );
   saveManager.onStorageError = (message) => hud.showToast(message);
   jobs.onQueueChanged = () => saveManager.checkpointJobs();
+  field.onInvasiveMintChanged = () => saveManager.save();
 
   // Pixi's ticker is requestAnimationFrame-driven and may stop completely when
   // the tab/window is backgrounded. Keep a separate monotonic clock for just the

@@ -16,6 +16,30 @@ import { plotsTouch } from "./zombie/cropMutations";
 import { isZombieColorMixerBucketKey } from "./zombieColorMixerBucket";
 
 export const PLOT = 4; // tiles per plot side
+export const DIAMINT_KEY = "diamint";
+export const INVADING_MINT_KEY = "invading_mint";
+export const DIAMINT_HARVEST_GRACE_MS = 20 * 60 * 1000;
+export const INVADING_MINT_GROW_MS = 20 * 60 * 1000;
+export const INVADING_MINT_STAGE1_FEE = 300;
+export const INVADING_MINT_STAGE2_FEE = 600;
+export const INVADING_MINT_CLEAR_XP = 1;
+export const INVADING_MINT: CropConfig = {
+  key: INVADING_MINT_KEY,
+  name: "Invading Diamint",
+  stages: ["invading_stage1.png", "invading_stage2.png"],
+  growMs: INVADING_MINT_GROW_MS,
+  cost: 0,
+  sell: 0,
+  xp: INVADING_MINT_CLEAR_XP,
+  unlockLevel: 1,
+  harvestIcon: "mint_icon.png",
+};
+
+export function invasiveMintRadiusFor(readyAt: number, now: number): number {
+  const firstSpreadAt = readyAt + DIAMINT_HARVEST_GRACE_MS;
+  if (now < firstSpreadAt) return 0;
+  return Math.floor((now - firstSpreadAt) / INVADING_MINT_GROW_MS) + 1;
+}
 
 // Fertilize leaves: the CONTINUOUS effect a fertilized crop shows the whole time it
 // stays fertilized. GROUND TRUTH (`-[Tile applyFarmParticles]`): a cocos2d
@@ -102,6 +126,9 @@ export interface HarvestResult {
   variant?: number;
   zombieKey?: string;
   mutationContext?: ZombieMutationContext;
+  invasiveMint?: boolean;
+  invasiveStage?: 1 | 2;
+  removalFee?: number;
 }
 export const CARROT: CropConfig = {
   key: "carrot",
@@ -164,6 +191,7 @@ interface Planting {
   baseY: number;
   fertilized?: boolean; // a Garden zombie fertilized it → 2x harvest + leaf FX
   fertEmitMs?: number; // countdown to the next leaf emit (fertilized crops only)
+  invasiveSpread?: boolean;
 }
 // Destroy both halves of a crop (the entity-layer plants sprite and the optional
 // ground-layer soil copy). Both auto-remove from their parent on destroy.
@@ -277,6 +305,7 @@ export class Field {
   private fenceBlock = new Map<string, Set<string>>();
   private nextObjId = 1;
   private highlightedObj: string | null = null;
+  onInvasiveMintChanged: (() => void) | null = null;
 
   constructor(private assets: GameAssets) {
     this.groundObjectLayer.sortableChildren = true;
@@ -507,7 +536,7 @@ export class Field {
     const at = this.plotOriginAt(col, row);
     if (!at) return false;
     const c = this.plots.get(this.key(at.oc, at.or))!.crop;
-    return !!c && c.ageMs >= c.cfg.growMs;
+    return !!c && (c.cfg.key === INVADING_MINT_KEY || c.ageMs >= c.cfg.growMs);
   }
   hasCrop(col: number, row: number): boolean {
     const at = this.plotOriginAt(col, row);
@@ -701,19 +730,31 @@ export class Field {
   ripePlots(): { oc: number; or: number; isZombie: boolean }[] {
     const out: { oc: number; or: number; isZombie: boolean }[] = [];
     for (const p of this.plots.values())
-      if (p.crop && p.crop.ageMs >= p.crop.cfg.growMs)
+      if (p.crop && p.crop.cfg.key !== INVADING_MINT_KEY && p.crop.ageMs >= p.crop.cfg.growMs)
         out.push({ oc: p.oc, or: p.or, isZombie: !!p.crop.cfg.isZombie });
     return out;
   }
 
-  /** Insta-Plow: re-plow every harvested (dirt/hole) plot in one pass. Returns the
-   *  plots it plowed, so the caller can pop each one's own reward numbers at once. */
-  replowSpent(): { oc: number; or: number }[] {
-    const done: { oc: number; or: number }[] = [];
-    for (const p of this.plots.values())
+  /** Insta-Plow: re-plow every harvested plot and clear invasive mint in one pass.
+   *  Returns per-plot effects so the caller can pop each one's own numbers at once. */
+  replowSpent(): { oc: number; or: number; invasiveMint?: boolean; removalFee?: number; xp?: number }[] {
+    const done: { oc: number; or: number; invasiveMint?: boolean; removalFee?: number; xp?: number }[] = [];
+    for (const p of [...this.plots.values()]) {
       if (p.state === "dirt" || p.state === "hole") {
         if (this.tillAt(p.oc, p.or)) done.push({ oc: p.oc, or: p.or });
+      } else if (p.crop?.cfg.key === INVADING_MINT_KEY) {
+        const result = this.harvestAt(p.oc, p.or);
+        if (result?.invasiveMint) {
+          done.push({
+            oc: p.oc,
+            or: p.or,
+            invasiveMint: true,
+            removalFee: result.removalFee,
+            xp: result.xp,
+          });
+        }
       }
+    }
     return done;
   }
 
@@ -774,6 +815,104 @@ export class Field {
     p.crop = crop;
     p.state = "planted";
     return useCfg;
+  }
+
+  private invasiveMintStage(c: Planting): 1 | 2 {
+    return c.ageMs >= c.cfg.growMs ? 2 : 1;
+  }
+
+  private invasiveMintRemovalFee(c: Planting): number {
+    const base = this.invasiveMintStage(c) === 2 ? INVADING_MINT_STAGE2_FEE : INVADING_MINT_STAGE1_FEE;
+    return this.hasPlowFree() ? Math.floor(base / 2) : base;
+  }
+
+  isInvasiveMintAt(col: number, row: number): boolean {
+    const at = this.plotOriginAt(col, row);
+    return !!at && this.plots.get(this.key(at.oc, at.or))?.crop?.cfg.key === INVADING_MINT_KEY;
+  }
+
+  private plantInvasiveMintAt(oc: number, or: number, now: number, stage: 1 | 2): boolean {
+    const k = this.key(oc, or);
+    const p = this.plots.get(k);
+    if (!p) return false;
+    let changed = false;
+
+    if (p.crop) {
+      if (p.crop.cfg.key === DIAMINT_KEY || p.crop.cfg.isZombie) return false;
+      if (p.crop.cfg.key === INVADING_MINT_KEY) {
+        const existingStage = this.invasiveMintStage(p.crop);
+        if (existingStage === stage) return false;
+        p.crop.plantedAt = stage === 2 ? now - INVADING_MINT_GROW_MS : now;
+        p.crop.ageMs = stage === 2 ? INVADING_MINT_GROW_MS : 0;
+        this.layoutCrop(p.crop, INVADING_MINT.stages[stage - 1], oc, or);
+        return true;
+      }
+      destroyCrop(p.crop);
+      p.crop = undefined;
+      changed = true;
+    } else if (p.state !== "dirt" && p.state !== "plowed") {
+      return false;
+    }
+
+    p.state = "planted";
+    this.fit(p.soil, this.assets.soil[PLOWED_FILE], oc, or, PLOT);
+    changed = true;
+
+    const crop: Planting = {
+      cfg: INVADING_MINT,
+      plantedAt: stage === 2 ? now - INVADING_MINT_GROW_MS : now,
+      ageMs: stage === 2 ? INVADING_MINT_GROW_MS : 0,
+      sprite: new Sprite(),
+      baseY: 0,
+    };
+    crop.baseY = this.layoutCrop(crop, INVADING_MINT.stages[stage - 1], oc, or);
+    p.crop = crop;
+    return changed;
+  }
+
+  private maxInvasiveMintRadius(): number {
+    return Math.ceil((this.w + this.h) / PLOT);
+  }
+
+  private markDesiredInvasiveMint(
+    desired: Map<string, { oc: number; or: number; stage: 1 | 2 }>,
+    oc: number,
+    or: number,
+    stage: 1 | 2,
+  ) {
+    const k = this.key(oc, or);
+    const prev = desired.get(k);
+    if (!prev || stage > prev.stage) desired.set(k, { oc, or, stage });
+  }
+
+  private desiredInvasiveMintFromDiamint(p: Plot, now: number, desired: Map<string, { oc: number; or: number; stage: 1 | 2 }>) {
+    const c = p.crop;
+    if (!c || c.cfg.key !== DIAMINT_KEY) return;
+    const radius = Math.min(invasiveMintRadiusFor(c.plantedAt + c.cfg.growMs, now), this.maxInvasiveMintRadius());
+    for (let dc = -radius; dc <= radius; dc++) {
+      const remaining = radius - Math.abs(dc);
+      for (let dr = -remaining; dr <= remaining; dr++) {
+        const dist = Math.abs(dc) + Math.abs(dr);
+        if (dist === 0) continue;
+        this.markDesiredInvasiveMint(
+          desired,
+          p.oc + dc * PLOT,
+          p.or + dr * PLOT,
+          dist === radius ? 1 : 2,
+        );
+      }
+    }
+  }
+
+  private advanceInvasiveMint(now: number): boolean {
+    const desired = new Map<string, { oc: number; or: number; stage: 1 | 2 }>();
+    for (const p of this.plots.values()) this.desiredInvasiveMintFromDiamint(p, now, desired);
+
+    let changed = false;
+    for (const { oc, or, stage } of desired.values()) {
+      if (this.plantInvasiveMintAt(oc, or, now, stage)) changed = true;
+    }
+    return changed;
   }
 
   /** Lay out a crop for stage file `stageFile`, and put its sprite(s) in the right
@@ -841,8 +980,29 @@ export class Field {
   // `name` is the crop/zombie display name (for quest-progress matching).
   harvestAt(oc: number, or: number): HarvestResult | null {
     const p = this.plots.get(this.key(oc, or));
-    if (!p || !p.crop || p.crop.ageMs < p.crop.cfg.growMs) return null;
+    if (!p || !p.crop || (p.crop.cfg.key !== INVADING_MINT_KEY && p.crop.ageMs < p.crop.cfg.growMs)) return null;
     const { cfg } = p.crop;
+    if (cfg.key === INVADING_MINT_KEY) {
+      const stage = this.invasiveMintStage(p.crop);
+      const fee = this.invasiveMintRemovalFee(p.crop);
+      destroyCrop(p.crop);
+      p.crop = undefined;
+      p.state = "dirt";
+      this.fit(p.soil, this.assets.soil[DIRT_FILE], oc, or, PLOT);
+      return {
+        sell: -fee,
+        xp: INVADING_MINT_CLEAR_XP,
+        growMs: cfg.growMs,
+        cropKey: cfg.key,
+        name: cfg.name,
+        isZombie: false,
+        fertilized: false,
+        icon: cfg.harvestIcon ?? cfg.stages[cfg.stages.length - 1],
+        invasiveMint: true,
+        invasiveStage: stage,
+        removalFee: fee,
+      };
+    }
     const mutationContext = cfg.isZombie ? this.zombieMutationContextAt(oc, or) : undefined;
     // Fertilized (by a Garden zombie): the harvest is worth DOUBLE — ground truth
     // (`isFertilized` yields 6 crop drops instead of 3).
@@ -922,6 +1082,7 @@ export class Field {
         }
       }
     }
+    if (this.advanceInvasiveMint(now)) this.onInvasiveMintChanged?.();
     this.fx.update(dt);
     // Ripen fruit trees: when the timer elapses, swap to the fruit-bearing sprite.
     for (const o of this.objects.values()) {
@@ -1707,6 +1868,7 @@ export class Field {
           growMs: p.crop.cfg.growMs,
           fertilized: p.crop.fertilized,
           variant: p.crop.cfg.variant,
+          invasiveSpread: p.crop.invasiveSpread,
         };
       }
       out.push(ps);
@@ -1757,7 +1919,15 @@ export class Field {
           // it here (and re-derived every frame in update()). Clamp the cache to growMs
           // so a crop that finished growing while the game was closed reads as ripe.
           const ageMs = Math.max(0, Math.min(cfg.growMs, now - ps.crop.plantedAt));
-          const crop: Planting = { cfg, plantedAt: ps.crop.plantedAt, ageMs, sprite: new Sprite(), baseY: 0, fertilized: ps.crop.fertilized };
+          const crop: Planting = {
+            cfg,
+            plantedAt: ps.crop.plantedAt,
+            ageMs,
+            sprite: new Sprite(),
+            baseY: 0,
+            fertilized: ps.crop.fertilized,
+            invasiveSpread: ps.crop.invasiveSpread,
+          };
           // layoutCrop parents by stage; the update(0) below then re-layers it to
           // match its restored age (seed -> ground layer, grown -> entity layer).
           crop.baseY = this.layoutCrop(crop, cfg.stages[0], oc, or);
@@ -1816,6 +1986,7 @@ export class Field {
       current.crop.plantedAt = saved.plantedAt;
       current.crop.ageMs = Math.max(0, Math.min(saved.growMs, now - saved.plantedAt));
       current.crop.fertilized = saved.fertilized;
+      current.crop.invasiveSpread = saved.invasiveSpread;
     }
     this.update(0);
   }

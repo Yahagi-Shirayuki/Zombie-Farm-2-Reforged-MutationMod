@@ -15,15 +15,6 @@ import {
 type GrindSelection = Record<PowderColor, number>;
 let activeStop: (() => void) | null = null;
 
-function tintOverlay(src: string, tint: number): HTMLElement {
-  const overlay = document.createElement("span");
-  overlay.className = "pwm-color";
-  overlay.style.backgroundColor = `#${tint.toString(16).padStart(6, "0")}`;
-  overlay.style.mask = `url("${src}") center / contain no-repeat`;
-  overlay.style.webkitMask = `url("${src}") center / contain no-repeat`;
-  return overlay;
-}
-
 function countBadge(count: number): HTMLElement {
   const badge = document.createElement("div");
   badge.className = "pwm-count";
@@ -52,43 +43,33 @@ function formatCountdown(ms: number): string {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
-function crystalSlot(name: string, tint: number, count: number): HTMLElement {
+function crystalSlot(name: string, iconFile: string, count: number): HTMLElement {
   const slot = document.createElement("div");
   slot.className = "pwm-item";
   const icon = document.createElement("div");
   icon.className = "pwm-icon";
-  const crystalSrc = `${BASE}assets/ui/storage/powder_crystal.png`;
   const crystal = document.createElement("img");
   crystal.className = "pwm-crystal";
-  crystal.src = crystalSrc;
+  crystal.src = `${BASE}assets/crop-icons/${iconFile}`;
   crystal.alt = "";
-  const color = tintOverlay(crystalSrc, tint);
-  color.classList.add("pwm-crystal-color");
-  icon.append(crystal, color, countBadge(count));
+  icon.append(crystal, countBadge(count));
   const label = document.createElement("div");
   label.className = "pwm-name";
-  label.textContent = `${name} Crystal`;
+  label.textContent = name;
   slot.append(icon, label);
   return slot;
 }
 
-function powderSlot(name: string, tint: number, count: number): HTMLElement {
+function powderSlot(name: string, iconFile: string, count: number): HTMLElement {
   const slot = document.createElement("div");
   slot.className = "pwm-item";
   const icon = document.createElement("div");
   icon.className = "pwm-icon";
-  const bag = document.createElement("img");
-  bag.className = "pwm-bag";
-  bag.src = `${BASE}assets/ui/storage/powder_bag.png`;
-  bag.alt = "";
-  const powderSrc = `${BASE}assets/ui/storage/powder.png`;
   const powder = document.createElement("img");
   powder.className = "pwm-powder";
-  powder.src = powderSrc;
+  powder.src = `${BASE}assets/ui/storage/${iconFile}`;
   powder.alt = "";
-  const color = tintOverlay(powderSrc, tint);
-  color.classList.add("pwm-powder-color");
-  icon.append(bag, powder, color, countBadge(count));
+  icon.append(powder, countBadge(count));
   const label = document.createElement("div");
   label.className = "pwm-name";
   label.textContent = `${name} Powder`;
@@ -111,7 +92,7 @@ function grindArrow(flipped: boolean, disabled: boolean, onClick: () => void): H
 
 function grindCrystalSlot(
   name: string,
-  tint: number,
+  iconFile: string,
   count: number,
   canIncrease: boolean,
   onDecrease: () => void,
@@ -121,18 +102,15 @@ function grindCrystalSlot(
   slot.className = "pwm-grind-item";
   const icon = document.createElement("div");
   icon.className = "pwm-icon pwm-grind-icon";
-  const crystalSrc = `${BASE}assets/ui/storage/powder_crystal.png`;
   const crystal = document.createElement("img");
   crystal.className = "pwm-crystal";
-  crystal.src = crystalSrc;
+  crystal.src = `${BASE}assets/crop-icons/${iconFile}`;
   crystal.alt = "";
-  const color = tintOverlay(crystalSrc, tint);
-  color.classList.add("pwm-crystal-color");
-  icon.append(crystal, color);
+  icon.append(crystal);
 
   const label = document.createElement("div");
   label.className = "pwm-name";
-  label.textContent = `${name} Crystal`;
+  label.textContent = name;
 
   const controls = document.createElement("div");
   controls.className = "pwm-grind-controls";
@@ -258,8 +236,8 @@ export function openPowderMachine(hud: Hud, machineId: string): void {
         const color = POWDER_COLORS[colorKey];
         const available = hud.state.powderStorage.crystals[colorKey] ?? 0;
         crystals.appendChild(grindCrystalSlot(
-          color.name,
-          color.tint,
+          color.crystalName,
+          color.crystalIcon,
           grindSelection[colorKey],
           total < GRIND_CRYSTAL_CAPACITY && grindSelection[colorKey] < available,
           () => changeGrindCount(colorKey, -1),
@@ -300,8 +278,8 @@ export function openPowderMachine(hud: Hud, machineId: string): void {
       powders.className = "pwm-col";
       for (const colorKey of POWDER_STORAGE_DISPLAY) {
         const color = POWDER_COLORS[colorKey];
-        crystals.appendChild(crystalSlot(color.name, color.tint, hud.state.powderStorage.crystals[colorKey] ?? 0));
-        powders.appendChild(powderSlot(color.name, color.tint, hud.state.powderStorage.powders[colorKey] ?? 0));
+        crystals.appendChild(crystalSlot(color.crystalName, color.crystalIcon, hud.state.powderStorage.crystals[colorKey] ?? 0));
+        powders.appendChild(powderSlot(color.name, color.powderIcon, hud.state.powderStorage.powders[colorKey] ?? 0));
       }
       grid.append(crystals, powders);
       body.appendChild(grid);

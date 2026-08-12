@@ -251,6 +251,8 @@ export interface CropSave {
   fertilized?: boolean;
   /** Optional visual/result variant rolled when the seed was planted. */
   variant?: number;
+  /** Invasive mint stage 2 has already spread to neighbours. */
+  invasiveSpread?: boolean;
 }
 
 // ---------------------------------------------------------------------------
