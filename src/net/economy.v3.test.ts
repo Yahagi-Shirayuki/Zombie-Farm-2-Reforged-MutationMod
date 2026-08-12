@@ -86,7 +86,8 @@ describe("v3 raid dependency ids", () => {
     );
 
     expect((economy as any).queue.pending[0].command).toEqual({
-      type: "farm.plant", oc: 4, or: 4, cropKey: "carrot", fertilized: true,
+      type: "farm.plant_many", cropKey: "carrot",
+      plots: [{ oc: 4, or: 4, fertilized: true }],
     });
   });
 

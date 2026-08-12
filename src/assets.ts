@@ -291,6 +291,8 @@ export interface PlaceableDef {
   collideExtend?: { dc: number; dr: number }[];
   movable: boolean;
   rotations: number;
+  /** This object's art must never be mirrored — see `canMirrorObject`. */
+  noMirror?: boolean;
   tapSound?: string; // signature audio played when this decor is tapped (e.g. belltoll.mp3)
   sprite: string; // filename under /assets/objects/
   /** Far-side art (the source's `childNodes` layer), drawn on the SAME canvas as
@@ -343,6 +345,24 @@ export interface PlaceableDef {
   growMs?: number;
   harvestValue?: number;
   growingSprite?: string;
+}
+
+/** Can the Rotate tool turn this object?
+ *
+ *  "Rotate" is a horizontal mirror, which for isometric art is exactly a quarter turn —
+ *  a shed facing front-left comes back facing front-right, and that is right for almost
+ *  everything on the farm. It is wrong for art with WRITING baked into it: mirroring the
+ *  Ice Cream Stand hands you a sign reading "MAERC ECI", which is what players reported.
+ *
+ *  There is no mechanical repair for that. Un-mirroring the lettering afterwards would
+ *  need it re-skewed onto a plank now leaning the other way, which is drawing, not a
+ *  transform. So these objects simply do not rotate, and the tool says so rather than
+ *  turning them into nonsense. Flag any object whose art carries readable text; anything
+ *  merely asymmetric (a banner's crest, a mailbox's flag) mirrors fine and should not be
+ *  listed. The flag is authored in tools/prep_placeables.py — placeables.json is
+ *  generated, so editing it alone is undone by the next asset regen. */
+export function canMirrorObject(def: Pick<PlaceableDef, "noMirror">): boolean {
+  return !def.noMirror;
 }
 
 /** Convert an authored RGB triplet to the packed tint format used by Pixi. */

@@ -23,6 +23,10 @@ const LEG_SWING = 0.32; // radians the legs rock while walking
 const WORK_SPEED = 8.5; // hoe-chop angular speed while working
 const LANTERN_HAND_DX = -5;
 const LANTERN_HAND_DY = 8;
+// Tap box around the standing farmer, measured up from his feet at (0,0). The art is
+// ~95px tall natively (see the sizing notes in docs/) and roughly half that wide.
+const ACTOR_HIT_HALF_W = 26;
+const ACTOR_HIT_H = 92;
 
 export class Actor {
   readonly container = new Container();
@@ -146,6 +150,18 @@ export class Actor {
       this.backArm.y + LANTERN_HAND_DX * sin + LANTERN_HAND_DY * cos,
     );
     this.lantern.rotation = rotation * 0.35;
+  }
+
+  /** Is this world-space point on the farmer?
+   *
+   *  A box around the standing figure rather than the sprite's own bounds: the parts
+   *  swing as he walks and hoes, and a hit box that breathed with the animation would
+   *  make him harder to tap the moment he is doing anything. Matched to ZombieUnit's
+   *  `containsPoint` — measured up from the feet, with a little slack below them. */
+  containsPoint(wx: number, wy: number): boolean {
+    const dx = wx - this.container.x;
+    const dy = wy - this.container.y;
+    return dx >= -ACTOR_HIT_HALF_W && dx <= ACTOR_HIT_HALF_W && dy <= 6 && dy >= -ACTOR_HIT_H;
   }
 
   /** World-space center of the lantern, used to center its night-light bubble. */

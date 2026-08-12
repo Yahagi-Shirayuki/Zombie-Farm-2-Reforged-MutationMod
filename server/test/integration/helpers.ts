@@ -159,3 +159,29 @@ export async function plowPaid(s: Session, oc: number, or: number): Promise<void
     actions: [{ id: `plow-${uniqueSub()}`, type: "plow", oc, or }],
   });
 }
+
+export const DEVICE_A = "device-aaaaaaaa";
+
+/** A POST /commands envelope fenced against a bootstrap the caller just read.
+ *
+ *  Lives here rather than inside one spec because it is the v3 idiom every mutation
+ *  goes through: a spec ported off the retired v2 action routes needs this and nothing
+ *  else. Read a fresh /bootstrap first — the CAS is on `accountVersion`, so a stale one
+ *  is refused rather than applied. */
+export const commandBody = (
+  bootstrap: { accountVersion: number; writerGeneration: number },
+  batchId: string,
+  firstSequence: number,
+  commands: unknown[],
+  deviceId = DEVICE_A,
+  takeWriter = false
+) => ({
+  protocolVersion: 3,
+  deviceId,
+  batchId,
+  firstSequence,
+  expectedAccountVersion: bootstrap.accountVersion,
+  writerGeneration: bootstrap.writerGeneration,
+  takeWriter,
+  commands: commands.map((command, index) => ({ sequence: firstSequence + index, command })),
+});

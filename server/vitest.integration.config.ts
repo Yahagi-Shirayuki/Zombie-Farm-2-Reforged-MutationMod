@@ -10,8 +10,23 @@ import { defineConfig } from "vitest/config";
 // one Worker/DB (tests isolate via unique account ids, not separate databases).
 export default defineConfig({
   test: {
-    // Protocol v2 route specs are intentionally retired with their 410 surface.
-    include: ["test/integration/v3.spec.ts", "test/integration/blackMarket.spec.ts"],
+    // A GLOB, not a list. The previous shape named two files explicitly, so every
+    // other spec in this directory silently did not run — nineteen of twenty-one —
+    // while CI reported the integration suite green. Most of them were legitimately
+    // retired with the v2 route surface, but `smoke`, `sessions` and the raid specs
+    // were not: they exercise live v3 routes and went dark alongside the v2 files
+    // with nothing recording it. A new spec must run the day it is written, so
+    // opting OUT is now the thing that has to be spelled out.
+    include: ["test/integration/**/*.spec.ts"],
+    exclude: [
+      // Retired: these drive protocol-v2 routes that now answer 410 (see `retiredV2`
+      // in src/index.ts). Kept only until their live-surface equivalents exist in
+      // v3.spec.ts — see the coverage note in test/integration/README.md.
+      "test/integration/api.spec.ts",
+      "test/integration/inventory.spec.ts",
+      "test/integration/raidLoot.spec.ts",
+      "test/integration/raidRewards.spec.ts",
+    ],
     globalSetup: ["./test/integration/globalSetup.ts"],
     testTimeout: 20000,
     hookTimeout: 20000,

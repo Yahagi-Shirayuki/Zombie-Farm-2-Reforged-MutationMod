@@ -160,6 +160,34 @@ export class CommandQueue {
     return sequence;
   }
 
+  /** Fold a new mutation into the last command that has NOT yet been sent.
+   *
+   *  `merge` receives that command and returns its replacement, or null to decline —
+   *  in which case the caller enqueues normally. Only the very last pending entry is
+   *  offered, so merging can never reorder anything: whatever the caller folds in still
+   *  lands after every command already ahead of it.
+   *
+   *  This exists for the drag-paint strokes, which produce one plow/plant per plot and
+   *  can cover the entire board. The Worker's rolling-minute budget counts SEMANTIC
+   *  commands, so unmerged they cannot fit through it; merged, a whole field is one.
+   *
+   *  Returns the sequence the command was folded into, or null if it was not merged. */
+  coalesceLast(merge: (last: GameplayCommand) => GameplayCommand | null): number | null {
+    // A paused queue declines rather than throwing: the caller falls through to
+    // `enqueue`, which is the one place that reports `gameplay_unavailable`.
+    if (this.paused) return null;
+    const last = this.pending[this.pending.length - 1];
+    if (!last) return null;
+    const merged = merge(last.command);
+    if (!merged) return null;
+    last.command = merged;
+    this.persist();
+    // Deliberately no `scheduleFromFirstCommand`: the batch window belongs to the FIRST
+    // command in the queue, and a stroke that keeps folding must not keep pushing its
+    // own deadline back.
+    return last.sequence;
+  }
+
   disable(reason: string): void { this.pause(reason); }
 
   /** A causal boundary: callers await this before a raid or before spending an

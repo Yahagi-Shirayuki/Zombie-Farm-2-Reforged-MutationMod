@@ -286,6 +286,13 @@ export function openSettings(hud: Hud): void {
       noteEl("Auto follows this device's local clock (night from 7pm to 7am).")
     );
   }
+  if (hud.getFarmerLantern && hud.onSetFarmerLantern) {
+    ambienceBlock.push(
+      settingRow("Farmer's Lantern", hud.getFarmerLantern(),
+        (v) => hud.onSetFarmerLantern?.(v)),
+      noteEl("Off puts the lamp away and leaves the farm dark after sunset, lit only by whatever you have placed. You can also tap the farmer at night to switch it."),
+    );
+  }
   const farmMode = document.createElement("div");
   farmMode.className = "set-row";
   const farmModeLabel = document.createElement("span");

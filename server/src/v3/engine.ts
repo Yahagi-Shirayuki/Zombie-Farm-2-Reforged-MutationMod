@@ -2,6 +2,7 @@ import type {
   BalanceProjection,
   CommandResult,
   FarmPlotProjection,
+  GameplayCommand,
   GameplayProjection,
   QuestProjection,
   RosterUnitProjection,
@@ -17,7 +18,7 @@ import { boostEcon, boostKeyForName, MAX_STACK } from "../boostCatalog";
 import { cropEcon } from "../catalog";
 import { dropEcon } from "../raidLootCatalog";
 import { XP_THRESHOLDS, levelForXp, levelUpBrains } from "../levels";
-import { objectBuyXp, objectEcon, objectSellGold } from "../objectCatalog";
+import { BASE_SHED_SLOTS, objectBuyXp, objectEcon, objectSellGold } from "../objectCatalog";
 import { planClaim } from "../storage";
 import { QUEST_DEFINITIONS, QUEST_REWARD } from "../questCatalog";
 import { isHeadlessZombie, legalMutation, zombieSell } from "../rosterCatalog";
@@ -45,6 +46,13 @@ import {
 import { encodeReceivedZombie, parseReceivedZombie } from "../../../src/zombie/receivedReward";
 
 export const MAX_FUNCTIONAL_OBJECTS = 512;
+
+/** The only shape a CLIENT-proposed object instance id may take. Every path that lets
+ *  the client name an object it is creating runs its id through this; anything else is
+ *  replaced with a server-minted one. Ids reach other players through farm visits and
+ *  are used as keys throughout the client, so the document must never carry an
+ *  arbitrary 128-character string just because a command field was typed `string`. */
+const CLIENT_INSTANCE_ID = /^[A-Za-z0-9_-]{1,80}$/;
 /** How many UNENSHRINED fallen zombies an account keeps. Oldest are dropped, so the
  *  losses a player is most likely to still want a statue for survive. Zombies already
  *  standing on one are never counted or dropped — a memorial is permanent, and the
@@ -291,6 +299,26 @@ function overlapsExistingPlot(
 function isRipe(plot: Extract<FarmPlotProjection, { state: "planted" }>, now: number): boolean {
   return now - plot.plantedAt >= Math.max(0, plot.growMs - GROW_GRACE_MS_V3);
 }
+
+/** How many ITEMS the account's shed holds. Derived from the placed shed's tier, with
+ *  the free starter Shabby Shed as the floor — the same rule the client's own cap uses
+ *  (see `itemCap` in main.ts), so this can only ever refuse what the client refuses.
+ *
+ *  A shed cannot itself be put away (`object.status` rejects any storageSlots object),
+ *  so "placed" and "owned" are the same set here; reading the tier rather than a stored
+ *  number is what stops an edited client declaring its own capacity. */
+function shedCapacity(state: MutableGameplayState): number {
+  let cap = BASE_SHED_SLOTS;
+  for (const obj of state.objects.objects) {
+    if (obj.status !== "placed") continue;
+    cap = Math.max(cap, objectRules.get(obj.catalogKey)?.storageSlots ?? 0);
+  }
+  return cap;
+}
+
+/** Items currently occupying shed slots (stacked counts, all keys). */
+const storedItemTotal = (state: MutableGameplayState): number =>
+  Object.values(state.storage.stored).reduce((total, count) => total + Math.max(0, count), 0);
 
 function placedCapacity(state: MutableGameplayState): { army: number; storage: number } {
   let army = state.zombieMax;
@@ -562,6 +590,45 @@ function reject(sequence: number, error: string): CommandResult {
   return { sequence, status: "rejected", error };
 }
 
+/** Apply a bulk farm command as its individual plots, in order, under exactly the
+ *  single-plot rules — including the ones that depend on what the earlier plots in the
+ *  same command already did (gold spent, XP gained and the level it may cross, the plot
+ *  count against MAX_FARM_PLOTS, overlap against soil this command just laid).
+ *
+ *  A plot the server refuses is skipped, not fatal: a drag-paint stroke that runs out of
+ *  gold halfway, or crosses ground that changed under it, should still lay the soil it
+ *  can afford. The command as a WHOLE is only rejected when nothing at all applied, so
+ *  the client's existing rejection toast still fires for the cases the player must see
+ *  (no funds, wrong level). A partial refusal is reported through `rejectedPlots` so it
+ *  can be summarised once instead of once per plot.
+ *
+ *  An empty list is `applied`: there is nothing to refuse, and treating "no work" as a
+ *  failure would surface an error for a command the client should never have sent. */
+function applyBulkFarm(
+  state: MutableGameplayState,
+  sequence: number,
+  options: Required<EngineOptions>,
+  events: QuestEvent[],
+  created: string[],
+  commands: GameplayCommand[]
+): CommandResult {
+  let applied = 0;
+  let rejectedPlots = 0;
+  let firstError = "";
+  for (const command of commands) {
+    const result = applyOne(state, { sequence, command }, options, events, created);
+    if (result.status === "applied") applied++;
+    else {
+      rejectedPlots++;
+      firstError ||= result.error ?? "no_effect";
+    }
+  }
+  if (!applied && rejectedPlots) return reject(sequence, firstError);
+  return rejectedPlots
+    ? { sequence, status: "applied", rejectedPlots, rejectedPlotError: firstError }
+    : { sequence, status: "applied" };
+}
+
 function applyOne(
   state: MutableGameplayState,
   item: SequencedCommand,
@@ -592,6 +659,15 @@ function applyOne(
       events.push({ type: "kSoilPlowedNotification", subject: "Plow" }, { type: "kNewSoilPlowedNotification", subject: "Plow" });
       return { sequence, status: "applied" };
     }
+    case "farm.plow_many":
+      return applyBulkFarm(state, sequence, options, events, created,
+        command.plots.map((plot) => ({ type: "farm.plow", oc: plot.oc, or: plot.or })));
+    case "farm.plant_many":
+      return applyBulkFarm(state, sequence, options, events, created,
+        command.plots.map((plot) => ({
+          type: "farm.plant", oc: plot.oc, or: plot.or,
+          cropKey: command.cropKey, fertilized: plot.fertilized,
+        })));
     case "farm.plant": {
       if (!validCoord(command.oc, state.farmSize) || !validCoord(command.or, state.farmSize)) return reject(sequence, "bad_coord");
       const key = plotKey(command.oc, command.or);
@@ -807,7 +883,7 @@ function applyOne(
         : (econ.brains ? "brains" : "gold");
       if (state.balance[currency] < cost) return reject(sequence, "insufficient");
       const requested = command.clientInstanceId;
-      const instanceId = requested && /^[A-Za-z0-9_-]{1,80}$/.test(requested) &&
+      const instanceId = requested && CLIENT_INSTANCE_ID.test(requested) &&
         !state.objects.objects.some((o) => o.instanceId === requested) ? requested : options.id();
       state.balance[currency] -= cost;
       state.balance.xp += objectBuyXp(
@@ -855,7 +931,12 @@ function applyOne(
       // therefore has no source instance to mutate. Adopt that existing client id as
       // a placed storage02 while still charging the full catalog price; every later
       // shed tier must continue to upgrade an owned server object.
-      const adoptsFreeStarterShed = !obj && command.catalogKey === "storage02";
+      // Adoption is the one upgrade path that INSERTS a client-named object rather than
+      // mutating one the server already minted, so it takes the same id fence as
+      // object.buy and storage.claim. Without it this was the only door into the object
+      // document that accepted any 128-character string the command carried.
+      const adoptsFreeStarterShed = !obj && command.catalogKey === "storage02" &&
+        CLIENT_INSTANCE_ID.test(command.instanceId);
       if (!obj && !adoptsFreeStarterShed) return reject(sequence, "not_owned");
       if (adoptsFreeStarterShed && state.objects.objects.length >= MAX_FUNCTIONAL_OBJECTS) {
         return reject(sequence, "object_limit");
@@ -1204,7 +1285,7 @@ function applyOne(
       }
       if (state.objects.objects.length >= MAX_FUNCTIONAL_OBJECTS) return reject(sequence, "object_limit");
       const requested = command.clientInstanceId;
-      const instanceId = requested && /^[A-Za-z0-9_-]{1,80}$/.test(requested) &&
+      const instanceId = requested && CLIENT_INSTANCE_ID.test(requested) &&
         !state.objects.objects.some((object) => object.instanceId === requested) ? requested : options.id();
       state.storage.received[command.itemName] = have - 1;
       const rule = objectRules.get(plan.objectKey);
@@ -1222,6 +1303,14 @@ function applyOne(
       const from = command.direction === "store" ? state.storage.received : state.storage.stored;
       const to = command.direction === "store" ? state.storage.stored : state.storage.received;
       if ((from[command.itemKey] ?? 0) < command.quantity) return reject(sequence, "insufficient_items");
+      // The shed's item capacity is authoritative here. The retired v2 route enforced
+      // it (planStore, via shedCapacity) and v3 dropped it on the way over, leaving the
+      // cap client-side only — so an edited client could stuff a Shabby Shed with any
+      // number of items and the server would file every one of them.
+      if (command.direction === "store" &&
+          storedItemTotal(state) + command.quantity > shedCapacity(state)) {
+        return reject(sequence, "shed_full");
+      }
       from[command.itemKey] -= command.quantity;
       to[command.itemKey] = (to[command.itemKey] ?? 0) + command.quantity;
       return { sequence, status: "applied" };

@@ -350,6 +350,10 @@ export class SaveManager {
       localStorage.setItem(key, encoded);
       localStorage.removeItem(temporary);
     } catch (error) {
+      // Drop the scratch copy on the way out. It is a whole save's worth of quota, and
+      // leaving it behind after a quota failure makes the NEXT write likelier to fail
+      // too — the one state where the retry has least room to spare.
+      try { localStorage.removeItem(temporary); } catch { /* storage already unusable */ }
       console.warn("[save] local write failed", error);
       this.onStorageError?.("Local Farm could not be saved. Check browser storage or export a backup.");
     }

@@ -429,10 +429,20 @@ export interface TileRef {
 }
 
 /** Device settings — persisted separately from game progress (SETTINGS_KEY).
- * Managed by AudioManager, which reads/writes this key directly. */
+ * Managed by AudioManager, which reads/writes this key directly; the authoritative
+ * shape is its `StoredSettings`, and every field here is optional in storage (a
+ * missing one takes the default noted beside it). Documented rather than imported
+ * so this file stays the one place the save's storage keys are described. */
 export interface Settings {
+  master: boolean;   // "All Audio" kill switch over every channel — defaults on
   music: boolean;    // farm BGM loop — defaults on
   sfx: boolean;      // action + menu one-shots — defaults on
   ambience: boolean; // ambient farm bed (birds/rooster) — defaults on
+  // Per-channel levels, 0..1. Each channel's final gain is its own level times the
+  // master level times the clip's authored volume.
+  masterVolume: number;
+  musicVolume: number;
+  sfxVolume: number;
+  ambienceVolume: number;
   muteWhenUnfocused: boolean; // also pause while a visible desktop window lacks focus
 }

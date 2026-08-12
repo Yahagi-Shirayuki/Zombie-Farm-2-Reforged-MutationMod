@@ -1,14 +1,14 @@
 import { Application, Assets, Container, FederatedPointerEvent, Graphics, Point, Sprite, Text, TextStyle, Texture } from "pixi.js";
-import { snapPlowOrigin } from "./plowSelection";
+import { choosePlowOrigin } from "./plowSelection";
 // Patch Pixi's renderer to use no-eval polyfills for its shader/UBO/uniform/particle
 // codegen (it otherwise uses `new Function`, which the production CSP's script-src
 // blocks — no 'unsafe-eval'). Side-effect import; must run before `new Application()`.
 // pixi.js lists ./lib/unsafe-eval/init.* under "sideEffects", so it survives bundling.
 import "pixi.js/unsafe-eval";
-import { loadAssets, ensureBackgroundTexture, ensureObjectTexture, ensureObjectTextures, objectSpriteFiles, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
+import { loadAssets, canMirrorObject, ensureBackgroundTexture, ensureObjectTexture, ensureObjectTextures, objectSpriteFiles, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
 import { pickPiece, type SceneryPiece, surroundingsTheme, themeObjectFiles } from "./surroundings";
 import { MAX_ZOMBIE_POTS, noRoomForAnother } from "./placementLimit";
-import { Field, CARROT, CropConfig, PLOT } from "./Field";
+import { Field, CARROT, CropConfig, objectFootprint, PLOT } from "./Field";
 import { Actor } from "./Actor";
 import { PetActor } from "./PetActor";
 import { WalkController } from "./WalkController";
@@ -60,7 +60,8 @@ import { harvestXp, plowXp } from "./farmRewards";
 import {
   DEFAULT_FARM_BACKGROUND, getFarmBackground, isFarmBackground, setFarmBackground,
   FARM_BG_DENSITY, type FarmBackground, getDayNightMode, setDayNightMode,
-  isLocalNight, type DayNightMode, hasSeenHazardTip, markHazardTipSeen,
+  isLocalNight, type DayNightMode, getFarmerLantern, setFarmerLantern,
+  hasSeenHazardTip, markHazardTipSeen,
   hasSeenRaidTip, markRaidTipSeen,
   zombieAppearancePrefs, setZombieBodyColorMode, setShowZombieMutations,
 } from "./prefs";
@@ -70,7 +71,7 @@ import { TutorialController } from "./tutorial/TutorialController";
 import { reconcileTutorialCompletion, TutStep, TUTORIAL_ZOMBIE_KEY } from "./tutorial/steps";
 import { initPlatform, isMobile, isTouch } from "./platform";
 import { initPwa, promptReload, checkForUpdate } from "./pwa";
-import { initDiagnostics } from "./diagnostics";
+import { initDiagnostics, recordDiagnostic } from "./diagnostics";
 import {
   captureTouchPointer, gestureMoved, isDeferredTouchMode, isOutsideFarmPanGesture, isTouchPointer,
   isSelectTapGesture, isZombieHold, plotOwnsObjectTap, shouldRecoverTouchPointerUp, TOUCH_ZOMBIE_HOLD_MS,
@@ -378,6 +379,24 @@ async function main() {
   // never overlapping the field. It lives at the back of the world so it pans and
   // zooms with the farm.
   const BG_GAP_TILES = 3; // hill bases stay this many tiles above the top tile
+  // SKY_EXTENSION. A flat band of the backdrop's own top-row colour, sitting directly on
+  // top of the art and stretching far above it.
+  //
+  // The backdrop is 2800x560, and the camera used to be forbidden from zooming out past
+  // the point where the view is taller than the world box (`minSceneZoom`) — because
+  // beyond the top of that art there is nothing but the renderer's green filler, and
+  // green above the horizon reads as a hole. On a landscape screen that limit is slack.
+  // In PORTRAIT it is the binding one: the viewport is tall and narrow, so the height
+  // term pinned a phone to roughly 0.6 zoom while the same farm on a desktop reached
+  // 0.25. Players could not get the farm on screen.
+  //
+  // Every shipped backdrop has a perfectly uniform top row, so more of that colour IS
+  // more sky. With the band there, the height limit has nothing left to protect and is
+  // dropped (see minSceneZoom) — the camera simply centres the world box and lets the
+  // extra height be sky above and ground below.
+  const skyExtension = new Sprite(Texture.WHITE);
+  skyExtension.anchor.set(0.5, 1);
+  world.addChild(skyExtension);
   const background = new Sprite(assets.background);
   background.anchor.set(0.5, 1);
   background.position.set(0, -BG_GAP_TILES * TILE_H);
@@ -594,6 +613,11 @@ async function main() {
   night.lights.addChild(lanternOuter, lanternInner);
   world.addChild(night);
   let isNight = false;
+  // Whether the farmer carries a lit lantern after dark. Off leaves the darkness mask
+  // whole except for the placed objects' own glows — a real look, and one players asked
+  // for. Toggled by tapping the farmer (see the Select tool's tap handling) and from
+  // Settings; persisted, so it survives a reload.
+  let lanternOn = getFarmerLantern();
   const setNight = (on: boolean) => {
     // A browser may preserve the JS objects while discarding their GPU render
     // target in the background. Rebuild on an off->on transition so a cold night
@@ -601,9 +625,9 @@ async function main() {
     if (on && !isNight) night.resetRenderTarget();
     isNight = on;
     night.visible = on;
-    actor.setLanternVisible(on);
-    lanternInner.visible = on;
-    lanternOuter.visible = on;
+    actor.setLanternVisible(on && lanternOn);
+    lanternInner.visible = on && lanternOn;
+    lanternOuter.visible = on && lanternOn;
     // Leave the viewport FILLER (the area beyond the hills backdrop) at its daytime
     // colour in both modes — it's the exact mid-hill colour of the current skin's
     // backdrop (surroundings.ts `filler`). At night the NightLayer's dark overlay
@@ -617,6 +641,17 @@ async function main() {
   };
   hud.getNight = () => isNight;
   hud.onSetNight = (on) => setNight(on); // retained for the developer menu
+  /** Turn the farmer's lantern on/off. Re-runs setNight so the lamp sprite, the two
+   *  point lights and the light map all change together on the same frame. */
+  const setLantern = (on: boolean) => {
+    if (on === lanternOn) return;
+    lanternOn = on;
+    setFarmerLantern(on);
+    if (isNight) night.resetRenderTarget(); // the carved holes just changed
+    setNight(isNight);
+  };
+  hud.getFarmerLantern = () => lanternOn;
+  hud.onSetFarmerLantern = setLantern;
   hud.getDayNightMode = () => dayNightMode;
   hud.onSetDayNightMode = (mode) => {
     dayNightMode = mode;
@@ -664,6 +699,20 @@ async function main() {
     const halfSpan = (field.w - 1 + 2 * REACH) * HW + 90;
     background.scale.set(Math.max(1, halfSpan / BG_BASE_HALF));
     background.position.set(0, -BG_GAP_TILES * TILE_H);
+    fitSkyExtension();
+  };
+
+  /** Size the sky band to cover anything the camera can reveal above the backdrop.
+   *
+   *  Height is the full viewport measured at MIN_ZOOM — the most world-space the screen
+   *  can ever show — which is generous by design: it is one solid-colour quad, and being
+   *  short by a pixel is a green line across the sky. It overlaps the backdrop's top edge
+   *  by a tile to hide any seam from fractional scaling. */
+  const fitSkyExtension = () => {
+    const top = background.position.y - background.height;
+    skyExtension.width = background.width;
+    skyExtension.height = app.screen.height / MIN_ZOOM + TILE_H;
+    skyExtension.position.set(background.position.x, top + TILE_H);
   };
 
   // Box the camera into the world: the view can pan/zoom to reveal the full sky
@@ -701,6 +750,7 @@ async function main() {
     surroundings = theme;
     buildFoliage();
     app.renderer.background.color = theme.filler;
+    skyExtension.tint = theme.sky; // continue THIS backdrop's sky, not the last one's
     void ensureBackgroundTexture(assets, theme.background).then((tex) => {
       if (surroundings !== theme) return; // skin changed again while loading
       background.texture = tex;
@@ -712,11 +762,19 @@ async function main() {
   field.onClimateChange = applySurroundings;
   applySurroundings(field.climate);
 
-  const minSceneZoom = () => Math.max(
-    MIN_ZOOM,
-    app.screen.width / (boundR - boundL),
-    app.screen.height / (boundB - boundT)
-  );
+  // How far out the camera may zoom. The WIDTH term stands: the world box is bounded
+  // left and right by the backdrop, and past its edges there is only filler colour with
+  // no sky over it, so a view wider than the box would show hills against green.
+  //
+  // There is deliberately no HEIGHT term. Above the box is the sky band (SKY_EXTENSION)
+  // and below it is the same flat green the ground is already drawn on, so a view taller
+  // than the box shows more of both and nothing wrong. `clampAxis` centres the box on
+  // whichever axis overflows, so the farm stays put in the middle.
+  //
+  // That term was the whole reason a portrait phone could not zoom out: a tall, narrow
+  // viewport divided by the world's modest height pinned it around 0.6 while a desktop
+  // reached 0.25 on the same farm.
+  const minSceneZoom = () => Math.max(MIN_ZOOM, app.screen.width / (boundR - boundL));
   const clampZoom = () => {
     const s = Math.max(minSceneZoom(), Math.min(MAX_ZOOM, world.scale.x));
     world.scale.set(s);
@@ -737,6 +795,9 @@ async function main() {
     world.position.y = clampAxis(world.position.y, world.pivot.y, app.screen.height, boundT, boundB);
   };
   const recenter = () => {
+    // The sky band is sized off the viewport, so a rotate into portrait — which is the
+    // orientation that needs it — has to re-cut it before the camera re-clamps.
+    fitSkyExtension();
     world.position.set(app.screen.width / 2, app.screen.height / 2);
     clampCamera();
   };
@@ -1399,6 +1460,9 @@ async function main() {
   );
   saveManager.periodicQuests = periodicQuests;
   saveManager.onStorageError = (message) => hud.showToast(message);
+  // Same treatment for the audio settings: a device that won't keep them is the one
+  // thing that makes a volume change look like it worked and silently undoes it.
+  audio.onStorageError = (message) => hud.showToast(message);
   jobs.onQueueChanged = () => saveManager.checkpointJobs();
 
   // Pixi's ticker is requestAnimationFrame-driven and may stop completely when
@@ -1557,6 +1621,29 @@ async function main() {
   // the authoritative balance (server wins over the just-loaded blob). Offline or
   // while visiting, `economy` stays null and currency is purely local as before.
   let economy: EconomyClient | null = null;
+
+  /** Put a gameplay pause into the diagnostics buffer Settings can copy.
+   *
+   *  A paused farm is the one failure a player cannot work around, and the branch that
+   *  caused it lived only in a toast and a console line — both gone by the time they
+   *  write the report, which is usually after a reload. The composite reason
+   *  (`state_conflict/q3/nocred`) is the whole diagnosis, so it belongs somewhere
+   *  durable.
+   *
+   *  Deduped on that composite: several paths pause in quick succession, and the tap
+   *  handler asks on EVERY tap while paused. Without this the 50-entry buffer would be
+   *  50 copies of one pause, pushing out the error that explains it. */
+  let lastRecordedPause = "";
+  const recordPause = (reason: string): void => {
+    const detail = `${reason} | ${economy?.unavailableReason ?? ""}`;
+    if (detail === lastRecordedPause) return;
+    lastRecordedPause = detail;
+    recordDiagnostic({
+      at: Date.now(), kind: "error", where: "gameplay-paused",
+      message: `gameplay paused: ${detail}`,
+    });
+  };
+
   hud.onEquipFarmerHead = (head) => {
     if (economy && !economy.submitFarmerEquip(head.id)) return;
     state.equipFarmerHead(head.id);
@@ -1924,6 +2011,12 @@ async function main() {
       hud.setPlayStatus("online", "reconnecting");
       hud.showToast(`Online gameplay paused (${reason}) — reconnecting to your farm.`);
       console.warn(`[zf] gameplay paused: ${reason} | ${economy?.unavailableReason}`);
+      // Also into the diagnostics buffer, which is what Settings > Diagnostics > Copy
+      // hands to a bug report. The console line above is gone the moment the tab is
+      // closed, and a player reporting "gameplay paused" is usually reporting it after
+      // a reload — so the branch that caused it was the one thing the report could
+      // never carry. Deduped in recordPause: several paths pause in quick succession.
+      recordPause(reason);
     };
     const showWriterLock = () => {
       saveManager.setOnlineWritable(false);
@@ -1966,12 +2059,28 @@ async function main() {
         not_owned: "the item is no longer available", capacity_full: "capacity is full",
         none_owned: "the reward is no longer available", stack_full: "the inventory stack is full",
         army_full: "the farm is full", storage_full: "storage is full",
+        shed_full: "the shed is full",
         not_grown: "the crop is not ready", nothing_planted: "the crop changed",
         not_plowed: "the soil is no longer plowed", plot_occupied: "the plot already contains a crop",
         insufficient: "there are not enough funds", no_effect: "the game state changed",
         prior_command_failed: "an earlier related action failed",
       };
       hud.showToast(`${subject} was rolled back: ${reason[error] ?? error.replace(/_/g, " ")}.`);
+    };
+    // A drag-paint stroke travels as ONE command, so a stroke the server only partly
+    // accepted has no per-plot rejection to report. Summarise it instead — otherwise the
+    // plots that did not take just quietly vanish on the next reconcile, which is the
+    // whole class of bug this reporting exists to prevent.
+    economy.onBulkFarmPartial = (plots, error) => {
+      const reason: Record<string, string> = {
+        insufficient: "there was not enough gold", locked: "the crop is not unlocked yet",
+        not_plowed: "the soil was no longer plowed", plot_occupied: "something was already growing",
+        already_plowed: "the soil was already plowed", plot_overlap: "the ground was taken",
+        farm_full: "the farm has no room for more plots", bad_coord: "the plots were off the farm",
+      };
+      hud.showToast(
+        `${plots} plot${plots === 1 ? "" : "s"} skipped: ${reason[error] ?? error.replace(/_/g, " ")}.`
+      );
     };
     void economy.start();
     // Seed the shop state from the save, then adopt server truth (once, after load).
@@ -2045,6 +2154,16 @@ async function main() {
   const plowStrokeTargets: { oc: number; or: number }[] = [];
   const plowStrokeKeys = new Set<string>();
   const plowStrokePreviews = new Map<string, Graphics>();
+  /** Every tile this stroke has already claimed for a plot.
+   *
+   *  On MOUSE the stroke enqueues as it goes and `Field.reserveTill` holds the ground, so
+   *  nothing later in the stroke can land on top. TOUCH only collects previews and
+   *  enqueues them all on finger-up, so it has no reservations to consult and needs its
+   *  own record — without one, two targets could overlap, and at commit the second would
+   *  be refused and vanish. It only became reachable when plowTargetAt gained its
+   *  off-lattice fallback: before that every target sat on one 4-tile lattice and could
+   *  not overlap by construction. */
+  const plowStrokeClaimed = new Set<string>();
 
   const cancelZombieLongPress = () => {
     if (zombieLongPressTimer !== null) clearTimeout(zombieLongPressTimer);
@@ -2079,6 +2198,7 @@ async function main() {
     plowStrokePreviews.clear();
     plowStrokeTargets.length = 0;
     plowStrokeKeys.clear();
+    plowStrokeClaimed.clear();
     plowStrokeAnchor = null;
   };
   const recordTouchPlantTile = (col: number, row: number) => {
@@ -2373,12 +2493,23 @@ async function main() {
     plowStrokePreviews.set(key, preview);
   };
 
+  /** Whether a 4x4 plot can actually be laid with this origin — free ground the field
+   *  accepts, and not already spoken for by this same stroke. */
+  const plowOriginFits = (origin: { oc: number; or: number }): boolean => {
+    for (let r = origin.or; r < origin.or + PLOT; r++)
+      for (let c = origin.oc; c < origin.oc + PLOT; c++)
+        if (plowStrokeClaimed.has(tileKey(c, r))) return false;
+    const target = field.resolveTill(origin.oc + PLOT / 2, origin.or + PLOT / 2);
+    return target.valid && target.oc === origin.oc && target.or === origin.or;
+  };
+
   const recordPlowStrokeTarget = (target: { oc: number; or: number }) => {
     const key = tileKey(target.oc, target.or);
     if (plowStrokeKeys.has(key)) return;
-    const current = field.resolveTill(target.oc + PLOT / 2, target.or + PLOT / 2);
-    if (!current.valid || current.oc !== target.oc || current.or !== target.or) return;
+    if (!plowOriginFits(target)) return;
     plowStrokeKeys.add(key);
+    for (let r = target.or; r < target.or + PLOT; r++)
+      for (let c = target.oc; c < target.oc + PLOT; c++) plowStrokeClaimed.add(tileKey(c, r));
     plowStrokeTargets.push(target);
     if (isTouchPointer(pressPointerType)) showPlowStrokePreview(target);
     else jobs.enqueue("till", target.oc + PLOT / 2, target.or + PLOT / 2);
@@ -2395,10 +2526,9 @@ async function main() {
       const target = field.resolveTill(col, row);
       return target.valid ? { oc: target.oc, or: target.or } : null;
     }
-    const current = originAtTile(col, row);
-    const snapped = snapPlowOrigin(plowStrokeAnchor, current);
-    const target = field.resolveTill(snapped.oc + PLOT / 2, snapped.or + PLOT / 2);
-    return target.valid && target.oc === snapped.oc && target.or === snapped.or ? snapped : null;
+    return choosePlowOrigin(
+      plowStrokeAnchor, col, row, originAtTile(col, row), plowOriginFits
+    );
   };
 
   const collectPlowStrokeSegment = (x: number, y: number) => {
@@ -3434,6 +3564,29 @@ async function main() {
   // `raidActive` gates farm input synchronously (the scene loads its textures async);
   // `raidScene` is the running scene once ready.
   let raidScene: RaidScene | null = null;
+
+  /** Put the farm back after a battle that never got as far as its own teardown.
+   *
+   *  Both launch paths flip the farm into battle mode (jobs paused, world hidden, HUD
+   *  in raid layout) BEFORE awaiting RaidScene.create, and every path that flips it
+   *  back lives inside the scene's onFinish. So a scene that fails to build stranded
+   *  the player on a blank screen with the farm frozen — `raidActive` stayed true, and
+   *  nothing else in the session ever clears it. Online it also left the invasion
+   *  session open, holding the roster locked and refusing the next fight until the
+   *  15-minute TTL. A reload was the only way out. */
+  const abandonBattle = () => {
+    if (raidScene) {
+      app.stage.removeChild(raidScene.container);
+      raidScene.destroy();
+      raidScene = null;
+    }
+    raidActive = false;
+    resumeFarmJobs();
+    world.visible = true;
+    hud.setRaiding(false);
+    audio.exitRaid();
+  };
+
   hud.onLaunchEpicBoss = async (partyIds, payment) => {
     if (raidActive || Date.now() < raidLaunchLockedUntil) return false;
     const def = selectEpicBoss(state.epicBossRun?.bossId);
@@ -3588,9 +3741,18 @@ async function main() {
             }
             economy?.adoptEpicBossResult(server);
             void economy?.refreshAuthoritative().catch(() => { /* reconcile again on next settle */ });
-            state.setEpicBossRun(server.event);
+            // The run's five epochs are the SERVER's clock. Translate them here — as
+            // every other adopt does — before anything stores or compares them: the
+            // event window, the encounter timeout and the retry gate are all read
+            // against Date.now(), and isActive() also gates Boss Token drops. Writing
+            // the raw projection back undid the conversion adoptEpicBossResult had
+            // just applied, and only the async refresh above ever repaired it.
+            // (Non-null: the helper answers null only for a nullish run, and a finish
+            // response always carries one.)
+            const serverRun = epicBossRunToClient(server.event, server.serverTime ?? Date.now())!;
+            state.setEpicBossRun(serverRun);
             const result = {
-              run: server.event,
+              run: serverRun,
               defeatedLevel: server.defeatedLevel,
               completed: !!server.event.completedAt,
               escaped: server.escaped,
@@ -3601,8 +3763,7 @@ async function main() {
             ]);
           }).catch(() => {
             hud.showToast("The fight result could not be verified. Reconnecting will recover it.");
-            if (raidScene) { app.stage.removeChild(raidScene.container); raidScene.destroy(); raidScene = null; }
-            raidActive = false; resumeFarmJobs(); world.visible = true; hud.setRaiding(false); audio.exitRaid();
+            abandonBattle();
             flushQuestCompletions();
           });
           return;
@@ -3620,6 +3781,24 @@ async function main() {
       if (import.meta.env.DEV) {
         (window as unknown as { ZF?: Record<string, unknown> }).ZF!.raidScene = scene;
       }
+    }).catch((error) => {
+      // The farm is already in battle mode and nothing downstream can undo that, so
+      // hand it back here rather than leaving the player on a frozen blank screen.
+      // The attempt is paid for by this point (brains or a token, and online a live
+      // epic session), so say so rather than promising nothing happened. The resync
+      // is what closes that session: bootstrap expires an abandoned one.
+      // Catching this took it off `unhandledrejection`, which is what used to put it
+      // in the player's diagnostics report — so record it explicitly. A soft-lock the
+      // player can now escape is still the thing we most want to see in a bug report.
+      recordDiagnostic({
+        at: Date.now(), kind: "error", where: "epic-boss-scene",
+        message: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      console.warn("[epic boss] battle scene failed to load", error);
+      abandonBattle();
+      hud.showToast("The battle could not be loaded. This attempt was lost — reload and try again.", 6000);
+      void economy?.refreshAuthoritative().catch(() => { /* recovered on the next sync */ });
     });
     return true;
   };
@@ -3990,6 +4169,31 @@ async function main() {
       if (import.meta.env.DEV) {
         (window as unknown as { ZF?: Record<string, unknown> }).ZF!.raidScene = scene;
       }
+    }).catch((error) => {
+      // The farm went into battle mode before this load was awaited, and every path
+      // that takes it back out lives inside the scene's own onFinish — which a scene
+      // that never built will never call. Hand the farm back here instead of leaving
+      // the player on a frozen blank screen with only a reload to escape.
+      // See the epic-boss chain: the catch is what removes this from the automatic
+      // unhandledrejection capture, so it is recorded by hand instead.
+      recordDiagnostic({
+        at: Date.now(), kind: "error", where: "invasion-scene",
+        message: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      console.warn("[invasion] battle scene failed to load", error);
+      abandonBattle();
+      // Same drop as the gated-launch path above: the server has a session open that
+      // no battle will ever settle, so clear the fence and let the next invasion's
+      // recovery retreat it (see EconomyClient.recoverResumableRaid). Until then the
+      // party stays locked, so say so rather than inviting an immediate retry.
+      raidSessionId = null;
+      clearRaidExpiry();
+      economy?.setLiveRaid(null);
+      hud.showToast(
+        "The battle could not be loaded. Your army is released when you next invade.",
+        6000
+      );
     });
     return true;
   };
@@ -4134,11 +4338,18 @@ async function main() {
   // carrying (Move) it spins the carried object, and otherwise it toggles a
   // standalone rotate mode (tap any placed object to flip it). This keeps a single
   // button meaning "rotate whatever I'm working with" in every situation.
+  /** Say why an object refuses to turn. See `canMirrorObject`: turning is a mirror, and
+   *  a mirrored sign reads backwards, so art with writing on it does not turn at all. */
+  const sayCannotRotate = (def: PlaceableDef) =>
+    hud.showToast(`The ${def.name}'s sign would read backwards, so it can't be turned.`);
+
   const rotateCurrent = () => {
     if (hud.mode === "place" && hud.placing) {
+      if (!canMirrorObject(hud.placing)) { sayCannotRotate(hud.placing); return; }
       placeFlipped = !placeFlipped;
       field.setGhostFlip(placeFlipped);
     } else if (hud.mode === "move" && carrying) {
+      if (!canMirrorObject(carrying.def)) { sayCannotRotate(carrying.def); return; }
       carrying.flipped = !carrying.flipped;
       field.setGhostFlip(carrying.flipped);
     } else {
@@ -4159,8 +4370,8 @@ async function main() {
       return;
     }
     if (noRoomForAnother(def, field)) return;
-    const { oc, or } = field.resolveObjectOrigin(def, col, row);
-    if (!field.canPlaceObject(oc, or, def)) return;
+    const { oc, or } = field.resolveObjectOrigin(def, col, row, placeFlipped);
+    if (!field.canPlaceObject(oc, or, def, undefined, placeFlipped)) return;
     // Retrieving a stored item: already owned, so it's free and places just one.
     if (retrieving) {
       const selected = retrieving;
@@ -4244,7 +4455,7 @@ async function main() {
   // it. Invalid drop keeps it carried; right-click / tool-switch cancels.
   const handleMoveTap = (col: number, row: number, wx: number, wy: number) => {
     if (carrying) {
-      const { oc, or } = field.resolveObjectOrigin(carrying.def, col, row);
+      const { oc, or } = field.resolveObjectOrigin(carrying.def, col, row, carrying.flipped);
       if (field.moveObject(carrying.id, oc, or, carrying.flipped)) cancelCarry();
       return;
     }
@@ -4425,10 +4636,20 @@ async function main() {
         hud.setMode("move"); // fires onModeChange (clears carry) FIRST...
         carrying = { id: oid, def, flipped: field.objectFlipOf(oid) }; // ...then pick up this object
         const o = field.objectOriginOf(oid);
-        if (o) field.setObjectCursor(def, o.oc + Math.floor((def.tileW - 1) / 2),
-          o.or + Math.floor((def.tileH - 1) / 2), oid, carrying.flipped);
+        // Aim the ghost at the tile the object is already centered on, in the
+        // orientation it is standing in — a turned object's footprint is transposed.
+        const fp = objectFootprint(def, carrying.flipped);
+        if (o) field.setObjectCursor(def, o.oc + Math.floor((fp.w - 1) / 2),
+          o.or + Math.floor((fp.h - 1) / 2), oid, carrying.flipped);
       },
-      onRotate: () => { field.flipObject(oid); saveManager.save(); },
+      onRotate: () => {
+        if (!canMirrorObject(def)) { sayCannotRotate(def); return; }
+        if (!field.flipObject(oid)) {
+          hud.showToast("No room to turn that — move it somewhere clearer first.");
+          return;
+        }
+        saveManager.save();
+      },
       onStore: () => storeObject(oid),
       // The sheet sells decor on one tap, which is fine for a 50-gold daisy. A
       // Memorial Statue is a 3,000-gold object that may be carrying somebody, so it
@@ -4509,7 +4730,17 @@ async function main() {
     else if (mode === "instagrow") tryInstaGrow(col, row, wx, wy);
     else if (mode === "rotate") {
       const id = field.objectAtPoint(wx, wy);
-      if (id) { field.flipObject(id); audio.play("place"); saveManager.save(); }
+      if (!id) return;
+      const rotateDef = field.objectDefOf(id);
+      if (rotateDef && !canMirrorObject(rotateDef)) { sayCannotRotate(rotateDef); return; }
+      // A long object turns across the diagonal it was lying on, so the tiles it
+      // needs change: say why nothing happened instead of eating the tap.
+      if (!field.flipObject(id)) {
+        hud.showToast("No room to turn that — move it somewhere clearer first.");
+        return;
+      }
+      audio.play("place");
+      saveManager.save();
     }
   };
 
@@ -4589,6 +4820,26 @@ async function main() {
     });
   };
 
+  /** Tap the farmer to switch his lantern on or off. Returns whether the tap landed.
+   *
+   *  Only meaningful after dark, so during the day the tap is left to fall through to
+   *  whatever is under him — a farmer standing on a ripe plot must not swallow the
+   *  harvest. Visiting is read-only, and the tutorial owns the farm outright while it
+   *  runs, so both sit this out.
+   *
+   *  On MOUSE this resolves just after the zombie pick, ahead of the tile. On TOUCH it
+   *  is the last resort, the same deal a zombie gets: a finger covers the plot behind
+   *  him, so the plot keeps the tap and the farmer is only reachable on open ground.
+   *  Settings carries the same switch for anyone who would rather not chase him. */
+  const tapFarmer = (wx: number, wy: number): boolean => {
+    if (!isNight || visiting || tutorial.active) return false;
+    if (!actor.containsPoint(wx, wy)) return false;
+    setLantern(!lanternOn);
+    audio.play("menuClick");
+    floatText(actor.container.x, actor.container.y - 70, lanternOn ? "Lantern on" : "Lantern off");
+    return true;
+  };
+
   const beginWorldLongPress = (wx: number, wy: number, pointerId: number) => {
     cancelZombieLongPress();
     zombieLongPressActivated = false;
@@ -4617,6 +4868,11 @@ async function main() {
       const why = economy.unavailableReason;
       hud.showToast(`Gameplay paused (${why}) — reconnect to continue.`);
       console.warn(`[zf] tap while paused: ${why}`);
+      // The tap path can be the FIRST place a pause is noticed: several branches set
+      // `paused` without emitting onGameplayUnavailable (a 409 rebase, a bootstrap
+      // that says the writer moved). recordPause dedupes, so tapping repeatedly on a
+      // dead farm still leaves exactly one entry.
+      recordPause("tap_while_paused");
       return;
     }
     if (touchPinch) return; // a pinch is in progress; ignore extra finger-downs
@@ -4930,6 +5186,11 @@ async function main() {
           lastPlot = "";
           return;
         }
+        if (!isTouchPointer(pressPointerType) && tapFarmer(wx, wy)) {
+          dragging = false;
+          lastPlot = "";
+          return;
+        }
         zombies.clearSelection();
         if (visiting) {
           // Read-only visit: a tap on non-zombie ground just free-roams the
@@ -4995,6 +5256,7 @@ async function main() {
           // plain tap and the hold gesture is never needed.
           const bare = isTouchPointer(pressPointerType) ? zombies.pick(wx, wy) : null;
           if (bare) inspectZombie(bare);
+          else if (tapFarmer(wx, wy)) { /* lantern toggled */ }
           else if (!jobs.busy) walk.goToPoint(wx, wy); // free-roam only when idle
         }
       } else if (hud.mode === "plant" && !field.canPlant(col, row)) {

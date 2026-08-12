@@ -210,6 +210,43 @@ describe("AudioManager focus muting", () => {
     expect(ambience.playCalls).toBe(0);
   });
 
+  // A device that refuses the write makes a volume change look like it took and
+  // then loses it at next launch — "my settings don't save", with nothing in the
+  // game to explain it. Say so once, and only once (the slider fires per drag step).
+  it("warns once when this device won't store the settings", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: () => { throw new DOMException("quota", "QuotaExceededError"); },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const audio = new AudioManager();
+    const messages: string[] = [];
+    audio.onStorageError = (message) => messages.push(message);
+
+    audio.setMasterVolume(0.4);
+    audio.setMusicVolume(0.2);
+    audio.setSfxVolume(0.1);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(/reset when you come back/);
+    // The failure is confined to persistence: the session itself still obeys.
+    expect(audio.masterVolume).toBe(0.4);
+    expect(audio.musicVolume).toBe(0.2);
+    warn.mockRestore();
+  });
+
+  // A corrupt settings key used to be dereferenced straight out of JSON.parse, so
+  // a stored "null" threw inside the constructor and took the whole boot with it.
+  it("falls back to defaults when the stored settings are not an object", () => {
+    for (const corrupt of ["null", "42", '"music"', "[1,2]", "{"]) {
+      storage.set(SETTINGS_KEY, corrupt);
+      const audio = new AudioManager();
+      expect(audio.masterOn, corrupt).toBe(true);
+      expect(audio.masterVolume, corrupt).toBe(1);
+      expect(audio.musicVolume, corrupt).toBe(1);
+    }
+  });
+
   it("resumes enabled loops from the explicit start gesture after autoplay is blocked", async () => {
     MockAudio.rejectPlay = true;
     const audio = new AudioManager();

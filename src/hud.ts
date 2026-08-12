@@ -1687,6 +1687,9 @@ export class Hud {
   /** Player-facing lighting mode. Auto follows the device's local clock. */
   getDayNightMode: (() => DayNightMode) | null = null;
   onSetDayNightMode: ((mode: DayNightMode) => void) | null = null;
+  /** The farmer's night lantern. Also toggled by tapping him after dark. */
+  getFarmerLantern: (() => boolean) | null = null;
+  onSetFarmerLantern: ((on: boolean) => void) | null = null;
   /** Current farm-background (foliage density) choice. */
   getFarmBackground: (() => FarmBackground) | null = null;
   /** Change the farm background — rebuilds the foliage ring live. */

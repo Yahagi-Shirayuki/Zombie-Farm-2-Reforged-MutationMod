@@ -184,6 +184,23 @@ def is_reward_only(tile):
 # no meaning — the pen's five slots are shared, not per-building.
 FUNCTIONAL_OVERRIDE_TILES = {"pettingZoo"}
 
+# ---- Objects the Rotate tool must not turn (design override, NOT source data) ----
+# In isometric art a horizontal mirror IS a quarter turn, which is why Rotate is a flip.
+# It stops being a turn the moment the art has WRITING baked into it: mirroring the Ice
+# Cream Stand gives its sign as "MAERC ECI", which is what a player reported. There is no
+# mechanical repair — un-mirroring the letters afterwards would need them re-skewed onto a
+# plank now leaning the other way — so these simply do not rotate, and the tool says so.
+#
+# Reviewed the whole object set for baked lettering; this is all of it. Judge by TEXT, not
+# by asymmetry: every raid banner is asymmetric and mirrors perfectly well, because its
+# crest is a picture. See canMirrorObject in src/assets.ts.
+NO_MIRROR_TILES = {
+    "iceCreamStand",      # "ICE CREAM 5c" across the sign board
+    "iceCreamTruck",      # "ICE CREAM" down the side panel
+    "newYearBannerLeft",  # "HAPPY 2012" on the bunting
+    "newYearBannerRight",
+}
+
 # ---- Mausoleum upgrade ladder (design override, NOT source data) ------------
 # The source ships one buyable Mausoleum (mausoleum3) plus two key-fragment tiers
 # that Reforged does not use. Reforged instead makes the placed Mausoleum
@@ -778,6 +795,8 @@ def main():
             "tileH": max(1, int(tp.get("tileHeight", 1))),
             "movable": bool(tp.get("movable", True)),
             "rotations": tp.get("rotations", 1),
+            # Art with writing on it: Rotate is a mirror, so it would read backwards.
+            **({"noMirror": True} if tile in NO_MIRROR_TILES else {}),
             "sprite": out_name,
             # Far-side art drawn BEHIND anything standing inside this object.
             **({"backSprite": back_name} if back_name else {}),
@@ -872,6 +891,8 @@ def main():
             "tileH": max(1, int(tp.get("tileHeight", 1))),
             "movable": bool(tp.get("movable", True)),
             "rotations": tp.get("rotations", 1),
+            # Art with writing on it: Rotate is a mirror, so it would read backwards.
+            **({"noMirror": True} if tile in NO_MIRROR_TILES else {}),
             "sprite": out_name,
             "nativeW": sprite_img.width,
             "nativeH": sprite_img.height,

@@ -1,8 +1,10 @@
 import type { GameState } from "../GameState";
 import * as api from "./api";
 import { CommandQueue } from "./commandQueue";
-import type {
-  BootstrapResponse, CommandBatchResponse, GameplayCommand, PeriodicQuestProjection,
+import {
+  FARM_BULK_LIMIT,
+  type BootstrapResponse, type CommandBatchResponse, type GameplayCommand,
+  type PeriodicQuestProjection,
 } from "./protocol";
 import type { RaidOutcome } from "../raid/types";
 import { RAID_RULESET_VERSION } from "../raid/replay";
@@ -127,6 +129,8 @@ export class EconomyClient {
   onWriterOwned: (() => void) | null = null;
   onWriterAvailable: (() => void) | null = null;
   onCommandRejected: ((command: GameplayCommand | undefined, error: string) => void) | null = null;
+  /** Some — not all — of a bulk plow/plant's plots were refused. */
+  onBulkFarmPartial: ((plots: number, error: string) => void) | null = null;
   onAuthoritativeSettled: ((serverTime: number) => void) | null = null;
   onPendingChange: ((pending: number) => void) | null = null;
   /** Fired at boot when the Worker's raid ruleset differs from this bundle's. Every
@@ -438,14 +442,66 @@ export class EconomyClient {
    * Callers must use a semantic command or a server-derived quest/raid reward. */
   record(_currency: api.Currency, _delta: number, _reason: string): void {}
 
+  /** Fold a plow/plant into the command already waiting at the back of the outbox.
+   *
+   *  The farmer emits one of these per plot as it works down the queue, and a drag-paint
+   *  stroke can cover the whole board. Unmerged, that is hundreds of semantic commands,
+   *  which the Worker's rolling-minute budget cannot pass — so the outbox spends minutes
+   *  draining behind 429s, `settle()` holds the next invasion launch behind it, and any
+   *  pause along the way strands the rest of the queue. Merged, one stroke is one
+   *  command and the whole field clears in a single request.
+   *
+   *  Only the LAST pending command is a candidate, so a fold can never jump a plot
+   *  ahead of a harvest, a purchase, or anything else queued between the two.
+   *
+   *  Returns the sequence it merged into, or null when it must be enqueued on its own. */
+  private coalesceFarmPlot(input: FarmActionInput): number | null {
+    let folded: GameplayCommand | null = null;
+    const sequence = this.queue.coalesceLast((last) => {
+      if (input.type === "plow") {
+        if (last.type !== "farm.plow_many" || last.plots.length >= FARM_BULK_LIMIT) return null;
+        folded = { ...last, plots: [...last.plots, { oc: input.oc, or: input.or }] };
+      } else if (input.type === "plant") {
+        // One crop per command: a stroke plants one thing, and a player who switches
+        // seed mid-queue simply starts a new command.
+        if (last.type !== "farm.plant_many" || last.cropKey !== (input.cropKey ?? "")) return null;
+        if (last.plots.length >= FARM_BULK_LIMIT) return null;
+        folded = {
+          ...last,
+          plots: [...last.plots, { oc: input.oc, or: input.or, fertilized: !!input.fertilized }],
+        };
+      }
+      return folded;
+    });
+    // Keep the rejection-reporting map pointed at what was actually sent, so a refusal
+    // names the merged command rather than the one-plot version it started as.
+    if (sequence !== null && folded) this.commandsBySequence.set(sequence, folded);
+    return sequence;
+  }
+
   submitFarm(input: FarmActionInput, optimistic: { gold?: number; brains?: number; xp?: number }): void {
+    // Plow and plant always go out in their BULK form, even for a single plot, so the
+    // next plot the farmer finishes has something to fold into.
+    if (input.type === "plow" || input.type === "plant") {
+      const merged = this.coalesceFarmPlot(input);
+      if (merged !== null) {
+        // The fold carries the plot's own cost and XP onto the command it joined, so the
+        // optimistic balance still moves per plot and still unwinds as one unit.
+        const pending = this.optimistic.get(merged);
+        if (pending) {
+          pending.gold += optimistic.gold ?? 0;
+          pending.brains += optimistic.brains ?? 0;
+          pending.xp += optimistic.xp ?? 0;
+        }
+        this.reconcile();
+        return;
+      }
+    }
     const command: GameplayCommand = input.type === "plant"
       ? {
-          type: "farm.plant",
-          oc: input.oc,
-          or: input.or,
+          type: "farm.plant_many",
           cropKey: input.cropKey ?? "",
-          fertilized: !!input.fertilized,
+          plots: [{ oc: input.oc, or: input.or, fertilized: !!input.fertilized }],
         }
       : input.type === "harvest"
         ? { type: "farm.harvest", oc: input.oc, or: input.or }
@@ -454,7 +510,7 @@ export class EconomyClient {
           : input.type === "move"
             ? { type: "farm.move", oc: input.oc, or: input.or,
                 toOc: input.toOc ?? input.oc, toOr: input.toOr ?? input.or }
-            : { type: "farm.plow", oc: input.oc, or: input.or };
+            : { type: "farm.plow_many", plots: [{ oc: input.oc, or: input.or }] };
     const sequence = this.enqueue(command, { ...optimistic, localUnitId: input.unitId });
     // A harvested zombie is rendered immediately, but its crop-adjacency mutation
     // is server-owned. Do not leave that visible result sitting in the ordinary
@@ -946,6 +1002,12 @@ export class EconomyClient {
       if ((result.status === "rejected" || result.status === "dependency_failed") && result.error) {
         if (command?.type === "roster.combine_start") this.combineParents.delete(command.potId);
         this.onCommandRejected?.(command, result.error);
+      }
+      // A bulk farm command that mostly worked. Report it once with the plot count, so
+      // "you ran out of gold twelve plots into the field" reaches the player without
+      // twelve separate toasts — and without the silence a per-plot-only path would give.
+      if (result.status === "applied" && result.rejectedPlots) {
+        this.onBulkFarmPartial?.(result.rejectedPlots, result.rejectedPlotError ?? "no_effect");
       }
       if (result.status === "applied" && command?.type === "roster.combine") {
         this.combineParents.delete(command.potId ?? "legacy");

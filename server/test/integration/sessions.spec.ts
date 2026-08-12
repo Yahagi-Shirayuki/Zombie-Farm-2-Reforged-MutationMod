@@ -16,7 +16,12 @@ describe("session/device management", () => {
   it("lists devices, revokes another one, and guards self/unknown ids", async () => {
     const sub = uniqueSub("dev");
     const a = await signIn(sub);
-    const b = await signIn(sub); // a second device for the SAME account
+    // The second device deliberately does NOT take the writer lease. Two sessions on
+    // one account is exactly the state the lease exists to arbitrate, so asking for it
+    // here is refused with 423 — and this spec is about session management, not about
+    // who may write. (This is what broke when the spec was brought back: it predates
+    // the writer lease, and nothing re-ran it in between.)
+    const b = await signIn(sub, false); // a second device for the SAME account
 
     // List shows both, with exactly one marked as the caller's current session.
     const list = await call<ListRes>("GET", "/session/list", a.token);

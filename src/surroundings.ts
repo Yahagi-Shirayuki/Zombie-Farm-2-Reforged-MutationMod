@@ -40,6 +40,13 @@ export interface SurroundingsTheme {
    */
   filler: number;
   /**
+   * The backdrop's own top-row colour, used to continue its sky upward past the top of
+   * the art. Every shipped backdrop is 2800x560 with a perfectly flat top row, so a band
+   * of this colour above it is indistinguishable from more sky — which is what lets the
+   * camera zoom out further than the art is tall (see SKY_EXTENSION in main.ts).
+   */
+  sky: number;
+  /**
    * Multiplier on how much of the scatter lattice this theme populates, on top of
    * the player's Farm Background setting. Default 1 = as dense as the temperate
    * forest. A forest wants to be thick; a paved lot or an airless moon does not,
@@ -82,6 +89,7 @@ const GRASS: SurroundingsTheme = {
   ],
   background: "farm_background.png",
   filler: 0x67bb4e,
+  sky: 0x96d0ec,
   treeShare: 0.7,
 };
 
@@ -128,6 +136,7 @@ const SANDY: SurroundingsTheme = {
   ],
   background: "farm_background_dirt.png",
   filler: 0xe6cc91,
+  sky: 0x74c6f2,
   treeShare: 0.7,
 };
 
@@ -155,6 +164,7 @@ const AUTUMN: SurroundingsTheme = {
   ],
   background: "farm_background_autumn.png",
   filler: 0xdea967,
+  sky: 0x96d0ec,
   treeShare: 0.7,
 };
 
@@ -180,6 +190,7 @@ const SNOWY: SurroundingsTheme = {
   ],
   background: "farm_background_snow.png",
   filler: 0xe7f1fa,
+  sky: 0x96d0ec,
   treeShare: 0.75,
 };
 
@@ -203,6 +214,7 @@ const URBAN: SurroundingsTheme = {
   ],
   background: "farm_background_stone.png",
   filler: 0x9fa3a7,
+  sky: 0x96d0ec,
   density: SPARSE_THEME_DENSITY,
 };
 
@@ -232,6 +244,7 @@ const DEAD: SurroundingsTheme = {
   ],
   background: "farm_background_sand.png",
   filler: 0xbda553,
+  sky: 0x96d0ec,
   treeShare: 0.65,
 };
 
@@ -259,6 +272,7 @@ const LUNAR: SurroundingsTheme = {
   ],
   background: "farm_background_water.png",
   filler: 0x5c5f66,
+  sky: 0x191932,
   density: SPARSE_THEME_DENSITY,
   treeShare: 0.2,
 };
@@ -267,6 +281,9 @@ const THEMES: Record<string, SurroundingsTheme> = {
   grass: GRASS, dirt: SANDY, autumn: AUTUMN, snow: SNOWY,
   stone: URBAN, sand: DEAD, water: LUNAR,
 };
+
+/** Every shipped theme, for checks that must cover all of them. */
+export const ALL_THEMES: SurroundingsTheme[] = Object.values(THEMES);
 
 /** The surroundings for a ground skin. Unknown terrain keys stay temperate. */
 export function surroundingsTheme(terrain: string): SurroundingsTheme {

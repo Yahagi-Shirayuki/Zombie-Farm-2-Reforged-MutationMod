@@ -165,7 +165,19 @@ import type { RaidOutcome } from "./types";
 // 3.0, since at 2.2 it was consumed by the ORDINARY Video Games fight alone and so measured
 // its own ceiling rather than the tuning. Same cost as v15: an invasion in flight at deploy
 // time settles as stale_ruleset and pays nothing.
-export const RAID_RULESET_VERSION = 23;
+// 24: MINIS NO LONGER LEAD THE ROW. v23 brought over the binary's per-body standoff, in
+// which the lightest body plants closest to the enemy — `Small: -15`, and the front-most
+// slot of its band. Paired with this sim's front-most-target rule (`playerInRange` commits
+// an enemy's whole output to the single nearest zombie), that made every Mini in the army
+// the designated casualty of every fight, which is what players reported. A Mini now
+// buckets and stands with Regular (so do the Cupid Gardens that bucket with Small), leaving
+// the Headless as the one body that pushes to the front — its defining behaviour, and
+// untouched here. Who stands where decides who the enemy hits, so the transcript diverges
+// from the first frame of every fight with a Mini in the party. Narrowing the standoff
+// spread also shortens BAND_ROW_DEPTH, which relaxes the in-row compression for every army.
+// Same cost as v15: an invasion in flight at deploy time settles as stale_ruleset and pays
+// nothing.
+export const RAID_RULESET_VERSION = 24;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

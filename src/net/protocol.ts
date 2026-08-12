@@ -12,6 +12,16 @@ export const COMMAND_BATCH_LIMIT = 64;
 // flushes on beforeunload / visibilitychange:hidden.
 export const COMMAND_BATCH_WINDOW_MS = 30_000;
 export const PRESENTATION_WINDOW_MS = 60_000;
+/** How many plots one bulk farm command may carry.
+ *
+ *  A plot is 4x4 tiles and the largest farm is 70x70, so 289 plots is the whole board —
+ *  which is exactly the point. Plowing or planting a field used to emit one command per
+ *  plot, and the Worker's rolling-minute budget is counted in SEMANTIC commands, so a
+ *  single full-farm pass could not physically fit inside it. The queue then spent minutes
+ *  draining behind 429s while `settle()` held the invasion launch hostage — the reported
+ *  "I can't start battles when I have a lot of planting/plowing queued". One stroke is now
+ *  one command. */
+export const FARM_BULK_LIMIT = 289;
 
 export type CommandStatus = "applied" | "duplicate" | "rejected" | "dependency_failed";
 
@@ -23,12 +33,28 @@ export interface CommandResult {
   /** Source plots for zombies created by a farm/power command. This avoids pairing
    * bulk-harvest identities by two different iteration orders. */
   createdZombieSources?: { id: string; oc: number; or: number }[];
+  /** For a bulk farm command that partly succeeded: how many of its plots the server
+   *  refused, and why the first of them was refused. A whole-command rejection still
+   *  uses `status: "rejected"` + `error`; this is the middle case, where the player
+   *  deserves one summary rather than either silence or a toast per plot. */
+  rejectedPlots?: number;
+  rejectedPlotError?: string;
 }
 
 export type GameplayCommand =
   | { type: "writer.claim" }
   | { type: "farm.plow"; oc: number; or: number }
   | { type: "farm.plant"; oc: number; or: number; cropKey: string; fertilized?: boolean }
+  // Bulk forms of the two commands a drag-paint stroke produces by the hundred. The
+  // single-plot forms above stay on the wire for cached older clients; a current client
+  // only ever sends these (see FARM_BULK_LIMIT and EconomyClient.submitFarm). Each is
+  // applied plot by plot, in order, by exactly the single-plot rules.
+  | { type: "farm.plow_many"; plots: { oc: number; or: number }[] }
+  | {
+      type: "farm.plant_many";
+      cropKey: string;
+      plots: { oc: number; or: number; fertilized?: boolean }[];
+    }
   | { type: "farm.harvest"; oc: number; or: number }
   | { type: "farm.remove"; oc: number; or: number }
   /** Relocate a plot and whatever is growing on it. Layout only — the crop,

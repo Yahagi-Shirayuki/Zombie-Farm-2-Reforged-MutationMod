@@ -1,27 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  befriend, call, currentIntegrityHeaders, grantBalance, grantFallen, grantRoster, signIn, uniqueSub,
+  befriend, call, commandBody, currentIntegrityHeaders, DEVICE_A, grantBalance, grantFallen,
+  grantRoster, signIn, uniqueSub,
 } from "./helpers";
 import { RAID_RULESET_VERSION } from "../../../src/raid/replay";
 
-const deviceA = "device-aaaaaaaa";
-const commandBody = (
-  bootstrap: { accountVersion: number; writerGeneration: number },
-  batchId: string,
-  firstSequence: number,
-  commands: unknown[],
-  deviceId = deviceA,
-  takeWriter = false
-) => ({
-  protocolVersion: 3,
-  deviceId,
-  batchId,
-  firstSequence,
-  expectedAccountVersion: bootstrap.accountVersion,
-  writerGeneration: bootstrap.writerGeneration,
-  takeWriter,
-  commands: commands.map((command, index) => ({ sequence: firstSequence + index, command })),
-});
+const deviceA = DEVICE_A;
 
 describe("protocol v3 API", () => {
   it("persists a level-up invasion cooldown reset in the command transaction", async () => {

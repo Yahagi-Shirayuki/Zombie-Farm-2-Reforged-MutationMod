@@ -113,20 +113,45 @@ const MAX_SIM_MS = 4 * 60 * 1000; // hard safety cap (min-damage 1 avoids stalls
 // front row plants at x=380 with the enemy at 435. We keep `frontX` as the anchor (it is
 // derived from the raid's own hold position and engage distance) and apply the recovered
 // geometry RELATIVE to it.
+//
+// ONE part of this block is deliberately not the binary's: the `Small` body's place in the
+// row. See MINI_STANDS_WITH_REGULAR below.
 const BAND_SIZE = 5; // zombies per depth band — `index / 5`, exactly the damage band
 const SRC_BAND_GAP = 35; // each band stands this much further back
 const SRC_SLOT_X_STEP = 5; // slots inside one row fan FORWARD by this much
 const SRC_SLOT_Y_STEP = 4; // ...and step DOWN the screen by this much
 const SRC_GARDEN_SETBACK = 120; // `reorderZombies` shoves every Garden's destination back
 /** Per-body-type standoff, SUBTRACTED from x: a heavy body plants further off the enemy, a
- *  small one steps in past the line. Bodies not listed take 0. */
+ *  light one steps in past the line. Bodies not listed take 0.
+ *
+ *  DELIBERATE DIVERGENCE (see MINI_STANDS_WITH_REGULAR): the source's `Small: -15` is gone.
+ *  A Mini now takes Regular's 8, so Headless is the only body that steps ahead of the line. */
 const SRC_BODY_STANDOFF: Record<string, number> = {
-  Large: 15, Garden: 15, Regular: 8, Girl: 4, Headless: -5, Small: -15,
+  Large: 15, Garden: 15, Regular: 8, Girl: 4, Headless: -5,
 };
 /** Slot order inside a band, front-most first — the order the bucketed insertion in
  *  `calculateDestinationPoint` produces (nested prefix counters, smallest bucket first).
- *  Cupid Gardens bucket with Small, not with Garden. */
-const BODY_ROW_ORDER = ["Small", "Headless", "Girl", "Regular", "Large", "Garden"];
+ *
+ *  The source's list opens with `Small`; ours does not, for the same reason the standoff
+ *  above dropped it (MINI_STANDS_WITH_REGULAR). Minis bucket with Regular, and so do the
+ *  Cupid Gardens that bucket with Small in the source. */
+const BODY_ROW_ORDER = ["Headless", "Girl", "Regular", "Large", "Garden"];
+// MINI_STANDS_WITH_REGULAR — why a Mini no longer leads the row.
+//
+// In the binary the lightest body plants CLOSEST to the enemy: `Small` carries the most
+// negative standoff and takes the front-most slot in its band. This sim's enemies commit
+// all their damage to the single front-most zombie down the lane (`playerInRange`), so
+// that pairing hands every incoming blow to the frailest unit on the field, for the whole
+// fight, in every raid — the army's Minis walked to the front and died there. Players
+// reported exactly that.
+//
+// ZF2 spreads its damage differently, so the rule costs it far less there; here it is the
+// difference between a Mini being a unit and a Mini being a casualty. So a Mini stands
+// where a Regular stands, and the one body that still pushes to the front is the Headless
+// — which is its defining behaviour and the thing its owner chose it for.
+//
+// This is a deliberate departure from `-[ZombieActor calculateDestinationPoint]`, in the
+// same spirit as the Zombie Pot's species ladder. Do not "restore" it from the disassembly.
 const BAND_GAP = SRC_BAND_GAP * SIM_PER_SOURCE_X;
 const SLOT_X_STEP = SRC_SLOT_X_STEP * SIM_PER_SOURCE_X;
 const SLOT_Y_STEP = SRC_SLOT_Y_STEP * SIM_PER_SOURCE_Y;
@@ -145,7 +170,9 @@ const ROW_SPREAD = 2;
  *  that would be an unrelated balance edit riding along with a formation fix. */
 const COMBAT_ZONE_DEPTH = 4 * 52 + 12;
 /** Depth one row occupies at the source's own scale: the slot fan plus the spread between
- *  the heaviest and the lightest standoff — 90 source points, or ~187 sim units. */
+ *  the heaviest and the lightest standoff. Derived, not authored — dropping the Small
+ *  bucket narrowed that spread from 30 source points to 20, so the row is genuinely
+ *  shallower than it was and `rowXFit` compresses it less. */
 const BAND_ROW_DEPTH = (BAND_SIZE - 1) * SLOT_X_STEP
   + (Math.max(...Object.values(SRC_BODY_STANDOFF)) - Math.min(...Object.values(SRC_BODY_STANDOFF)))
     * SIM_PER_SOURCE_X;
@@ -1754,15 +1781,18 @@ export class BattleSim {
   }
 
   /** Which row bucket a zombie falls in — `calculateDestinationPoint` dispatches on the
-   *  concrete ZombieActor subclass, and a Cupid Garden buckets with Small, not Garden. */
+   *  concrete ZombieActor subclass, and a Cupid Garden buckets with Small, not Garden.
+   *
+   *  The source's `Small` bucket is folded into `Regular` here on purpose; see
+   *  MINI_STANDS_WITH_REGULAR above. That takes the Cupid Gardens with it, since they
+   *  bucket with Small rather than with Garden. */
   private bodyOf(p: SimUnit): string {
-    if (/Cupid/i.test(p.sourceKey)) return "Small";
+    if (/Cupid/i.test(p.sourceKey)) return "Regular";
     if (p.isHeadless) return "Headless";
     if (p.isGarden) return "Garden";
     const g = p.group ?? "";
     if (BODY_ROW_ORDER.includes(g)) return g;
-    if (this.isSmall(p)) return "Small";
-    return "Regular";
+    return "Regular"; // includes every Small: a Mini queues with the ordinary bodies
   }
 
   /** Build the ordered army — the reimpl's stand-in for `[fightMan zombies]`, which is the
@@ -1819,7 +1849,8 @@ export class BattleSim {
     for (let start = 0; start < order.length; start += BAND_SIZE) {
       const band = start / BAND_SIZE;
       const members = order.slice(start, start + BAND_SIZE);
-      // Row order inside the band: small bodies to the front, healers to the back.
+      // Row order inside the band: Headless to the front, healers to the back, everyone
+      // else (Minis included — MINI_STANDS_WITH_REGULAR) by weight in between.
       const row = members.slice().sort((a, b) => {
         const d = BODY_ROW_ORDER.indexOf(this.bodyOf(a)) - BODY_ROW_ORDER.indexOf(this.bodyOf(b));
         return d || a.formOrder - b.formOrder;

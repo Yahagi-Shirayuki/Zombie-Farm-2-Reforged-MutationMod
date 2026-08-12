@@ -925,6 +925,22 @@ describe("protocol v3 command engine", () => {
     expect(invalidMissingSource.results[0]).toMatchObject({ status: "rejected", error: "not_owned" });
   });
 
+  it("refuses to adopt the starter shed under a malformed client instance id", () => {
+    // Adoption is the only upgrade that INSERTS a client-named object, so it takes the
+    // same id fence as object.buy. It used to accept anything `commandString` allowed,
+    // which put an arbitrary 128-character string into a document other players read.
+    const state = freshGameplayState();
+    state.balance.gold = 20_000;
+    for (const instanceId of ["<script>", "has space", "a".repeat(81), "quote\"id"]) {
+      const rejected = applyCommandBatch(state, commands({
+        type: "object.upgrade", instanceId, catalogKey: "storage02",
+      }), { now: 100 });
+      expect(rejected.results[0]).toMatchObject({ status: "rejected", error: "not_owned" });
+      expect(rejected.state.objects.objects).toEqual([]);
+      expect(rejected.state.balance.gold).toBe(20_000);
+    }
+  });
+
   it("persists Zombie Pot ownership and charges the permanent repeat price", () => {
     const state = freshGameplayState();
     state.balance.gold = 1_000;
@@ -1646,6 +1662,42 @@ describe("protocol v3 command engine", () => {
     expect(result.results[0]).toMatchObject({ status: "rejected", error: "bad_item" });
     expect(result.state.storage.received[marker]).toBe(1);
     expect(result.state.storage.stored[marker]).toBeUndefined();
+  });
+
+  it("holds the item shed to the capacity of the shed actually placed", () => {
+    // The retired v2 route enforced this (planStore via shedCapacity); v3 dropped it and
+    // left the cap client-side only, so an edited client could fill a Shabby Shed
+    // without limit. The floor is the free starter shed's 8 slots.
+    const state = freshGameplayState();
+    state.storage.received.windmill = 20;
+
+    const overflow = applyCommandBatch(state, commands(
+      { type: "storage.move", itemKey: "windmill", quantity: 9, direction: "store" },
+    ), { now: 1 });
+    expect(overflow.results[0]).toMatchObject({ status: "rejected", error: "shed_full" });
+    expect(overflow.state.storage.stored.windmill).toBeUndefined();
+
+    const exact = applyCommandBatch(state, commands(
+      { type: "storage.move", itemKey: "windmill", quantity: 8, direction: "store" },
+      { type: "storage.move", itemKey: "windmill", quantity: 1, direction: "store" },
+    ), { now: 1 });
+    expect(exact.results[0].status).toBe("applied");
+    expect(exact.results[1]).toMatchObject({ status: "rejected", error: "shed_full" });
+    expect(exact.state.storage.stored.windmill).toBe(8);
+
+    // A bigger PLACED shed raises the ceiling; taking items back out never checks it.
+    const bigger = { ...state, objects: { version: 0,
+      objects: [{ instanceId: "shed", catalogKey: "storage03", status: "placed" as const }] } };
+    const roomy = applyCommandBatch(bigger, commands(
+      { type: "storage.move", itemKey: "windmill", quantity: 20, direction: "store" },
+    ), { now: 1 });
+    expect(roomy.results[0].status).toBe("applied");
+    expect(roomy.state.storage.stored.windmill).toBe(20);
+
+    const emptying = applyCommandBatch(roomy.state, commands(
+      { type: "storage.move", itemKey: "windmill", quantity: 20, direction: "take" },
+    ), { now: 2 });
+    expect(emptying.results[0].status).toBe("applied");
   });
 
   const specialPair = (): MutableGameplayState => {

@@ -4,7 +4,8 @@
 //   plowed -> planted -> (grows) -> harvest -> dirt (crop) / hole (zombie) -> re-till.
 import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import {
-  DIRT_FILE, GameAssets, HOLE_FILE, multiplyObjectTint, objectTint, PlaceableDef, PLOWED_FILE, SEED_FILE,
+  canMirrorObject, DIRT_FILE, GameAssets, HOLE_FILE, multiplyObjectTint, objectTint,
+  PlaceableDef, PLOWED_FILE, SEED_FILE,
 } from "./assets";
 import { clampPointToGrid, footprintOrigin, gridToScreen, HH, HW, screenToGrid, TILE_H, TILE_W, tileCenter } from "./iso";
 import { setFootprint, sortLayer } from "./depthSort";
@@ -17,6 +18,28 @@ import { sanitizeFallenUncapped, type FallenZombie } from "./zombie/memorial";
 import { buildStatueRig } from "./zombie/statueRig";
 
 export const PLOT = 4; // tiles per plot side
+
+/** The tiles a placeable actually covers in a given orientation.
+ *
+ *  The Rotate tool's "flip" is a horizontal mirror of the art — a reflection of the
+ *  screen x axis. In this iso projection screen x is (col - row) and screen y is
+ *  (col + row), so mirroring x negates (col - row) and leaves (col + row) alone:
+ *  that is EXACTLY a col<->row swap about the object's origin tile. (It is the same
+ *  reflection extensionTiles already applies to a fence's overhang offsets.)
+ *
+ *  So a turned object's footprint is its def rectangle TRANSPOSED. Anything
+ *  asymmetric — a 1x5 hedge, a 4x1 banner, a 5x3 tractor — genuinely blocks a
+ *  different set of tiles once it is turned, and the art moves with them. Squares
+ *  are unaffected, which is why this went unnoticed: 371 of the 460 placeables are
+ *  square, and the 89 that are not left an invisible barrier lying across the
+ *  diagonal the hedge USED to run down. */
+export function objectFootprint(
+  def: Pick<PlaceableDef, "tileW" | "tileH">, flipped: boolean,
+): { w: number; h: number } {
+  return flipped
+    ? { w: def.tileH, h: def.tileW }
+    : { w: def.tileW, h: def.tileH };
+}
 
 // Fertilize leaves: the CONTINUOUS effect a fertilized crop shows the whole time it
 // stays fertilized. GROUND TRUTH (`-[Tile applyFarmParticles]`): a cocos2d
@@ -184,9 +207,10 @@ interface FarmObject {
   // the owning system through setObjectWork, since the job lives outside the Field.
   work?: ObjectWork;
   // Rotated by the Rotate tool: a horizontal mirror (flip on the vertical axis), so
-  // a directional decor (fences!) can face either diagonal. The footprint is a
-  // rectangle centered under the sprite, so mirroring never moves which tiles it
-  // occupies — collision/depth are unaffected; only the art flips.
+  // a directional decor (fences! hedges!) can face either diagonal. In iso that
+  // mirror reflects col<->row, so a flipped object's footprint is its def rectangle
+  // TRANSPOSED — see objectFootprint. Every occupancy/anchor/depth read goes through
+  // that helper, never through def.tileW/tileH directly.
   flipped: boolean;
   // Memorial Statue only: the zombie enshrined on it, and the stone rig drawn
   // standing on its plinth. `memorialRig` is derived — rebuilt whenever `memorial`
@@ -243,7 +267,10 @@ export class Field {
   // What the ghost is previewing, so flipping it in place can re-derive the flat-tile
   // anchor offset (which is not symmetric about the footprint's bottom-center).
   private ghostDef: PlaceableDef | null = null;
-  private ghostOrigin = { oc: 0, or: 0 };
+  // The pointer tile the ghost was last resolved against, and the object being moved
+  // (if any), so a rotate can re-resolve the preview without a pointer move.
+  private ghostTile: { col: number; row: number } | null = null;
+  private ghostIgnoreId: string | undefined;
   // Field dimensions in tiles. Mutable: the Farm Size upgrade grows them at
   // runtime (origin stays at tile 0,0, so all existing plots/objects keep their
   // coordinates — the farm only gains land on its south/east edges).
@@ -1061,9 +1088,10 @@ export class Field {
     }
     const s = this.objectScale();
     const w = def.nativeW * s, h = def.nativeH * s;
-    const front = gridToScreen(oc + def.tileW - 1, or + def.tileH - 1);
+    const fp = objectFootprint(def, flipped);
+    const front = gridToScreen(oc + fp.w - 1, or + fp.h - 1);
     const p = { x: front.x - HW, y: front.y + TILE_H }; // the ground tile's own position
-    const a = this.footprintAnchor(oc, or, def.tileW, def.tileH);
+    const a = this.footprintAnchor(oc, or, fp.w, fp.h);
     // A mirrored tile reflects about the centre line of that same ground tile, one
     // source tile to the right of `p` — the binary's `1 - pivotx - 48/width`.
     const anchorX = flipped
@@ -1085,7 +1113,8 @@ export class Field {
     if (!rig) return;
     const def = obj.def;
     const s = this.objectScale();
-    const anchor = this.footprintAnchor(obj.oc, obj.or, def.tileW, def.tileH);
+    const fp = objectFootprint(def, obj.flipped);
+    const anchor = this.footprintAnchor(obj.oc, obj.or, fp.w, fp.h);
     const mountX = def.mountX ?? 0.5;
     const mountY = def.mountY ?? 1;
     // The plinth art is not symmetric, so a flipped plinth mirrors its mount point
@@ -1095,7 +1124,7 @@ export class Field {
       anchor.x + def.nativeW * s * offsetX,
       this.objectRenderY(def, anchor.y) - def.nativeH * s * mountY,
     );
-    setFootprint(rig, obj.oc, obj.or, obj.oc + def.tileW - 1, obj.or + def.tileH - 1,
+    setFootprint(rig, obj.oc, obj.or, obj.oc + fp.w - 1, obj.or + fp.h - 1,
       MEMORIAL_RIG_BIAS);
   }
 
@@ -1107,12 +1136,14 @@ export class Field {
     const texture = this.assets.objects[name] ?? this.assets.objects[def.sprite] ?? Texture.EMPTY;
     const tint = objectTint(def.color);
     const s = this.objectScale();
-    // Flip = mirror horizontally (about the sprite's bottom-center anchor), so the
-    // art faces the other way while sitting in the exact same footprint tiles.
-    const a = this.footprintAnchor(oc, or, def.tileW, def.tileH);
+    // Flip = mirror horizontally, which in iso reflects the footprint about the
+    // origin tile — so the art is bottom-centered on the TRANSPOSED rectangle it
+    // actually occupies (objectFootprint), and lands over its own blocked tiles.
+    const fp = objectFootprint(def, flipped);
+    const a = this.footprintAnchor(oc, or, fp.w, fp.h);
     const off = this.flatTileOffset(def, oc, or, flipped);
-    const scaleX = flipped ? -s : s;
-    const c1 = oc + def.tileW - 1, r1 = or + def.tileH - 1;
+    const scaleX = flipped && canMirrorObject(def) ? -s : s;
+    const c1 = oc + fp.w - 1, r1 = or + fp.h - 1;
     const lay = (sprite: Sprite, tex: Texture) => {
       sprite.texture = tex;
       sprite.tint = tint;
@@ -1221,7 +1252,8 @@ export class Field {
   private positionObjectLight(obj: FarmObject) {
     const l = obj.light;
     if (!l) return;
-    const a = this.footprintAnchor(obj.oc, obj.or, obj.def.tileW, obj.def.tileH);
+    const fp = objectFootprint(obj.def, obj.flipped);
+    const a = this.footprintAnchor(obj.oc, obj.or, fp.w, fp.h);
     // Raise the glow off the ground onto the object's body.
     l.position.set(a.x, a.y - (l.height ?? 0) * 0.35);
   }
@@ -1231,14 +1263,18 @@ export class Field {
     obj.light = undefined;
   }
 
-  // Center a def's footprint on the pointer tile.
-  resolveObjectOrigin(def: PlaceableDef, col: number, row: number): { oc: number; or: number } {
-    return { oc: col - Math.floor((def.tileW - 1) / 2), or: row - Math.floor((def.tileH - 1) / 2) };
+  // Center a def's footprint on the pointer tile. A turned object is transposed, so
+  // the centering has to use the orientation it will actually be placed in — else
+  // the ghost sits off the cursor by half the difference between its sides.
+  resolveObjectOrigin(def: PlaceableDef, col: number, row: number, flipped = false): { oc: number; or: number } {
+    const fp = objectFootprint(def, flipped);
+    return { oc: col - Math.floor((fp.w - 1) / 2), or: row - Math.floor((fp.h - 1) / 2) };
   }
-  canPlaceObject(oc: number, or: number, def: PlaceableDef, ignoreId?: string): boolean {
+  canPlaceObject(oc: number, or: number, def: PlaceableDef, ignoreId?: string, flipped = false): boolean {
+    const fp = objectFootprint(def, flipped);
     return (
-      this.footprintFits(oc, or, def.tileW, def.tileH) &&
-      this.footprintFree(oc, or, def.tileW, def.tileH, ignoreId)
+      this.footprintFits(oc, or, fp.w, fp.h) &&
+      this.footprintFree(oc, or, fp.w, fp.h, ignoreId)
     );
   }
 
@@ -1246,10 +1282,11 @@ export class Field {
    *  or null when nothing on the farm can hold it. Object positions live only in the
    *  presentation layout, so this is how the reconcile re-homes a server-owned object
    *  whose saved position was lost — without it that object can never be drawn again. */
-  findFreeOrigin(def: PlaceableDef): { oc: number; or: number } | null {
-    for (let or = 0; or + def.tileH - 1 < this.h; or++)
-      for (let oc = 0; oc + def.tileW - 1 < this.w; oc++)
-        if (this.canPlaceObject(oc, or, def)) return { oc, or };
+  findFreeOrigin(def: PlaceableDef, flipped = false): { oc: number; or: number } | null {
+    const fp = objectFootprint(def, flipped);
+    for (let or = 0; or + fp.h - 1 < this.h; or++)
+      for (let oc = 0; oc + fp.w - 1 < this.w; oc++)
+        if (this.canPlaceObject(oc, or, def, undefined, flipped)) return { oc, or };
     return null;
   }
 
@@ -1259,7 +1296,12 @@ export class Field {
   // the object id, or null if the footprint isn't valid.
   placeObject(def: PlaceableDef, oc: number, or: number, id?: string, readyAt?: number,
     flipped = false, memorial?: FallenZombie): string | null {
-    if (!this.canPlaceObject(oc, or, def, id)) return null;
+    // Clamped here rather than at the call sites because this is the ONE door every
+    // object comes through — a purchase, a restored save, a gift, a friend's farm. An
+    // object whose art carries writing keeps its footprint AND its art unturned, so the
+    // two can never disagree, and a save that already stored `flipped` self-heals.
+    flipped = flipped && canMirrorObject(def);
+    if (!this.canPlaceObject(oc, or, def, id, flipped)) return null;
     const now = Date.now();
     const ra = def.growMs ? readyAt ?? now + def.growMs : 0;
     const ready = def.growMs ? now >= ra : false;
@@ -1282,7 +1324,8 @@ export class Field {
     this.objects.set(oid, obj);
     this.attachObjectLight(obj);
     if (memorial) this.setMemorialOccupant(oid, memorial); // restoring an enshrined statue
-    this.forEachFootprint(oc, or, def.tileW, def.tileH, (t) => this.tileObject.set(t, oid));
+    const fp = objectFootprint(def, flipped);
+    this.forEachFootprint(oc, or, fp.w, fp.h, (t) => this.tileObject.set(t, oid));
     this.setExtensionBlocks(oid, def, oc, or, flipped, true);
     return oid;
   }
@@ -1342,7 +1385,10 @@ export class Field {
    * footprint as solid; only cosmetic pen pets use this interior. */
   petPenBounds(): { oc: number; or: number; tileW: number; tileH: number } | null {
     for (const o of this.objects.values()) {
-      if (o.def.petPen) return { oc: o.oc, or: o.or, tileW: o.def.tileW, tileH: o.def.tileH };
+      if (o.def.petPen) {
+        const fp = objectFootprint(o.def, o.flipped);
+        return { oc: o.oc, or: o.or, tileW: fp.w, tileH: fp.h };
+      }
     }
     return null;
   }
@@ -1416,8 +1462,9 @@ export class Field {
     for (const o of this.objects.values()) {
       if (!o.def.zombiePatch) continue;
       const tiles: { col: number; row: number }[] = [];
-      for (let r = o.or; r < o.or + o.def.tileH; r++)
-        for (let c = o.oc; c < o.oc + o.def.tileW; c++) tiles.push({ col: c, row: r });
+      const fp = objectFootprint(o.def, o.flipped);
+      for (let r = o.or; r < o.or + fp.h; r++)
+        for (let c = o.oc; c < o.oc + fp.w; c++) tiles.push({ col: c, row: r });
       return tiles;
     }
     return null;
@@ -1429,18 +1476,20 @@ export class Field {
   replaceObjectDef(id: string, def: PlaceableDef): boolean {
     const o = this.objects.get(id);
     if (!o) return false;
-    this.forEachFootprint(o.oc, o.or, o.def.tileW, o.def.tileH, (t) => this.tileObject.delete(t));
-    if (!this.footprintFits(o.oc, o.or, def.tileW, def.tileH) ||
-        !this.footprintFree(o.oc, o.or, def.tileW, def.tileH, id)) {
+    const was = objectFootprint(o.def, o.flipped);
+    const now = objectFootprint(def, o.flipped);
+    this.forEachFootprint(o.oc, o.or, was.w, was.h, (t) => this.tileObject.delete(t));
+    if (!this.footprintFits(o.oc, o.or, now.w, now.h) ||
+        !this.footprintFree(o.oc, o.or, now.w, now.h, id)) {
       // restore the old footprint occupancy and bail
-      this.forEachFootprint(o.oc, o.or, o.def.tileW, o.def.tileH, (t) => this.tileObject.set(t, id));
+      this.forEachFootprint(o.oc, o.or, was.w, was.h, (t) => this.tileObject.set(t, id));
       return false;
     }
     this.setExtensionBlocks(id, o.def, o.oc, o.or, o.flipped, false);
     o.def = def;
     o.ready = def.growMs ? o.ready : false;
     this.fitObjectSprite(o.sprite, def, o.oc, o.or, true, o.flipped, o);
-    this.forEachFootprint(o.oc, o.or, def.tileW, def.tileH, (t) => this.tileObject.set(t, id));
+    this.forEachFootprint(o.oc, o.or, now.w, now.h, (t) => this.tileObject.set(t, id));
     this.setExtensionBlocks(id, def, o.oc, o.or, o.flipped, true);
     return true;
   }
@@ -1450,16 +1499,22 @@ export class Field {
   // rotate while carrying); omitted keeps the object's current flip.
   moveObject(id: string, oc: number, or: number, flipped?: boolean): boolean {
     const obj = this.objects.get(id);
-    if (!obj || !this.canPlaceObject(oc, or, obj.def, id)) return false;
-    this.forEachFootprint(obj.oc, obj.or, obj.def.tileW, obj.def.tileH, (t) => this.tileObject.delete(t));
+    // The drop is validated in the orientation it lands in, not the one it was
+    // picked up in — turning a hedge mid-carry changes which tiles it needs.
+    const asked = flipped ?? obj?.flipped ?? false;
+    const next = obj ? asked && canMirrorObject(obj.def) : asked;
+    if (!obj || !this.canPlaceObject(oc, or, obj.def, id, next)) return false;
+    const was = objectFootprint(obj.def, obj.flipped);
+    this.forEachFootprint(obj.oc, obj.or, was.w, was.h, (t) => this.tileObject.delete(t));
     this.setExtensionBlocks(id, obj.def, obj.oc, obj.or, obj.flipped, false);
     obj.oc = oc;
     obj.or = or;
-    if (flipped !== undefined) obj.flipped = flipped;
+    obj.flipped = next;
     this.fitObjectSprite(obj.sprite, obj.def, oc, or, obj.ready, obj.flipped, obj);
     this.fitMemorialRig(obj);
     this.positionObjectLight(obj);
-    this.forEachFootprint(oc, or, obj.def.tileW, obj.def.tileH, (t) => this.tileObject.set(t, id));
+    const fp = objectFootprint(obj.def, obj.flipped);
+    this.forEachFootprint(oc, or, fp.w, fp.h, (t) => this.tileObject.set(t, id));
     this.setExtensionBlocks(id, obj.def, oc, or, obj.flipped, true);
     return true;
   }
@@ -1532,7 +1587,8 @@ export class Field {
     // here rather than at the call sites so every removal path — sell, store, the
     // Remove tool, and anything added later — is covered by construction.
     if (obj.memorial) this.onMemorialReleased?.(obj.memorial);
-    this.forEachFootprint(obj.oc, obj.or, obj.def.tileW, obj.def.tileH, (t) => this.tileObject.delete(t));
+    const fp = objectFootprint(obj.def, obj.flipped);
+    this.forEachFootprint(obj.oc, obj.or, fp.w, fp.h, (t) => this.tileObject.delete(t));
     this.setExtensionBlocks(id, obj.def, obj.oc, obj.or, obj.flipped, false);
     this.destroyObjectSprites(obj);
     this.destroyObjectLight(obj);
@@ -1576,21 +1632,25 @@ export class Field {
   objectFlipOf(id: string): boolean {
     return !!this.objects.get(id)?.flipped;
   }
-  // Rotate tool: mirror a placed object on the vertical axis. Footprint is unchanged
-  // (see FarmObject.flipped), so only the art flips. Returns the new flip state.
+  // Rotate tool: mirror a placed object on the vertical axis, in place. The mirror
+  // transposes the footprint (see objectFootprint), so unlike before this can be
+  // BLOCKED — a hedge turned across its neighbours has nowhere to go. Returns
+  // whether the object actually turned.
+  /** Turn a placed object a quarter turn (a horizontal mirror). False when it did not
+   *  turn — either the turned footprint has no room, or the object's art must never be
+   *  mirrored (`canMirrorObject`). Callers check that second case first so they can say
+   *  which it was. */
   flipObject(id: string): boolean {
     const o = this.objects.get(id);
-    if (!o) return false;
-    o.flipped = !o.flipped;
-    this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, o.ready, o.flipped, o);
-    this.fitMemorialRig(o);
-    return o.flipped;
+    if (!o || !canMirrorObject(o.def)) return false;
+    return this.moveObject(id, o.oc, o.or, !o.flipped);
   }
   // World point the farmer walks to in order to harvest this object (its base).
   objectWorkPoint(id: string): { x: number; y: number } | null {
     const o = this.objects.get(id);
     if (!o) return null;
-    const base = this.footprintAnchor(o.oc, o.or, o.def.tileW, o.def.tileH);
+    const fp = objectFootprint(o.def, o.flipped);
+    const base = this.footprintAnchor(o.oc, o.or, fp.w, fp.h);
     return clampPointToGrid(base.x, base.y, this.w, this.h);
   }
 
@@ -1667,7 +1727,8 @@ export class Field {
     const o = this.objects.get(id);
     if (!o) return null;
     const tiles = Math.max(o.def.tileW, o.def.tileH);
-    const base = this.footprintAnchor(o.oc, o.or, o.def.tileW, o.def.tileH);
+    const fp = objectFootprint(o.def, o.flipped);
+    const base = this.footprintAnchor(o.oc, o.or, fp.w, fp.h);
     return { x: base.x, y: base.y - tiles * HH, tiles };
   }
   // Topmost object whose (tall) sprite contains world point (wx,wy) — so a tree
@@ -1682,8 +1743,9 @@ export class Field {
         // diamond. Reject the large transparent corner triangles so clicks beside
         // the pen continue to target the ground instead of opening pet management.
         const grid = screenToGrid(wx, wy);
-        hit = grid.col >= o.oc - 0.5 && grid.col <= o.oc + o.def.tileW - 0.5 &&
-          grid.row >= o.or - 0.5 && grid.row <= o.or + o.def.tileH - 0.5;
+        const fp = objectFootprint(o.def, o.flipped);
+        hit = grid.col >= o.oc - 0.5 && grid.col <= o.oc + fp.w - 0.5 &&
+          grid.row >= o.or - 0.5 && grid.row <= o.or + fp.h - 0.5;
       } else if (o.def.category === "tree") {
         const top = s.y - s.height;
         const canopyBottom = top + s.height * TREE_CANOPY_HEIGHT_RATIO;
@@ -1705,8 +1767,8 @@ export class Field {
   // Placement/move preview: a tinted ghost of the object at the snapped origin
   // (green tint if placeable, red if blocked). `ignoreId` = the object being moved.
   setObjectCursor(def: PlaceableDef, col: number, row: number, ignoreId?: string, flipped = false): { oc: number; or: number; valid: boolean } {
-    const { oc, or } = this.resolveObjectOrigin(def, col, row);
-    const valid = this.canPlaceObject(oc, or, def, ignoreId);
+    const { oc, or } = this.resolveObjectOrigin(def, col, row, flipped);
+    const valid = this.canPlaceObject(oc, or, def, ignoreId, flipped);
     this.cursorGreen.visible = false;
     this.cursorRed.visible = false;
     this.cursorLabel.visible = false;
@@ -1715,10 +1777,12 @@ export class Field {
     this.ghostFlipped = flipped;
     const s = this.objectScale();
     this.objGhost.scale.set(flipped ? -s : s, s); // preview the chosen orientation
-    const a = this.footprintAnchor(oc, or, def.tileW, def.tileH);
+    const fp = objectFootprint(def, flipped);
+    const a = this.footprintAnchor(oc, or, fp.w, fp.h);
     const off = this.flatTileOffset(def, oc, or, flipped);
     this.ghostDef = def;
-    this.ghostOrigin = { oc, or };
+    this.ghostTile = { col, row };
+    this.ghostIgnoreId = ignoreId;
     this.objGhost.position.set(a.x + off.dx, this.objectRenderY(def, a.y) + off.dy);
     this.objGhost.alpha = 0.6;
     this.objGhost.tint = multiplyObjectTint(
@@ -1730,18 +1794,19 @@ export class Field {
     return { oc, or, valid };
   }
   // Flip the placement ghost in place — the Rotate control uses this to spin the
-  // current preview without waiting for a pointer move. A flat tile's art is not
-  // centered on its footprint, so mirroring it does move where it lands.
+  // current preview without waiting for a pointer move. Turning an object transposes
+  // its footprint, so this is a full re-resolve against the tile the ghost is
+  // sitting on: where it lands, which tiles it would take, and whether it still
+  // fits all change with the orientation.
   setGhostFlip(flipped: boolean) {
     this.ghostFlipped = flipped;
-    const s = this.objectScale();
-    this.objGhost.scale.x = flipped ? -s : s;
     const def = this.ghostDef;
-    if (!def?.flatTile) return;
-    const { oc, or } = this.ghostOrigin;
-    const a = this.footprintAnchor(oc, or, def.tileW, def.tileH);
-    const off = this.flatTileOffset(def, oc, or, flipped);
-    this.objGhost.position.set(a.x + off.dx, this.objectRenderY(def, a.y) + off.dy);
+    if (!def || !this.ghostTile) {
+      const s = this.objectScale();
+      this.objGhost.scale.x = flipped ? -s : s;
+      return;
+    }
+    this.setObjectCursor(def, this.ghostTile.col, this.ghostTile.row, this.ghostIgnoreId, flipped);
   }
   get ghostFlip(): boolean {
     return this.ghostFlipped;
@@ -1889,6 +1954,30 @@ export class Field {
     return out;
   }
 
+  /** Re-place one saved object, tolerating a saved position that its real footprint
+   *  no longer fits.
+   *
+   *  Saves written before a turned object transposed its footprint (see
+   *  objectFootprint) recorded the origin of a rectangle laid out the OTHER way
+   *  round, so a hedge saved hard against the farm's east edge, or butted up against
+   *  its neighbour, can now want tiles that are off the map or already taken.
+   *  Losing the object is the one outcome a player cannot undo, so give ground in
+   *  this order: nudge it back inside the farm, then, failing that, drop the flip
+   *  and keep the object. Returns whether it made it onto the farm. */
+  private restoreOneObject(
+    def: PlaceableDef, s: PlacedObjectSave, memorial?: FallenZombie,
+  ): boolean {
+    const attempt = (flipped: boolean): boolean => {
+      const fp = objectFootprint(def, flipped);
+      // Clamp rather than reject: an origin one tile past the edge is a legal object
+      // in the wrong place, not a missing one.
+      const oc = Math.max(0, Math.min(s.oc, this.w - fp.w));
+      const or = Math.max(0, Math.min(s.or, this.h - fp.h));
+      return !!this.placeObject(def, oc, or, s.id, s.readyAt, flipped, memorial);
+    };
+    return attempt(!!s.rotation) || (!!s.rotation && attempt(false));
+  }
+
   // Rebuild placed objects from a save. `resolve` maps a def key to its config.
   restoreObjects(saves: PlacedObjectSave[], resolve: (key: string) => PlaceableDef | undefined) {
     for (const o of this.objects.values()) {
@@ -1901,14 +1990,14 @@ export class Field {
     const restored: string[] = [];
     for (const s of saves) {
       const def = resolve(s.key);
-      if (!def || !this.footprintFits(s.oc, s.or, def.tileW, def.tileH)) continue;
+      if (!def) continue;
       // A memorial occupant comes straight out of a save file, so it goes through
       // the same shape check the graveyard list does before a rig is built from it.
       // Uncapped: this is an ENSHRINED zombie, which the graveyard's cap never
       // counts (see sanitizeFallenUncapped).
       const memorial = s.memorial ? sanitizeFallenUncapped([s.memorial])[0] : undefined;
-      this.placeObject(def, s.oc, s.or, s.id, s.readyAt, !!s.rotation, memorial);
-      restored.push(s.id);
+      this.restoreOneObject(def, s, memorial);
+      restored.push(s.id); // reserve the id even if the object could not be re-placed
     }
     // Monotonic: a save whose objects all carry server instance ids scans to nothing,
     // and dropping the counter back would re-issue ids this session already aliased to

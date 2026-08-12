@@ -60,7 +60,7 @@ import plantCatalog from "../../public/assets/plants.json";
 import zombieCatalog from "../../public/assets/zombies.json";
 import boostCatalog from "../../public/assets/boosts.json";
 import objectCatalog from "../../public/assets/placeables.json";
-import { CLIENT_INTEGRITY_VERSION, COMMAND_BATCH_LIMIT, GAMEPLAY_PROTOCOL, type CommandBatchRequest, type GameplayCommand, type PresentationRequest } from "../../src/net/protocol";
+import { CLIENT_INTEGRITY_VERSION, COMMAND_BATCH_LIMIT, FARM_BULK_LIMIT, GAMEPLAY_PROTOCOL, type CommandBatchRequest, type GameplayCommand, type PresentationRequest } from "../../src/net/protocol";
 import * as v3 from "./v3/db";
 import * as v3Raid from "./v3/raid";
 import * as v3EpicBoss from "./v3/epicBoss";
@@ -431,11 +431,32 @@ app.use("/writer/*", requireAuth);
 app.use("/black-market", requireAuth);
 app.use("/black-market/*", requireAuth);
 
+/** Every `/dev/*` route in one gate, registered BEFORE any of them so it runs first.
+ *
+ *  These fixtures set balances to 100M gold and mint arbitrary rosters — a production
+ *  Worker must not expose one. Each route used to carry its own copy of this check as
+ *  its first line: eight identical lines, all correct, and nothing at all stopping the
+ *  ninth route from being added without one. The gate belongs to the PREFIX, not to
+ *  each handler, so omission stops being possible.
+ *
+ *  Ahead of the route-level `requireAuth` too, deliberately: with DEV_AUTH off these
+ *  paths should be indistinguishable from any other unrouted URL, rather than
+ *  answering 401 and confirming something is there. Covered by devRoutes.test.ts.
+ *
+ *  NOTE for anything added near here: this module is the Worker ENTRY, so workerd
+ *  treats every named export as a handler and refuses to boot on one it cannot call
+ *  ("Incorrect type for map entry ... not of type 'function or ExportedHandler'").
+ *  Exporting a plain constant from this file kills the Worker at startup — which is
+ *  invisible to the unit suite and caught only by the integration harness. */
+app.use("/dev/*", async (c, next) => {
+  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
+  await next();
+});
+
 // Local integration fixture. This route is inert in production (DEV_AUTH=0) and
 // exists so tests can establish trusted authoritative state without reopening the
 // permanently-closed client import endpoints.
 app.post("/dev/fixture/roster", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ units?: unknown }>().catch(() => ({ units: [] }));
   const count = await db.grantRosterFixture(c.env.DB, c.get("accountId"), body.units);
   return c.json({ count });
@@ -445,7 +466,6 @@ app.post("/dev/fixture/roster", requireAuth, async (c) => {
 // which needs a full verified replay that actually kills someone — far more moving
 // parts than the memorial behaviour under test.
 app.post("/dev/fixture/fallen", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ units?: unknown }>().catch(() => ({ units: [] }));
   const units = Array.isArray(body.units) ? body.units.slice(0, 200) : [];
   const accountId = c.get("accountId");
@@ -466,7 +486,6 @@ app.post("/dev/fixture/fallen", requireAuth, async (c) => {
 });
 
 app.post("/dev/fixture/balance", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ gold?: number; brains?: number; xp?: number }>()
     .catch((): { gold?: number; brains?: number; xp?: number } => ({}));
   const gold = Math.max(0, Math.min(100_000_000, Math.floor(Number(body.gold ?? 400))));
@@ -479,7 +498,6 @@ app.post("/dev/fixture/balance", requireAuth, async (c) => {
 });
 
 app.post("/dev/fixture/orphan-gift-grant", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ giftId?: string; settled?: boolean }>()
     .catch((): { giftId?: string; settled?: boolean } => ({}));
   const accountId = c.get("accountId");
@@ -509,7 +527,6 @@ app.post("/dev/fixture/orphan-gift-grant", requireAuth, async (c) => {
 // at zero friends so they never perturb the other side of a cap check. Dev-only:
 // absent when DEV_AUTH="0" (the deployed value).
 app.post("/dev/fixture/friends-fill", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ count?: number }>().catch((): { count?: number } => ({}));
   const me = c.get("accountId");
   const want = Number.isFinite(body.count) ? Math.max(0, Math.floor(body.count as number)) : 0;
@@ -534,7 +551,6 @@ app.post("/dev/fixture/friends-fill", requireAuth, async (c) => {
 // the once-a-day rule without waiting for midnight and check that the unopened-gift
 // rule still holds on its own. Dev-only: absent when DEV_AUTH="0" (the deployed value).
 app.post("/dev/fixture/gift-backdate", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ toAccountId?: string; days?: number }>()
     .catch((): { toAccountId?: string; days?: number } => ({}));
   const accountId = c.get("accountId");
@@ -553,7 +569,6 @@ app.post("/dev/fixture/gift-backdate", requireAuth, async (c) => {
 // column both rules read, which is exactly why this fixture is one UPDATE. Dev-only:
 // with DEV_AUTH="0" (the deployed value) this route does not exist.
 app.post("/dev/fixture/market-backdate", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ orderId?: string; ageMs?: number }>()
     .catch((): { orderId?: string; ageMs?: number } => ({}));
   if (typeof body.orderId !== "string") return c.json({ error: "bad_request" }, 400);
@@ -569,7 +584,6 @@ app.post("/dev/fixture/market-backdate", requireAuth, async (c) => {
 // exercise a known payout instead of whatever the send-time roll produced. Dev-only:
 // with DEV_AUTH="0" (the deployed value) this route does not exist.
 app.post("/dev/fixture/gift-reward", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ giftId?: string; kind?: string; amount?: number }>()
     .catch((): { giftId?: string; kind?: string; amount?: number } => ({}));
   const accountId = c.get("accountId");
@@ -844,6 +858,24 @@ export const validGameplayCommand = (value: unknown): value is GameplayCommand =
     case "farm.plant":
       return commandInt(command.oc) && commandInt(command.or) && commandString(command.cropKey) &&
         (command.fertilized === undefined || typeof command.fertilized === "boolean");
+    // Bulk forms. FARM_BULK_LIMIT is the whole board (289 plots), so the cap bounds the
+    // payload without ever refusing a legitimate full-farm stroke. An empty list is
+    // accepted and applies nothing — a length floor here would turn a harmless
+    // client-side edge into `bad_command_batch`, which pauses the farm permanently.
+    case "farm.plow_many":
+      return Array.isArray(command.plots) && command.plots.length <= FARM_BULK_LIMIT &&
+        command.plots.every((plot) => !!plot && typeof plot === "object" &&
+          commandInt((plot as Record<string, unknown>).oc) &&
+          commandInt((plot as Record<string, unknown>).or));
+    case "farm.plant_many":
+      return commandString(command.cropKey) && Array.isArray(command.plots) &&
+        command.plots.length <= FARM_BULK_LIMIT &&
+        command.plots.every((entry) => {
+          if (!entry || typeof entry !== "object") return false;
+          const plot = entry as Record<string, unknown>;
+          return commandInt(plot.oc) && commandInt(plot.or) &&
+            (plot.fertilized === undefined || typeof plot.fertilized === "boolean");
+        });
     case "power.buy": return commandString(command.key);
     case "power.use":
       return commandString(command.key) && (command.oc === undefined || commandInt(command.oc)) &&
@@ -911,6 +943,65 @@ const validCommandBatch = (body: unknown): body is CommandBatchRequest => {
   );
 };
 
+/** Why a batch failed `validCommandBatch`, in a form that is safe to log.
+ *
+ *  This is the one rejection in the system with no recovery: the client returns the
+ *  commands to its outbox, rebuilds an identical envelope, and is refused again — so a
+ *  single unacceptable command pauses that farm across reloads, for good. It was also
+ *  the ONLY rejection path with no `slog` line, which meant the failure mode we most
+ *  need to see left no trace on the server at all; the player's own toast was the only
+ *  evidence anywhere.
+ *
+ *  Deliberately shape-only. Command TYPES are named (that is what identifies the
+ *  offending client build), but no field values are read out — a batch that reached
+ *  here is by definition untrusted input, and its payload is nobody's business. */
+export function describeInvalidBatch(body: unknown): Record<string, unknown> {
+  if (!body || typeof body !== "object") return { reason: "not_an_object" };
+  const b = body as Partial<CommandBatchRequest>;
+  const commands = Array.isArray(b.commands) ? b.commands : null;
+  const label = (entry: unknown): string => {
+    if (!entry || typeof entry !== "object") return "<malformed>";
+    const command = (entry as { command?: unknown }).command;
+    if (!command || typeof command !== "object") return "<no-command>";
+    const type = (command as { type?: unknown }).type;
+    return typeof type === "string" ? type.slice(0, 64) : "<untyped>";
+  };
+  // Envelope problems come first: with a bad envelope the command list has not been
+  // judged at all, so naming a command as the culprit would be a guess.
+  const envelope =
+    b.protocolVersion !== GAMEPLAY_PROTOCOL ? "protocol_version"
+    : typeof b.deviceId !== "string" || b.deviceId.length < 8 || b.deviceId.length > 128 ? "device_id"
+    : typeof b.batchId !== "string" || b.batchId.length < 8 || b.batchId.length > 128 ? "batch_id"
+    : !Number.isSafeInteger(b.firstSequence) ? "first_sequence"
+    : !Number.isSafeInteger(b.expectedAccountVersion) ? "expected_account_version"
+    : !Number.isSafeInteger(b.writerGeneration) ? "writer_generation"
+    : !commands ? "commands_not_array"
+    : commands.length < 1 ? "commands_empty"
+    : commands.length > COMMAND_BATCH_LIMIT ? "commands_too_many"
+    : null;
+  if (envelope || !commands) {
+    return { reason: "envelope", field: envelope ?? "commands_not_array",
+      protocolVersion: typeof b.protocolVersion === "number" ? b.protocolVersion : null,
+      commandCount: commands?.length ?? null };
+  }
+  const index = commands.findIndex((entry, at) =>
+    !entry || typeof entry !== "object" || entry.sequence !== (b.firstSequence as number) + at ||
+    !validGameplayCommand(entry.command));
+  const offender = index >= 0 ? commands[index] : null;
+  return {
+    reason: "command",
+    index,
+    // The refused command, plus the whole batch's shape: a type that is valid on its
+    // own but arrives in an order the server does not expect looks identical to an
+    // unknown type unless the neighbours are visible too.
+    commandType: label(offender),
+    sequenceOk: !!offender && typeof offender === "object" &&
+      offender.sequence === (b.firstSequence as number) + index,
+    commandCount: commands.length,
+    types: [...new Set(commands.map(label))].slice(0, 12),
+  };
+}
+
 // The single "is the economy accepting writes?" question, asked by every mutation
 // route. Two independent levers, either of which halts writes: MUTATIONS_DISABLED (a
 // Worker var — the incident lever, needs a deploy) and the D1 service mode (the
@@ -977,7 +1068,17 @@ app.post("/commands", async (c) => {
   const accountId = c.get("accountId");
   if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body = await c.req.json<unknown>().catch(() => null);
-  if (!validCommandBatch(body)) return c.json({ error: "bad_command_batch" }, 400);
+  if (!validCommandBatch(body)) {
+    // "alert", not "warn": this is unrecoverable for the account that hit it (see
+    // describeInvalidBatch), so it wants to be findable without knowing to look.
+    slog("command_batch_invalid", {
+      account: accountHash(accountId),
+      build: c.req.header("X-Client-Build") ?? "unknown",
+      integrityVersion: c.req.header("X-Integrity-Version") ?? "none",
+      ...describeInvalidBatch(body),
+    }, "alert");
+    return c.json({ error: "bad_command_batch" }, 400);
+  }
   const credential = writerCredential(c);
   if (c.req.header("X-Integrity-Version") === String(CLIENT_INTEGRITY_VERSION) &&
       (!credential || body.deviceId !== credential.clientId || body.takeWriter)) {

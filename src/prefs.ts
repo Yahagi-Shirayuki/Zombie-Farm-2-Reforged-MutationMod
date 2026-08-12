@@ -44,6 +44,7 @@ const HAZARD_TIP_KEY = "zf2r.seenHazardTip";
 const RAID_TIP_KEY = "zf2r.seenRaidTip."; // + raid id
 const BODY_COLOR_KEY = "zf2r.zombieBodyColor";
 const SHOW_MUTATIONS_KEY = "zf2r.showZombieMutations";
+const LANTERN_KEY = "zf2r.farmerLantern";
 
 /** localStorage.getItem that survives a browser with storage denied (private mode,
  *  blocked third-party context). Appearance prefs are read while DRAWING, so a throw
@@ -82,6 +83,20 @@ export function getShowZombieMutations(): boolean {
 
 export function setShowZombieMutations(on: boolean): void {
   writePref(SHOW_MUTATIONS_KEY, on ? "1" : "0");
+}
+
+/** Whether the farmer carries a lit lantern at night. Defaults to on — that is what
+ *  ZF2 does, and it is how you see anything after dark.
+ *
+ *  Off puts the farm back under the full darkness mask with only the placed objects'
+ *  own glows carved out of it, which is the look some players actually want. It also
+ *  takes the lamp out of the farmer's hand, so the two agree. */
+export function getFarmerLantern(): boolean {
+  return readPref(LANTERN_KEY) !== "0";
+}
+
+export function setFarmerLantern(on: boolean): void {
+  writePref(LANTERN_KEY, on ? "1" : "0");
 }
 
 /** Both appearance choices at once, for the render sites that apply them. */

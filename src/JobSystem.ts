@@ -326,6 +326,10 @@ export class JobSystem {
     this.audioSuppressed ||= suppressAudio;
     try {
       while (remaining > 0 && (this.busy || this.walk.moving)) {
+        // The queue is stalled on an unreachable server, so no amount of further time
+        // moves it. Leave now rather than grinding out one no-op step per 50 ms of the
+        // whole absence — an overnight tab would otherwise burn hundreds of thousands.
+        if (!this.active && this.queue.length && this.mutationBlocked(this.queue[0].kind)) break;
         const step = Math.min(CATCH_UP_STEP_SEC, remaining);
         cursor += step * 1000;
         this.replayNow = cursor;
@@ -408,6 +412,10 @@ export class JobSystem {
   update(dt: number) {
     if (this.paused) return;
     if (!this.active) {
+      // Don't start work the server can't be told about — the head of the queue simply
+      // waits for the command lane to come back. Checked HERE as well as at the payoff
+      // so the farmer doesn't walk out and mime a plow that cannot land.
+      if (this.queue.length && this.mutationBlocked(this.queue[0].kind)) return;
       const next = this.queue.shift();
       if (!next) return;
       this.active = next;
@@ -429,8 +437,8 @@ export class JobSystem {
         if (this.field.hasFastWork()) {
           // apply() emits the completion sound. Playing a separate start sound here
           // would overlap it because instant work has no delay between the two.
-          this.apply(next);
-          this.finish();
+          if (this.apply(next)) this.finish();
+          else this.hold();
           return;
         }
         // Fruit-tree harvest uses the harvest animation at 2x speed (half as long).
@@ -451,16 +459,51 @@ export class JobSystem {
       if (this.active.bar) this.active.bar.fill.scale.x = progress;
       if (this.workMs <= 0) {
         this.actor.setWorking(false);
-        this.apply(this.active);
-        this.finish();
+        if (this.apply(this.active)) this.finish();
+        else this.hold();
       }
     }
   }
 
-  private apply(job: Job) {
-    if (job.kind === "walk") return;
-    const serverOwned = job.kind === "harvestTree" ? !!this.state.onTreeHarvest : !!this.state.onFarm;
-    if (serverOwned && this.state.canMutateOnline && !this.state.canMutateOnline()) return;
+  /** Put the active job back at the head of the queue, untouched, and stand down.
+   *
+   *  Used only when `apply` refused because the server is unreachable. The job keeps its
+   *  plot reservation and its pending key, so nothing else can claim the plot and a fresh
+   *  swipe over it still dedupes; only the walk/work animation is thrown away. The next
+   *  `update` after the lane recovers re-walks it. */
+  private hold() {
+    if (!this.active) return;
+    this.active.bar?.cont.destroy();
+    this.active.bar = null;
+    this.queue.unshift(this.active);
+    this.active = null;
+    this.phase = null;
+    this.onQueueChanged?.();
+  }
+
+  /** Whether this job's outcome has to reach the server, and the server is currently
+   *  unreachable. Online, the farm document is authoritative: applying locally while the
+   *  command lane is paused produces work the server never hears about, which the next
+   *  reconcile silently erases.
+   *
+   *  This used to be checked inside `apply` as a bare early return, and `update` finished
+   *  the job either way — so every plot the farmer reached during a pause was quietly
+   *  consumed. A player who drag-plowed a field and then lost the lane (a rate limit, a
+   *  bad connection, a writer hand-off) got holes in it with no error anywhere, which is
+   *  the "drag-plowing skips plots" report. Now the job WAITS. */
+  private mutationBlocked(kind: Kind): boolean {
+    if (kind === "walk") return false;
+    const serverOwned = kind === "harvestTree" ? !!this.state.onTreeHarvest : !!this.state.onFarm;
+    return serverOwned && !!this.state.canMutateOnline && !this.state.canMutateOnline();
+  }
+
+  /** Returns false when the job could not be applied because the server is unreachable,
+   *  so the caller must put it back rather than finish it. Every other outcome —
+   *  including a legitimate refusal like insufficient funds — returns true: the job was
+   *  judged, and repeating it would only produce the same refusal forever. */
+  private apply(job: Job): boolean {
+    if (job.kind === "walk") return true;
+    if (this.mutationBlocked(job.kind)) return false;
     if (job.kind === "harvestTree") {
       const treeName = job.objId ? this.field.objectDefOf(job.objId)?.name : undefined;
       const baseGold = job.objId ? this.field.harvestObject(job.objId) : null;
@@ -472,14 +515,14 @@ export class JobSystem {
         this.float(job.cx, job.cy, `+${gold}g`);
         this.playSfx("xp");
       }
-      return;
+      return true;
     }
     if (job.kind === "till") {
       const cost = this.plowCost(); // 0 with a Plowing Monolith
       const xp = plowXp(cost === 0);
       if (this.state.gold < cost) {
         this.onInsufficientFunds("gold", cost);
-        return;
+        return true;
       }
       if (this.state.gold >= cost && this.field.tillAt(job.oc, job.or)) {
         // ONLINE: the server owns the plow cost + XP and RECORDS the soil, which
@@ -509,7 +552,7 @@ export class JobSystem {
       const funds = cfg.brainsNeeded ? this.state.brains : this.state.gold;
       if (funds < cfg.cost) {
         this.onInsufficientFunds(cfg.brainsNeeded ? "brains" : "gold", cfg.cost);
-        return;
+        return true;
       }
       if (funds >= cfg.cost && this.field.plantAt(job.oc, job.or, cfg, this.replayNow ?? Date.now())) {
         // Zombie crops are now server-owned too (plant debits the cost, harvest yields a
@@ -552,7 +595,7 @@ export class JobSystem {
       // would delete a grown zombie outright rather than merely refusing it.
       if (this.field.ripeZombieAt(job.oc, job.or) && !this.hasZombieRoom()) {
         this.float(job.cx, job.cy, "Army full!");
-        return;
+        return true;
       }
       const r = this.field.harvestAt(job.oc, job.or);
       if (r) {
@@ -604,6 +647,7 @@ export class JobSystem {
         );
       }
     }
+    return true;
   }
 
   private finish() {
