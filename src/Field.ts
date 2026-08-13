@@ -1546,6 +1546,10 @@ export class Field {
     obj.paintOverlay.tint = tint;
     obj.paintOverlay.visible = true;
     this.fitObjectSprite(obj.sprite, obj.def, obj.oc, obj.or, obj.ready, obj.flipped, obj);
+    // Dye overlays are refreshed after the entity-layer depth sort in main's frame
+    // loop, so keep this sibling explicitly above its bucket for the frame about to
+    // render. The footprint still lets the normal sorter keep it near the object.
+    obj.paintOverlay.zIndex = obj.sprite.zIndex + 0.01;
     return true;
   }
 

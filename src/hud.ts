@@ -4691,8 +4691,8 @@ export class Hud {
         const plus = document.createElement("div");
         plus.className = "cmb-plus";
         plus.textContent = "+";
-        slots.append(parent(st.pending!.keyA, st.pending!.maskA, st.pending!.colorA), plus,
-          parent(st.pending!.keyB, st.pending!.maskB, st.pending!.colorB));
+        slots.append(parent(st.pending!.keyA, st.pending!.maskA, st.pending!.colorA, st.pending!.mutationIdsA), plus,
+          parent(st.pending!.keyB, st.pending!.maskB, st.pending!.colorB, st.pending!.mutationIdsB));
 
         const bar = document.createElement("div");
         bar.className = "cmb-prog";

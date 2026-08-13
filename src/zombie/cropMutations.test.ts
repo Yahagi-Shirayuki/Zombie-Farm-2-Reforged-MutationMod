@@ -136,7 +136,7 @@ describe("crop-adjacency mutations", () => {
     })).toBe(4096);
   });
 
-  it("keeps secondary arm rolls at 50% with the monolith instead of guaranteeing them", () => {
+  it("keeps matching secondary arm rolls at 50% with the monolith instead of guaranteeing them", () => {
     expect(resolveCropMutationSet(0, [], ["corn"], {
       guaranteed: true,
       random: () => 0.5,
@@ -146,6 +146,15 @@ describe("crop-adjacency mutations", () => {
       guaranteed: true,
       random: () => 0.499,
     }).ids).toContain("corn_arm_b");
+  });
+
+  it("does not lower different arm secondaries with the monolith", () => {
+    const crops = { corn: "corn_arm", celery: "celery" };
+    expect(resolveCropMutationSet(0, [], ["corn", "celery"], {
+      crops,
+      guaranteed: true,
+      random: () => 1,
+    })).toEqual({ mask: 64, ids: ["corn_arm_b"] });
   });
 });
 

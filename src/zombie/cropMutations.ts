@@ -107,11 +107,10 @@ function frontArmKey(set: MutationSet): string | null {
   return null;
 }
 
-function backArmChance(baseChance: number, frontKey: string | null, pairedWith: MutationRef): number {
+function backArmChance(baseChance: number, frontKey: string | null, pairedWith: MutationRef, guaranteed: boolean): number {
   const pairedKey = mutationOf(pairedWith)?.key ?? null;
-  return frontKey && pairedKey === frontKey
-    ? baseChance * MATCHING_BACK_ARM_CHANCE_MULTIPLIER
-    : baseChance;
+  if (!frontKey || pairedKey !== frontKey) return baseChance;
+  return guaranteed ? GUARANTEED_BACK_ARM_CHANCE : baseChance * MATCHING_BACK_ARM_CHANCE_MULTIPLIER;
 }
 
 function chanceSucceeds(chance: number, random: () => number): boolean {
@@ -170,9 +169,7 @@ export function resolveCropMutationSet(
       if (!startingSlots.has("arm")) set = addMutationRef(set, success.ref, !!options.headless);
       if (backArmRef && occupiedMutationSlots(set.mask, set.ids).has("arm") &&
           refGrowable(backArmRef, !!options.headless)) {
-        const chance = guaranteed
-          ? GUARANTEED_BACK_ARM_CHANCE
-          : backArmChance(success.chance, frontArmKey(set), success.ref);
+        const chance = backArmChance(success.chance, frontArmKey(set), success.ref, guaranteed);
         if (chanceSucceeds(chance, random)) set = addMutationRef(set, backArmRef, !!options.headless);
       }
       continue;

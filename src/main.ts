@@ -207,7 +207,7 @@ function installLocalFarmHotkeys(playMode: PlayMode, state: GameState, saves: Sa
 
       case "KeyJ":
         saves.flush();
-        skipLocalFarmTime(playMode, saves, 1 * 60);
+        skipLocalFarmTime(playMode, saves, 30);
         break;
 
       case "KeyK":

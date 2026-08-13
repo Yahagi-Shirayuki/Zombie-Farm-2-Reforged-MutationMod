@@ -6,13 +6,13 @@ import { Container, Sprite } from "pixi.js";
 import { GameAssets, ZombieModel } from "../assets";
 import { slotOfRef, type MutationRef } from "../zombie/mutations";
 import {
-  isMutationForegroundPart,
   matchesMutationReplacement,
   mutationRefsForRendering,
   mutationPartForFacing,
   mutationCoversFace,
   mutationReplacementFor,
   mutationPartZIndex,
+  shouldPromoteBaseHeadForegroundPart,
   type MutationReplacement,
 } from "../zombie/mutationVisual";
 import {
@@ -189,7 +189,7 @@ export class RaidActor {
         replacements.has("head")
         && p.group === "head"
         && (matchesMutationReplacement(p.file, "head")
-          || (coversFace && isMutationForegroundPart(p.file)))
+          || (coversFace && shouldPromoteBaseHeadForegroundPart(p.file, p.z)))
       ) continue;
       const tex = assets.zombiePartTex[p.file];
       if (!tex) continue;
@@ -197,7 +197,7 @@ export class RaidActor {
       sp.anchor.set(p.ax, p.ay);
       sp.position.set(p.px, p.py);
       sp.scale.set(p.scale ?? 1);
-      sp.zIndex = replacements.has("head") && isMutationForegroundPart(p.file)
+      sp.zIndex = replacements.has("head") && shouldPromoteBaseHeadForegroundPart(p.file, p.z)
         ? MUT_BASE_FOREGROUND_Z + p.z
         : p.z;
       if (p.tint) sp.tint = zombiePartTint(p.file, tint, group);

@@ -1,6 +1,7 @@
 import { Texture } from "pixi.js";
 import { describe, expect, it } from "vitest";
 import type { GameAssets, ZombieModel } from "../assets";
+import { bitOf } from "../zombie/mutations";
 import { RaidActor } from "./RaidActor";
 
 const model: ZombieModel = {
@@ -172,6 +173,40 @@ describe("RaidActor mutation rendering", () => {
     // Default eyes keep their authored light-yellow regardless of the body tint.
     const eyes = (owned as unknown as { eyes: { sp: { tint: number } }[] }).eyes;
     expect(eyes.every(({ sp }) => sp.tint === 0xffffff)).toBe(true);
+  });
+
+  it("keeps low-z sunflower head features behind raid head mutations", () => {
+    const testAssets = assets();
+    testAssets.zombieModels.sunflower = {
+      name: "Sunflower Zombie",
+      neck: { x: 0, y: 0 },
+      scale: 1,
+      color: [255, 255, 255],
+      parts: [
+        { file: "defaultBody", group: "root", px: 0, py: 0, ax: 0.5, ay: 0.5, z: 2, tint: true },
+        { file: "sunflowerFeature", group: "head", px: 0, py: -18, ax: 0.5, ay: 0.5, z: 3, tint: false },
+      ],
+    };
+    testAssets.zombiePartTex.sunflowerFeature = Texture.EMPTY;
+    testAssets.zombiePartTex.tomatoHead = Texture.EMPTY;
+    testAssets.mutationParts.tomato = {
+      file: "tomatoHead",
+      group: "head",
+      headRel: false,
+      ox: 0,
+      oy: 16,
+      ax: 0.5,
+      ay: 0.5,
+      z: 4,
+      replaces: "head",
+    };
+
+    const actor = new RaidActor(testAssets, "sunflower", bitOf("tomato"));
+    const children = (actor as unknown as { root: { children: { zIndex: number }[] } }).root.children;
+    const sunflowerZ = children.find((child) => child.zIndex === 3)?.zIndex;
+    const mutationZ = children.find((child) => child.zIndex === 4.5)?.zIndex;
+
+    expect(sunflowerZ).toBeLessThan(mutationZ!);
   });
 
   it("falls back to the model's catalog colour when the unit has no tint", () => {
