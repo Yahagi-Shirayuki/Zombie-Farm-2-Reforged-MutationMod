@@ -290,15 +290,17 @@ describe("JobSystem elapsed-time catch-up", () => {
     const state = {
       onFarm: null, onTreeHarvest: null, canMutateOnline: null,
     };
+    let room = 1;
     const jobs = new JobSystem(
       field as never, { setWorking } as never, walk as never, state as never,
       (_x, _y, message) => messages.push(message),
       () => {}, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-      () => false,
+      () => room,
     );
 
     expect(jobs.enqueue("harvest", 4, 8)).toBe(true);
     jobs.enqueueWalk(20, 20);
+    room = 0;
     jobs.update(0);
     walk.update(0.2);
     // The next queued task starts on the following foreground tick.

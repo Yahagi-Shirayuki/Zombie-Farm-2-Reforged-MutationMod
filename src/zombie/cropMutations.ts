@@ -47,11 +47,13 @@ export const CROP_MUTATIONS: CropMutationTable = {
   corn: ["corn_head", "corn_arm"],
   Spineapple: "spineapple_body",
   malakale: "kale_arm",
+  blueberyl: "berry_eye",
+  spinalch: "spinach_hair",
   Bloodberry: "bloodberry_hair",
   skellyberry: "skellyberry_body",
   reddelicious: "apple_head",
   felonmelon: "melon_head",
-  blueberyl: "berry_eye",
+
 };
 
 export function cropMutationRefs(

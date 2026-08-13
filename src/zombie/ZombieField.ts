@@ -26,11 +26,11 @@ import {
 export const MAUSOLEUM_CAP = 15;
 
 type MutationInput = number | MutationSet | undefined;
-type SplitMutationInput = { mask?: number; ids: string[] };
+type SplitMutationInput = { mask?: number; ids?: string[] };
 
 const splitMutationInput = (mutation?: MutationInput, mutationIds?: readonly string[]): SplitMutationInput => {
   if (typeof mutation === "object" && mutation) return { mask: mutation.mask, ids: [...mutation.ids] };
-  return { mask: mutation, ids: [...(mutationIds ?? [])] };
+  return { mask: mutation, ids: mutationIds ? [...mutationIds] : undefined };
 };
 
 const sameColor = (a?: readonly [number, number, number], b?: readonly [number, number, number]): boolean =>
@@ -170,6 +170,15 @@ export class ZombieField {
   /** Can a grown zombie be collected into either the active army or Mausoleum? */
   canHarvestZombie(): boolean {
     return this.canAdd() || (!!this.field.mausoleumId() && !this.mausoleumFull);
+  }
+
+  /** How many grown zombie crops can be collected right now. */
+  zombieHarvestRoom(): number {
+    const armyRoom = Math.max(0, this.state.zombieMax - this.units.length);
+    const cryptRoom = this.field.mausoleumId()
+      ? Math.max(0, this.mausoleumCap - this.stored.length)
+      : 0;
+    return armyRoom + cryptRoom;
   }
 
   /** A crop was just planted at plot (oc,or): each DEPLOYED Garden zombie rolls its

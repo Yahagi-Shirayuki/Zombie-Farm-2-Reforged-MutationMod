@@ -21,7 +21,7 @@ import { objectBuyXp, objectEcon, objectRefund } from "../objectCatalog";
 import { planClaim } from "../storage";
 import { QUEST_DEFINITIONS, QUEST_REWARD } from "../questCatalog";
 import { isHeadlessZombie, legalMutation, zombieSell } from "../rosterCatalog";
-import { climateCost, nextSize, sizeTier } from "../shopCatalog";
+import { climateCost, MAX_FARM_SIZE, nextSize, sizeTier } from "../shopCatalog";
 import { zombieCropEcon } from "../zombieCropCatalog";
 import {
   activeBonusHeadId, farmerGold, farmerHeadHasEffect, farmerHeadXp, farmerZombieGrowMs,
@@ -61,9 +61,9 @@ import {
 } from "../../../src/quest/mutantSubjects";
 import { encodeReceivedZombie, parseReceivedZombie } from "../../../src/zombie/receivedReward";
 
-export const MAX_FARM_PLOTS = 225;
 export const MAX_FUNCTIONAL_OBJECTS = 512;
 export const PLOT_SIZE = 4;
+export const MAX_FARM_PLOTS = Math.floor(MAX_FARM_SIZE / PLOT_SIZE) ** 2;
 export const GROW_GRACE_MS_V3 = 15_000;
 export const PLOW_COST_V3 = 10;
 
@@ -535,6 +535,51 @@ function reject(sequence: number, error: string): CommandResult {
   return { sequence, status: "rejected", error };
 }
 
+function applyBulkFarm(
+  state: MutableGameplayState,
+  sequence: number,
+  options: Required<EngineOptions>,
+  events: QuestEvent[],
+  created: string[],
+  commands: Extract<GameplayCommand, { type: "farm.plow" | "farm.plant" }>[]
+): CommandResult {
+  if (!commands.length) return reject(sequence, "no_effect");
+  let applied = 0;
+  let rejected = 0;
+  let rejectedPlotError = "";
+  const createdBefore = created.length;
+  const createdZombieSources: { id: string; oc: number; or: number }[] = [];
+  for (const command of commands.slice(0, MAX_FARM_PLOTS)) {
+    const createdAt = created.length;
+    const result = applyOne(
+      state,
+      { sequence, command },
+      options,
+      events,
+      created,
+    );
+    if (result.status === "applied") {
+      applied++;
+      if (result.createdZombieSources?.length) createdZombieSources.push(...result.createdZombieSources);
+      else if (created.length > createdAt) {
+        createdZombieSources.push({ id: created[created.length - 1], oc: command.oc, or: command.or });
+      }
+    } else {
+      rejected++;
+      rejectedPlotError ||= result.error ?? "no_effect";
+    }
+  }
+  if (!applied) return reject(sequence, rejectedPlotError || "no_effect");
+  const createdIds = created.slice(createdBefore);
+  return {
+    sequence,
+    status: "applied",
+    ...(createdIds.length ? { createdIds } : {}),
+    ...(createdZombieSources.length ? { createdZombieSources } : {}),
+    ...(rejected ? { rejectedPlots: rejected, rejectedPlotError: rejectedPlotError || "no_effect" } : {}),
+  };
+}
+
 function applyOne(
   state: MutableGameplayState,
   item: SequencedCommand,
@@ -565,6 +610,19 @@ function applyOne(
       events.push({ type: "kSoilPlowedNotification", subject: "Plow" }, { type: "kNewSoilPlowedNotification", subject: "Plow" });
       return { sequence, status: "applied" };
     }
+    case "farm.plow_many":
+      return applyBulkFarm(state, sequence, options, events, created,
+        command.plots.map((plot) => ({ type: "farm.plow", oc: plot.oc, or: plot.or })));
+    case "farm.plant_many":
+      return applyBulkFarm(state, sequence, options, events, created,
+        command.plots.map((plot) => ({
+          type: "farm.plant",
+          oc: plot.oc,
+          or: plot.or,
+          cropKey: command.cropKey,
+          fertilized: plot.fertilized,
+          variant: plot.variant,
+        })));
     case "farm.plant": {
       if (!validCoord(command.oc, state.farmSize) || !validCoord(command.or, state.farmSize)) return reject(sequence, "bad_coord");
       const key = plotKey(command.oc, command.or);

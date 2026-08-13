@@ -281,6 +281,18 @@ export interface CrabConfig {
   holdMs: number; // grab -> carry delay (CCDelayTime 2.0 s)
 }
 
+/** What the fight can attest to about how it was won, beyond who lived and died. */
+export interface RaidFeats {
+  /** One entry per enemy destroyed by an activated ability. */
+  abilityKills: { ability: string; boss: boolean }[];
+  /** One entry per resurrection performed. */
+  resurrections: { exploded: boolean }[];
+}
+
+export function emptyRaidFeats(): RaidFeats {
+  return { abilityKills: [], resurrections: [] };
+}
+
 /** The outcome of a resolved raid (fed to the Result panel + reward pipeline). */
 export interface RaidOutcome {
   win: boolean;
@@ -295,6 +307,8 @@ export interface RaidOutcome {
   playerDamage: number;
   /** Epic Boss only: the hard attempt clock elapsed while the boss still lived. */
   escaped?: boolean;
+  /** How the fight was won, for technique achievements. */
+  feats?: RaidFeats;
 }
 
 

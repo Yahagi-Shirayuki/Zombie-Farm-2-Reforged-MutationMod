@@ -19,6 +19,8 @@ import type { PlayMode } from "../playMode";
 import type { JobSystem } from "../JobSystem";
 import { sanitizePowderGrinds, sanitizePowderStorage } from "../powderMachine";
 import { sanitizeZombieColorDyeJobs } from "../zombieColorMixerBucket";
+import { sanitizeTeams } from "../zombie/teams";
+import type { PeriodicQuestSystem } from "../quest/periodic/PeriodicQuestSystem";
 
 export type FarmLoadResult =
   | { kind: "local-existing" }
@@ -40,7 +42,7 @@ type PresentationData = {
   zombiePot?: SaveGame["zombiePot"];
   zombiePots?: SaveGame["zombiePots"];
   tutorial?: SaveGame["tutorial"];
-  ui?: { attackOrder?: string[] };
+  ui?: { attackOrder?: string[]; teams?: unknown };
   /** Zombie Almanac lifetime-discovery counts. Cosmetic and client-authored, so
    * online it rides the presentation blob rather than a server table. */
   almanac?: SaveGame["almanac"];
@@ -50,6 +52,7 @@ type ObjectLayout = NonNullable<PresentationData["objectLayout"]>[number];
 /** Offline builds retain a local full save. Signed-in v3 builds persist only visual
  * presentation; authoritative gameplay is hydrated from the shared bootstrap call. */
 export class SaveManager {
+  periodicQuests: PeriodicQuestSystem | null = null;
   /** Background from the latest hydrated save. Main applies this only for the
    * player's own farm, so visiting never overwrites device preferences. */
   loadedFarmBackground: SaveGame["farm"]["background"];
@@ -208,12 +211,14 @@ export class SaveManager {
       powderGrinds: sanitizePowderGrinds(this.state.powderGrinds),
       zombieColorDyes: sanitizeZombieColorDyeJobs(this.state.zombieColorDyes),
       quests: this.quests.serialize(),
+      ...(this.periodicQuests?.serialize() ? { periodicQuests: this.periodicQuests.serialize() } : {}),
       raids: { completed: this.state.raidsCompleted, lastRaidAt: this.state.lastRaidAt, attackOrder: this.state.raidAttackOrder,
         brainDryStreak: this.state.brainDryStreak, zombieDryWins: this.state.zombieDryWins },
       epicBoss: this.state.epicBossRun ?? undefined,
       social: { friends: this.state.friends },
       tutorial: this.state.tutorial,
       almanac: { discovered: this.state.zombieDiscovered },
+      teams: this.state.zombieTeams,
       ...(farmJobs ? { farmJobs } : {}),
     };
   }
@@ -248,7 +253,7 @@ export class SaveManager {
       rosterLayout: (blob.ownedZombies ?? []).map((u) => ({ id: u.id, name: u.name, pos: u.pos, stored: u.stored, color: u.color })),
       zombiePots: blob.zombiePots,
       tutorial: blob.tutorial,
-      ui: { attackOrder: blob.raids?.attackOrder ?? [] },
+      ui: { attackOrder: blob.raids?.attackOrder ?? [], teams: blob.teams ?? [] },
       almanac: blob.almanac,
     };
   }
@@ -551,6 +556,7 @@ export class SaveManager {
       social: { friends: boot.social.friends.map((friend) => ({ id: friend.accountId, name: friend.name, addedAt: boot.serverTime, giftsSent: 0 })) },
       tutorial: reconcileTutorialCompletion(p.tutorial, boot.gameplay.tutorialRewarded),
       almanac: p.almanac,
+      teams: sanitizeTeams(p.ui?.teams),
       farmJobs: this.readJobJournal(),
     };
   }
@@ -610,9 +616,11 @@ export class SaveManager {
     this.state.syncPowderStorage(data.powderStorage);
     this.state.syncPowderGrinds(data.powderGrinds);
     this.state.syncZombieColorDyes(data.zombieColorDyes);
+    this.periodicQuests?.restore(data.periodicQuests);
     this.state.raidsCompleted = data.raids?.completed ?? {};
     this.state.lastRaidAt = data.raids?.lastRaidAt ?? 0;
     this.state.raidAttackOrder = data.raids?.attackOrder ?? [];
+    this.state.zombieTeams = sanitizeTeams(data.teams);
     this.state.brainDryStreak = Math.max(0, Math.trunc(data.raids?.brainDryStreak ?? 0));
     this.state.zombieDryWins = Object.fromEntries(
       Object.entries(data.raids?.zombieDryWins ?? {})

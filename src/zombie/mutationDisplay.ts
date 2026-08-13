@@ -63,6 +63,7 @@ export const MUTATION_ICON: Record<string, string> = {
   spineapple_body: placeholderIcon,
   kale_arm: iconFile("kale"),
   berry_eye: iconFile("blueberry"),
+  spinach_hair: iconFile("spinach"),
   bloodberry_hair: placeholderIcon, 
   skellyberry_body: placeholderIcon,
 };

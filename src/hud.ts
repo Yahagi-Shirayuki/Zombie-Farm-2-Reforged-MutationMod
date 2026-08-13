@@ -77,6 +77,12 @@ import {
   openZombieInfo as openZombieInfoPanel,
   openZombiesPanel, rosterInfo, type ZombiesPanelTab,
 } from "./ui/panels/zombies";
+import { openTeamsPanel } from "./ui/panels/teams";
+import type { TeamAssembleResult, ZombieTeam } from "./zombie/teams";
+import {
+  openPeriodicQuests, renderPeriodicQuests, type PeriodicQuestPanelView,
+} from "./ui/panels/periodicQuests";
+import type { PeriodicScope, PeriodicScopeView } from "./quest/periodic/types";
 import { openFarmersGuide } from "./ui/panels/farmersGuide";
 import { showTimNotice } from "./ui/TimNotice";
 // View-model types + the grave classifier live in hudTypes so panel modules can
@@ -112,6 +118,10 @@ interface MktEntry {
    *  description parchment — stats and abilities are the thing worth reading before
    *  buying, and the blurb rides along under the card. */
   inspect?: () => void;
+  zombieKey?: string; // zombie market entries can render their mutation-aware portrait
+  mutation?: number;
+  mutationIds?: readonly string[];
+  color?: [number, number, number];
   tint?: [number, number, number]; // multiplicative object tint from Market data
   theme?: string; // seasonal badge ("Christmas"); "" or absent for evergreen
   onPick: () => void;
@@ -249,6 +259,10 @@ export class Hud {
   private questViews: QuestView[] = [];
   private questLogModal: ModalHandle | null = null;
   private questDetailModal: { id: string; handle: ModalHandle } | null = null;
+  private periodicViews: PeriodicScopeView[] = [];
+  private periodicModal: ModalHandle | null = null;
+  private periodicButton: HTMLButtonElement | null = null;
+  onPeriodicQuestClaim: ((scope: PeriodicScope, questId: string) => void) | null = null;
   private tools: Record<string, HTMLButtonElement> = {};
   private menuCol!: HTMLElement;
   private toolsBar!: HTMLElement;
@@ -677,6 +691,56 @@ export class Hud {
       more.onclick = () => this.openQuestLog();
       this.questCol.appendChild(more);
     }
+    this.renderPeriodicButton();
+  }
+
+  private renderPeriodicButton() {
+    if (!this.questCol) return;
+    this.periodicButton?.remove();
+    this.periodicButton = null;
+    if (!this.periodicViews.length) return;
+    const claimable = this.periodicViews.reduce(
+      (total, scope) => total + scope.quests.filter((q) => q.done && !q.claimed).length, 0
+    );
+    const button = document.createElement("button");
+    button.className = "quest qperiodic" + (claimable ? " ready" : "");
+    button.title = claimable
+      ? `${claimable} quest reward${claimable === 1 ? "" : "s"} to collect`
+      : "Daily & weekly quests";
+    button.setAttribute("aria-label", button.title);
+    const glyph = document.createElement("span");
+    glyph.className = "qperiodic-glyph";
+    glyph.textContent = "★";
+    button.appendChild(glyph);
+    if (claimable) {
+      const badge = document.createElement("span");
+      badge.className = "qbadge";
+      badge.textContent = String(claimable);
+      button.appendChild(badge);
+    }
+    button.onclick = () => this.openPeriodicQuests();
+    this.questCol.appendChild(button);
+    this.periodicButton = button;
+  }
+
+  setPeriodicQuests(views: PeriodicScopeView[]) {
+    this.periodicViews = views;
+    this.renderPeriodicButton();
+    if (this.periodicModal) renderPeriodicQuests(this.periodicModal.panel, this.periodicPanelView());
+  }
+
+  private periodicPanelView(): PeriodicQuestPanelView {
+    return {
+      scopes: this.periodicViews,
+      onClaim: (scope, questId) => this.onPeriodicQuestClaim?.(scope, questId),
+    };
+  }
+
+  private openPeriodicQuests() {
+    this.periodicModal?.close();
+    this.periodicModal = openPeriodicQuests(this.el, this.periodicPanelView(), () => {
+      this.periodicModal = null;
+    });
   }
 
   // Full quest screen: every active quest as a card with its objectives, scrollable.
@@ -1316,6 +1380,14 @@ export class Hud {
   /** Mausoleum storage-slot capacity (shown as fixed slots). The placed building's
    *  tier decides it, so it is read on every render, not cached. 0 = none placed. */
   getMausoleumCap: (() => number) | null = null;
+  /** Current farm army cap, used by saved zombie-team assembly planning. */
+  getArmyCap: (() => number) | null = null;
+  /** Saved zombie line-ups. */
+  getTeams: (() => ZombieTeam[]) | null = null;
+  /** Persist replacement saved zombie line-ups. */
+  onTeamsChange: ((teams: ZombieTeam[]) => void) | null = null;
+  /** Move the requested saved team onto the farm. */
+  onTeamAssemble: ((members: readonly string[]) => Promise<TeamAssembleResult | null>) | null = null;
   /** The next Mausoleum tier the placed building can be upgraded to, or null when
    *  none is placed / it is already the top tier. */
   getMausoleumUpgrade: (() => { name: string; cost: number; brains: boolean; slots: number } | null) | null = null;
@@ -1738,6 +1810,9 @@ export class Hud {
           timeLabel: c.timeLabel,
           graveNeeded: c.cfg.unlockGrave,
           description: c.description,
+          zombieKey: c.cfg.key,
+          mutation: c.zombie?.mutation ?? 0,
+          mutationIds: c.zombie?.mutationIds,
           inspect: () => openCatalogZombieCard(this, c),
           onPick: () => { this.setPlanting(c.cfg); bg.remove(); },
         }));
@@ -2272,7 +2347,8 @@ export class Hud {
     const curAmt = en.brains ? this.state.brains : this.state.gold;
     const poor = !en.owned && !locked && !graveLock && !limitLock && curAmt < en.cost;
     const card = document.createElement("div");
-    card.className = "mkt-card" + (en.owned ? " owned" : "") + (en.equipped ? " equipped" : "") +
+    card.className = "mkt-card" + (en.zombieKey ? " mkt-zombie" : "") +
+      (en.owned ? " owned" : "") + (en.equipped ? " equipped" : "") +
       (locked || poor || graveLock || limitLock ? " locked" : "");
 
     const hd = document.createElement("div");
@@ -2295,6 +2371,13 @@ export class Hud {
     img.decoding = "async";
     img.src = en.portrait;
     tintMarketPortrait(img, en.tint);
+    if (en.zombieKey && this.zombieMutationPortraitOf) {
+      onFirstVisible(img, () => {
+        void this.zombieMutationPortraitOf?.(en.zombieKey!, en.mutation ?? 0, en.color, en.mutationIds)
+          .then((mutated) => { if (img.isConnected) img.src = mutated; })
+          .catch(() => { /* retain the static species portrait */ });
+      });
+    }
     body.appendChild(img);
     if (en.sell !== undefined) {
       const s = document.createElement("div");
@@ -4463,8 +4546,16 @@ export class Hud {
         }
       }
 
-      // Upgrade the building in place: each tier adds five slots for brains.
       foot.innerHTML = "";
+      const teams = document.createElement("button");
+      teams.className = "zbtn store";
+      const savedTeams = this.getTeams?.().length ?? 0;
+      teams.textContent = savedTeams ? `Teams (${savedTeams})` : "Teams";
+      teams.title = "Save and swap farm line-ups";
+      teams.onclick = () => openTeamsPanel(this, render);
+      foot.appendChild(teams);
+
+      // Upgrade the building in place: each tier adds five slots for brains.
       const next = this.getMausoleumUpgrade?.() ?? null;
       if (next) {
         const button = document.createElement("button");

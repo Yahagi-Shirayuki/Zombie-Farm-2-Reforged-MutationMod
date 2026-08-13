@@ -65,7 +65,7 @@ export function makeOwned(
   const group = def.group ?? tax.group;
   const isHeadless = group === "Headless";
   const mask = applyBodyTypeRestriction(mutation ?? def.mutation ?? 0, isHeadless);
-  const ids = applyBodyTypeIdRestriction(normalizeMutationIds(mutationIds), isHeadless);
+  const ids = applyBodyTypeIdRestriction(normalizeMutationIds(mutationIds ?? def.mutationIds), isHeadless);
   const bonus = mutationBonus(mask, ids);
   const cleanPowderStats = sanitizeZombiePowderStats(powderStats);
   const cleanPowderProgress = sanitizeZombiePowderStatProgress(powderStatProgress);

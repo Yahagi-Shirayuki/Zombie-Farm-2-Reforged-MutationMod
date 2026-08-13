@@ -28,16 +28,32 @@ import {
   raidTier,
   resolveStageWave,
   rewardPreview,
+  boostDrops,
   seededRandom,
 } from "./RaidCatalog";
 import { ABILITY_TIER, ABILITY_POOL } from "../zombie/traits";
 import { displayStatTones, displayTotals, type StatTone } from "../zombie/statDisplay";
 import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidOutcome, RaidStage } from "./types";
 import { rollLootTier } from "./LootTable";
-import { rollBrainDropWithPity, nextBrainDryStreak } from "./brainDrops";
+import { rollBrainDropWithPity, nextBrainDryStreak, brainDropChance, brainDropTable } from "./brainDrops";
 import { orderPartyRoster } from "./partySelection";
-import { rollRaidZombieDropWithPity, nextRaidZombieDryWins, hasRaidZombieDrop } from "./zombieDrops";
+import {
+  rollRaidZombieDropWithPity,
+  nextRaidZombieDryWins,
+  hasRaidZombieDrop,
+  raidZombieDropRate,
+  RAID_ZOMBIE_DROPS,
+} from "./zombieDrops";
 import { raidBoostBundle } from "./lootBundles";
+import {
+  BRAIN_TICKET_KEY,
+  ELITE_BRAIN_LUCK,
+  eliteBossSpecials,
+  eliteBossThrow,
+  eliteProfile,
+  eliteWallHp,
+  type EliteProfile,
+} from "./eliteInvasion";
 
 /** Real grab-hazard art per raid id. Circus = the trapeze girl (extracted from the
  *  stage atlas). */
@@ -65,6 +81,14 @@ export interface RaidCardView {
   /** XP actually on offer from this card: the enemy's `xp` if never cleared, else 0
    *  â€” XP is a one-time first-clear bonus (`firstTimeBeatingEnemy`). */
   firstClearXp: number;
+  /** Brain payout odds for a boss win here. */
+  brainOdds: { chance: number; tiers: { amount: number; chance: number }[] };
+  /** The same odds on a Brain Ticket. */
+  eliteBrainOdds: { chance: number; tiers: { amount: number; chance: number }[] };
+  /** Rare zombie reward odds, if this raid has one. */
+  zombieDrop: { name: string; rate: number; eliteRate: number } | null;
+  /** Boosts on this raid's loot table, with the quantity one drop pays. */
+  boostDrops: { key: string; name: string; qty: number }[];
   rewardPreview: string[];
   introText: string;
   seasonal: boolean;
@@ -150,6 +174,8 @@ export interface RaidResultView {
 export interface RaidLaunchOpts {
   /** Spend an Invasion Voucher to bypass an active cooldown. */
   useVoucher?: boolean;
+  /** Spend a Brain Ticket to bypass cooldown, fight an elite wave, and multiply brain/rare-zombie odds. */
+  brainTicket?: boolean;
   /** Spend a Concentration boost so zombies fight at full focus (no distraction). */
   concentration?: boolean;
   /** How many Golden Dice to spend (each climbs the loot one tier rarer). */
@@ -167,6 +193,8 @@ export interface RaidLaunchOpts {
   /** ONLINE: server-pinned brain award, revealed at start for the boss-death visual
    * but credited only after the deterministic replay verifies the win. */
   serverBrainDrop?: number;
+  /** ONLINE: whether the server actually charged a Brain Ticket and pinned this session as elite. */
+  serverElite?: boolean;
   /** Seed for any per-fight randomness in the wave itself (today only the Robots'
    *  random boss â€” see resolveStageWave). ONLINE this MUST be the raid session id,
    *  because the server pinned its own wave from the same seed and the replay
@@ -203,6 +231,8 @@ export interface RaidSetup {
   /** Whether this fight could pay brains at all (it fields a boss). Only such an
    *  invasion moves the silent dry-streak counter â€” see finishRaid. */
   brainEligible: boolean;
+  /** A Brain Ticket was charged: the enemy line is scaled to this raid's elite profile. */
+  elite: boolean;
 }
 
 export class RaidManager {
@@ -234,6 +264,10 @@ export class RaidManager {
   /** How many Invasion Vouchers the player owns (each bypasses the cooldown). */
   voucherCount(): number {
     return this.state.boostCount(VOUCHER_KEY);
+  }
+  /** How many Brain Tickets the player owns (each starts one elite invasion). */
+  brainTicketCount(): number {
+    return this.state.boostCount(BRAIN_TICKET_KEY);
   }
   /** How many Concentration boosts the player owns (fight at full focus). */
   concentrationCount(): number {
@@ -272,6 +306,22 @@ export class RaidManager {
         unlockLevel: r.unlockLevel,
         xp: r.xp,
         firstClearXp: this.state.hasClearedRaid(String(r.id)) ? 0 : r.xp,
+        brainOdds: {
+          chance: brainDropChance(r.recommendedLevel),
+          tiers: brainDropTable(r.recommendedLevel),
+        },
+        eliteBrainOdds: {
+          chance: brainDropChance(r.recommendedLevel, ELITE_BRAIN_LUCK),
+          tiers: brainDropTable(r.recommendedLevel, ELITE_BRAIN_LUCK),
+        },
+        zombieDrop: RAID_ZOMBIE_DROPS[r.id]
+          ? {
+              name: RAID_ZOMBIE_DROPS[r.id].name,
+              rate: raidZombieDropRate(r.id),
+              eliteRate: raidZombieDropRate(r.id, 0, ELITE_BRAIN_LUCK),
+            }
+          : null,
+        boostDrops: boostDrops(r, this.assets.boosts),
         rewardPreview: rewardPreview(r),
         introText: r.introText.replace(/\\n/g, "\n"),
         seasonal: r.seasonal,
@@ -363,14 +413,28 @@ export class RaidManager {
     // the local list, else the next inventory sync would restore a "spent" boost.
     const online = !!this.state.onInventory;
 
+    // Brain Ticket. Spent before the cooldown gate, because spending it is also the
+    // cooldown bypass for an elite invasion.
+    let elite = false;
+    if (opts.serverAuthorized) {
+      elite = !!opts.serverElite;
+      if (elite && !online) this.state.useBoost(BRAIN_TICKET_KEY);
+    } else if (opts.brainTicket && this.state.boostCount(BRAIN_TICKET_KEY) > 0) {
+      elite = true;
+      if (online) this.state.onInventory!({ type: "use", key: BRAIN_TICKET_KEY }, { count: -1 });
+      else this.state.useBoost(BRAIN_TICKET_KEY);
+    }
+    const profile = eliteProfile(raid.id, elite);
+    const brainLuck = elite ? ELITE_BRAIN_LUCK : 1;
+
     // Cooldown gate. ONLINE (serverAuthorized): the server already decided via
     // /raid/start â€” it owns the clock â€” and it ALSO consumed the voucher there if it
     // bypassed a cooldown, so there's nothing to spend here (main.ts refreshes the
     // inventory). OFFLINE: the client is authoritative â€” wait it out, or spend a
-    // voucher to skip.
+    // voucher (or the Brain Ticket just charged) to skip.
     if (opts.serverAuthorized) {
-      if (opts.bypassed && !online) this.state.useBoost(VOUCHER_KEY);
-    } else if (this.onCooldown()) {
+      if (opts.bypassed && !elite && !online) this.state.useBoost(VOUCHER_KEY);
+    } else if (this.onCooldown() && !elite) {
       if (!opts.useVoucher || !this.state.useBoost(VOUCHER_KEY)) return null;
     }
 
@@ -407,6 +471,7 @@ export class RaidManager {
     const enemyUnits = buildEnemyUnits(stage, this.assets.enemyStats, this.assets.raidAttacks, {
       raidId: raid.id,
       playerLevel: this.state.level,
+      elite: profile,
     });
     // OFFLINE the roll carries the silent pity floor (a long brain-less streak guarantees
     // the smallest stack). ONLINE the server rolls it â€” floor included â€” and pins it.
@@ -414,7 +479,7 @@ export class RaidManager {
     const brainDrop = hasBoss
       ? opts.serverAuthorized
         ? Math.max(0, Math.floor(opts.serverBrainDrop ?? 0))
-        : rollBrainDropWithPity(raid.recommendedLevel, this.state.brainDryStreak)
+        : rollBrainDropWithPity(raid.recommendedLevel, this.state.brainDryStreak, Math.random, brainLuck)
       : 0;
     return {
       raid,
@@ -431,19 +496,19 @@ export class RaidManager {
         farmerLifeMult: this.state.farmerZombieLifeMult(),
       }),
       enemyUnits,
-      bossThrow: this.bossThrowOf(
-        raid,
-        stage,
-        this.state.raidWins(String(raid.id))
+      bossThrow: eliteBossThrow(
+        this.bossThrowOf(raid, stage, this.state.raidWins(String(raid.id))),
+        profile
       ),
-      bossSpecials: this.bossSpecialsOf(stage),
+      bossSpecials: eliteBossSpecials(this.bossSpecialsOf(stage), profile),
       grabber: this.grabberOf(raid),
       crab: this.crabOf(raid),
-      ...this.summonWallTemplatesOf(stage, enemyUnits),
+      ...this.summonWallTemplatesOf(stage, enemyUnits, profile),
       dice,
       concentration,
       brainDrop,
       brainEligible: hasBoss,
+      elite,
     };
   }
 
@@ -484,7 +549,8 @@ export class RaidManager {
    *  Each is null unless the stage's BOSS actually carries that action. */
   private summonWallTemplatesOf(
     stage: RaidStage,
-    enemyUnits: CombatUnit[]
+    enemyUnits: CombatUnit[],
+    elite: EliteProfile | null = null
   ): { summonTemplate: CombatUnit | null; wallTemplate: CombatUnit | null } {
     let summonTemplate: CombatUnit | null = null;
     let wallTemplate: CombatUnit | null = null;
@@ -496,7 +562,7 @@ export class RaidManager {
       }
       const wall = actions.find((a) => a.name === "wall");
       if (wall) {
-        const hp = Math.max(1, Math.round(wall.hp ?? 1500));
+        const hp = Math.max(1, Math.round(eliteWallHp(wall.hp ?? 1500, elite)));
         // Use the action's own wall art (Ninja carrotWall.png / Robot junkWall.png); the
         // sourceKey strips ".png" so the renderer keys its preloaded texture by it.
         const sourceKey = (wall.sprite ?? "carrotWall.png").replace(/\.png$/i, "");
@@ -588,7 +654,9 @@ export class RaidManager {
     dice = 0,
     serverRewards = false,
     brainDrop = 0,
-    brainEligible = brainDrop > 0
+    brainEligible = brainDrop > 0,
+    /** A Brain Ticket was charged for this fight, so the rare-zombie roll runs at elite luck. */
+    elite = false
   ): RaidResultView {
     // Veterancy is earned by SURVIVING a battle â€” credit only the units still
     // standing (drives rank-up). A unit knocked out mid-fight, even in a win, gets
@@ -669,7 +737,10 @@ export class RaidManager {
         const dryKey = String(raid.id);
         // `dice` â€” the Golden Dice spent on this fight â€” widens the rare-zombie chance the
         // same way it shifts the item roll's tier.
-        const zombieDrop = rollRaidZombieDropWithPity(raid.id, true, Math.random(), this.state.zombieDryWins[dryKey] ?? 0, dice);
+        const zombieDrop = rollRaidZombieDropWithPity(
+          raid.id, true, Math.random(), this.state.zombieDryWins[dryKey] ?? 0, dice,
+          elite ? ELITE_BRAIN_LUCK : 1
+        );
         if (hasRaidZombieDrop(raid.id)) {
           this.state.zombieDryWins[dryKey] = nextRaidZombieDryWins(this.state.zombieDryWins[dryKey] ?? 0, !!zombieDrop);
         }
@@ -764,7 +835,10 @@ export class RaidManager {
     const setup = this.beginRaid(raidId, partyIds, opts);
     if (!setup) return null;
     const outcome = resolveRaid(setup.playerUnits, setup.enemyUnits);
-    return this.finishRaid(setup.raid, setup.party, outcome, setup.dice, false, setup.brainDrop, setup.brainEligible);
+    return this.finishRaid(
+      setup.raid, setup.party, outcome, setup.dice, false,
+      setup.brainDrop, setup.brainEligible, setup.elite
+    );
   }
 }
 

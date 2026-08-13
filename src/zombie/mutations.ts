@@ -84,8 +84,8 @@ const AUTHORED_MODDED_MUTATIONS: Readonly<Record<MutationKey, ModdedMutationDef>
 	spineapple_body:	{ modded: true, key: "spineapple_body",	name: "Spine-ap-body",		  slot: "body",		  stats: { str: 1, con: 3 } },
 	kale_arm:		      { modded: true, key: "kale_arm",		    name: "Malakale Arm",		    slot: "arm",		  stats: { str: 2, con: 1, dex: 1 } },
 	berry_eye:		    { modded: true, key: "berry_eye",		    name: "Beryl-eyed",		      slot: "hair_eye",	stats: { dex: 1, wis: 2, con: 1 } },
-	/*
 	spinach_hair:		  { modded: true, key: "spinach_hair",		name: "Spinel hair",		    slot: "hair_eye",	stats: { con: 2, dex: 1, wis: 1 } },
+  /*
 	mint_neck:		    { modded: true, key: "mint_neck",		    name: "Diamint lei",		    slot: "neck",		  stats: { con: 2, wis: 2, dex: 1 } },
 	oat_hat:		      { modded: true, key: "oat_hat",			    name: "Oatnyx wreath",		  slot: "hair_eye",	stats: { con: 2, wis: 2 } },
 	oat_arm:		      { modded: true, key: "oat_arm",			    name: "Oatnyx Arm",		      slot: "arm",		  stats: { str: 2, con: 2 } },

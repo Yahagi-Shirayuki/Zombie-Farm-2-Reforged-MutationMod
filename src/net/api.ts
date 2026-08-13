@@ -24,6 +24,7 @@ import {
   type BlackMarketSummary,
   type FriendActivity,
   type GiftReward,
+  type PeriodicQuestProjection,
   type PresentationProjection,
   type PresentationRequest,
 } from "./protocol";
@@ -877,7 +878,8 @@ export const raidStart = (
   raidId: number,
   orderedUnitIds: string[],
   concentration = false,
-  dice = 0
+  dice = 0,
+  elite = false
 ) =>
   req<{
     ok: boolean;
@@ -892,6 +894,7 @@ export const raidStart = (
     /** Server-pinned 1/3/5 brain award. It is visualized during combat but is
      * credited only if raidFinish verifies a boss-defeating win. */
     brainDrop?: number;
+    elite?: boolean;
     concentration?: boolean;
     inventory?: Record<string, number>;
     /** Authoritative time at which this accepted invasion started its cooldown. */
@@ -905,6 +908,7 @@ export const raidStart = (
     orderedUnitIds,
     concentration,
     dice,
+    elite,
     rulesetVersion: RAID_RULESET_VERSION,
   });
 
@@ -929,6 +933,7 @@ export interface RaidFinishResult {
   newZombie?: { id: string; key: string; stored: boolean; received?: boolean } | null;
   outcome?: RaidOutcome;
   questChanges?: QuestChange[];
+  periodicQuests?: PeriodicQuestProjection | null;
   inventory?: Record<string, number>;
   storage?: { received: Record<string, number>; stored: Record<string, number> };
   raidProgress?: Record<string, number>;

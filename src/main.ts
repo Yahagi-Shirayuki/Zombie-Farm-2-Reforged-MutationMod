@@ -1,5 +1,5 @@
 ﻿import { Application, Assets, Container, FederatedPointerEvent, Graphics, Point, Sprite, Text, TextStyle, Texture } from "pixi.js";
-import { snapPlowOrigin } from "./plowSelection";
+import { choosePlowOrigin } from "./plowSelection";
 // Patch Pixi's renderer to use no-eval polyfills for its shader/UBO/uniform/particle
 // codegen (it otherwise uses `new Function`, which the production CSP's script-src
 // blocks â€” no 'unsafe-eval'). Side-effect import; must run before `new Application()`.
@@ -15,6 +15,7 @@ import { ZombieField } from "./zombie/ZombieField";
 import { makeOwned, type OwnedZombie } from "./zombie/types";
 import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
 import { almanacEntries, isEpicZombie, obtainHint } from "./zombie/almanac";
+import { planTeamAssembly, sanitizeTeams, settleTeamMembers } from "./zombie/teams";
 import { POT_DURATION_MS } from "./zombie/ZombiePot";
 import { isCombinePromotion } from "./zombie/combineSpecies";
 import { GameState } from "./GameState";
@@ -33,6 +34,7 @@ import { epicBossRunToClient, serverTimestampToClient } from "./net/clock";
 import { QuestBus, QuestEvent } from "./quest/events";
 import { objectQuestAliases } from "./quest/objectVariants";
 import { QuestSystem } from "./quest/QuestSystem";
+import { PeriodicQuestSystem } from "./quest/periodic/PeriodicQuestSystem";
 import { QuestDef, questRewardInfo } from "./quest/types";
 import { RaidManager, RaidResultView, type LootDrop } from "./raid/RaidManager";
 import { RaidScene } from "./raid/RaidScene";
@@ -372,11 +374,15 @@ async function main() {
     if (state.onFarm) return undefined; // online mutation rolls are server-owned
     const def = zombieDefs.get(key);
     if (!def) return undefined;
-    return resolveCropMutationSet(def.mutation ?? 0, [], context.cropKeys, {
+    return resolveCropMutationSet(def.mutation ?? 0, def.mutationIds, context.cropKeys, {
       guaranteed: context.guaranteed,
       headless: def.group === "Headless",
     });
   };
+  const zombieCatalogPortraitKey = (z: ZombieDef | undefined, fallbackKey = "ZombieActorRegularTier1"): string =>
+    z?.portraitKey ?? z?.baseKey ?? (z && assets.zombieModels[z.key] ? z.key : fallbackKey);
+  const zombieCatalogPortrait = (z: ZombieDef | undefined, fallbackKey?: string): string =>
+    zombiePortrait(zombieCatalogPortraitKey(z, fallbackKey));
   const allZombieCards = assets.zombies.map((z) => {
     const cfg: CropConfig = {
       key: z.key, name: z.name,
@@ -392,11 +398,12 @@ async function main() {
       category: z.category,
       // Catalog stats are pre-mutation (makeOwned folds the bonus in), so this is the
       // exact displayed gain the grown unit's stat tile will show.
-      description: mutationMarketDescription(z, z.mutation ?? 0),
-      portrait: zombiePortrait(z.key), // per-type composited portrait
+      description: mutationMarketDescription(z, z.mutation ?? 0, z.mutationIds),
+      portrait: zombieCatalogPortrait(z), // per-type composited portrait, with a base fallback for mod rows
       zombie: {
         group: z.group, className: z.className, classColor: z.classColor,
         str: z.str, dex: z.dex, con: z.con, focus: z.focus, mutation: z.mutation ?? 0,
+        mutationIds: z.mutationIds,
       },
       cfg,
     };
@@ -988,7 +995,7 @@ async function main() {
       currency === "gold" ? "Not enough coins." : `Not enough brains (need ${needed}).`
     ),
     popHarvestIcon,
-    () => zombies.canHarvestZombie()
+    () => zombies.zombieHarvestRoom()
   );
 
   // `raidActive` is declared up here (ahead of both the celebration queue and the raid
@@ -1108,6 +1115,23 @@ async function main() {
       render: (views) => hud.setQuests(views),
     }
   );
+
+  const periodicQuests = new PeriodicQuestSystem(
+    state,
+    () => (onlineFarm ? api.getSession()?.accountId ?? "anon" : profiles.activeSaveKey()),
+    questBus,
+    {
+      authoritative: onlineFarm,
+      submitClaim: (scope, questId, xp) => economy?.submitPeriodicQuestClaim(scope, questId, xp) ?? false,
+      claimed: (text, xp) => hud.showToast(`${text} - +${xp} XP`),
+      render: (views) => hud.setPeriodicQuests(views),
+    }
+  );
+  hud.onPeriodicQuestClaim = (scope, questId) => periodicQuests.claim(scope, questId);
+  setInterval(() => {
+    periodicQuests.refresh();
+    hud.setPeriodicQuests(periodicQuests.views());
+  }, 60_000);
 
   // ---- consumable boosts: buy (into inventory) + use (apply farm effect) ----
   // Gift vouchers are "1 per farm": you can't buy/use one once you already own
@@ -1399,6 +1423,7 @@ async function main() {
     playMode,
     jobs,
   );
+  saveManager.periodicQuests = periodicQuests;
   saveManager.onStorageError = (message) => hud.showToast(message);
   jobs.onQueueChanged = () => saveManager.checkpointJobs();
   field.onInvasiveMintChanged = () => saveManager.save();
@@ -1509,7 +1534,10 @@ async function main() {
     }
     state.seedFarmerCatalog(assets.farmer);
     applyFarmerAppearance();
-    if (!restored) quests.restore(); // fresh farm: activate the opening quests
+    if (!restored) {
+      quests.restore(); // fresh farm: activate the opening quests
+      periodicQuests.restore();
+    }
     // Closedown handoff. The farm is now hydrated from the server â€” which is the only
     // way to serialise an Online Farm, since one keeps no full blob on the device â€” so
     // this is the earliest point the export can be produced, and the latest point that
@@ -1909,6 +1937,7 @@ async function main() {
     economy.onPetState = (ownedPets, activePet, penPets) => state.syncPetOwnership(ownedPets, activePet, penPets);
     economy.onQuestState = (serverState) => quests.restoreAuthoritative(serverState);
     economy.onQuestChanges = (changes) => quests.applyAuthoritativeChanges(changes);
+    economy.onPeriodicQuestState = (serverState) => periodicQuests.adoptAuthoritative(serverState);
     economy.onTutorialState = (rewarded) => {
       if (!rewarded) return;
       state.setTutorial(reconcileTutorialCompletion(state.tutorial, true));
@@ -2035,6 +2064,7 @@ async function main() {
   const plowStrokeLast = new Point();
   const plowStrokeTargets: { oc: number; or: number }[] = [];
   const plowStrokeKeys = new Set<string>();
+  const plowStrokeClaimed = new Set<string>();
   const plowStrokePreviews = new Map<string, Graphics>();
 
   const cancelZombieLongPress = () => {
@@ -2065,6 +2095,7 @@ async function main() {
     plowStrokePreviews.clear();
     plowStrokeTargets.length = 0;
     plowStrokeKeys.clear();
+    plowStrokeClaimed.clear();
     plowStrokeAnchor = null;
   };
   const recordTouchPlantTile = (col: number, row: number) => {
@@ -2230,11 +2261,6 @@ async function main() {
       return jobs.enqueue("till", target.oc, target.or);
     }
     if (!field.isRipe(target.oc, target.or)) return false;
-    if (field.ripeZombieAt(target.oc, target.or) && !zombies.canHarvestZombie()) {
-      const center = field.plotCenterOf(target.oc, target.or);
-      floatText(center.x, center.y, "Army full!");
-      return false;
-    }
     return jobs.enqueue("harvest", target.oc, target.or);
   };
 
@@ -2313,12 +2339,21 @@ async function main() {
     plowStrokePreviews.set(key, preview);
   };
 
+  const plowOriginFits = (origin: { oc: number; or: number }): boolean => {
+    for (let r = origin.or; r < origin.or + PLOT; r++)
+      for (let c = origin.oc; c < origin.oc + PLOT; c++)
+        if (plowStrokeClaimed.has(tileKey(c, r))) return false;
+    const target = field.resolveTill(origin.oc + PLOT / 2, origin.or + PLOT / 2);
+    return target.valid && target.oc === origin.oc && target.or === origin.or;
+  };
+
   const recordPlowStrokeTarget = (target: { oc: number; or: number }) => {
     const key = tileKey(target.oc, target.or);
     if (plowStrokeKeys.has(key)) return;
-    const current = field.resolveTill(target.oc + PLOT / 2, target.or + PLOT / 2);
-    if (!current.valid || current.oc !== target.oc || current.or !== target.or) return;
+    if (!plowOriginFits(target)) return;
     plowStrokeKeys.add(key);
+    for (let r = target.or; r < target.or + PLOT; r++)
+      for (let c = target.oc; c < target.oc + PLOT; c++) plowStrokeClaimed.add(tileKey(c, r));
     plowStrokeTargets.push(target);
     if (isTouchPointer(pressPointerType)) showPlowStrokePreview(target);
     else jobs.enqueue("till", target.oc + PLOT / 2, target.or + PLOT / 2);
@@ -2336,9 +2371,7 @@ async function main() {
       return target.valid ? { oc: target.oc, or: target.or } : null;
     }
     const current = originAtTile(col, row);
-    const snapped = snapPlowOrigin(plowStrokeAnchor, current);
-    const target = field.resolveTill(snapped.oc + PLOT / 2, snapped.or + PLOT / 2);
-    return target.valid && target.oc === snapped.oc && target.or === snapped.or ? snapped : null;
+    return choosePlowOrigin(plowStrokeAnchor, col, row, current, plowOriginFits);
   };
 
   const collectPlowStrokeSegment = (x: number, y: number) => {
@@ -2541,7 +2574,7 @@ async function main() {
       return {
         key: def.key,
         name: def.name,
-        portrait: zombiePortrait(def.key),
+        portrait: zombieCatalogPortrait(def),
         group: def.group,
         className: def.className,
         classColor: def.classColor,
@@ -2552,7 +2585,7 @@ async function main() {
         ...(epic ? { epic } : {}),
       };
     });
-  hud.zombiePortraitOf = (key) => zombiePortrait(key);
+  hud.zombiePortraitOf = (key) => zombieCatalogPortrait(zombieDefs.get(key), key);
   hud.getMausoleumCap = () => zombies.mausoleumCap;
   // The Mausoleum upgrade ladder: each tier is an ordinary catalog placeable that
   // replaces the placed one (see upgradeBuilding), so the next tier is simply the
@@ -2599,6 +2632,56 @@ async function main() {
   hud.onZombieLocate = (id) => {
     const p = zombies.selectById(id);
     if (p) centerOn(p.x, p.y);
+  };
+  // ---- saved line-ups ("Zombie Teams", opened from the Mausoleum) ----
+  hud.getArmyCap = () => state.zombieMax;
+  hud.getTeams = () => state.zombieTeams;
+  hud.onTeamsChange = (teams) => {
+    state.zombieTeams = sanitizeTeams(teams);
+    saveManager.flushCritical();
+  };
+  hud.onTeamAssemble = async (memberIds) => {
+    if (onlineGameplayBlocked()) return null;
+    let members = memberIds;
+    let settledTeams = false;
+    try {
+      if (economy) {
+        members = await economy.settleUnitIds([...memberIds]);
+        const settled = settleTeamMembers(state.zombieTeams, (id) => economy!.authoritativeUnitId(id));
+        settledTeams = settled.some((team, i) => team !== state.zombieTeams[i]);
+        if (settledTeams) state.zombieTeams = settled;
+      }
+    } catch {
+      hud.showToast("Could not confirm your zombies. Please reconnect.");
+      return null;
+    }
+    const plan = planTeamAssembly(members, zombies.roster(), state.zombieMax, zombies.mausoleumCap);
+    let stored = 0;
+    let deployed = 0;
+    for (const operation of plan.operations) {
+      if (operation.type === "store") {
+        if (zombies.store(operation.id)) {
+          economy?.submitRosterStatus(operation.id, true);
+          stored++;
+        }
+      } else if (zombies.deploy(operation.id)) {
+        economy?.submitRosterStatus(operation.id, false);
+        deployed++;
+      }
+    }
+    const onFarm = new Set(zombies.roster().filter((unit) => !unit.stored).map((unit) => unit.id));
+    const order = members.filter((id) => onFarm.has(id));
+    if (order.length) state.raidAttackOrder = order;
+    if (stored || deployed || settledTeams) saveManager.flush();
+    return {
+      deployed,
+      stored,
+      missing: plan.missing.length,
+      blocked: plan.blocked.length + (plan.deploy.length - deployed),
+      left: plan.left.length + (plan.store.length - stored),
+      present: plan.present.length,
+      shortfall: plan.shortfall,
+    };
   };
   hud.zombieBaseCost = (key) => zombieDefs.get(key)?.cost ?? 0;
   hud.zombieCostsBrains = (key) => !!zombieDefs.get(key)?.brainsNeeded;
@@ -5193,7 +5276,7 @@ async function main() {
   // shipped bundle. It was never a security boundary (a determined player can edit
   // browser state regardless), but it must not be handed to every player. Real
   // integrity comes from server-side validation/authority.
-  if (import.meta.env.DEV) (window as any).ZF = { app, world, field, actor, walk, zombies, state, hud, jobs, audio, save: saveManager, quests, questBus, raids, screenToGrid, CARROT,
+  if (import.meta.env.DEV) (window as any).ZF = { app, world, field, actor, walk, zombies, state, hud, jobs, audio, save: saveManager, quests, questBus, periodicQuests, raids, screenToGrid, CARROT,
     placeables: placeCatalog,
     boosts: boostCatalog,
     // Instantly resolve a raid for testing (e.g. ZF.runRaid(1) with 8+ zombies).

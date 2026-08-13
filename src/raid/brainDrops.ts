@@ -2,7 +2,7 @@
  * drop-rate event multiplier across every tier. Tiers roll rarest-first so a boss
  * can award at most one stack. */
 export const BRAIN_DROP_RATE_MULTIPLIER = 2;
-export const BRAIN_OPTIMAL_LEVEL = 20;
+export const BRAIN_RAMP_LEVEL = 20;
 
 // Post-brainflation revert: amounts are 1/10 of the old 50/30/10 stacks (a brain is now
 // ~10x more valuable). Drop CHANCES are unchanged — only the stack sizes shrank.
@@ -12,16 +12,27 @@ const BASE_BRAIN_DROP_TABLE = [
   { amount: 1, lower: 0.025, upper: 0.05 },
 ] as const;
 
-export function brainDropTable(recommendedLevel: number) {
-  const frac = Math.max(0, Math.min(1, recommendedLevel / BRAIN_OPTIMAL_LEVEL));
+const MAX_TIER_CHANCE = 0.95;
+
+export function brainDropTable(recommendedLevel: number, luck = 1) {
+  const frac = Math.max(0, recommendedLevel / BRAIN_RAMP_LEVEL);
+  const scale = BRAIN_DROP_RATE_MULTIPLIER * Math.max(0, luck);
   return BASE_BRAIN_DROP_TABLE.map((tier) => ({
     amount: tier.amount,
-    chance: (tier.lower + (tier.upper - tier.lower) * frac) * BRAIN_DROP_RATE_MULTIPLIER,
+    chance: Math.min(MAX_TIER_CHANCE, (tier.lower + (tier.upper - tier.lower) * frac) * scale),
   }));
 }
 
-export function rollBrainDrop(recommendedLevel: number, random: () => number = Math.random): number {
-  for (const tier of brainDropTable(recommendedLevel)) {
+export function brainDropChance(recommendedLevel: number, luck = 1): number {
+  return 1 - brainDropTable(recommendedLevel, luck).reduce((miss, tier) => miss * (1 - tier.chance), 1);
+}
+
+export function rollBrainDrop(
+  recommendedLevel: number,
+  random: () => number = Math.random,
+  luck = 1
+): number {
+  for (const tier of brainDropTable(recommendedLevel, luck)) {
     if (random() < tier.chance) return tier.amount;
   }
   return 0;
@@ -48,9 +59,10 @@ export const BRAIN_PITY_AMOUNT = BASE_BRAIN_DROP_TABLE[BASE_BRAIN_DROP_TABLE.len
 export function rollBrainDropWithPity(
   recommendedLevel: number,
   dryStreak: number,
-  random: () => number = Math.random
+  random: () => number = Math.random,
+  luck = 1
 ): number {
-  const rolled = rollBrainDrop(recommendedLevel, random);
+  const rolled = rollBrainDrop(recommendedLevel, random, luck);
   if (rolled > 0) return rolled;
   return dryStreak >= BRAIN_PITY_INVASIONS ? BRAIN_PITY_AMOUNT : 0;
 }

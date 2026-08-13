@@ -77,7 +77,7 @@ describe("v3 raid dependency ids", () => {
     expect(status).toHaveBeenCalledOnce();
   });
 
-  it("carries the immediate fertilization result in the existing plant command", () => {
+  it("carries the immediate fertilization result in the queued plant command", () => {
     const economy = new EconomyClient(new GameState(), "fertilized-plant");
 
     economy.submitFarm(
@@ -86,7 +86,9 @@ describe("v3 raid dependency ids", () => {
     );
 
     expect((economy as any).queue.pending[0].command).toEqual({
-      type: "farm.plant", oc: 4, or: 4, cropKey: "carrot", fertilized: true,
+      type: "farm.plant_many",
+      cropKey: "carrot",
+      plots: [{ oc: 4, or: 4, fertilized: true, variant: undefined }],
     });
   });
 

@@ -1326,9 +1326,8 @@ export class BattleSim {
   }
 
   /** Resurrect is automatic and one-use. A living Garden holder revives the
-   *  defeated non-Small zombie at full Life and sends it back into formation. */
+   *  defeated zombie at full Life and sends it back into formation. */
   private tryResurrect(defeated: SimUnit): boolean {
-    if (this.isSmall(defeated)) return false;
     const healer = this.players.find(
       (p) => p.alive && (p.state === "advance" || p.state === "fight") &&
         p.abilities.includes("ressurect") && !p.resurrectUsed

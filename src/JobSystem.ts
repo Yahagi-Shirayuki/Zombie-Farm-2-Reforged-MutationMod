@@ -100,13 +100,30 @@ export class JobSystem {
     private onInsufficientFunds: (currency: JobCurrency, needed: number) => void = () => {},
     // Visual-only collection feedback. Called after a successful crop harvest.
     private onHarvestFx: (result: HarvestResult, x: number, y: number) => void = () => {},
-    // Rechecked when the farmer reaches a queued zombie harvest. Capacity can fill
-    // after the tap but before arrival, so enqueue-time validation is insufficient.
-    private canHarvestZombie: () => boolean = () => true
+    // Free army + Mausoleum room for grown zombie crops. Checked when queued, when
+    // reached, and immediately before the crop is consumed.
+    private zombieHarvestRoom: () => number | boolean = () => Number.POSITIVE_INFINITY
   ) {}
 
   private key(kind: JobKind, oc: number, or: number) {
     return `${kind}:${oc},${or}`;
+  }
+
+  private hasZombieRoom(): boolean {
+    return this.zombieRoom() > 0;
+  }
+
+  private zombieRoom(): number {
+    const room = this.zombieHarvestRoom();
+    return typeof room === "boolean" ? (room ? Number.POSITIVE_INFINITY : 0) : room;
+  }
+
+  private pendingZombieHarvests(): number {
+    let count = 0;
+    for (const job of this.active ? [this.active, ...this.queue] : this.queue) {
+      if (job.kind === "harvest" && this.field.ripeZombieAt(job.oc, job.or)) count++;
+    }
+    return count;
   }
 
   // Gold charged to plow one plot — 0 while a Plowing Monolith is placed.
@@ -143,6 +160,12 @@ export class JobSystem {
         this.onInsufficientFunds(cfg.brainsNeeded ? "brains" : "gold", cfg.cost);
         return false;
       }
+    }
+    if (kind === "harvest" && this.field.ripeZombieAt(oc, or) &&
+        this.zombieRoom() <= this.pendingZombieHarvests()) {
+      const at = this.field.plotCenterOf(oc, or);
+      this.float(at.x, at.y, "Army full!");
+      return false;
     }
 
     if (kind === "till") this.field.reserveTill(oc, or); // hold the area while queued
@@ -300,6 +323,7 @@ export class JobSystem {
     this.audioSuppressed ||= suppressAudio;
     try {
       while (remaining > 0 && (this.busy || this.walk.moving)) {
+        if (!this.active && this.queue.length && this.mutationBlocked(this.queue[0].kind)) break;
         const step = Math.min(CATCH_UP_STEP_SEC, remaining);
         cursor += step * 1000;
         this.replayNow = cursor;
@@ -382,6 +406,7 @@ export class JobSystem {
   update(dt: number) {
     if (this.paused) return;
     if (!this.active) {
+      if (this.queue.length && this.mutationBlocked(this.queue[0].kind)) return;
       const next = this.queue.shift();
       if (!next) return;
       this.active = next;
@@ -394,7 +419,7 @@ export class JobSystem {
         // Still walk to a queued zombie, but do not begin the work animation or
         // mutate the plot once both the active army and Mausoleum are full.
         if (next.kind === "harvest" && this.field.ripeZombieAt(next.oc, next.or) &&
-            !this.canHarvestZombie()) {
+            !this.hasZombieRoom()) {
           this.float(next.cx, next.cy, "Army full!");
           this.finish();
           return;
@@ -403,8 +428,8 @@ export class JobSystem {
         if (this.field.hasFastWork()) {
           // apply() emits the completion sound. Playing a separate start sound here
           // would overlap it because instant work has no delay between the two.
-          this.apply(next);
-          this.finish();
+          if (this.apply(next)) this.finish();
+          else this.hold();
           return;
         }
         // Fruit-tree harvest uses the harvest animation at 2x speed (half as long).
@@ -426,16 +451,31 @@ export class JobSystem {
       if (this.active.bar) this.active.bar.fill.scale.x = progress;
       if (this.workMs <= 0) {
         this.actor.setWorking(false);
-        this.apply(this.active);
-        this.finish();
+        if (this.apply(this.active)) this.finish();
+        else this.hold();
       }
     }
   }
 
-  private apply(job: Job) {
-    if (job.kind === "walk") return;
-    const serverOwned = job.kind === "harvestTree" ? !!this.state.onTreeHarvest : !!this.state.onFarm;
-    if (serverOwned && this.state.canMutateOnline && !this.state.canMutateOnline()) return;
+  private hold() {
+    if (!this.active) return;
+    this.active.bar?.cont.destroy();
+    this.active.bar = null;
+    this.queue.unshift(this.active);
+    this.active = null;
+    this.phase = null;
+    this.onQueueChanged?.();
+  }
+
+  private mutationBlocked(kind: Kind): boolean {
+    if (kind === "walk") return false;
+    const serverOwned = kind === "harvestTree" ? !!this.state.onTreeHarvest : !!this.state.onFarm;
+    return serverOwned && !!this.state.canMutateOnline && !this.state.canMutateOnline();
+  }
+
+  private apply(job: Job): boolean {
+    if (job.kind === "walk") return true;
+    if (this.mutationBlocked(job.kind)) return false;
     if (job.kind === "harvestTree") {
       const treeName = job.objId ? this.field.objectDefOf(job.objId)?.name : undefined;
       const baseGold = job.objId ? this.field.harvestObject(job.objId) : null;
@@ -447,14 +487,14 @@ export class JobSystem {
         this.float(job.cx, job.cy, `+${gold}g`);
         this.playSfx("xp");
       }
-      return;
+      return true;
     }
     if (job.kind === "till") {
       const cost = this.plowCost(); // 0 with a Plowing Monolith
       const xp = plowXp(cost === 0);
       if (this.state.gold < cost) {
         this.onInsufficientFunds("gold", cost);
-        return;
+        return true;
       }
       if (this.state.gold >= cost && this.field.tillAt(job.oc, job.or)) {
         // ONLINE: the server owns the plow cost + XP and RECORDS the soil, which
@@ -484,7 +524,7 @@ export class JobSystem {
       const funds = cfg.brainsNeeded ? this.state.brains : this.state.gold;
       if (funds < cfg.cost) {
         this.onInsufficientFunds(cfg.brainsNeeded ? "brains" : "gold", cfg.cost);
-        return;
+        return true;
       }
       const planted = funds >= cfg.cost
         ? this.field.plantAt(job.oc, job.or, cfg, this.replayNow ?? Date.now())
@@ -523,6 +563,10 @@ export class JobSystem {
         this.playSfx("place");
       }
     } else {
+      if (this.field.ripeZombieAt(job.oc, job.or) && !this.hasZombieRoom()) {
+        this.float(job.cx, job.cy, "Army full!");
+        return true;
+      }
       const r = this.field.harvestAt(job.oc, job.or);
       if (r) {
         if (!r.invasiveMint) this.onHarvestFx(r, job.cx, job.cy);
@@ -534,7 +578,7 @@ export class JobSystem {
           if (r.xp) this.float(job.cx, job.cy, `+${r.xp}xp`, 0.42);
           this.playSfx("till");
           this.quest.post(QuestEvent.SoilPlowed, "Plow");
-          return;
+          return true;
         }
         if (!r.zombieKey) r.sell = this.state.farmerHarvestGold(r.sell);
         const xp = harvestXp(r.xp, this.field.hasPlowFree());
@@ -589,6 +633,7 @@ export class JobSystem {
         );
       }
     }
+    return true;
   }
 
   private finish() {

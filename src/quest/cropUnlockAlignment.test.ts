@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
+import moddedZombieRows from "../../public/assets/modded_zombies.json";
 import plants from "../../public/assets/plants.json";
 import quests from "../../public/assets/quests.json";
 import zombies from "../../public/assets/zombies.json";
 import { XP_THRESHOLDS } from "../GameState";
-import { cropMutationBits } from "../zombie/cropMutations";
+import { mergeModdedZombies, type ModdedZombieDef, type ZombieDef } from "../assets";
+import { cropMutationRefs } from "../zombie/cropMutations";
+import { mutationRefs, type MutationRef } from "../zombie/mutations";
 
 // The crop rebalance (tools/reforge_economy.py CROP_REBALANCE) respreads the 25
 // regular crops over levels 1-45. Two invariants have to hold for that ladder to
@@ -110,29 +113,33 @@ const MAX_LEAD = 5;
 
 interface ZombieRow {
   key: string; name: string; level: number; tier: number;
-  category: string; className: string; mutation?: number;
+  category: string; className: string; mutation?: number; mutationIds?: string[];
 }
-const ZOMBIES = zombies as unknown as ZombieRow[];
+const ZOMBIES = mergeModdedZombies(
+  zombies as unknown as ZombieDef[],
+  moddedZombieRows as unknown as ModdedZombieDef[],
+) as unknown as ZombieRow[];
 const mutants = ZOMBIES.filter((z) => z.category === "mutant");
 
-/** Earliest crop level that can grow a given mutation bit. Tier-4 crops reuse a
- *  lower tier's bit, so a bit can have more than one crop. */
-function earliestCropFor(bit: number): number | null {
+/** Earliest crop level that can grow a given mutation. Tier-4 crops reuse a
+ *  lower tier's bit, so a mutation can have more than one crop. */
+function earliestCropFor(ref: MutationRef): number | null {
   const levels = plants
-    .filter((p) => cropMutationBits(p.key).includes(bit))
+    .filter((p) => cropMutationRefs(p.key).includes(ref))
     .map((p) => p.level);
   return levels.length ? Math.min(...levels) : null;
 }
 
 describe("market mutants vs the crops that grow their mutation", () => {
   it("never unlocks a mutant more than five levels before its crop", () => {
-    expect(mutants).toHaveLength(15);
+    expect(mutants).toHaveLength(16);
     for (const m of mutants) {
-      const crop = earliestCropFor(m.mutation ?? 0);
-      expect(crop, `${m.name} carries bit ${m.mutation}, which no crop grows`).not.toBeNull();
+      const refs = mutationRefs(m.mutation ?? 0, m.mutationIds);
+      const crop = Math.min(...refs.map(earliestCropFor).filter((level): level is number => level !== null));
+      expect(Number.isFinite(crop), `${m.name} carries mutations ${refs.join(", ")}, which no crop grows`).toBe(true);
       expect.soft(
-        crop! - m.level,
-        `${m.name} unlocks at ${m.level}, ${crop! - m.level} levels before its crop (${crop})`,
+        crop - m.level,
+        `${m.name} unlocks at ${m.level}, ${crop - m.level} levels before its crop (${crop})`,
       ).toBeLessThanOrEqual(MAX_LEAD);
     }
   });

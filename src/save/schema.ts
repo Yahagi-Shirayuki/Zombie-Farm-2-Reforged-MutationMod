@@ -28,6 +28,8 @@ import type { FarmBackground } from "../prefs";
 import type { EpicBossRun } from "../epicBoss/types";
 import type { PowderColor, PowderGrindJob } from "../powderMachine";
 import type { ZombieColorDyeJob, ZombiePowderStatProgress, ZombiePowderStats } from "../zombieColorMixerBucket";
+import type { ZombieTeam } from "../zombie/teams";
+import type { PeriodicQuestState } from "../quest/periodic/types";
 
 /** Bump when the shape changes in a way that needs a migration. */
 export const SAVE_VERSION = 1;
@@ -78,6 +80,8 @@ export interface SaveGame {
   zombieColorDyes?: Record<string, ZombieColorDyeJob>;
   /** Real quest engine progress (active per-requirement counts + completed ids). */
   quests?: QuestSave;
+  /** Local daily / weekly quest board. Online state is projected by the server. */
+  periodicQuests?: PeriodicQuestState;
   /** Phase 5: raid/invasion progress (lifetime win count per raid id). */
   raids?: RaidProgressSave;
   /** Active/completed limited Epic Boss run. Absent in saves created before the feature. */
@@ -94,6 +98,8 @@ export interface SaveGame {
   /** Zombie Almanac: lifetime obtained count per species key. Absent in saves
    *  written before the Almanac existed â€” backfilled from ownedZombies on load. */
   almanac?: AlmanacSave;
+  /** Saved farm line-ups. Presentation only; assembling runs ordinary roster moves. */
+  teams?: ZombieTeam[];
 }
 
 /** Zombie Almanac collection progress (cosmetic; counts never decrease). */

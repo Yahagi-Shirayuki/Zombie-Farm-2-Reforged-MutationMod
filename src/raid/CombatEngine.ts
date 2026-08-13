@@ -38,6 +38,7 @@ import type {
   RaidOutcome,
   RaidStage,
 } from "./types";
+import { eliteEnemyStat, type EliteProfile } from "./eliteInvasion";
 
 const STEP_MS = 100; // simulation tick
 const MAX_SIM_MS = 20 * 60 * 1000; // safety cap (min-damage 1 prevents true stalls)
@@ -339,13 +340,14 @@ export function buildEnemyUnits(
   stage: RaidStage,
   stats: Record<string, EnemyStat>,
   attacks: Record<string, AttackDef>,
-  opts: { raidId?: number; playerLevel?: number } = {}
+  opts: { raidId?: number; playerLevel?: number; elite?: EliteProfile | null } = {}
 ): CombatUnit[] {
   const out: CombatUnit[] = [];
   const pace = farmRaidEnemyPace(opts.raidId, opts.playerLevel);
   const add = (key: string, boss: boolean) => {
-    const st = stats[key];
-    if (!st) return;
+    const base = stats[key];
+    if (!base) return;
+    const st = eliteEnemyStat(base, opts.elite ?? null, boss);
     const u = unit(
       `e${out.length}`,
       key,

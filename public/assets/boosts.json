@@ -84,9 +84,24 @@
   "amount": 0,
   "perPurchase": 1,
   "giftZombieKey": "",
-  "usableOnFarm": false,
-  "info": "Invade immediately!",
-  "flavorText": "Use this to remove the wait time for an invasion.",
+ "usableOnFarm": false,
+ "info": "Invade immediately!",
+ "flavorText": "Use this to remove the wait time for an invasion.",
   "icon": "invasion_voucher.png"
+ },
+ {
+  "key": "brain_ticket",
+  "name": "Brain Ticket",
+  "cost": 10000,
+  "brainsNeeded": false,
+  "level": 0,
+  "effect": "other",
+  "amount": 0,
+  "perPurchase": 1,
+  "giftZombieKey": "",
+  "usableOnFarm": false,
+  "info": "Invade now, for brains!",
+  "flavorText": "Skips the wait AND quadruples the brain and rare-zombie odds - but the invasion turns ELITE, and elite invasions hit far harder.",
+  "icon": "brain_ticket.png"
  }
 ]

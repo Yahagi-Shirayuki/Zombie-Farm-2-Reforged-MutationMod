@@ -15,6 +15,35 @@ export function snapPlowOrigin(anchor: PlowOrigin, current: PlowOrigin): PlowOri
   };
 }
 
+/** Pick the plot origin a drag-plow stroke should lay under this pointer.
+ *
+ * The stroke still prefers the lattice established by its starting tile, but if
+ * that square collides with existing soil, try nearby origins that still cover
+ * the tile under the pointer. That keeps a swipe from leaving holes beside an
+ * already-plowed row just because its original lattice was offset by one tile.
+ */
+export function choosePlowOrigin(
+  anchor: PlowOrigin,
+  col: number,
+  row: number,
+  pointerOrigin: PlowOrigin,
+  fits: (origin: PlowOrigin) => boolean,
+): PlowOrigin | null {
+  const snapped = snapPlowOrigin(anchor, pointerOrigin);
+  if (fits(snapped)) return snapped;
+  let best: PlowOrigin | null = null;
+  let bestDistance = Infinity;
+  for (let oc = col - PLOT + 1; oc <= col; oc++) {
+    for (let or = row - PLOT + 1; or <= row; or++) {
+      const distance = Math.abs(oc - snapped.oc) + Math.abs(or - snapped.or);
+      if (distance >= bestDistance || !fits({ oc, or })) continue;
+      best = { oc, or };
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
 /** Build an inclusive plot rectangle on the lattice established by the anchor. */
 export function plowRectangle(anchor: PlowOrigin, current: PlowOrigin): PlowOrigin[] {
   const dc = Math.round((current.oc - anchor.oc) / PLOT);

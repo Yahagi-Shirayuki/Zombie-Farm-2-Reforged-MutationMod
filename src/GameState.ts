@@ -26,6 +26,7 @@ import {
   sanitizeZombieColorDyeJobs,
   type ZombieColorDyeJob,
 } from "./zombieColorMixerBucket";
+import type { ZombieTeam } from "./zombie/teams";
 
 export const XP_THRESHOLDS = [
   0, 25, 75, 150, 250, 375, 550, 800, 1300, 1800, 2300, 2800, 3300, 3900, 4500,
@@ -104,6 +105,8 @@ export class GameState {
   // The player's chosen attack order (deployed zombie ids, first attacks first).
   // Persisted so the Army screen reopens with the same ordering after a raid.
   raidAttackOrder: string[] = [];
+  // ---- saved farm line-ups ("teams") ----
+  zombieTeams: ZombieTeam[] = [];
   // ---- limited Epic Boss run ----
   epicBossRun: EpicBossRun | null = null;
   // ---- friends (local offline-fallback list) ----

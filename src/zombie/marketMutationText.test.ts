@@ -7,14 +7,18 @@
 // the two Tier-4 mutants reuse a lower tier's mutation bit, so the old text named the
 // wrong mutation ("Cauli-hair" on a Heartichoke Zombie).
 import { describe, expect, it } from "vitest";
+import moddedZombieRows from "../../public/assets/modded_zombies.json";
 import zombieRows from "../../public/assets/zombies.json";
 import { makeOwned } from "./types";
 import { displayStat } from "./traits";
 import { mutationDisplayGains, mutationMarketDescription } from "./statDisplay";
 import { statBreakdown } from "./statDisplay";
-import type { ZombieDef } from "../assets";
+import { mergeModdedZombies, type ModdedZombieDef, type ZombieDef } from "../assets";
 
-const rows = zombieRows as unknown as ZombieDef[];
+const rows = mergeModdedZombies(
+  zombieRows as unknown as ZombieDef[],
+  moddedZombieRows as unknown as ModdedZombieDef[],
+);
 const row = (key: string) => rows.find((z) => z.key === key)!;
 const mutants = rows.filter((z) => z.category === "mutant");
 
@@ -45,7 +49,7 @@ describe("mutation gains are reported in displayed units", () => {
     const base = { str: 2, dex: 2, con: 2 };
     // Turnip (+2 str) + Lima Bean (+3 con) occupy different slots and stats.
     expect(mutationDisplayGains(base, 8 | 1024)).toEqual([
-      { stat: "str", label: "Damage", delta: 8 },
+      { stat: "str", label: "Damage", delta: 12 },
       { stat: "con", label: "Life", delta: 10 },
     ]);
   });
@@ -56,7 +60,7 @@ describe("every Market mutant's promise matches what its card will read", () => 
     "%s advertises the gain its grown unit actually shows",
     (_name, key) => {
       const def = row(key);
-      const gains = mutationDisplayGains(def, def.mutation!);
+      const gains = mutationDisplayGains(def, def.mutation ?? 0, def.mutationIds);
       expect(gains.length).toBeGreaterThan(0);
 
       // Grow the unit for real, then read the stat card's own "Mutation" line.
@@ -72,9 +76,22 @@ describe("every Market mutant's promise matches what its card will read", () => 
   it("never quotes a raw 1-4 point value for a speed mutation", () => {
     // The regression: Carrot/Coffee/Eyebiscus used to read "+1 speed" / "+2 speed".
     for (const def of mutants) {
-      const speed = mutationDisplayGains(def, def.mutation!).find((g) => g.stat === "dex");
+      const speed = mutationDisplayGains(def, def.mutation ?? 0, def.mutationIds).find((g) => g.stat === "dex");
       if (speed) expect(speed.delta).toBeGreaterThan(4);
     }
+  });
+
+  it("supports modded string-id market mutants", () => {
+    const bread = row("ZombieActorRegularTier1Bread");
+    expect(bread.mutation).toBe(0);
+    expect(bread.mutationIds).toEqual(["bread_neck"]);
+    expect(mutationDisplayGains(bread, bread.mutation ?? 0, bread.mutationIds)).toEqual([
+      { stat: "con", label: "Life", delta: 10 },
+    ]);
+
+    const owned = makeOwned("z1", bread, 0, 0);
+    expect(owned.mutationIds).toEqual(["bread_neck"]);
+    expect(owned.con).toBe(5);
   });
 });
 
@@ -87,7 +104,8 @@ describe("Tier-4 mutants that reuse a lower tier's bit", () => {
     expect(heartichoke.mutation).toBe(512); // shared with Cauliflower Zombie
 
     const text = mutationMarketDescription(heartichoke, heartichoke.mutation!)!;
-    expect(text).toContain("+10 Life");
+    expect(text).toContain("+6 Life");
+    expect(text).toContain("+13 Focus");
     expect(text).not.toContain("Cauli-hair"); // the reported wrong text
     expect(text).not.toContain("+3 life"); // the raw-unit value
   });
@@ -106,7 +124,14 @@ describe("Tier-4 mutants that reuse a lower tier's bit", () => {
     const cauli = row("ZombieActorRegularTier2Cauliflower");
     const heartichoke = row("ZombieActorRegularTier4Heartichoke");
     expect(heartichoke.con).toBeGreaterThan(cauli.con);
-    expect(mutationDisplayGains(cauli, 512)).toEqual(mutationDisplayGains(heartichoke, 512));
+    expect(mutationDisplayGains(cauli, 512)).toEqual([
+      { stat: "con", label: "Life", delta: 7 },
+      { stat: "focus", label: "Focus", delta: 13 },
+    ]);
+    expect(mutationDisplayGains(heartichoke, 512)).toEqual([
+      { stat: "con", label: "Life", delta: 6 },
+      { stat: "focus", label: "Focus", delta: 13 },
+    ]);
   });
 });
 

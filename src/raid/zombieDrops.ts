@@ -22,6 +22,8 @@ export const TEDDY_ZOMBIE_KEY = "ZombieActorRegular4Tier5";
 export const TEDDY_ZOMBIE_NAME = "Teddy Zombie";
 export const VALENTINES_DAY_RAID_ID = 11;
 
+export const RARE_INVASION_ZOMBIE_SUBJECT = "rare_invasion_zombie";
+
 export const EVENT_ZOMBIE_DROP_RATE = 0.8 / 100;
 
 export const RAID_ZOMBIE_DROPS: Readonly<Record<number, RaidZombieDrop>> = {
@@ -64,11 +66,12 @@ export const ZOMBIE_LUCK_DICE_CAP = 10;
 
 /** This raid's rare-zombie chance with `dice` Golden Dice spent — 0 for a raid that has no
  *  rare zombie. Never exceeds 1. */
-export function raidZombieDropRate(raidId: number, dice = 0): number {
+export function raidZombieDropRate(raidId: number, dice = 0, luck = 1): number {
   const drop = RAID_ZOMBIE_DROPS[raidId];
   if (drop == null) return 0;
   const spent = Math.max(0, Math.min(ZOMBIE_LUCK_DICE_CAP, Math.trunc(Number(dice) || 0)));
-  return Math.min(1, drop.rate * (1 + ZOMBIE_LUCK_PER_DIE * spent));
+  const elite = Math.max(0, Number(luck) || 0);
+  return Math.min(1, drop.rate * (1 + ZOMBIE_LUCK_PER_DIE * spent) * elite);
 }
 
 /** A successful configured invasion independently rolls for its rare zombie reward. `dice`
@@ -77,14 +80,15 @@ export function rollRaidZombieDrop(
   raidId: number,
   won: boolean,
   roll: number,
-  dice = 0
+  dice = 0,
+  luck = 1
 ): RaidZombieDrop | null {
   const drop = RAID_ZOMBIE_DROPS[raidId];
   return won &&
     drop != null &&
     Number.isFinite(roll) &&
     roll >= 0 &&
-    roll < raidZombieDropRate(raidId, dice)
+    roll < raidZombieDropRate(raidId, dice, luck)
     ? drop
     : null;
 }
@@ -116,9 +120,10 @@ export function rollRaidZombieDropWithPity(
   won: boolean,
   roll: number,
   dryWins: number,
-  dice = 0
+  dice = 0,
+  luck = 1
 ): RaidZombieDrop | null {
-  const rolled = rollRaidZombieDrop(raidId, won, roll, dice);
+  const rolled = rollRaidZombieDrop(raidId, won, roll, dice, luck);
   if (rolled) return rolled;
   const drop = RAID_ZOMBIE_DROPS[raidId];
   return won && drop != null && dryWins >= RAID_ZOMBIE_PITY_WINS ? drop : null;
@@ -137,4 +142,8 @@ export function nextRaidZombieDryWins(dryWins: number, dropped: boolean): number
 /** Whether a raid has a rare zombie at all — i.e. whether its dry-win streak means anything. */
 export function hasRaidZombieDrop(raidId: number): boolean {
   return RAID_ZOMBIE_DROPS[raidId] != null;
+}
+
+export function isRareInvasionZombieName(name: string): boolean {
+  return Object.values(RAID_ZOMBIE_DROPS).some((drop) => drop.name === name);
 }

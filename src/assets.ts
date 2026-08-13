@@ -5,7 +5,7 @@ import type { QuestDef } from "./quest/types";
 import type { RaidDef, EnemyStat, AttackDef } from "./raid/types";
 import { setZombieNames } from "./zombie/names";
 import { BASE } from "./base";
-import { fetchJson, mapConcurrent } from "./assetLoading";
+import { AssetHttpError, fetchJson, mapConcurrent } from "./assetLoading";
 import { MAX_ZOMBIE_POTS } from "./placementLimit";
 import { isPowderMachineKey, POWDER_MACHINE_PURCHASE_LIMIT } from "./powderMachine";
 import { isZombieColorMixerBucketKey, ZOMBIE_COLOR_MIXER_BUCKET_LIMIT } from "./zombieColorMixerBucket";
@@ -190,6 +190,10 @@ export function mergeSpecialZombieModel(
 export interface ZombieDef {
   key: string;
   name: string;
+  /** Optional source species a data-only modded zombie inherits art/stats from. */
+  baseKey?: string;
+  /** Optional portrait species key when this row has no dedicated portrait file. */
+  portraitKey?: string;
   cost: number;
   growMs: number; // authoritative (source) grow time
   level: number; // player level required to unlock
@@ -197,6 +201,7 @@ export interface ZombieDef {
   brainsNeeded?: boolean; // cost is paid in brains, not gold
   category: "normal" | "special" | "mutant";
   mutation?: number; // mutation BITMASK for market mutants (Carrot=4); 0/absent = none
+  mutationIds?: string[]; // local modded mutation ids for market mutants
   // Phase 3 taxonomy + combat stats (baked by tools/prep_market.py).
   group: string; // Regular / Female / Small / Large / Headless / Garden
   className: string; // Green / Blue / Red / Silver / Special / Yellow
@@ -209,6 +214,50 @@ export interface ZombieDef {
   specialSprite?: string; // named source zombie rendered from its dedicated sheet
   rewardOnly?: boolean; // earned from an event/quest; never shown as a plantable Market crop
   marketHidden?: boolean; // obtained through a voucher/gift rather than planted directly
+}
+
+export interface ModdedZombieDef extends Omit<Partial<ZombieDef>, "key" | "name"> {
+  key: string;
+  name: string;
+  baseKey: string;
+}
+
+export function mergeModdedZombies(
+  baseRows: readonly ZombieDef[],
+  modRows: readonly ModdedZombieDef[],
+): ZombieDef[] {
+  const out = [...baseRows];
+  const indexByKey = new Map(out.map((row, index) => [row.key, index]));
+  const baseByKey = new Map(baseRows.map((row) => [row.key, row]));
+
+  for (const mod of modRows) {
+    const base = baseByKey.get(mod.baseKey);
+    if (!base) {
+      console.warn(`[assets] modded zombie "${mod.key}" skipped: baseKey "${mod.baseKey}" was not found`);
+      continue;
+    }
+    const row: ZombieDef = {
+      ...base,
+      ...mod,
+      key: mod.key,
+      name: mod.name,
+      baseKey: mod.baseKey,
+      portraitKey: mod.portraitKey ?? base.portraitKey ?? mod.baseKey,
+      category: mod.category ?? "mutant",
+      mutation: mod.mutation ?? 0,
+      mutationIds: [...(mod.mutationIds ?? [])],
+      rewardOnly: mod.rewardOnly ?? false,
+      marketHidden: mod.marketHidden ?? false,
+    };
+    const existing = indexByKey.get(row.key);
+    if (existing === undefined) {
+      indexByKey.set(row.key, out.length);
+      out.push(row);
+    } else {
+      out[existing] = row;
+    }
+  }
+  return out;
 }
 
 export const purchasableZombies = (zombies: readonly ZombieDef[]): ZombieDef[] =>
@@ -553,13 +602,18 @@ export async function loadAssets(): Promise<GameAssets> {
     retryDelay: 350,
   };
 
-  const [field, groundIndex, rig, plants, zombies, placeables, boosts, quests,
+  const [field, groundIndex, rig, plants, baseZombies, moddedZombies, placeables, boosts, quests,
     raids, enemyStats, raidAttacks, zombieNames, drops, upgrades, farmer, pets] = await Promise.all([
     json<FieldData>(BASE + "assets/field_default.json"),
     json<GroundIndex>(BASE + "assets/ground_index.json"),
     json<Rig>(BASE + "assets/rig_player.json"),
     json<PlantDef[]>(BASE + "assets/plants.json"),
     json<ZombieDef[]>(BASE + "assets/zombies.json"),
+    json<ModdedZombieDef[]>(BASE + "assets/modded_zombies.json").catch((error) => {
+      if (error instanceof AssetHttpError && error.status === 404) return [];
+      console.warn("[assets] modded_zombies.json could not be loaded", error);
+      return [];
+    }),
     json<PlaceableDef[]>(BASE + "assets/placeables.json"),
     json<BoostDef[]>(BASE + "assets/boosts.json"),
     json<Record<string, QuestDef>>(BASE + "assets/quests.json"),
@@ -572,6 +626,7 @@ export async function loadAssets(): Promise<GameAssets> {
     json<FarmerCatalog>(BASE + "assets/farmer.json"),
     json<PetCatalog>(BASE + "assets/pets/catalog.json"),
   ]);
+  const zombies = mergeModdedZombies(baseZombies, moddedZombies);
   setZombieNames(zombieNames); // seed the random-name picker before any zombie is built
   const invasionBubble = (await Assets.load(
     BASE + "assets/ui/thoughtBubbleBrains.png"

@@ -1,0 +1,25 @@
+[
+ {
+  "key": "ZombieActorRegularTier1Bread",
+  "name": "Bread Zombie",
+  "baseKey": "ZombieActorRegularTier1",
+  "cost": 80,
+  "level": 6,
+  "category": "mutant",
+  "mutationIds": [
+   "bread_neck"
+  ]
+ },
+ {
+  "key": "ZombieActorRegularTier1CarrotA",
+  "name": "Carrot Arms Zombie",
+  "baseKey": "ZombieActorRegularTier1",
+  "cost": 60,
+  "level": 4,
+  "category": "mutant",
+  "mutationIds": [
+   "carrot_arm",
+   "carrot_arm_b"
+  ]
+ }
+]

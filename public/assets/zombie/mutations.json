@@ -312,5 +312,15 @@
   "ax": 0,
   "ay": 1,
   "z": 8
+ },
+ "spinach_hair": {
+  "file": "spinach_hair.png",
+  "group": "head",
+  "headRel": true,
+  "ox": 10,
+  "oy": -7,
+  "ax": 0.73,
+  "ay": 0.7,
+  "z": 7
  }
 }

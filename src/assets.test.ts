@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { BoostDef, DropDef, GameAssets, PlaceableDef } from "./assets";
-import { looseMutationFiles, looseMutationPath, raidRewardImage } from "./assets";
+import type { BoostDef, DropDef, GameAssets, PlaceableDef, ZombieDef } from "./assets";
+import { looseMutationFiles, looseMutationPath, mergeModdedZombies, raidRewardImage } from "./assets";
 
 const assets = {
   drops: {
@@ -73,5 +73,52 @@ describe("loose mutation art", () => {
       .toBe("modded_mutations/cornhead.png");
     expect(looseMutationPath("modded_mutations/cornhead"))
       .toBe("modded_mutations/cornhead.png");
+  });
+});
+
+describe("modded zombie catalog", () => {
+  const base = {
+    key: "ZombieActorRegularTier1",
+    name: "Plain Zombie",
+    cost: 50,
+    growMs: 300000,
+    level: 1,
+    xp: 1,
+    brainsNeeded: false,
+    category: "normal",
+    group: "Regular",
+    className: "Green",
+    classColor: "#7bd84a",
+    str: 2,
+    dex: 2,
+    con: 2,
+    focus: 50,
+    mutation: 0,
+    tier: 1,
+    marketHidden: false,
+  } satisfies ZombieDef;
+
+  it("inherits the boring fields from baseKey and keeps the mod row copy-pasteable", () => {
+    expect(mergeModdedZombies([base], [{
+      key: "ZombieActorRegularTier1Bread",
+      name: "Bread Zombie",
+      baseKey: "ZombieActorRegularTier1",
+      cost: 80,
+      level: 4,
+      mutationIds: ["bread_neck"],
+    }])).toContainEqual({
+      ...base,
+      key: "ZombieActorRegularTier1Bread",
+      name: "Bread Zombie",
+      baseKey: "ZombieActorRegularTier1",
+      portraitKey: "ZombieActorRegularTier1",
+      cost: 80,
+      level: 4,
+      category: "mutant",
+      mutation: 0,
+      mutationIds: ["bread_neck"],
+      rewardOnly: false,
+      marketHidden: false,
+    });
   });
 });

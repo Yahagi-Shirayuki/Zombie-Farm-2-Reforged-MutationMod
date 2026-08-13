@@ -160,6 +160,17 @@ export class CommandQueue {
     return sequence;
   }
 
+  coalesceLast(merge: (last: GameplayCommand) => GameplayCommand | null): number | null {
+    if (this.paused) return null;
+    const last = this.pending[this.pending.length - 1];
+    if (!last) return null;
+    const merged = merge(last.command);
+    if (!merged) return null;
+    last.command = merged;
+    this.persist();
+    return last.sequence;
+  }
+
   disable(reason: string): void { this.pause(reason); }
 
   /** A causal boundary: callers await this before a raid or before spending an

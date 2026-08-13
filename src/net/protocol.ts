@@ -1,6 +1,7 @@
 /** Wire contract for the authoritative gameplay protocol. Keep this module free of
  * browser and Worker dependencies so both sides compile against the same shapes. */
 import type { PowderColor, PowderGrindJob, PowderStorage } from "../powderMachine";
+import type { PeriodicScopeState } from "../quest/periodic/types";
 import type { ZombieColorDyeJob, ZombiePowderStatProgress, ZombiePowderStats } from "../zombieColorMixerBucket";
 
 export const GAMEPLAY_PROTOCOL = 3 as const;
@@ -13,6 +14,7 @@ export const COMMAND_BATCH_LIMIT = 64;
 // flushes on beforeunload / visibilitychange:hidden.
 export const COMMAND_BATCH_WINDOW_MS = 30_000;
 export const PRESENTATION_WINDOW_MS = 60_000;
+export const FARM_BULK_LIMIT = 289;
 
 export type CommandStatus = "applied" | "duplicate" | "rejected" | "dependency_failed";
 
@@ -24,12 +26,16 @@ export interface CommandResult {
   /** Source plots for zombies created by a farm/power command. This avoids pairing
    * bulk-harvest identities by two different iteration orders. */
   createdZombieSources?: { id: string; oc: number; or: number }[];
+  rejectedPlots?: number;
+  rejectedPlotError?: string;
 }
 
 export type GameplayCommand =
   | { type: "writer.claim" }
   | { type: "farm.plow"; oc: number; or: number }
   | { type: "farm.plant"; oc: number; or: number; cropKey: string; fertilized?: boolean; variant?: number }
+  | { type: "farm.plow_many"; plots: { oc: number; or: number }[] }
+  | { type: "farm.plant_many"; cropKey: string; plots: { oc: number; or: number; fertilized?: boolean; variant?: number }[] }
   | { type: "farm.harvest"; oc: number; or: number }
   | { type: "farm.remove"; oc: number; or: number }
   /** Relocate a plot and whatever is growing on it. Layout only — the crop,
@@ -64,6 +70,7 @@ export type GameplayCommand =
   | { type: "pet.buy"; petKey: string }
   | { type: "pet.equip"; petKey: string | null }
   | { type: "pet.pen"; petKeys: string[] }
+  | { type: "quest.periodic_claim"; scope: "daily" | "weekly"; questId: string }
   | { type: "tutorial.complete" };
 
 export interface SequencedCommand {
@@ -128,6 +135,12 @@ export interface QuestProjection {
   progress: { questId: string; counts: number[] }[];
 }
 
+export interface PeriodicQuestProjection {
+  version?: number;
+  daily: PeriodicScopeState | null;
+  weekly: PeriodicScopeState | null;
+}
+
 export interface EpicBossProjection {
   runId: string;
   bossId: string;
@@ -173,6 +186,7 @@ export interface GameplayProjection {
   farm: FarmDocumentProjection;
   objects: ObjectDocumentProjection;
   quests: QuestProjection;
+  periodicQuests?: PeriodicQuestProjection;
   inventory: Record<string, number>;
   storage: { received: Record<string, number>; stored: Record<string, number> };
   powderStorage?: PowderStorage;
