@@ -14,6 +14,8 @@ import {
   deriveMaxHp,
   deriveAttackIntervalMs,
   deriveHitDamage,
+  displayedDamageForCrit,
+  expectedPhysicalCritMultiplier,
   lineupDamageBand,
   LINEUP_DAMAGE_BANDS,
   lineupSpeedBand,
@@ -25,6 +27,8 @@ import {
   SOURCE_FRAME_SEC,
   POWER_PER_STR,
   HP_PER_CON,
+  physicalCritLayerMultiplier,
+  physicalCritMultiplier,
 } from "./combatStats";
 
 // Ground truth: Actor calculateFinal* / Actor damage: / rollAgainstFrequencyInArray:
@@ -161,6 +165,24 @@ describe("stat -> fight-data conversion (initFightDataAfterLoad)", () => {
     expect(deriveHitDamage(20, 2)).toBeCloseTo(40);
     // default multiplier is 1 (matches the binary's damageMultiplier default for mult-less attacks)
     expect(deriveHitDamage(20)).toBeCloseTo(20);
+  });
+});
+
+describe("physical crit rule — Focus chance with displayed Damage scaling", () => {
+  it("uses the visible Damage stat for each crit layer", () => {
+    expect(displayedDamageForCrit(30)).toBe(129);
+    expect(physicalCritLayerMultiplier(30)).toBeCloseTo(2.29);
+  });
+
+  it("turns Focus over 100 into guaranteed layers plus a fractional super-crit roll", () => {
+    expect(physicalCritMultiplier(30, 103, () => 0.50)).toBeCloseTo(2.29);
+    expect(physicalCritMultiplier(30, 103, () => 0.02)).toBeCloseTo(2.29 * 2.29);
+    expect(physicalCritMultiplier(30, 220, () => 0.50)).toBeCloseTo(2.29 * 2.29);
+    expect(physicalCritMultiplier(30, 220, () => 0.10)).toBeCloseTo(2.29 * 2.29 * 2.29);
+  });
+
+  it("has an expected-value form for the RNG-free instant resolver", () => {
+    expect(expectedPhysicalCritMultiplier(30, 120)).toBeCloseTo(2.29 * (1 + 0.2 * 1.29));
   });
 });
 

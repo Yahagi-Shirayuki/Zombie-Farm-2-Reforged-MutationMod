@@ -67,6 +67,7 @@ import {
   FARM_BG_DENSITY, type FarmBackground, getDayNightMode, setDayNightMode,
   isLocalNight, type DayNightMode, hasSeenHazardTip, markHazardTipSeen,
   zombieAppearancePrefs, setZombieBodyColorMode, setShowZombieMutations,
+  getShowDamageNumbers,
 } from "./prefs";
 import { BASE } from "./base";
 import { TutorialController } from "./tutorial/TutorialController";
@@ -3431,6 +3432,7 @@ async function main() {
       bossAnimations: def.animations,
       bossFallsFromSky: true,
       bossEngageDistance: 150,
+      showDamageNumbers: getShowDamageNumbers(),
       // Loco Locust sits low inside his generously padded animation cells. Lift his
       // whole token slightly so the visible character shares the other bosses' line.
       bossGroundOffset: { x: 32, y: def.id === "loco-locust" ? 8 : 24 },
@@ -3673,6 +3675,7 @@ async function main() {
       wallTemplate: setup.wallTemplate,
       brainDrop: setup.brainDrop,
       concentration: setup.concentration,
+      showDamageNumbers: getShowDamageNumbers(),
       onStrike: (strike) => audio.fightStrike(strike),
       onBrainRelease: (sourceKey) => audio.brainForZombie(sourceKey),
       onVictory: () => audio.playRaidVictory(),

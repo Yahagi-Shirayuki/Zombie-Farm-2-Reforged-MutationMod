@@ -291,5 +291,26 @@
   "ay": 0.7,
   "z": 4,
   "replaces": "head"
+ },
+ "kale_arm": {
+  "file": "kale_arm.png",
+  "group": "root",
+  "headRel": false,
+  "ox": 12,
+  "oy": 35,
+  "ax": 1,
+  "ay": 0.4,
+  "z": 8,
+  "replaces": "armF"
+ },
+ "berry_eye": {
+  "file": "berry_eye.png",
+  "group": "head",
+  "headRel": true,
+  "ox": -14,
+  "oy": 5,
+  "ax": 0,
+  "ay": 1,
+  "z": 8
  }
 }

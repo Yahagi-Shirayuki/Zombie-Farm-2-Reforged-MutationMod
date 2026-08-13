@@ -53,37 +53,45 @@ export function statEffectsOf(def: Pick<ResolvedMutationDef, "stats">): { stat: 
 // The authored vanilla catalog, in BIT ORDER. Entry N owns bit 2^N.
 // APPEND VANILLA ONLY. Modded entries belong in MODDED_MUTATIONS below so they keep
 // real string ids instead of spending finite bit positions.
+// Original mutation list
 const CATALOG: readonly MutationSpec[] = [
-  { key: "tomato", name: "Tomatohead", slot: "head", stats: { str: 1, con: 1 } },
-  { key: "onion", name: "Onionhead", slot: "head", stats: { dex: 1, con: 1 }  },
-  { key: "carrot", name: "Carrot-eyed", slot: "hair_eye", stats: { dex: 1, wis: 1 } },
-  { key: "turnip", name: "Turnip-Arm", slot: "arm", stats: { str: 3, dex: -1 } },
-  { key: "potato", name: "Potatohead", slot: "head", stats: { con: 3, dex: -1 } },
-  { key: "coffee", name: "Coffeehead", slot: "head", stats: { dex: 3, wis: 1, con: -2 } },
-  { key: "celery", name: "Celery-arms", slot: "arm", stats: { str: 3, con: 1, dex: -1 } },
-  { key: "broccoli", name: "Broccohair", slot: "hair_eye", stats: { con: 3, wis: 2, dex: -2 } },
-  { key: "garlic", name: "Garlichead", slot: "head", stats: { str: 4, con: 1, dex: -2 } },
-  { key: "cauli", name: "Cauli-hair", slot: "hair_eye", stats: { con: 2, wis: 3, dex: -2 } },
-  { key: "limabean", name: "Lima Bean", slot: "body", stats: { str: 2, con: 3, dex: -2 } },
-  { key: "flytrap", name: "Flytrap", slot: "neck", stats: { str: 2, con: 3, wis: 1, dex: -2 } },
-  { key: "dragon", name: "Dragon-arm", slot: "arm", stats: { str: 5, dex: 2, con: -3 } },
-  { key: "pumpking", name: "Pumpking", slot: "head", stats: { str: 3, con: 2, wis: -2 } },
+	{ key: "tomato",	  name: "Tomatohead",	  slot: "head",		  stats: { str: 1, con: 1 } },
+	{ key: "onion",	    name: "Onionhead",	  slot: "head",		  stats: { con: 1 } },
+	{ key: "carrot",	  name: "Carrot-eyed",	slot: "hair_eye",	stats: { dex: 1 } },
+	{ key: "turnip",	  name: "Turnip-Arm",	  slot: "arm",		  stats: { str: 2 } },
+	{ key: "potato",	  name: "Potatohead",	  slot: "head",		  stats: { con: 2, str: 1 } },
+	{ key: "coffee",	  name: "Coffeehead",	  slot: "head",		  stats: { dex: 1, wis: 2 } },
+	{ key: "celery",	  name: "Celery-arms",	slot: "arm",		  stats: { str: 3, con: 1 } },
+	{ key: "broccoli",	name: "Broccohair",	  slot: "hair_eye",	stats: { con: 3, wis: 1 } },
+	{ key: "garlic",	  name: "Garlichead",	  slot: "head",		  stats: { str: 2, con: 2, wis: 1 } },
+	{ key: "cauli",	    name: "Cauli-hair",	  slot: "hair_eye",	stats: { con: 2, wis: 3 } },
+	{ key: "limabean",	name: "Lima Bean",	  slot: "body",		  stats: { con: 3, str: 1 } },
+	{ key: "flytrap",	  name: "Flytrap",	    slot: "neck",		  stats: { str: 2, con: 2 } },
+	{ key: "dragon",	  name: "Dragon-arm",	  slot: "arm",		  stats: { str: 4, dex: 1, wis: 1 } },
+	{ key: "pumpking",	name: "Pumpking",	    slot: "head",		  stats: { str: 3, con: 2, wis: 1 } },
 ];
-// Authored modded mutations. Back-arm twins are derived below for every arm-slot
-// entry, so mod content only has to name and tune the primary arm once.
+// Addition modded mutation
 const AUTHORED_MODDED_MUTATIONS: Readonly<Record<MutationKey, ModdedMutationDef>> = Object.freeze({
-  carrot_arm: { modded: true, key: "carrot_arm", name: "carrot-armed", slot: "arm", stats: { dex: 1 } },
-  turnip_eye: { modded: true, key: "turnip_eye", name: "Turnip-eyed", slot: "hair_eye", stats: { dex: 3, str: -1 } },
-  turnip_head: { modded: true, key: "turnip_head", name: "Turnip-head", slot: "head", stats: { str: 2, con: 2, dex: -1 } },
-  bread_neck: { modded: true, key: "bread_neck", name: "Bread neck", slot: "neck", stats: { con: 4, dex: -1 } },
-  apple_head: { modded: true, key: "apple_head", name: "Red-delicious Head", slot: "head", stats: { str: 2, dex: 2, wis: 1, con: -1 } },
-  melon_head: { modded: true, key: "melon_head", name: "Felon-Headon", slot: "head", stats: { con: 5, dex: -2 } },
-  sampaguita_hair: { modded: true, key: "sampaguita_hair", name: "Sampaguita hair", slot: "hair_eye", stats: { wis: 3, dex: 2, str: -1 } },
-  corn_head: { modded: true, key: "corn_head", name: "Corned head", slot: "head", stats: { con: 3, str: 2, dex: -1 } },
-  corn_arm: { modded: true, key: "corn_arm", name: "Corned Arms", slot: "arm", stats: { str: 4, con: 1, dex: -1 } },
-  spineapple_body: { modded: true, key: "spineapple_body", name: "Spine-ap-body", slot: "body", stats: { str: 3, con: 3, dex: 1, wis: -2 } },
-  bloodberry_hair: { modded: true, key: "bloodberry_hair", name: "Bloody-hairy", slot: "hair_eye", stats: { str: 4, con: 2, wis: 1, dex: -2 } },
-  skellyberry_body: { modded: true, key: "skellyberry_body", name: "Skelly-belly", slot: "body", stats: { con: 5, str: 3, dex: -2 } },
+	carrot_arm:		    { modded: true, key: "carrot_arm",		  name: "carrot-armed",		    slot: "arm",		  stats: { str: 1, dex: 1 } },
+	turnip_eye:		    { modded: true, key: "turnip_eye",		  name: "Turnip-eyed",		    slot: "hair_eye",	stats: { wis: 2 } },
+	turnip_head:		  { modded: true, key: "turnip_head",		  name: "Turnip-head",		    slot: "head",		  stats: { con: 2 } },
+	bread_neck:		    { modded: true, key: "bread_neck",		  name: "Bread neck",		      slot: "neck",		  stats: { con: 3 } },
+	apple_head:		    { modded: true, key: "apple_head",		  name: "Red-delicious Head",	slot: "head",		  stats: { str: 1, dex: 1 } },
+	melon_head:		    { modded: true, key: "melon_head",		  name: "Felon-Headon",		    slot: "head",		  stats: { con: 3 } },
+	sampaguita_hair:	{ modded: true, key: "sampaguita_hair",	name: "Sampaguita hair",	  slot: "hair_eye",	stats: { dex: 1, wis: 2 } },
+	corn_head:		    { modded: true, key: "corn_head",		    name: "Corned head",		    slot: "head",		  stats: { str: 1, con: 2, wis: 1 } },
+	corn_arm:		      { modded: true, key: "corn_arm",		    name: "Corned Arm",		      slot: "arm",		  stats: { str: 3, con: 1 } },
+	spineapple_body:	{ modded: true, key: "spineapple_body",	name: "Spine-ap-body",		  slot: "body",		  stats: { str: 1, con: 3 } },
+	kale_arm:		      { modded: true, key: "kale_arm",		    name: "Malakale Arm",		    slot: "arm",		  stats: { str: 2, con: 1, dex: 1 } },
+	berry_eye:		    { modded: true, key: "berry_eye",		    name: "Beryl-eyed",		      slot: "hair_eye",	stats: { dex: 1, wis: 2, con: 1 } },
+	/*
+	spinach_hair:		  { modded: true, key: "spinach_hair",		name: "Spinel hair",		    slot: "hair_eye",	stats: { con: 2, dex: 1, wis: 1 } },
+	mint_neck:		    { modded: true, key: "mint_neck",		    name: "Diamint lei",		    slot: "neck",		  stats: { con: 2, wis: 2, dex: 1 } },
+	oat_hat:		      { modded: true, key: "oat_hat",			    name: "Oatnyx wreath",		  slot: "hair_eye",	stats: { con: 2, wis: 2 } },
+	oat_arm:		      { modded: true, key: "oat_arm",			    name: "Oatnyx Arm",		      slot: "arm",		  stats: { str: 2, con: 2 } },
+	*/
+	bloodberry_hair:	{ modded: true, key: "bloodberry_hair",	name: "Bloody-hairy",		    slot: "hair_eye",	stats: { str: 2, dex: 1, wis: 2 } },
+	skellyberry_body:	{ modded: true, key: "skellyberry_body",name: "Skelly-belly",		    slot: "body",		  stats: { str: 2, con: 4 } },
 });
 
 export const SECONDARY_ARM_SUFFIX = "_b";

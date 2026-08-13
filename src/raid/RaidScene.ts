@@ -11,7 +11,7 @@
 // portraits, not side-view stage actors.
 import { AnimatedSprite, Application, Assets, Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
 import { GameAssets, raidImage } from "../assets";
-import { BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX } from "./BattleSim";
+import { BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX, type SimDamageEvent } from "./BattleSim";
 import { RaidActor } from "./RaidActor";
 import { EnemyActor, type EnemyAttackPose } from "./EnemyActor";
 import { ParticleField, ParticleConfig } from "./Particles";
@@ -71,6 +71,8 @@ export interface RaidSceneParams {
   bossFallsFromSky?: boolean;
   bossEngageDistance?: number;
   bossGroundOffset?: { x: number; y: number };
+  /** Visual-only floating damage numbers. Does not affect combat or replay data. */
+  showDamageNumbers?: boolean;
   confirmRetreat?: () => Promise<boolean>;
   onCheckpoint?: (finalTick: number, inputs: RaidReplayInput[]) => Promise<void>;
   /** Presentation-only authored attack cue; combat remains deterministic without it. */
@@ -341,6 +343,16 @@ interface Token {
   laserFxSeq: number; // last automatic laser event rendered for this unit
 }
 
+interface DamageFloat {
+  text: Text;
+  t: number;
+  life: number;
+  startX: number;
+  startY: number;
+  driftX: number;
+  rise: number;
+}
+
 async function loadTex(url: string): Promise<Texture | null> {
   try {
     return (await Assets.load(url)) as Texture;
@@ -435,6 +447,9 @@ export class RaidScene {
   private fxLayer = new Container(); // transient effects (death poofs) above the field
   private fx: { g: Graphics; t: number; life: number; color: number }[] = [];
   private laserFx: { g: Graphics; t: number; life: number }[] = [];
+  private showDamageNumbers = false;
+  private pendingDamageEvents: SimDamageEvent[] = [];
+  private damageFloats: DamageFloat[] = [];
   private brainLayer = new Container();
   private brainTex: Texture | null = null;
   private brainDrop = 0;
@@ -549,6 +564,7 @@ export class RaidScene {
     this.bossAnimationDefs = params.bossAnimations;
     this.bossGroundOffset = params.bossGroundOffset ?? { x: 0, y: 0 };
     this.bossFallsFromSky = !!params.bossFallsFromSky;
+    this.showDamageNumbers = !!params.showDamageNumbers;
     this.confirmRetreat = params.confirmRetreat ?? (() => Promise.resolve(true));
     this.brainDrop = Math.max(0, Math.floor(params.brainDrop ?? 0));
     this.sim = new BattleSim(
@@ -2046,6 +2062,55 @@ export class RaidScene {
     this.fx.push({ g, t: 0, life: 0.45, color });
   }
 
+  private collectDamageEvents() {
+    const events = this.sim.consumeDamageEvents();
+    if (this.showDamageNumbers && events.length) this.pendingDamageEvents.push(...events);
+  }
+
+  private flushDamageNumbers() {
+    if (!this.pendingDamageEvents.length) return;
+    const events = this.pendingDamageEvents.splice(0, this.pendingDamageEvents.length);
+    events.forEach((event, i) => this.spawnDamageNumber(event, i));
+  }
+
+  private spawnDamageNumber(event: SimDamageEvent, order: number) {
+    const amount = Math.floor(event.amount);
+    if (amount <= 0) return;
+    const tok = this.tokens.get(event.targetId);
+    if (!tok || !tok.root.visible) return;
+
+    const heal = !!event.heal;
+    const crit = !heal && event.fromPlayer && event.critLayers > 0;
+    const s = this.sizeScale();
+    const fontSize = Math.max(14, (crit ? 30 : 20) * s);
+    const fill = heal ? 0xb7ff2a : event.fromPlayer ? (crit ? 0xff9f2e : 0xffffff) : 0xff3333;
+    const strokeColor = heal ? 0x167c23 : event.fromPlayer ? (crit ? 0x5c1007 : 0x000000) : 0x000000;
+    const text = new Text({
+      text: heal ? `+${amount}` : event.fromPlayer ? String(amount) : `-${amount}`,
+      style: {
+        fill,
+        fontSize,
+        fontWeight: "bold",
+        stroke: { color: strokeColor, width: Math.max(3, 4 * s) },
+      },
+    });
+    text.anchor.set(0.5);
+    const lane = ((this.damageFloats.length + order) % 5) - 2;
+    const startX = tok.root.x + tok.hpCenterX + lane * 8 * s;
+    const startY = tok.root.y + tok.topY * 0.58 - Math.abs(lane) * 2 * s;
+    text.position.set(startX, startY);
+    this.fxLayer.addChild(text);
+    this.damageFloats.push({
+      text,
+      t: 0,
+      life: crit ? 0.68 : 0.56,
+      startX,
+      startY,
+      driftX: lane * 10 * s,
+      rise: (crit ? 48 : 36) * s,
+    });
+  }
+
   private stepFx(dtSec: number) {
     for (const e of this.fx) {
       e.t += dtSec;
@@ -2068,6 +2133,18 @@ export class RaidScene {
     if (this.laserFx.some((beam) => beam.t >= beam.life)) {
       for (const beam of this.laserFx) if (beam.t >= beam.life) beam.g.destroy();
       this.laserFx = this.laserFx.filter((beam) => beam.t < beam.life);
+    }
+    for (const dmg of this.damageFloats) {
+      dmg.t += dtSec;
+      const k = Math.min(1, dmg.t / dmg.life);
+      const eased = 1 - (1 - k) * (1 - k);
+      dmg.text.x = dmg.startX + dmg.driftX * eased;
+      dmg.text.y = dmg.startY - dmg.rise * eased;
+      dmg.text.alpha = k < 0.2 ? 1 : Math.max(0, 1 - (k - 0.2) / 0.8);
+    }
+    if (this.damageFloats.some((dmg) => dmg.t >= dmg.life)) {
+      for (const dmg of this.damageFloats) if (dmg.t >= dmg.life) dmg.text.destroy();
+      this.damageFloats = this.damageFloats.filter((dmg) => dmg.t < dmg.life);
     }
   }
 
@@ -2283,6 +2360,7 @@ export class RaidScene {
         let stepped = false;
         while (this.simAccumulatorMs >= RAID_TICK_MS && !this.sim.finished && catchup++ < 5) {
           this.sim.step(RAID_TICK_MS);
+          this.collectDamageEvents();
           this.simAccumulatorMs -= RAID_TICK_MS;
           this.simTick++;
           stepped = true;
@@ -2385,6 +2463,7 @@ export class RaidScene {
     }
 
     this.layout(dtSec);
+    this.flushDamageNumbers();
   }
 
   private setPhase(p: Phase) {

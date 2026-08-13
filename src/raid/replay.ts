@@ -77,7 +77,15 @@ import type { RaidOutcome } from "./types";
 // finish died on `illegal_ability` — a player-reported bug on exactly the Silver Small's
 // two explosion buttons. Same cost as v15: an invasion in flight at deploy time settles
 // as stale_ruleset and pays nothing.
-export const RAID_RULESET_VERSION = 18;
+// 19: player zombie Focus now doubles as physical crit chance. Normal melee, Bash,
+// Smash, Explode, Explode Ver.2, and Double Strike's bonus hit multiply by
+// (1 + displayed Damage / 100) once per guaranteed Focus/100 layer, then roll the
+// fractional remainder for one extra layer. Walking lasers and enemy/hazard damage
+// intentionally do not crit. This changes player damage from the first physical hit.
+// 20: Focus also scales the pre-deploy focus bar fill speed. Focus 50 keeps the old
+// 3.6s bar, low Focus slows it, and high/over-100 Focus speeds it up with caps. The
+// butterfly/brain auto-continue timers are unchanged, but release timing can change.
+export const RAID_RULESET_VERSION = 20;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

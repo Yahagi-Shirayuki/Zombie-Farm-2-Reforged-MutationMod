@@ -97,14 +97,20 @@ describe("crop-adjacency mutations", () => {
       .toEqual({ mask: 0, ids: [] });
   });
 
-  it("halves the paired back-arm chance when it matches the occupied front arm", () => {
+  it("heavily lowers the paired back-arm chance when it matches the occupied front arm", () => {
     const crops = { corn: "corn_arm", celery: "celery" };
 
-    const matchingRolls = [0.1, 0.2];
+    const matchingFailRolls = [0.1, 0.025];
     expect(resolveCropMutationSet(0, ["corn_arm"], ["corn"], {
       crops,
-      random: () => matchingRolls.shift()!,
+      random: () => matchingFailRolls.shift()!,
     }).ids).toEqual(["corn_arm"]);
+
+    const matchingWinRolls = [0.1, 0.024];
+    expect(resolveCropMutationSet(0, ["corn_arm"], ["corn"], {
+      crops,
+      random: () => matchingWinRolls.shift()!,
+    }).ids).toEqual(["corn_arm", "corn_arm_b"]);
 
     const differentRolls = [0.1, 0.2];
     expect(resolveCropMutationSet(0, ["corn_arm"], ["celery"], {
@@ -129,6 +135,18 @@ describe("crop-adjacency mutations", () => {
       random: () => 1,
     })).toBe(4096);
   });
+
+  it("keeps secondary arm rolls at 50% with the monolith instead of guaranteeing them", () => {
+    expect(resolveCropMutationSet(0, [], ["corn"], {
+      guaranteed: true,
+      random: () => 0.5,
+    }).ids).not.toContain("corn_arm_b");
+
+    expect(resolveCropMutationSet(0, [], ["corn"], {
+      guaranteed: true,
+      random: () => 0.499,
+    }).ids).toContain("corn_arm_b");
+  });
 });
 
 describe("crop -> mutation wiring", () => {
@@ -136,8 +154,16 @@ describe("crop -> mutation wiring", () => {
     expect(cropMutationBits("tomato")).toEqual([1]);
     expect(cropMutationBits("pumpking")).toEqual([8192]);
     expect(cropMutationBits("corn")).toEqual([]);
+    expect(cropMutationBits("blueberyl")).toEqual([]);
     expect(cropMutationBits("eyebiscus")).toEqual([4]); // the Tier-4 variant's shared bit
     expect(cropMutationBits("grass")).toEqual([]); // a crop that grows nothing
+  });
+
+  it("wires Blueberyl to its local berry-eye mutation id", () => {
+    expect(resolveCropMutationSet(0, [], ["blueberyl"], {
+      guaranteed: true,
+      random: () => 1,
+    })).toEqual({ mask: 0, ids: ["berry_eye"] });
   });
 
   it("lets one crop grow SEVERAL mutations, each rolling on its own", () => {

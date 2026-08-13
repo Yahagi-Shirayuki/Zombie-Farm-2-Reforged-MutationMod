@@ -43,6 +43,7 @@ const ZOMBIE_SORT_KEY = "zf2r.zombieSort";
 const HAZARD_TIP_KEY = "zf2r.seenHazardTip";
 const BODY_COLOR_KEY = "zf2r.zombieBodyColor";
 const SHOW_MUTATIONS_KEY = "zf2r.showZombieMutations";
+const SHOW_DAMAGE_KEY = "zf2r.showDamageNumbers";
 
 /** localStorage.getItem that survives a browser with storage denied (private mode,
  *  blocked third-party context). Appearance prefs are read while DRAWING, so a throw
@@ -86,6 +87,16 @@ export function setShowZombieMutations(on: boolean): void {
 /** Both appearance choices at once, for the render sites that apply them. */
 export function zombieAppearancePrefs(): ZombieAppearancePrefs {
   return { bodyColor: getZombieBodyColorMode(), showMutations: getShowZombieMutations() };
+}
+
+/** Whether raids show floating damage numbers. Visual only; combat/replay math does
+ *  not read this preference. Defaults off so normal play keeps the original look. */
+export function getShowDamageNumbers(): boolean {
+  return readPref(SHOW_DAMAGE_KEY) === "1";
+}
+
+export function setShowDamageNumbers(on: boolean): void {
+  writePref(SHOW_DAMAGE_KEY, on ? "1" : "0");
 }
 
 /** Which sprite pack to render with. Defaults to ZF2 (the only pack wired today). */

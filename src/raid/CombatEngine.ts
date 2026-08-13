@@ -23,6 +23,7 @@ import {
   deriveMaxHp,
   deriveAttackIntervalMs,
   deriveHitDamage,
+  expectedPhysicalCritMultiplier,
   farmRaidEnemyPace,
   lineupDamageBand,
   lineupSpeedBand,
@@ -121,7 +122,8 @@ function hitDamage(u: CombatUnit, lineupIndex = 0): number {
   const power = u.str * POWER_PER_STR;
   const base = deriveHitDamage(power, u.attacks[0]?.mult ?? 1);
   const band = u.team === "player" ? lineupDamageBand(lineupIndex) : 1;
-  return Math.max(1, Math.round(base * band));
+  const crit = u.team === "player" ? expectedPhysicalCritMultiplier(u.str, u.focus) : 1;
+  return Math.max(1, Math.round(base * band * crit));
 }
 
 // Distraction model: during an invasion the enemy distracts your zombies, costing

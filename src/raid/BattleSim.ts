@@ -44,6 +44,7 @@ import {
   lineupDamageBand,
   lineupSpeedBand,
   mirroredAttackIntervalSec,
+  physicalCritResult,
   POWER_PER_STR,
 } from "./combatStats";
 
@@ -74,7 +75,11 @@ const BAND_BOT = FIELD_H - 70;
 const CENTER_Y = FIELD_H / 2;
 const ENGAGE = 60; // x-distance at which two units trade blows
 
-const CHARGE_MS = 3600; // focus-bar fill (zombies take a while to get out)
+const CHARGE_MS = 3600; // focus-bar fill at Focus 50 (average zombie baseline)
+const FOCUS_CHARGE_BASELINE = 50;
+const FOCUS_CHARGE_PER_POINT = 0.006;
+const FOCUS_CHARGE_MIN_MULT = 0.70;
+const FOCUS_CHARGE_MAX_MULT = 1.60;
 // Focus-bubble minigame thresholds: the fill pauses at 1/4, 2/4, 3/4 (a butterfly
 // distraction) and again at full (a brain, gating the release). Popping a bubble
 // resumes instantly; if the player never taps, it auto-resolves after these
@@ -105,6 +110,17 @@ const COL_GAP = 52; // depth spacing between columns
 // we can't fully pin. `turnZombie` deliberately bypasses it because that action converts the
 // target rather than dealing an ordinary hit.
 const ONE_SHOT_FLOOR = 0.1; // hit is capped if it would leave HP fraction below this
+
+/** Focus now affects how quickly a zombie fills its pre-deploy focus bar. Focus 50
+ *  keeps the old 3.6s timing, while very low/high Focus stretches or compresses it
+ *  without letting stacked WIS make deployment instant. */
+export function focusChargeMs(focus: number): number {
+  const safeFocus = Number.isFinite(focus) ? focus : FOCUS_CHARGE_BASELINE;
+  const rawMult =
+    1 + (safeFocus - FOCUS_CHARGE_BASELINE) * FOCUS_CHARGE_PER_POINT;
+  const mult = Math.max(FOCUS_CHARGE_MIN_MULT, Math.min(FOCUS_CHARGE_MAX_MULT, rawMult));
+  return CHARGE_MS / mult;
+}
 
 // Mini Buddy: the binary sets the carrier to 4Ã— walking speed. On arrival it
 // stuns the enemy for 2 seconds and the carrier for 1 second.
@@ -279,6 +295,14 @@ export type UnitState =
   | "hold" // enemy standing, no target in range
   | "dead";
 
+export interface SimDamageEvent {
+  targetId: string;
+  amount: number;
+  fromPlayer: boolean;
+  critLayers: number;
+  heal?: boolean;
+}
+
 /** A combatant with spatial + charge state, consumed by the renderer each frame. */
 export interface SimUnit {
   id: string;
@@ -353,6 +377,7 @@ export interface SimUnit {
   laserFxSeq: number; // increments when a walking laser fires (renderer trigger)
   laserTargetId: string | null; // target of the most recent walking laser
   abilityRollSeq: number; // replay-safe proc sequence (Block/Stun/Double Strike)
+  critRollSeq: number; // replay-safe physical crit sequence
   usedAbilities: string[]; // one-use activated abilities already consumed
   resurrectUsed: boolean; // one-use automatic Resurrect latch
   stunMs: number; // ms of stun left â€” can't act while > 0 (enemies AND zombies)
@@ -560,6 +585,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     laserFxSeq: 0,
     laserTargetId: null,
     abilityRollSeq: 0,
+    critRollSeq: 0,
     usedAbilities: [],
     resurrectUsed: false,
     stunMs: 0,
@@ -576,6 +602,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
 export class BattleSim {
   readonly units: SimUnit[];
   readonly projectiles: SimProjectile[] = [];
+  readonly damageEvents: SimDamageEvent[] = [];
   /** Presentation-only count; reset at the start of every fixed simulation step. */
   projectileImpactsThisTick = 0;
   private players: SimUnit[];
@@ -755,6 +782,7 @@ export class BattleSim {
       laserFxSeq: u.laserFxSeq ?? 0,
       laserTargetId: u.laserTargetId ?? null,
       abilityRollSeq: u.abilityRollSeq ?? 0,
+      critRollSeq: u.critRollSeq ?? 0,
       usedAbilities: [...(u.usedAbilities ?? [])],
       resurrectUsed: u.resurrectUsed ?? false,
       power: u.power ?? u.damage,
@@ -983,19 +1011,19 @@ export class BattleSim {
     if (p.windupMs > 0) return;
     const key = p.windupKey!;
     const ab = ACTIVATED_ABILITY[key]!;
-    const dmg = Math.max(1, Math.round(p.damage * ab.damageFactor));
+    const hit = this.playerPhysicalDamageResult(p, p.damage * ab.damageFactor);
     if (ab.aoe) {
       for (const e of this.enemies) {
         if (!e.alive || e.state === "queued" || e.state === "structure" || e.state === "descending") continue;
         if (e.isBoss && !ab.hitBoss && (key === "explode" || key === "explodeV2")) continue;
-        this.dealDamage(e, dmg, true);
+        this.dealDamage(e, hit.amount, true, hit.critLayers);
         if (ab.stunMs) e.stunMs = Math.max(e.stunMs, ab.stunMs);
-        this.playerDamage += dmg;
+        this.playerDamage += hit.amount;
       }
     } else {
-      this.dealDamage(foe, dmg, true);
+      this.dealDamage(foe, hit.amount, true, hit.critLayers);
       if (ab.stunMs) foe.stunMs = Math.max(foe.stunMs, ab.stunMs);
-      this.playerDamage += dmg;
+      this.playerDamage += hit.amount;
     }
     p.struckThisTick = true;
     this.attacksLanded++;
@@ -1053,7 +1081,7 @@ export class BattleSim {
             const target = candidates.reduce(
               (a, b) => b.hp / b.maxHp < a.hp / a.maxHp ? b : a
             );
-            target.hp = Math.min(target.maxHp, target.hp + amount);
+            this.healUnit(target, amount);
             target.healFxSeq++;
             healer.healCastSeq++;
             healer.healTimerMs = healer.cooldownMs;
@@ -1068,7 +1096,7 @@ export class BattleSim {
         if (healer.healAoeTimerMs <= 0) {
           const damaged = deployed.filter((p) => p.hp > 0 && p.hp < p.maxHp);
           for (const target of damaged) {
-            target.hp = Math.min(target.maxHp, target.hp + amount);
+            this.healUnit(target, amount);
             target.healFxSeq++;
           }
           if (damaged.length) healer.healCastSeq++;
@@ -1166,6 +1194,32 @@ export class BattleSim {
     return roll;
   }
 
+  /** Replay-safe 0..1 roll for player physical crits. Kept separate from abilityRoll
+   *  so crits do not change the proc cadence for Block/Stun/Double Strike. */
+  private critRoll01(u: SimUnit): number {
+    const roll = (stringSeed(u.id) + 17 + u.critRollSeq * 53) % 100;
+    u.critRollSeq++;
+    return roll / 100;
+  }
+
+  /** Apply the modded Focus crit rule to a physical player hit. Lasers and enemy
+   *  attacks deliberately bypass this and keep their authored damage paths. */
+  private playerPhysicalDamageResult(u: SimUnit, baseDamage: number): { amount: number; critLayers: number } {
+    const crit = physicalCritResult(
+      u.power / POWER_PER_STR,
+      u.focus,
+      () => this.critRoll01(u)
+    );
+    return {
+      amount: Math.max(1, Math.round(baseDamage * crit.multiplier)),
+      critLayers: crit.layers,
+    };
+  }
+
+  consumeDamageEvents(): SimDamageEvent[] {
+    return this.damageEvents.splice(0, this.damageEvents.length);
+  }
+
   /** Fire the automatic walking laser. Both versions deal 10% of finalPower;
    *  Ver.2 schedules at finalAttackSpeed/6 instead of /3. */
   private stepLaser(u: SimUnit, dtMs: number) {
@@ -1209,25 +1263,22 @@ export class BattleSim {
     u.timerMs += this.cycleMs(u, foe);
     // Player normal swings take the lineup-depth band (front five full, then 0.85/0.7/0.55);
     // enemies always hit at band 1.0. See combatStats.lineupDamageBand (ground truth).
-    const dmg =
-      u.team === "player"
-        ? Math.max(1, Math.round(u.damage * lineupDamageBand(u.lineupIndex)))
-        : u.damage;
     if (u.team === "enemy") {
-      this.dealEnemyDamage(foe, dmg);
+      this.dealEnemyDamage(foe, u.damage);
     } else {
-      this.dealDamage(foe, dmg, true);
-      this.playerDamage += dmg;
+      const hit = this.playerPhysicalDamageResult(u, u.damage * lineupDamageBand(u.lineupIndex));
+      this.dealDamage(foe, hit.amount, true, hit.critLayers);
+      this.playerDamage += hit.amount;
 
       // Girl `damageIn:` uses integer rolls >.70 and >.95. Double Strike adds
       // the authored 0.25Ã— Power strike; Random Stun holds the target for 1s.
       if (u.abilities.includes("doubleStrike") && this.abilityRoll(u) > 70 && foe.alive) {
-        const bonus = Math.max(
-          1,
-          Math.round(u.power * 0.25 * lineupDamageBand(u.lineupIndex))
+        const bonus = this.playerPhysicalDamageResult(
+          u,
+          u.power * 0.25 * lineupDamageBand(u.lineupIndex)
         );
-        this.dealDamage(foe, bonus, true);
-        this.playerDamage += bonus;
+        this.dealDamage(foe, bonus.amount, true, bonus.critLayers);
+        this.playerDamage += bonus.amount;
         this.attacksLanded++;
       }
       if (u.abilities.includes("stun") && this.abilityRoll(u) > 95 && foe.alive) {
@@ -1256,7 +1307,8 @@ export class BattleSim {
     p.timerMs = this.cycleMs(p, null);
   }
 
-  private dealDamage(foe: SimUnit, dmg: number, fromPlayer: boolean) {
+  private dealDamage(foe: SimUnit, dmg: number, fromPlayer: boolean, critLayers = 0) {
+    this.recordDamageEvent(foe, dmg, fromPlayer, critLayers);
     foe.hp -= dmg;
     if (foe.hp > 0) return;
     foe.hp = 0;
@@ -1313,6 +1365,7 @@ export class BattleSim {
       foe.hp > 1 &&
       (foe.hp - applied) / foe.maxHp < ONE_SHOT_FLOOR
     ) {
+      this.recordDamageEvent(foe, foe.hp - 1, false, 0);
       foe.hp = 1;
       foe.oneShotProtectionUsed = true;
       return;
@@ -1320,12 +1373,36 @@ export class BattleSim {
     this.dealDamage(foe, applied, false);
   }
 
+  private recordDamageEvent(foe: SimUnit, dmg: number, fromPlayer: boolean, critLayers: number) {
+    if (!foe.alive || dmg <= 0) return;
+    if (fromPlayer && foe.team !== "enemy") return;
+    if (!fromPlayer && foe.team !== "player") return;
+    const amount = Math.min(foe.hp, dmg);
+    if (amount <= 0) return;
+    this.damageEvents.push({ targetId: foe.id, amount, fromPlayer, critLayers });
+  }
+
+  private healUnit(target: SimUnit, amount: number) {
+    if (!target.alive || amount <= 0) return;
+    const healed = Math.min(target.maxHp - target.hp, amount);
+    if (healed <= 0) return;
+    target.hp += healed;
+    this.damageEvents.push({
+      targetId: target.id,
+      amount: healed,
+      fromPlayer: true,
+      critLayers: 0,
+      heal: true,
+    });
+  }
+
   /** Advance the charging zombie's focus bar, running the bubble minigame unless
    *  Concentration is active. See CHARGE_STEPS: the fill clamps to the next
    *  threshold so a big frame can't skip a distraction. */
   private stepCharge(p: SimUnit, dtMs: number) {
+    const chargeMs = focusChargeMs(p.focus);
     if (this.concentration) {
-      p.charge = Math.min(1, p.charge + dtMs / CHARGE_MS);
+      p.charge = Math.min(1, p.charge + dtMs / chargeMs);
       if (p.charge >= 1) this.releaseCharger(p);
       return;
     }
@@ -1335,7 +1412,7 @@ export class BattleSim {
         if (p.bubbleMs <= 0) this.releaseCharger(p);
         return;
       }
-      p.charge = Math.min(1, p.charge + dtMs / CHARGE_MS);
+      p.charge = Math.min(1, p.charge + dtMs / chargeMs);
       if (p.charge >= 1) { p.awaitRelease = true; p.bubbleMs = BRAIN_AUTO_MS; }
       return;
     }
@@ -1350,7 +1427,7 @@ export class BattleSim {
       return;
     }
     const next = CHARGE_STEPS[p.distractStep] ?? 1;
-    p.charge = Math.min(next, p.charge + dtMs / CHARGE_MS);
+    p.charge = Math.min(next, p.charge + dtMs / chargeMs);
     if (p.charge >= next) {
       p.distractStep++;
       if (next >= 1) {
@@ -1480,6 +1557,7 @@ export class BattleSim {
     if (this.finished) return false;
     this.elapsed += dtMs;
     this.projectileImpactsThisTick = 0;
+    this.damageEvents.length = 0;
     for (const u of this.units) {
       u.struckThisTick = false;
       u.prevX = u.x; // snapshot for this step's velocity measurement (see below)

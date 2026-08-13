@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BattleSim } from "./BattleSim";
+import { BattleSim, focusChargeMs } from "./BattleSim";
 import type { CombatUnit } from "./types";
 
 function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | "team">): CombatUnit {
@@ -8,7 +8,7 @@ function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | 
     str: 5,
     dex: 5,
     con: 30,
-    focus: 100,
+    focus: 0,
     hp: 3000,
     maxHp: 3000,
     attackCooldownMs: 1000,
@@ -161,6 +161,33 @@ describe("finished combat input", () => {
 
     expect(sim.activate("bash")).toBe(false);
     expect(sim.popBubble("player")).toBe(false);
+  });
+});
+
+describe("Focus charge timing", () => {
+  it("keeps Focus 50 at the old fill time and scales low/high Focus modestly", () => {
+    expect(focusChargeMs(50)).toBeCloseTo(3600);
+    expect(focusChargeMs(0)).toBeCloseTo(3600 / 0.7);
+    expect(focusChargeMs(100)).toBeCloseTo(3600 / 1.3);
+    expect(focusChargeMs(200)).toBeCloseTo(3600 / 1.6);
+  });
+
+  it("still auto-releases at the brain bubble if the player does not tap", () => {
+    const player = unit({
+      id: "focused", sourceKey: "ZombieActorRegularTier1", team: "player",
+      focus: 100,
+    });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
+    const sim = new BattleSim([player], [enemy], null, false, [], undefined, null, null, true);
+    const p = sim.units.find((candidate) => candidate.id === "focused")!;
+    p.state = "charging";
+
+    (sim as any).stepCharge(p, focusChargeMs(100));
+    expect(p.awaitRelease).toBe(true);
+    expect(p.state).toBe("charging");
+
+    (sim as any).stepCharge(p, 3200);
+    expect(p.state).toBe("advance");
   });
 });
 
@@ -350,6 +377,9 @@ describe("Garden healing and formation depth", () => {
     expect(f.hp).toBe(2925); // healer Power 50 × 0.5
     expect(f.healFxSeq).toBe(1);
     expect(h.healCastSeq).toBe(1);
+    expect(sim.consumeDamageEvents().filter((event) => event.heal)).toEqual([
+      { targetId: "fighter", amount: 25, fromPlayer: true, critLayers: 0, heal: true },
+    ]);
   });
 
   it("fires Heal All every 20 seconds for half the healer's Power", () => {
@@ -371,6 +401,10 @@ describe("Garden healing and formation depth", () => {
     sim.step(50);
     expect(sim.units.find((u) => u.id === "a")!.hp).toBe(1025);
     expect(sim.units.find((u) => u.id === "b")!.hp).toBe(2025);
+    expect(sim.consumeDamageEvents().filter((event) => event.heal)).toEqual([
+      { targetId: "a", amount: 25, fromPlayer: true, critLayers: 0, heal: true },
+      { targetId: "b", amount: 25, fromPlayer: true, critLayers: 0, heal: true },
+    ]);
   });
 
   it("carries the faithful unbanded base damage on both sides (enemies NOT doubled)", () => {
@@ -381,6 +415,126 @@ describe("Garden healing and formation depth", () => {
     const sim = new BattleSim([player], [enemy], null, true);
     expect(sim.units.find((u) => u.id === "player")!.damage).toBe(50);
     expect(sim.units.find((u) => u.id === "enemy")!.damage).toBe(50);
+  });
+
+  it("applies Focus crits to normal zombie melee, using displayed Damage as the multiplier", () => {
+    const player = unit({
+      id: "crit", sourceKey: "ZombieActorRegularTier1", team: "player",
+      str: 23.32, focus: 100, attackCooldownMs: 1000,
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000,
+    });
+    const sim = new BattleSim([player], [enemy], null, true);
+    const p = sim.units.find((u) => u.id === "crit")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    p.timerMs = 0;
+
+    (sim as any).tryAttack(p, e, 0);
+
+    expect(e.hp).toBe(100_000 - 466); // round(str23.32*10)=233, Damage 100 => 2x
+    expect(sim.consumeDamageEvents()).toEqual([
+      { targetId: "enemy", amount: 466, fromPlayer: true, critLayers: 1 },
+    ]);
+  });
+
+  it("applies the same physical crit rule to Bash, Smash, and Explode payoffs", () => {
+    const cases: [string, number][] = [
+      ["bash", 1282],
+      ["bashV2", 839],
+      ["explode", 4660],
+      ["explodeV2", 4660],
+    ];
+    for (const [key, expected] of cases) {
+      const player = unit({
+        id: `crit-${key}`, sourceKey: "ZombieActorLargeTier3", team: "player",
+        str: 23.32, focus: 100, abilities: [key],
+      });
+      const enemy = unit({
+        id: `enemy-${key}`, sourceKey: "FarmStageActorFarmhand", team: "enemy",
+        hp: 100_000, maxHp: 100_000,
+      });
+      const sim = new BattleSim([player], [enemy], null, true);
+      const p = sim.units.find((u) => u.id === `crit-${key}`)!;
+      const e = sim.units.find((u) => u.id === `enemy-${key}`)!;
+      e.state = "hold";
+      p.windupKey = key;
+      p.windupMs = 1;
+
+      (sim as any).stepWindup(p, e, 1);
+
+      expect(e.hp).toBe(100_000 - expected);
+    }
+  });
+
+  it("lets Double Strike's bonus physical hit crit separately", () => {
+    const striker = unit({
+      id: "striker", sourceKey: "ZombieActorFemaleTier4", team: "player",
+      str: 23.32, focus: 100, abilities: ["doubleStrike"],
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000,
+    });
+    const sim = new BattleSim([striker], [enemy], null, true);
+    const s = sim.units.find((u) => u.id === "striker")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    s.timerMs = 0;
+    s.abilityRollSeq = 1; // "striker" then rolls 85, triggering Double Strike.
+
+    (sim as any).tryAttack(s, e, 0);
+
+    expect(e.hp).toBe(100_000 - 466 - 117);
+    expect(sim.consumeDamageEvents()).toEqual([
+      { targetId: "enemy", amount: 466, fromPlayer: true, critLayers: 1 },
+      { targetId: "enemy", amount: 117, fromPlayer: true, critLayers: 1 },
+    ]);
+  });
+
+  it("does not apply physical crits to walking lasers", () => {
+    const laser = unit({
+      id: "laser-crit", sourceKey: "ZombieActorRegularTier3", team: "player",
+      str: 23.32, focus: 200, abilities: ["laserBeam"], attackCooldownMs: 600,
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 10_000, maxHp: 10_000,
+    });
+    const sim = new BattleSim([laser], [enemy], null, true);
+    const p = sim.units.find((u) => u.id === "laser-crit")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    p.state = "advance";
+    p.x = 300;
+    e.state = "hold";
+    e.x = 915;
+
+    sim.step(200);
+
+    expect(e.hp).toBe(10_000 - 23); // 10% Power only; no Focus crit layers.
+    expect(sim.consumeDamageEvents()).toEqual([
+      { targetId: "enemy", amount: 23, fromPlayer: true, critLayers: 0 },
+    ]);
+  });
+
+  it("publishes enemy damage events as the actual player HP lost", () => {
+    const player = unit({
+      id: "target", sourceKey: "ZombieActorRegularTier1", team: "player",
+      hp: 20, maxHp: 100,
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      str: 1, attackCooldownMs: 1000,
+    });
+    const sim = new BattleSim([player], [enemy], null, true);
+    const p = sim.units.find((u) => u.id === "target")!;
+
+    (sim as any).dealEnemyDamage(p, 50);
+
+    expect(p.hp).toBe(1);
+    expect(sim.consumeDamageEvents()).toEqual([
+      { targetId: "target", amount: 19, fromPlayer: false, critLayers: 0 },
+    ]);
   });
 
   it("throws boss debris for its authored damage, unscaled", () => {

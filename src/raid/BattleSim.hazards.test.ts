@@ -4,7 +4,7 @@ import type { CombatUnit, CrabConfig, GrabberConfig } from "./types";
 
 function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | "team">): CombatUnit {
   return {
-    name: over.id, str: 5, dex: 5, con: 30, focus: 100, hp: 3000, maxHp: 3000,
+    name: over.id, str: 5, dex: 5, con: 30, focus: 0, hp: 3000, maxHp: 3000,
     attackCooldownMs: 1000, attacks: [{ name: "", frequency: 1, mult: 1 }],
     isBoss: false, alive: true, isGarden: false, isHeadless: false, abilities: [], ...over,
   };

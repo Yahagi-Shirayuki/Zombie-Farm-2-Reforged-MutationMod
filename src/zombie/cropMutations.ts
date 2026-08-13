@@ -46,10 +46,12 @@ export const CROP_MUTATIONS: CropMutationTable = {
   sampaguita: "sampaguita_hair",
   corn: ["corn_head", "corn_arm"],
   Spineapple: "spineapple_body",
+  malakale: "kale_arm",
   Bloodberry: "bloodberry_hair",
   skellyberry: "skellyberry_body",
   reddelicious: "apple_head",
   felonmelon: "melon_head",
+  blueberyl: "berry_eye",
 };
 
 export function cropMutationRefs(
@@ -84,7 +86,8 @@ export function cropMutationBits(
 }
 
 export const CROP_MUTATION_CHANCE = 0.25;
-export const MATCHING_BACK_ARM_CHANCE_MULTIPLIER = 0.5;
+export const MATCHING_BACK_ARM_CHANCE_MULTIPLIER = 0.1;
+export const GUARANTEED_BACK_ARM_CHANCE = 0.5;
 
 function pairedBackArmRef(ref: MutationRef): MutationRef | null {
   const key = mutationOf(ref)?.key;
@@ -168,7 +171,7 @@ export function resolveCropMutationSet(
       if (backArmRef && occupiedMutationSlots(set.mask, set.ids).has("arm") &&
           refGrowable(backArmRef, !!options.headless)) {
         const chance = guaranteed
-          ? 1
+          ? GUARANTEED_BACK_ARM_CHANCE
           : backArmChance(success.chance, frontArmKey(set), success.ref);
         if (chanceSucceeds(chance, random)) set = addMutationRef(set, backArmRef, !!options.headless);
       }

@@ -6,7 +6,13 @@ import type { Hud } from "../../hud";
 import { openModal } from "../Modal";
 import { BUILD_ID } from "../../version";
 import { diagnosticsReport, diagnosticsCount, clearDiagnostics } from "../../diagnostics";
-import { getSpriteSet, setSpriteSet, FARM_BACKGROUNDS } from "../../prefs";
+import {
+  FARM_BACKGROUNDS,
+  getShowDamageNumbers,
+  getSpriteSet,
+  setShowDamageNumbers,
+  setSpriteSet,
+} from "../../prefs";
 import { ABILITY_POOL, ABILITY_TIER, TIER_BOSS } from "../../zombie/traits";
 import { otherPlayMode, playModeDestinationLabel } from "../../playMode";
 import { updateCheckMessage, type UpdateCheckResult } from "../../updateCheck";
@@ -437,6 +443,7 @@ export function openSettings(hud: Hud): void {
     row("Mute When Unfocused", hud.audio.muteWhenUnfocused,
       (v) => hud.audio.setMuteWhenUnfocused(v)),
     noteEl("Silence the game while its tab or window is in the background."),
+    row("Show Damage", getShowDamageNumbers(), setShowDamageNumbers),
     fullscreenRow,
     noteEl(canFullscreen
       ? "Press F to toggle fullscreen. Escape also exits."

@@ -1,3 +1,5 @@
+import { displayStat } from "../zombie/traits";
+
 // ---------------------------------------------------------------------------
 // Combat stat math — GROUND TRUTH recovered by disassembling the iOS binary
 // (`Actor calculateFinal*`, `Actor damage:`, `GameState rollAgainstFrequencyInArray:`;
@@ -264,6 +266,49 @@ export function deriveAttackIntervalMs(dex: number, side: "player" | "enemy"): n
  *  Pre-armor/DR — the target applies those via `applyDamage`. */
 export function deriveHitDamage(power: number, multiplier = 1): number {
   return power * multiplier;
+}
+
+/** Displayed Damage/Power value used by the modded crit rule. Combat still derives
+ *  a hit's base from raw str×10; the crit multiplier uses the same visible Damage
+ *  number the zombie detail card shows. */
+export function displayedDamageForCrit(rawStr: number): number {
+  return displayStat("str", Number.isFinite(rawStr) ? rawStr : 0);
+}
+
+/** Multiplier for one crit layer: displayed Damage 70 => 1.70, 129 => 2.29. */
+export function physicalCritLayerMultiplier(rawStr: number): number {
+  return Math.max(1, 1 + displayedDamageForCrit(rawStr) / 100);
+}
+
+/** Roll the layered Focus crit rule. Focus/100 is the chance budget: 103 Focus gives
+ *  one guaranteed crit layer and a 3% chance at one additional layer. */
+export function physicalCritMultiplier(
+  rawStr: number,
+  focus: number,
+  roll01: () => number
+): number {
+  return physicalCritResult(rawStr, focus, roll01).multiplier;
+}
+
+export function physicalCritResult(
+  rawStr: number,
+  focus: number,
+  roll01: () => number
+): { multiplier: number; layers: number } {
+  const chanceBudget = Math.max(0, Number.isFinite(focus) ? focus : 0) / 100;
+  const guaranteed = Math.floor(chanceBudget);
+  const fractional = chanceBudget - guaranteed;
+  const layers = guaranteed + (fractional > 0 && roll01() < fractional ? 1 : 0);
+  return { multiplier: Math.pow(physicalCritLayerMultiplier(rawStr), layers), layers };
+}
+
+/** Expected-value counterpart for the old deterministic instant resolver. */
+export function expectedPhysicalCritMultiplier(rawStr: number, focus: number): number {
+  const chanceBudget = Math.max(0, Number.isFinite(focus) ? focus : 0) / 100;
+  const guaranteed = Math.floor(chanceBudget);
+  const fractional = chanceBudget - guaranteed;
+  const layer = physicalCritLayerMultiplier(rawStr);
+  return Math.pow(layer, guaranteed) * (1 + fractional * (layer - 1));
 }
 
 /** Weighted random selection — the binary's universal picker
