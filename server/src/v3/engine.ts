@@ -9,6 +9,7 @@ import type {
   FallenUnitProjection,
   SequencedCommand,
 } from "../../../src/net/protocol";
+import { EPIC_BOSS_TOKEN_GRANT_LIMIT } from "../../../src/net/protocol";
 import plantRows from "../../../public/assets/plants.json";
 import zombieRows from "../../../public/assets/zombies.json";
 import farmerRows from "../../../public/assets/farmer.json";
@@ -27,7 +28,6 @@ import { zombieCropEcon } from "../zombieCropCatalog";
 import {
   activeBonusHeadId, farmerGold, farmerHeadHasEffect, farmerHeadXp, farmerZombieGrowMs,
 } from "../../../src/farmer";
-import { dropsEpicBossToken } from "../../../src/epicBoss/tokens";
 import { combineMasks } from "../../../src/zombie/mutations";
 import { resolveCropMutations, plotsTouch } from "../../../src/zombie/cropMutations";
 import { createCombineRandom, isCombinePromotion, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
@@ -423,7 +423,6 @@ function rewardHarvest(
   plot: Extract<FarmPlotProjection, { state: "planted" }>,
   makeId: () => string,
   created: string[],
-  now: number,
   random: () => number,
   mutationCropKeys: readonly string[] = []
 ): { ok: true; event: QuestEvent } | { ok: false; error: string } {
@@ -460,11 +459,9 @@ function rewardHarvest(
   const harvestValue = plot.sell * (plot.fertilized ? 2 : 1);
   state.balance.gold += farmerGold(harvestValue, bonusHeadOf(state));
   state.balance.xp += harvestXp(plot.xp, hasPlowingMonolith(state));
-  const run = state.epicBoss;
-  if (run && !run.completedAt && run.expiresAt > now &&
-      dropsEpicBossToken(plot.growMs, harvestValue, random)) {
-    run.tokenCount = (run.tokenCount ?? 0) + 1;
-  }
+  // Boss Tokens are NOT rolled here. The client rolls them at the moment it harvests
+  // and reports the result with `epicBoss.token`; see that command and the note on it
+  // in protocol.ts for why the authoritative roll was given up.
   return { ok: true, event: { type: "kCropHarvestedNotification", subject: plantNames.get(key) ?? key } };
 }
 
@@ -709,7 +706,7 @@ function applyOne(
       if (!plot || plot.state !== "planted") return reject(sequence, "nothing_planted");
       if (!isRipe(plot, options.now)) return reject(sequence, "not_grown");
       const createdBefore = created.length;
-      const harvest = rewardHarvest(state, plot.cropKey, plot, options.id, created, options.now,
+      const harvest = rewardHarvest(state, plot.cropKey, plot, options.id, created,
         options.random, adjacentCropKeys(state.farm.plots, command.oc, command.or));
       if (!harvest.ok) return reject(sequence, harvest.error);
       state.farm.plots[key] = { state: "spent", zombie: plot.zombie };
@@ -801,7 +798,7 @@ function applyOne(
         for (const [key, plot] of ripe) {
           const createdAt = created.length;
           const [oc, or] = key.split(":").map(Number);
-          const harvest = rewardHarvest(state, plot.cropKey, plot, options.id, created, options.now,
+          const harvest = rewardHarvest(state, plot.cropKey, plot, options.id, created,
             options.random, adjacentCropKeys(mutationPlots, oc, or));
           if (!harvest.ok) continue; // capacity-full zombie crops remain planted
           if (created.length > createdAt) {
@@ -1322,6 +1319,21 @@ function applyOne(
       const claim = claimPeriodicQuest(periodicStateOf(state), command.scope, command.questId);
       if (!claim.ok) return reject(sequence, claim.error);
       state.balance.xp += claim.xp;
+      return { sequence, status: "applied" };
+    }
+    case "epicBoss.token": {
+      // Taken on trust. The client rolled this token when it harvested the crop (see
+      // GameplayCommand in protocol.ts); the only things checked are that the event it
+      // names is the one actually running and that the batch cannot carry an absurd
+      // count. A stale or finished run drops the grant rather than moving it forward.
+      const run = state.epicBoss;
+      if (!run || run.runId !== command.runId) return reject(sequence, "inactive");
+      if (run.completedAt || run.expiresAt <= options.now) return reject(sequence, "inactive");
+      const count = command.count ?? 1;
+      if (!Number.isInteger(count) || count < 1 || count > EPIC_BOSS_TOKEN_GRANT_LIMIT) {
+        return reject(sequence, "bad_count");
+      }
+      run.tokenCount = (run.tokenCount ?? 0) + count;
       return { sequence, status: "applied" };
     }
     case "tutorial.complete": {

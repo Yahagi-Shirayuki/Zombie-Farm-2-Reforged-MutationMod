@@ -92,7 +92,7 @@ export const QUEST_REWARDS: Readonly<Record<string, QuestReward>> = {
   "19": { rewardType: 0, rewardValue: 300, rewardItemKey: "" },
   "20": { rewardType: 0, rewardValue: 750, rewardItemKey: "" },
   "21": { rewardType: 0, rewardValue: 675, rewardItemKey: "" },
-  "22": { rewardType: 0, rewardValue: 20, rewardItemKey: "" },
+  "22": { rewardType: 0, rewardValue: 750, rewardItemKey: "" },
   "23": { rewardType: 0, rewardValue: 90, rewardItemKey: "" },
   "24": { rewardType: 0, rewardValue: 150, rewardItemKey: "" },
   "25": { rewardType: 0, rewardValue: 300, rewardItemKey: "" },

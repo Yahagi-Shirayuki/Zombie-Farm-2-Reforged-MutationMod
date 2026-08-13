@@ -97,7 +97,19 @@ export type GameplayCommand =
    *  grant themselves inside the transaction that completes them — a periodic quest
    *  waits to be claimed, so this is the only command that pays one out. */
   | { type: "quest.periodic_claim"; scope: "daily" | "weekly"; questId: string }
+  /** Record Boss Tokens the CLIENT rolled on harvest. Deliberately unverified: the
+   *  server no longer rolls for tokens itself and does not re-check this claim, so an
+   *  edited client can mint tokens. That is an accepted trade — a token buys one Epic
+   *  Boss attempt, the drop rate is generous, and the alternative (a server roll) made
+   *  the token arrive a batch window after the crop it came out of, so the pop-up
+   *  effect played over an empty plot. `runId` pins the grant to the run the client
+   *  rolled against, so a token cannot leak into a later event. */
+  | { type: "epicBoss.token"; runId: string; count?: number }
   | { type: "tutorial.complete" };
+
+/** Ceiling on one `epicBoss.token` command, so an Insta-Harvest across a full field
+ *  folds into a single command instead of one per lucky plot. */
+export const EPIC_BOSS_TOKEN_GRANT_LIMIT = 64;
 
 export interface SequencedCommand {
   sequence: number;

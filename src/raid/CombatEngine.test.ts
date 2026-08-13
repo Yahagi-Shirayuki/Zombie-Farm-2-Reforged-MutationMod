@@ -216,8 +216,10 @@ describe("buildPlayerUnits — mutations apply last, as a flat bonus", () => {
   });
 
   it("still ramps the UNMUTATED base while paying the mutation in full", () => {
-    // Headless con: endpoint 11, base 29.7, +3 con from Cauli-hair -> listed 32.7.
-    const mask = 512;
+    // Headless con: endpoint 11, base 29.7, +3 con from Lima Bean -> listed 32.7.
+    // Lima Bean deliberately, not a hair/eye mutation: this unit is HEADLESS, which
+    // may hold body/arm/neck bits and nothing else (HEADLESS_SLOTS).
+    const mask = 1024;
     const head = (): OwnedZombie[] => [
       { ...mutant()[0], group: "Headless", key: "ZombieActorHeadless", mutation: mask,
         str: 11, dex: 1, con: 29.7 + 3 },

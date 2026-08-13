@@ -418,11 +418,19 @@ The Worker is deployed separately by `.github/workflows/deploy-server.yml`, whic
 
 ## Asset Provenance
 
-The art and audio under `public/assets/` are extracted/derived from the
+Most of the art and audio under `public/assets/` are extracted/derived from the
 commercial game **Zombie Farm 2** and are used here for a personal,
 non-commercial reimplementation. They are **not** covered by any license in this
 repo and are not authorized for redistribution or commercial use. If you fork or
 publish this, replace or remove those assets, or keep the repo private.
+
+The exception is **contributed art** — assets drawn for this project rather than
+extracted. Their sources live in `tools/art/`. Catalog items go through
+`tools/contributed_art.py`, which builds them into the catalog and names their
+artist in a `credit` field the Market shows on the item's info parchment:
+currently the three sakura trees, by **LennyFaze**. Backdrops have no catalog row
+and so no credit — the autumn sunset horizon, and the tree-less base
+`tools/prep_backgrounds.py` derives four skins from. See `PROVENANCE.md`.
 
 ## Regenerate Assets
 

@@ -127,6 +127,15 @@ per-harvest feel at the cost of the grow-time ladder, and shrinking `FLAT_BONUS`
 (The original rule was `0.35 * sqrt(time * value)`, which was *documented* as favouring
 long crops but per plot-hour did the opposite, at a much lower overall supply.)
 
+The roll is the **client's**, in both online and offline play, and it happens the moment
+the crop is harvested — the token portrait rises out of that plot in the same frame. The
+Worker used to roll it authoritatively during command replay, which meant the token
+surfaced a batch window later over a plot the player had usually already replanted. It
+now only records what the client reports (`epicBoss.token`, pinned to the running
+`runId`), and does not re-check the roll. An edited client can therefore mint Boss
+Tokens. That is an accepted trade: a token buys one attempt, the drop is common, and the
+alternative price is a single brain.
+
 Tokens can be
 hoarded during the run, but expire when that boss event ends. Damage survives an escape.
 If two hours elapse from the first attempt at the current level, that level returns to

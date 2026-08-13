@@ -77,6 +77,26 @@ QUEST_LEVEL_OVERRIDES = {
     # Not a crop: The Perfect Yard requires the Lawnmower, which the Market does
     # not sell until level 45, while the quest shipped at 44.
     "61": (45, "Lawnmower unlocks at level 45"),
+    # Not a crop either: quest 22 ships with levelRequired -1, but its prerequisite
+    # (quest 21) is gated at 25, so 25 is where it actually unlocks. Spelling that
+    # out is what lets quest_xp_rebalance price it as the level-25 quest it is
+    # instead of a level-1 one.
+    "22": (25, "prerequisite quest 21 is gated at 25; the -1 was never the real gate"),
+}
+
+# ---- Objective sizes the shipped data gets wrong ------------------------------
+# Quests.plist sizes every objective for the front of the original game. A few ask
+# for so little that the quest is over before it registers — and because the XP
+# rule prices on `levelRequired` alone (see quest_xp_rebalance), asking for less
+# work never cost them anything. Resizing them here, in the generator, keeps a
+# regeneration from reverting it.
+#
+# Counts apply positionally to the quest's requirements list.
+QUEST_COUNT_OVERRIDES = {
+    # quest id: (counts per requirement, why)
+    "32": ((25, 25), "10 Broccoli + 10 Cauliflower for 900 XP at level 29 was 45 "
+                     "XP/harvest — an order above every other harvest quest"),
+    "59": ((50, 50), "25 + 25 for 3750 XP at the level cap was 75 XP/harvest"),
 }
 
 
@@ -246,6 +266,20 @@ def main():
         if qid not in out:
             raise SystemExit(f"quest gate override names unknown quest {qid}")
         out[qid]["levelRequired"] = level
+
+    # Re-size the objectives that ask for too little (see QUEST_COUNT_OVERRIDES).
+    # The displayed text carries the count too, so it moves with the requirement.
+    for qid, (counts, _why) in QUEST_COUNT_OVERRIDES.items():
+        if qid not in out:
+            raise SystemExit(f"quest count override names unknown quest {qid}")
+        reqs = out[qid]["requirements"]
+        if len(counts) != len(reqs):
+            raise SystemExit(
+                f"quest {qid} count override has {len(counts)} counts "
+                f"for {len(reqs)} requirements")
+        for r, n in zip(reqs, counts):
+            r["countTotal"] = n
+            r["text"] = LEADING_COUNT.sub(str(n), r["text"], count=1)
 
     # Bully Frog's only surviving quest definitions are embedded in its
     # EpicEventEnemy row rather than Quests.plist. Import the unambiguous 3xxx

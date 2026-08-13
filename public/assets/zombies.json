@@ -1957,7 +1957,7 @@
   "dex": 2.0,
   "con": 18.0,
   "focus": 80.0,
-  "mutation": 4,
+  "mutation": 16384,
   "tier": 4,
   "marketHidden": false
  },
@@ -1977,7 +1977,7 @@
   "dex": 2.0,
   "con": 18.0,
   "focus": 80.0,
-  "mutation": 512,
+  "mutation": 32768,
   "tier": 4,
   "marketHidden": false
  }

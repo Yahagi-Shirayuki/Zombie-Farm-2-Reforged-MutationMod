@@ -213,6 +213,29 @@ describe("deterministic raid replay", () => {
     if (full.ok && second.ok) expect(second.outcome).toEqual(full.outcome);
   });
 
+  // Resurrect draws from a corpse backlog that accumulates for the whole fight, so the
+  // backlog has to cross a checkpoint intact. If `snapshot`/`restore` dropped it, a
+  // resumed segment would forget its dead, the server would decline a revive the client
+  // performed, and a won raid would settle as a divergence.
+  it("carries the corpse backlog across a checkpoint", () => {
+    const sim = worstCaseSim();
+    const victim = sim.units.find((u) => u.team === "player")!;
+    (sim as any).dealDamage(victim, victim.maxHp, false);
+    expect((sim as any).fallen).toContain(victim.id);
+
+    const resumed = worstCaseSim();
+    resumed.restore(sim.snapshot());
+    expect((resumed as any).fallen).toEqual((sim as any).fallen);
+
+    // …and a snapshot from before the backlog existed rebuilds it from the dead units,
+    // rather than silently starting the resumed fight with an empty graveyard.
+    const legacy = sim.snapshot();
+    delete legacy.fallen;
+    const rebuilt = worstCaseSim();
+    rebuilt.restore(legacy);
+    expect((rebuilt as any).fallen).toContain(victim.id);
+  });
+
   it.skipIf(!RUN_BENCHMARK)("keeps benchmark-selected 15-second checkpoint segments below the 8 ms p95 target", () => {
     // Measure steady-state verifier cost. Workerd keeps isolates warm between requests;
     // including V8's first compilation passes made this test primarily measure JIT.

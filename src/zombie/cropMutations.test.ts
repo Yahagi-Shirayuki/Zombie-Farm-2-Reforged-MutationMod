@@ -85,7 +85,10 @@ describe("crop -> mutation wiring", () => {
   it("names mutations by key, resolving to the bit they persist as", () => {
     expect(cropMutationBits("tomato")).toEqual([1]);
     expect(cropMutationBits("pumpking")).toEqual([8192]);
-    expect(cropMutationBits("eyebiscus")).toEqual([4]); // the Tier-4 variant's shared bit
+    // The Tier-4 crops grow their OWN mutations — they used to grow carrot's (4) and
+    // cauli's (512), which is what made planting one pointless.
+    expect(cropMutationBits("eyebiscus")).toEqual([16384]);
+    expect(cropMutationBits("heartichoke")).toEqual([32768]);
     expect(cropMutationBits("grass")).toEqual([]); // a crop that grows nothing
   });
 
@@ -103,11 +106,23 @@ describe("crop -> mutation wiring", () => {
   });
 
   it("pools adjacency when two crops name the same mutation", () => {
-    // Carrot and eyebiscus both grow bit 4, so two plots of them together clear the
-    // 25%-per-plot threshold exactly as two carrot plots would — one roll, not two.
+    // Nothing SHIPPED shares a mutation any more (the Tier-4 pair stopped riding
+    // carrot's and cauli's bits), but the table still allows it, and two crops that do
+    // must clear the 25%-per-plot threshold together — one roll, not two.
+    const crops = { carrot: "carrot", baby_carrot: "carrot" };
     const random = () => 0.4; // beats 2 x 25%, would fail a single plot's 25%
-    expect(resolveCropMutations(0, ["carrot", "eyebiscus"], { random })).toBe(4);
-    expect(resolveCropMutations(0, ["carrot"], { random })).toBe(0);
+    expect(resolveCropMutations(0, ["carrot", "baby_carrot"], { crops, random })).toBe(4);
+    expect(resolveCropMutations(0, ["carrot"], { crops, random })).toBe(0);
+  });
+
+  it("no longer makes a Tier-4 crop grow the Tier-1 mutation beside it", () => {
+    // The reported balance hole: an eyebiscus plot cost several times a carrot plot
+    // and granted the identical +1 speed, and two of them pooled into carrot's roll.
+    const random = () => 0.4;
+    expect(resolveCropMutations(0, ["carrot", "eyebiscus"], { random })).toBe(0);
+    expect(resolveCropMutations(0, ["eyebiscus", "eyebiscus"], { random })).toBe(16384);
+    expect(resolveCropMutations(0, ["cauliflower", "heartichoke"], { random })).toBe(0);
+    expect(resolveCropMutations(0, ["heartichoke", "heartichoke"], { random })).toBe(32768);
   });
 
   it("ignores a mutation name the catalog does not have", () => {

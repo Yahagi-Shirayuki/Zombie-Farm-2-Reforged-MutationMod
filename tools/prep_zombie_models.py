@@ -87,6 +87,12 @@ MUTATION_PART = {
     # mutation as a faceless gourd hovering over the shoulders, and needed a hand-tuned
     # offset to sit anywhere near right.
     "pumpking": "pumpkinHead",
+    # The two Tier-4 crops. They used to have no bit of their own — each rode a lower
+    # tier's, reaching the rig through VARIANT_OVERRIDE below — so their art was keyed
+    # by PART name only. They are catalogued mutations now (mutations.ts), so they need
+    # the ordinary key-addressed entry every other mutation has; the part-keyed one is
+    # still emitted for units that have yet to shed the shared bit.
+    "eyebiscus": "eyebiscusHat", "heartichoke": "heartichokeBody",
 }
 # Tier-4 variants SHARE a mutation with a lower tier (Eyebiscus=Carrot,
 # Heartichoke=Cauliflower) but have their OWN hair art. We emit a per-model

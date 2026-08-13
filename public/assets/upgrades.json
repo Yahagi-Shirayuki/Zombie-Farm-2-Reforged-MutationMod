@@ -93,6 +93,14 @@
    "gold": 3000,
    "icon": "upgrade_ground_autumn.png",
    "terrain": "autumn"
+  },
+  {
+   "name": "Sakura Ground",
+   "climateGID": 0,
+   "level": 1,
+   "gold": 7500,
+   "icon": "upgrade_ground_sakura.png",
+   "terrain": "sakura"
   }
  ]
 }

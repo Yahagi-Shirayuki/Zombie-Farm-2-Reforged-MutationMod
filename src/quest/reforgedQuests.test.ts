@@ -8,10 +8,6 @@ import { QuestEvent } from "./events";
 import { questBonusRewardInfo, questRewardInfo } from "./types";
 import { ABILITY_SUBJECT, EXPLODED_MINI_SUBJECT } from "../raid/featQuestEvents";
 import { RARE_INVASION_ZOMBIE_SUBJECT } from "../raid/zombieDrops";
-import { XP_THRESHOLDS } from "../GameState";
-import { xpToNextLevel as xpToNext } from "./periodic/generate";
-
-const xpToNextLevel = (level: number) => xpToNext(Math.max(1, level), XP_THRESHOLDS);
 
 type Quest = (typeof reforged)[keyof typeof reforged];
 const QUESTS = Object.entries(reforged) as [string, Quest][];
@@ -89,37 +85,177 @@ describe("reforged achievement catalog", () => {
     }
   });
 
-  // ONE policy governs both catalogs: a quest is worth a share of the XP needed to
-  // clear the level it unlocks at. Standard work sits at 10-20%; only the truly hard
-  // rungs reach 40%. The imported side is enforced by tools/quest_xp_rebalance.py at
-  // generation time; this is the authored side's equivalent, so a hand-edit that walks
-  // out of the band fails here rather than shipping.
-  it("prices every achievement inside the agreed bands", () => {
-    for (const [id, quest] of QUESTS) {
-      const share = quest.rewardValue / xpToNextLevel(quest.levelRequired);
-      const brains = (quest as { rewardBrains?: number }).rewardBrains ?? 0;
-      if (brains) {
-        expect(share, `${id} is a brain rung and should sit near 40%`).toBeGreaterThan(0.3);
-        expect(share, id).toBeLessThanOrEqual(0.42);
-      } else {
-        expect(share, `${id} should sit in the 10-20% band`).toBeGreaterThanOrEqual(0.1);
-        expect(share, id).toBeLessThanOrEqual(0.22);
+  // ONE policy governs both catalogs, and it is NOT a share-of-a-level band.
+  //
+  // The band rule priced a quest from `levelRequired` alone and never looked at how
+  // much work the objective asked for. That is invisible while every quest wants a
+  // handful of actions, and absurd once one wants hundreds: a 500-plow achievement
+  // gated at level 8 paid 75 XP while a 250-plow quest gated at 27 paid 750 — twice
+  // the work for a tenth of the reward, and both "inside the bands".
+  //
+  // What actually has to hold is DOMINANCE: within a category, no quest may pay less
+  // total XP than one that unlocks no later AND asks for no more actions. That is
+  // strictly weaker than "XP per action must rise with level" — which is unsatisfiable,
+  // since a 3-action quest always beats a 30-action one per action unless payouts scale
+  // linearly — but it is exactly strong enough to catch a work/pay inversion.
+  const CATEGORY: Record<string, string> = {
+    kSoilPlowedNotification: "plowing", kNewSoilPlowedNotification: "plowing",
+    kCropPlantedNotification: "planting", kCropHarvestedNotification: "crop harvest",
+    kCropHarvestedZombieNotification: "zombie harvest",
+    kItemBoughtNotification: "buying",
+    kCombinerCombinedNotification: "combining",
+    kCombinerHarvestedNotification: "combining",
+    kCombinerCollectedNotification: "combining",
+    kInvasionSuccessfulNotification: "invasion",
+    kInvasionPerfectGameNotification: "invasion",
+    kEliteInvasionSuccessfulNotification: "invasion",
+    kElitePerfectGameNotification: "invasion",
+    kLootItemWonNotification: "invasion loot",
+    kEnemyDefeatedByAbilityNotification: "combat feat",
+    kBossDefeatedByAbilityNotification: "combat feat",
+    kZombieResurrectedNotification: "combat feat",
+  };
+
+  // Buying is deliberately exempt. Its objectives cost GOLD, which is the real effort
+  // and is invisible to a count of actions — "buy 2 Zen Garden pieces" is a bigger ask
+  // than two hundred plows. Judging it on actions alone would flag the whole category.
+  const UNPRICED_BY_ACTION = new Set(["buying"]);
+
+  type Priced = {
+    id: string; title: string; category: string;
+    level: number; actions: number; xp: number; prerequisite: number;
+  };
+
+  type CatalogQuest = {
+    id: string; title: string; rewardType: number; rewardValue: number;
+    levelRequired: number; prerequisiteQuest: number; epicEvent: boolean; seasonal: boolean;
+    requirements: { notificationID: string; notificationObject?: string; countTotal: number }[];
+  };
+  const ALL: Record<string, CatalogQuest> = {
+    ...(imported as unknown as Record<string, CatalogQuest>),
+    ...(reforged as unknown as Record<string, CatalogQuest>),
+  };
+
+  // A quest's real gate is the highest in its prerequisite chain, not its own field:
+  // quest 22 ships `levelRequired: -1` but follows quest 21, which is gated at 25.
+  const effectiveLevel = (id: string, seen = new Set<string>()): number => {
+    const quest = ALL[id];
+    if (!quest || seen.has(id)) return 1;
+    seen.add(id);
+    const own = Math.max(1, quest.levelRequired);
+    return quest.prerequisiteQuest >= 0
+      ? Math.max(own, effectiveLevel(String(quest.prerequisiteQuest), seen))
+      : own;
+  };
+
+  const priced: Priced[] = [];
+  for (const [id, quest] of Object.entries(ALL)) {
+    if (quest.rewardType !== 0 || quest.epicEvent || quest.seasonal || !quest.rewardValue) continue;
+    const categories = new Set(quest.requirements.map((r) => CATEGORY[r.notificationID]));
+    if (categories.size !== 1) continue; // mixed-objective quests have no single yardstick
+    const [category] = [...categories];
+    if (!category || UNPRICED_BY_ACTION.has(category)) continue;
+    priced.push({
+      id, title: quest.title, category,
+      level: effectiveLevel(id),
+      actions: quest.requirements.reduce((n, r) => n + r.countTotal, 0),
+      xp: quest.rewardValue,
+      prerequisite: quest.prerequisiteQuest,
+    });
+  }
+
+  it("never pays less for strictly more work (the dominance invariant)", () => {
+    const failures: string[] = [];
+    for (const quest of priced) {
+      for (const other of priced) {
+        if (other.id === quest.id || other.category !== quest.category) continue;
+        // A chain successor legitimately out-pays its own prerequisite at the same
+        // gate — that is the chain advancing, not an inversion.
+        if (quest.prerequisite === Number(other.id) || other.prerequisite === Number(quest.id)) continue;
+        if (other.level <= quest.level && other.actions <= quest.actions && other.xp > quest.xp) {
+          failures.push(
+            `${quest.category}: ${quest.id} "${quest.title}" (level ${quest.level}, ` +
+            `${quest.actions} actions) pays ${quest.xp} XP, but ${other.id} "${other.title}" ` +
+            `(level ${other.level}, ${other.actions} actions) pays ${other.xp}`
+          );
+        }
       }
     }
+    expect(failures, `\n${failures.join("\n")}\n`).toEqual([]);
   });
 
-  it("keeps the imported catalog inside the same bands", () => {
-    for (const [id, quest] of Object.entries(imported) as [string, {
-      rewardType: number; rewardValue: number; levelRequired: number; epicEvent: boolean;
-    }][]) {
+  // Dominance alone is NOT enough. It orders two quests only when one is worse on
+  // both axes, and the original bug was worse on neither: Groundskeeper asked 500
+  // plows at level 8 while Live Laugh Plow asked 250 at level 27 — more work at an
+  // EARLIER gate, so neither dominates and the inversion slips through.
+  //
+  // The check that catches that shape compares XP PER ACTION down a single ladder:
+  // same event, same wildcard-vs-named subject, so the actions really are the same
+  // deed. As the gate rises the rate must not collapse.
+  //
+  // Two exclusions keep it honest rather than noisy:
+  //   - countTotal 1 is a milestone ("win an elite invasion"), priced for the EVENT.
+  //     Against a grind quest it always looks better per action and means nothing.
+  //   - multi-objective quests have no single per-action rate to speak of.
+  // TOLERANCE exists because the ladder is hand-authored, not computed: a rung may
+  // sit slightly under the one before it (Plow Now Brown Cow is 10% under It's Plow
+  // Or Never) without anything being wrong. A real inversion is far larger — the
+  // shipped Groundskeeper paid 62% under the rung below it.
+  const RATE_TOLERANCE = 0.25;
+
+  it("never lets XP-per-action collapse as the gate rises on one ladder", () => {
+    const ladders = new Map<string, Priced[]>();
+    for (const [id, quest] of Object.entries(ALL)) {
+      if (quest.rewardType !== 0 || quest.epicEvent || quest.seasonal || !quest.rewardValue) continue;
+      if (quest.requirements.length !== 1) continue;
+      const [requirement] = quest.requirements;
+      if (requirement.countTotal < 2) continue;
+      const subject = (requirement as { notificationObject?: string }).notificationObject;
+      const key = `${requirement.notificationID}:${subject ? "named" : "any"}`;
+      const rung: Priced = {
+        id, title: quest.title, category: key,
+        level: effectiveLevel(id), actions: requirement.countTotal,
+        xp: quest.rewardValue, prerequisite: quest.prerequisiteQuest,
+      };
+      ladders.set(key, [...(ladders.get(key) ?? []), rung]);
+    }
+
+    const failures: string[] = [];
+    for (const [key, rungs] of ladders) {
+      rungs.sort((a, b) => a.level - b.level);
+      let best = 0;
+      let bestRung: Priced | undefined;
+      for (const rung of rungs) {
+        const rate = rung.xp / rung.actions;
+        if (bestRung && rate < best * (1 - RATE_TOLERANCE)) {
+          failures.push(
+            `${key}: ${rung.id} "${rung.title}" (level ${rung.level}, ${rung.actions} ` +
+            `actions, ${rung.xp} XP) pays ${rate.toFixed(2)}/action, far under the ` +
+            `${best.toFixed(2)}/action set by "${bestRung.title}" at level ${bestRung.level}`
+          );
+        }
+        if (rate > best) { best = rate; bestRung = rung; }
+      }
+    }
+    expect(failures, `\n${failures.join("\n")}\n`).toEqual([]);
+  });
+
+  it("covers the categories the invariant is meant to police", () => {
+    // A typo in CATEGORY would silently empty the check rather than fail it.
+    const categories = new Set(priced.map((q) => q.category));
+    expect(categories).toContain("plowing");
+    expect(categories).toContain("crop harvest");
+    expect(categories).toContain("invasion");
+    expect(categories).toContain("combining");
+    expect(priced.length).toBeGreaterThan(25);
+  });
+
+  // The floor still matters on its own: levels 1-7 need 25-250 XP in total, so a
+  // percentage-derived reward there would round to single digits.
+  it("never pays less than the 20 XP floor", () => {
+    for (const [id, quest] of Object.entries(ALL)) {
       if (quest.rewardType !== 0 || quest.epicEvent || !quest.rewardValue) continue;
-      const level = Math.max(1, quest.levelRequired);
-      const share = quest.rewardValue / xpToNextLevel(level);
-      // Levels 1-7 need 25-250 XP in total, so the 20 XP floor deliberately overshoots
-      // the band there rather than paying single digits.
-      if (quest.rewardValue <= 20) continue;
-      expect(share, `${id} (level ${level}) is outside the bands`).toBeLessThanOrEqual(0.42);
-      expect(share, `${id} (level ${level}) is outside the bands`).toBeGreaterThanOrEqual(0.1);
+      expect(quest.rewardValue, `${id} "${quest.title}"`).toBeGreaterThanOrEqual(20);
     }
   });
 

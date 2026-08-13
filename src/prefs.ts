@@ -217,9 +217,28 @@ export function markRaidTipSeen(raidId: number): void {
   }
 }
 
-/** Local-clock night window. This avoids requesting precise location permission:
- * 7pm through 6:59am in the device's own timezone. */
+/** When the local-clock night window opens and closes, in the device's own
+ *  timezone. Whole hours, and deliberately not derived from real sunset: that
+ *  would need precise location permission. */
+export const NIGHT_START_HOUR = 19;
+export const NIGHT_END_HOUR = 7;
+/** How far either side of nightfall counts as dusk. */
+export const DUSK_HOURS = 2;
+
+/** Local-clock night window: 7pm through 6:59am. */
 export function isLocalNight(at = new Date()): boolean {
   const hour = at.getHours();
-  return hour >= 19 || hour < 7;
+  return hour >= NIGHT_START_HOUR || hour < NIGHT_END_HOUR;
+}
+
+/** The hours either side of nightfall — 5pm to 8:59pm by default.
+ *
+ *  Derived from NIGHT_START_HOUR rather than written out, so the two can never
+ *  drift apart: a dusk window that no longer straddles the moment the lights go
+ *  down is worse than none, because the sunset backdrop would show while the sky
+ *  is plainly still day. Half of this window is also night, which is intended —
+ *  the sunset art carries on under the darkness for the first couple of hours. */
+export function isLocalDusk(at = new Date()): boolean {
+  const hour = at.getHours();
+  return hour >= NIGHT_START_HOUR - DUSK_HOURS && hour < NIGHT_START_HOUR + DUSK_HOURS;
 }

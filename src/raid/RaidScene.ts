@@ -576,11 +576,19 @@ export class RaidScene {
   private activeAbilityStrip = new Container();
   private passiveAbilityStrip = new Container();
   private abilityCells: {
+    /** The button's identity for status lookup: a group's FIRST (highest-tier) key on
+     *  an activated cell, the ability itself on a passive one. */
     key: string;
     cell: Container;
     badge?: Text;
     badgeDot?: Graphics;
     activated: boolean;
+    /** Stacked buttons only: every move this button can fire, and the art for each,
+     *  so `layout` can show the one a tap would actually spend. */
+    icon?: Sprite;
+    icons?: Map<string, Texture | null>;
+    /** The key currently on the face — so the swap is skipped unless it changed. */
+    shown?: string;
   }[] = [];
   /** Whether the army carries any team passive at all — decides how far down the
    *  active column starts. Static for the whole fight, so the buttons never move. */
@@ -860,28 +868,48 @@ export class RaidScene {
    *  for the whole fight. Nothing is ever removed or re-packed: a knocked-back Large
    *  used to take Smash out of the column, sliding Explode up into the space the
    *  player's thumb was already aimed at, and the next tap blew up a Small instead.
-   *  A move that can't be used is darkened in place. */
+   *  A move that can't be used is darkened in place.
+   *
+   *  A button can, however, cover a FAMILY of moves (Bash/Smash, Explode/Explode
+   *  Ver.2 — see ACTIVATED_STACKS), because five separate buttons overran the bottom
+   *  of a landscape phone. Only the face changes; the slot never moves, so the thumb
+   *  target the fix above protects is untouched. */
   private async buildAbilityStrip() {
-    const keys = [
-      ...this.sim.activatedKeys.map((key) => ({ key, activated: true })),
-      ...this.sim.teamKeys.map((key) => ({ key, activated: false })),
+    const groups = [
+      ...this.sim.activatedGroups.map((keys) => ({ keys, activated: true })),
+      ...this.sim.teamKeys.map((key) => ({ keys: [key], activated: false })),
     ];
     const icons = new Map<string, Texture | null>();
     await Promise.all(
-      keys.map(async ({ key }) => {
+      groups.flatMap(({ keys }) => keys).map(async (key) => {
         const icon = ABILITY_POOL[key]?.icon;
         icons.set(key, icon ? await loadTex(icon) : null);
       })
     );
     let activeSlot = 0;
-    for (const { key, activated } of keys) {
-      const cell = this.makeAbilityCell(key, icons.get(key) ?? null, activated);
+    for (const { keys, activated } of groups) {
+      const shown = activated ? this.sim.nextInGroup(keys) : keys[0];
+      const cell = this.makeAbilityCell(keys, icons.get(shown) ?? null, activated);
       if (activated) cell.cell.y = activeSlot++ * ABILITY_ACTIVE_STEP;
       (activated ? this.activeAbilityStrip : this.passiveAbilityStrip).addChild(cell.cell);
-      this.abilityCells.push({ key, ...cell, activated });
+      // Only THIS button's art, so a face swap can't reach for a move the button
+      // does not cover.
+      const own = new Map(keys.map((key) => [key, icons.get(key) ?? null]));
+      this.abilityCells.push({ key: keys[0], ...cell, activated, icons: own, shown });
       if (!activated) this.hasPassiveAbilities = true;
     }
     this.container.addChild(this.passiveAbilityStrip, this.activeAbilityStrip);
+  }
+
+  /** Put `key`'s art on a stacked button's face, keeping the icon scaled to the cell
+   *  (the two tiers' source images are not guaranteed to be the same size). */
+  private setAbilityFace(c: RaidScene["abilityCells"][number], key: string) {
+    if (c.shown === key || !c.icon) return;
+    const tex = c.icons?.get(key);
+    if (!tex) return;
+    c.shown = key;
+    c.icon.texture = tex;
+    c.icon.scale.set((2 * ABILITY_ACTIVE_R * 0.68) / Math.max(tex.width, tex.height, 1));
   }
 
   /** One ability cell.
@@ -890,15 +918,17 @@ export class RaidScene {
    *  bevel across the top and a dark rim — sized ABILITY_ACTIVE_R so they read as
    *  the thing you press. PASSIVE cells are half that size and keep the flat dark
    *  slot frame, so a glance separates "press me" from "you already have this". */
-  private makeAbilityCell(key: string, tex: Texture | null, activated: boolean) {
+  private makeAbilityCell(keys: string[], tex: Texture | null, activated: boolean) {
     const R = activated ? ABILITY_ACTIVE_R : ABILITY_PASSIVE_R;
     const cell = new Container();
     cell.addChild(activated ? woodenButtonFace(R) : passiveIconFrame(R));
+    let icon: Sprite | undefined;
     if (tex) {
       const sp = new Sprite(tex);
       sp.anchor.set(0.5);
       sp.scale.set((2 * R * (activated ? 0.68 : 0.8)) / Math.max(tex.width, tex.height, 1));
       cell.addChild(sp);
+      icon = sp;
     }
     // Count badge: ready-to-act zombies on a button, deployed carriers on a passive
     // icon. Either way it only earns its pixels past one, so layout() hides it at
@@ -922,13 +952,18 @@ export class RaidScene {
       cell.cursor = "pointer";
       cell.on("pointertap", () => {
         if (this.sim.finished) return;
+        // Resolved at TAP TIME, not from the drawn face: the face refreshes on a 150 ms
+        // throttle, so between refreshes it can be one move stale. Asking the sim now
+        // means the tap always fires the move that is actually available — and the
+        // transcript records that concrete key, which is what the server replays.
+        const key = this.sim.nextInGroup(keys);
         if (this.sim.activate(key)) {
           this.recordInput({ type: "ability", abilityKey: key });
           cell.scale.set(0.86); // tap feedback (eased back in layout)
         }
       });
     }
-    return { cell, badge, badgeDot };
+    return { cell, badge, badgeDot, icon };
   }
 
   /** A circular framed portrait badge for a team bar (feet-agnostic head-ish crop). */
@@ -1974,7 +2009,9 @@ export class RaidScene {
     this.abilityRefreshMs -= dtSec * 1000;
     if (this.abilityRefreshMs <= 0 || resized) {
       this.abilityRefreshMs = 150;
-      const status = new Map(this.sim.activatedStatus().map((s) => [s.key, s]));
+      // Keyed on the group's first (highest-tier) key, which is the cell's own `key` —
+      // so a stacked button reads one status covering both of its moves.
+      const status = new Map(this.sim.activatedGroupStatus().map((s) => [s.keys[0], s]));
       const teamStatus = new Map(this.sim.teamAbilityStatus().map((s) => [s.key, s.count]));
       let passiveSlot = 0;
       this.abilityCells.forEach((c) => {
@@ -1985,6 +2022,8 @@ export class RaidScene {
           c.cell.tint = count > 0
             ? ABILITY_TINT_ARMED
             : st?.present ? ABILITY_TINT_RECHARGING : ABILITY_TINT_UNAVAILABLE;
+          // Show the move a tap would spend. A one-move button never changes face.
+          if (st) this.setAbilityFace(c, st.key);
         } else {
           count = teamStatus.get(c.key) ?? 0;
           c.cell.visible = count > 0;
@@ -1993,11 +2032,16 @@ export class RaidScene {
         }
         // One is the common case and needs no number; the badge is there to say
         // "more than one of these is available right now".
+        //
+        // Resurrect is the exception: its count is revives LEFT, a resource that counts
+        // down and does not come back, so the last one is the number the player most
+        // needs to see. It keeps its badge all the way down to 1.
+        const showBadge = count > 1 || (c.key === "ressurect" && count > 0);
         if (c.badge) {
           c.badge.text = String(count);
-          c.badge.visible = count > 1;
+          c.badge.visible = showBadge;
         }
-        if (c.badgeDot) c.badgeDot.visible = count > 1;
+        if (c.badgeDot) c.badgeDot.visible = showBadge;
       });
     }
     this.abilityCells.forEach((c) => {

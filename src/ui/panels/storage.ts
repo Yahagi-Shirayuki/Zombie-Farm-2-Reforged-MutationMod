@@ -289,6 +289,20 @@ function receivedCard(hud: Hud, v: ReceivedView, bg: HTMLElement, rerender: () =
       btn.onclick = () => { hud.onClaimReceived?.(v.index); rerender(); };
     }
     actions.appendChild(btn);
+    // Straight to the shed, skipping the farm. A decoration you have no room (or no
+    // plan) for used to have to be placed somewhere and then stored from the object
+    // sheet — two steps and a spot you did not want it in. Only offered where the
+    // shed can actually take it, so it never turns into a dead button.
+    if (v.kind === "placeable" && v.storable) {
+      const store = document.createElement("button");
+      store.className = "st-use rcv-act";
+      store.textContent = "Store";
+      store.title = "Put it straight into the shed";
+      store.onclick = async () => {
+        if (await hud.onStoreReceived?.(v.index)) rerender();
+      };
+      actions.appendChild(store);
+    }
     if (v.sellable) {
       const sell = document.createElement("button");
       sell.className = "st-use st-sell rcv-act";

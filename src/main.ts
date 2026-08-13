@@ -1,4 +1,4 @@
-import { Application, Assets, Container, FederatedPointerEvent, Graphics, Point, Sprite, Text, TextStyle, Texture } from "pixi.js";
+import { Application, Assets, Container, FederatedPointerEvent, Graphics, Point, Sprite, Text, TextStyle, Texture, TilingSprite } from "pixi.js";
 import { choosePlowOrigin } from "./plowSelection";
 // Patch Pixi's renderer to use no-eval polyfills for its shader/UBO/uniform/particle
 // codegen (it otherwise uses `new Function`, which the production CSP's script-src
@@ -6,12 +6,12 @@ import { choosePlowOrigin } from "./plowSelection";
 // pixi.js lists ./lib/unsafe-eval/init.* under "sideEffects", so it survives bundling.
 import "pixi.js/unsafe-eval";
 import { loadAssets, canMirrorObject, ensureBackgroundTexture, ensureObjectTexture, ensureObjectTextures, objectSpriteFiles, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
-import { pickPiece, type SceneryPiece, surroundingsTheme, themeObjectFiles } from "./surroundings";
+import { pickPiece, type PathSpec, type RoadSpec, type SceneryPiece, type SkylineSpec, type SpringSpec, surroundingsTheme, themeObjectFiles } from "./surroundings";
 import { MAX_ZOMBIE_POTS, noRoomForAnother } from "./placementLimit";
 import { Field, CARROT, CropConfig, objectFootprint, PLOT } from "./Field";
 import { Actor } from "./Actor";
 import { PetActor } from "./PetActor";
-import { WalkController } from "./WalkController";
+import { SPEED_PX, WalkController } from "./WalkController";
 import { ZombieField } from "./zombie/ZombieField";
 import { makeOwned, type OwnedZombie } from "./zombie/types";
 import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
@@ -49,7 +49,7 @@ import {
   invasionExpiryState,
   type InvasionExpiryState,
 } from "./raid/sessionExpiry";
-import { screenToGrid, tileCenter, TILE_H, TILE_W, HW, HH } from "./iso";
+import { gridToScreen, screenToGrid, tileCenter, TILE_H, TILE_W, HW, HH } from "./iso";
 import { setFootprint } from "./depthSort";
 import { NightLayer, makeLight } from "./lighting";
 import { buyXp, sellBack, zombieSellValue } from "./economy";
@@ -60,7 +60,7 @@ import { harvestXp, plowXp } from "./farmRewards";
 import {
   DEFAULT_FARM_BACKGROUND, getFarmBackground, isFarmBackground, setFarmBackground,
   FARM_BG_DENSITY, type FarmBackground, getDayNightMode, setDayNightMode,
-  isLocalNight, type DayNightMode, getFarmerLantern, setFarmerLantern,
+  isLocalNight, isLocalDusk, type DayNightMode, getFarmerLantern, setFarmerLantern,
   hasSeenHazardTip, markHazardTipSeen,
   hasSeenRaidTip, markRaidTipSeen,
   zombieAppearancePrefs, setZombieBodyColorMode, setShowZombieMutations,
@@ -98,6 +98,7 @@ import { buildEpicBossSetup, rollEpicBossLoot } from "./epicBoss/combat";
 import { epicBossCurrencyReward } from "./epicBoss/rewards";
 import { epicZombieRewardNotes, visibleEpicBosses } from "./epicBoss/market";
 import { dropsEpicBossToken, EPIC_BOSS_FIGHT_BRAIN_COST } from "./epicBoss/tokens";
+import { epicAsset, epicLootImage, epicLootImageByName } from "./epicBoss/lootImage";
 import { offerFullscreenPrompt } from "./ui/panels/fullscreenPrompt";
 import { openToolWheel, type ToolWheelHandle, type ToolWheelItem } from "./ui/toolWheel";
 import {
@@ -402,6 +403,19 @@ async function main() {
   background.position.set(0, -BG_GAP_TILES * TILE_H);
   world.addChild(background);
 
+  // GROUND FILL. Only the farm is built out of ground tiles; the land around it is
+  // just the renderer's flat `filler` colour showing through. That passes unnoticed
+  // while a terrain is a flat wash, and stops passing the moment one has texture —
+  // the stony Sakura farm otherwise sits as a detailed diamond on an unbroken sheet
+  // of pink. A theme with a `groundFill` tiles that terrain over the land instead.
+  //
+  // Sits directly on the backdrop's lower edge and runs down from there, so it
+  // covers everything below the horizon and nothing above it. Themes without a fill
+  // leave it hidden and keep the flat colour, which is all the untextured ones need.
+  const groundFill = new TilingSprite({ texture: Texture.EMPTY, width: 1, height: 1 });
+  groundFill.visible = false;
+  world.addChild(groundFill);
+
   const field = new Field(assets);
   world.addChild(field.container);
 
@@ -430,20 +444,292 @@ async function main() {
   // grass keeps the temperate trees/shrubs, the sandy skin gets palms and a
   // shipwrecked pirate's cargo, and so on.
   let foliage: Sprite[] = [];
+  /** Where the road sits this build. Shared so the scatter can keep off it. */
+  interface RoadGeometry {
+    row: number; colMin: number; colMax: number;
+    nearVerge: number; farVerge: number; crossCol: number;
+  }
+  // How far below the backdrop's base the skyline stands. Far enough that the poles
+  // read as planted on the land rather than growing out of the hills, close enough
+  // that they still sit against them.
+  const SKYLINE_DROP = 34;
   // A visit may display the friend's selection, but must never overwrite this
   // device's own preference in localStorage.
   let displayedFarmBackground: FarmBackground = getFarmBackground();
   let surroundings = surroundingsTheme(field.climate);
+  // Read here rather than beside the night code that owns it: the backdrop dressing
+  // below needs it, and that runs during startup well before the lighting is built.
+  let dayNightMode: DayNightMode = getDayNightMode();
+  /** Is the sunset horizon the one to show? Only in `auto` — a player who has pinned
+   *  the farm to day or night has said what they want the sky to be. */
+  const wantDusk = () =>
+    !!surroundings.dusk && dayNightMode === "auto" && isLocalDusk();
+  let duskShown = false;
   // Bumped by every build so a texture load that finishes after a later rebuild
   // (or a theme switch) resolves into a no-op instead of a duplicate ring.
   let foliageGeneration = 0;
+
+  /** Lay a street across the surrounding land, and line its two verges.
+   *
+   *  The carriageway runs down a single grid ROW, which in iso is the down-right
+   *  diagonal — the direction the road art's own lane markings are painted along.
+   *  Laid the other way the dashes would run ACROSS the road.
+   *
+   *  Surface pieces go into the ground-object layer rather than the entity layer, so
+   *  everything on the verges (and anything that ever walks past) draws over the
+   *  asphalt instead of sorting against it. Verge pieces are ordinary scenery and go
+   *  where the scatter's pieces go. Everything is pushed into `foliage`, which is
+   *  what a rebuild tears down — a road that outlived its skin would be worse than
+   *  no road at all. */
+  const buildRoad = (
+    road: RoadSpec, geom: RoadGeometry, objScale: number,
+    pieceTexture: (p: SceneryPiece) => Texture | null, rnd: () => number,
+  ) => {
+    const def = placeCatalog.get(road.key);
+    const surface = def && assets.objects[def.sprite];
+    if (!def || !surface) return; // catalog or texture not resolved yet
+    const cross = placeCatalog.get(road.crossingKey);
+    const crossTex = cross && assets.objects[cross.sprite];
+    const { row: roadRow, colMin, colMax, crossCol } = geom;
+    const lay = (
+      piece: SceneryPiece, tex: Texture, col: number, row: number,
+      w: number, h: number, scale: number, dy = 0,
+    ) => {
+      const sp = new Sprite(tex);
+      sp.anchor.set(0.5, 1);
+      sp.scale.set(piece.flip ? -scale : scale, scale);
+      sp.position.set(((col + (w - 1) / 2) - (row + (h - 1) / 2)) * HW,
+        gridToScreen(col + w - 1, row + h - 1).y + TILE_H + dy);
+      return sp;
+    };
+    // Road art is anchored by its authored flat-tile pivot, not bottom-centred like
+    // everything else — the same rule Field.flatTileOffset applies to a placed one.
+    // A constant offset cannot open a seam (pieces still step exactly 2*HW across),
+    // but it decides where the asphalt sits relative to the ROWS, and the verges are
+    // positioned by row: get it wrong and the kerbs crowd one side of the street and
+    // leave a gap on the other. For a 2x2 it reduces to a vertical nudge.
+    const kerbDy = def.nativeH * objScale * (def.anchorY ?? 0);
+    const surfacePiece = { file: def.sprite };
+    const paveTo = (sp: Sprite) => { field.groundObjectLayer.addChild(sp); foliage.push(sp); };
+    for (let col = colMin; col <= colMax; col += 2) {
+      // The crossing replaces one straight rather than sitting beside it, so the run
+      // stays in step and the junction lands on the lay instead of half a tile off.
+      const useCross = col === crossCol && cross && crossTex;
+      paveTo(useCross
+        ? lay({ file: cross!.sprite }, crossTex!, col, roadRow, 2, 2, objScale,
+          cross!.nativeH * objScale * (cross!.anchorY ?? 0))
+        : lay(surfacePiece, surface, col, roadRow, 2, 2, objScale, kerbDy));
+    }
+    // The branch off the crossing, running AWAY from the farm down a fixed column.
+    // Same art MIRRORED: a horizontal flip of an iso diamond swaps the two axes, so
+    // the lane markings turn with the road instead of running across it.
+    // Run it past everything the camera can REVEAL, which is not the same as its pan
+    // box. minSceneZoom has a width term and deliberately no height one, so a tall
+    // viewport zoomed right out ends up taller than the box and clampAxis centres it,
+    // showing world above and below boundT/boundB. Measured worst case over both
+    // orientations, since a rotate does not rebuild the ring.
+    //
+    // The main road needs no such margin: the width term means the view is never
+    // WIDER than the box, so its two tiles of overshoot always clear the screen.
+    const shortSide = Math.min(app.screen.width, app.screen.height);
+    const longSide = Math.max(app.screen.width, app.screen.height);
+    const viewH = longSide / Math.max(MIN_ZOOM, shortSide / (boundR - boundL));
+    const reveal = Math.max(0, (viewH - (boundB - boundT)) / 2);
+    const branchEnd = Math.ceil((boundB + reveal + TILE_H) / HH) - crossCol + 4;
+    for (let row = roadRow + 2; row <= branchEnd; row += 2) {
+      paveTo(lay({ file: def.sprite, flip: true }, surface, crossCol, row, 2, 2,
+        objScale, kerbDy));
+    }
+    const place = (piece: SceneryPiece, col: number, row: number) => {
+      const tex = pieceTexture(piece);
+      if (!tex) return;
+      const sp = lay(piece, tex, col, row, 1, 1, objScale * (piece.scale ?? 1));
+      setFootprint(sp, col, row, col, row);
+      field.entityLayer.addChild(sp);
+      foliage.push(sp);
+    };
+    // Lamps march: an even stride down one kerb, skipping the junction so none
+    // stands in the mouth of the side road.
+    if (road.lamps.length && road.lampSpacing >= 1) {
+      let i = 0;
+      for (let col = colMin; col <= colMax; col += road.lampSpacing, i++) {
+        if (Math.abs(col - crossCol) <= 2) continue;
+        place(road.lamps[i % road.lamps.length], col, geom.nearVerge);
+      }
+    }
+    // Litter does not march. Clumps are dropped at random along the far side and a
+    // handful of pieces scattered around each, because that is how waste actually
+    // accumulates — someone tips a load and it spreads from where it landed.
+    if (road.litter.length) {
+      const spread = Math.max(4, (colMax - colMin) / (road.litterClumps * 2));
+      for (let c = 0; c < road.litterClumps; c++) {
+        const cc = colMin + rnd() * (colMax - colMin);
+        const cr = geom.farVerge + rnd() * 2;
+        for (let k = 0; k < road.litterPerClump; k++) {
+          const col = Math.round(cc + (rnd() - 0.5) * spread);
+          const row = Math.round(Math.max(geom.farVerge, cr + (rnd() - 0.5) * 3));
+          if (Math.abs(col - crossCol) <= 2) continue; // keep the side road clear
+          place(road.litter[Math.floor(rnd() * road.litter.length)], col, row);
+        }
+      }
+    }
+  };
+
+  /** Top of the scatterable land: the grass just below the hill bases. Shared by
+   *  every pass that fills that band, so they cannot disagree about where it starts. */
+  const treeTopY = () => background.position.y + 6;
+
+  /** Drop a scenery piece at a world point, depth-sorted on the tile it stands on. */
+  const dropPiece = (
+    piece: SceneryPiece, tex: Texture, wx: number, wy: number, scale: number,
+  ) => {
+    const sp = new Sprite(tex);
+    sp.anchor.set(0.5, 1);
+    sp.scale.set(piece.flip ? -scale : scale, scale);
+    sp.position.set(wx, wy);
+    const v = (wy - HH) / HH, u = wx / HW;
+    const col = Math.round((u + v) / 2), row = Math.round((v - u) / 2);
+    setFootprint(sp, col, row, col, row);
+    field.entityLayer.addChild(sp);
+    foliage.push(sp);
+  };
+
+  /** Landmarks with the wood held back around them. Returns each one's clearing as a
+   *  world-space circle, which the scatter and the trails both steer around.
+   *
+   *  Sited by rejection sampling rather than by an authored position: the land around
+   *  the farm changes size with it, so any fixed spot would drift out of the ring on a
+   *  bigger farm. Attempts are bounded — on a small farm there may genuinely be
+   *  nowhere left that satisfies every rule, and the honest answer then is fewer
+   *  springs, not one jammed against the fence. */
+  const buildSprings = (
+    spec: SpringSpec, objScale: number,
+    pieceTexture: (p: SceneryPiece) => Texture | null,
+    rnd: () => number, distOutside: (c: number, r: number) => number,
+  ): { x: number; y: number; r: number }[] => {
+    const clearings: { x: number; y: number; r: number }[] = [];
+    const radius = spec.clearing * HW;
+    for (let i = 0; i < spec.count; i++) {
+      // The piece is chosen BEFORE the position, because how tall it is decides where
+      // it may stand. Every scenery sprite is drawn upward from its ground point, so
+      // a piece whose ground point sits at the top of the band still covers the hills
+      // above it. For a tree that is right — it is standing in front of them. For a
+      // POND it is not: flat water cannot climb a hillside, and one drawn over the
+      // slope reads as pinned to it. So the whole sprite is kept below the horizon.
+      const piece = spec.pieces[Math.floor(rnd() * spec.pieces.length)];
+      const tex = pieceTexture(piece);
+      if (!tex) break; // art still loading; the rebuild will place it
+      const scale = objScale * (piece.scale ?? 1);
+      const top = treeTopY() + tex.height * scale;
+      if (top >= boundB) break; // nowhere it could stand clear of the hills
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const wx = boundL + rnd() * (boundR - boundL);
+        const wy = top + rnd() * (boundB - top);
+        const v = (wy - HH) / HH, u = wx / HW;
+        const col = (u + v) / 2, row = (v - u) / 2;
+        if (distOutside(col, row) < spec.minDistance) continue;
+        // Two springs on top of each other are one big pond, so keep them apart by
+        // both their clearings.
+        if (clearings.some((c) => Math.hypot(c.x - wx, c.y - wy) < radius * 2)) continue;
+        dropPiece(piece, tex, wx, wy, scale);
+        clearings.push({ x: wx, y: wy, r: radius });
+        break;
+      }
+    }
+    return clearings;
+  };
+
+  /** Stone trails winding through the land.
+   *
+   *  Each is a random walk: a heading that turns a little at every step, which is the
+   *  cheapest thing that reads as a path someone wore rather than a line someone
+   *  drew. Steps that land on the farm, its margin or a spring are skipped rather
+   *  than ending the trail, so a path can pass behind an obstacle and pick up again
+   *  on the far side. */
+  const buildPaths = (
+    spec: PathSpec, objScale: number,
+    pieceTexture: (p: SceneryPiece) => Texture | null,
+    rnd: () => number, distOutside: (c: number, r: number) => number,
+    clearings: { x: number; y: number; r: number }[], margin: number,
+  ) => {
+    // Starts are STRATIFIED, not simply random: the band is cut into a coarse grid
+    // and each trail begins in its own cell. A dozen independent uniform draws
+    // reliably leaves half the wood untouched and stacks three trails in one corner
+    // — the clustering is what random looks like, and it reads as a few gravel
+    // patches rather than as paths running through the place.
+    const top = treeTopY();
+    const cols = Math.ceil(Math.sqrt(spec.count));
+    const rows = Math.ceil(spec.count / cols);
+    for (let t = 0; t < spec.count; t++) {
+      let wx = boundL + ((t % cols) + rnd()) * (boundR - boundL) / cols;
+      let wy = top + (Math.floor(t / cols) + rnd()) * (boundB - top) / rows;
+      let heading = rnd() * Math.PI * 2;
+      for (let s = 0; s < spec.length; s++) {
+        heading += (rnd() - 0.5) * 2 * spec.wander;
+        // Iso is half as tall as it is wide, so a heading walked in raw screen space
+        // would make every trail look like it runs downhill. Squash y to match.
+        wx += Math.cos(heading) * spec.step;
+        wy += Math.sin(heading) * spec.step * (HH / HW);
+        if (wx < boundL || wx > boundR || wy < top || wy > boundB) break;
+        const v = (wy - HH) / HH, u = wx / HW;
+        if (distOutside((u + v) / 2, (v - u) / 2) < margin) continue;
+        if (clearings.some((c) => Math.hypot(c.x - wx, c.y - wy) < c.r)) continue;
+        const piece = spec.pieces[Math.floor(rnd() * spec.pieces.length)];
+        const tex = pieceTexture(piece);
+        if (!tex) return;
+        dropPiece(piece, tex, wx, wy, objScale * (piece.scale ?? 1));
+      }
+    }
+  };
+
+  /** A line of pieces marching across the screen just below the hills.
+   *
+   *  A HORIZONTAL screen line is not a grid row — rows run diagonally. It is a line
+   *  of constant col+row, which is exactly a constant world y, so this walks world x
+   *  directly and converts back only to work out what tile each piece stands on for
+   *  the depth sort. */
+  const buildSkyline = (
+    spec: SkylineSpec, objScale: number,
+    pieceTexture: (p: SceneryPiece) => Texture | null,
+  ) => {
+    if (!spec.pieces.length || spec.spacing < 1) return;
+    const y = background.position.y + SKYLINE_DROP;
+    const step = spec.spacing * HW;
+    let i = 0;
+    // Anchored to a multiple of the step rather than to boundL, so growing the farm
+    // widens the line instead of shuffling every pole along it.
+    for (let x = Math.ceil(boundL / step) * step; x <= boundR; x += step, i++) {
+      const piece = spec.pieces[i % spec.pieces.length];
+      const tex = pieceTexture(piece);
+      if (!tex) continue;
+      const sp = new Sprite(tex);
+      sp.anchor.set(0.5, 1);
+      const s = objScale * (piece.scale ?? 1);
+      sp.scale.set(piece.flip ? -s : s, s);
+      sp.position.set(x, y);
+      const v = (y - HH) / HH, u = x / HW;
+      const col = Math.round((u + v) / 2), row = Math.round((v - u) / 2);
+      setFootprint(sp, col, row, col, row);
+      field.entityLayer.addChild(sp);
+      foliage.push(sp);
+    }
+  };
+
   const buildFoliage = () => {
     const generation = ++foliageGeneration;
     for (const s of foliage) { s.parent?.removeChild(s); s.destroy(); }
     foliage = [];
     // Theme pieces are ordinary object art, which loads lazily. Draw with whatever
     // is already resident, and rebuild once the rest of this theme's art arrives.
-    const missing = themeObjectFiles(surroundings).filter((f) => !assets.objects[f]);
+    // The road SURFACE is named by catalog key rather than filename (the layout
+    // needs its footprint, not just its art), so it is resolved here and added to
+    // the same preload — otherwise the first build of an urban farm lays verges
+    // down an invisible street and never comes back to fill it in.
+    const roadSprite = surroundings.road
+      ? placeCatalog.get(surroundings.road.key)?.sprite : undefined;
+    const wanted = themeObjectFiles(surroundings);
+    if (roadSprite) wanted.push(roadSprite);
+    const missing = wanted.filter((f) => !assets.objects[f]);
     if (missing.length) {
       void Promise.all(missing.map((f) => ensureObjectTexture(assets, f).catch(() => null)))
         .then(() => { if (generation === foliageGeneration) buildFoliage(); });
@@ -463,11 +749,57 @@ async function main() {
     // that ring is why the far screen corners used to sit on bare grass when fully
     // zoomed out. We sweep the rotated (u,v) lattice (u = col-row, v = col+row),
     // which maps straight onto that rect:  worldX = u*HW,  worldY = v*HH + HH.
-    const treeTop = background.position.y + 6; // grass just below the hill bases
+    const treeTop = treeTopY();
     const uMin = Math.floor(boundL / HW) - 2, uMax = Math.ceil(boundR / HW) + 2;
     const vMin = Math.floor((treeTop - HH) / HH) - 2;
     const vMax = Math.ceil((boundB - HH) / HH) + 2;
     const STEP = 2;
+
+    // The street, if this skin has one. Laid FIRST so the scatter below can be told
+    // to keep off it — a bin standing in the middle of the carriageway would undo
+    // the one thing a road is here to do, which is look deliberate.
+    const road = surroundings.road;
+    // The road piece is 2x2, so the carriageway covers rows [row, row+1]. Columns
+    // span the reachable rect: worldX = (col - row) * HW, so at a fixed row the
+    // visible column range falls straight out of the camera's x bounds.
+    //
+    // The two verges are NOT symmetric about the carriageway, and cannot be. Road art
+    // is pinned by its authored flat-tile pivot, which sits below the footprint's
+    // bottom-centre — so the asphalt is drawn about a third of a row further toward
+    // the far side than its rows suggest. Two clear rows on the near side put the
+    // lamps off the kerb; on the far side it takes three.
+    const roadRow = field.h - 1 + (road?.offset ?? 0);
+    const geom = {
+      row: roadRow,
+      colMin: Math.floor(roadRow + boundL / HW) - 2,
+      colMax: Math.ceil(roadRow + boundR / HW) + 2,
+      nearVerge: roadRow - 2,
+      farVerge: roadRow + 3,
+      // The crossing sits where the road passes directly below the middle of the
+      // farm (world x is 0 where col == row), snapped onto the two-tile lay so the
+      // piece lands in step with the straights either side of it.
+      crossCol: 0,
+    };
+    geom.crossCol = geom.colMin + 2 * Math.round((roadRow - geom.colMin) / 2);
+    // Rows the scatter must leave alone: the carriageway and both verges, which the
+    // road dresses itself, plus the corridor the branch runs down.
+    const onRoad = (col: number, row: number) => {
+      if (!road) return false;
+      if (row >= geom.nearVerge && row <= geom.farVerge) return true;
+      return row > geom.farVerge && Math.abs(col - geom.crossCol) <= 2.5;
+    };
+    if (road) buildRoad(road, geom, objScale, pieceTexture, rnd);
+    if (surroundings.skyline) buildSkyline(surroundings.skyline, objScale, pieceTexture);
+    // Springs before trails before the scatter, strictly: each pass needs more room
+    // than the one after it, so the one that needs the most gets to choose first and
+    // the rest steer around what is already down.
+    const clearings = surroundings.springs
+      ? buildSprings(surroundings.springs, objScale, pieceTexture, rnd, distOutside)
+      : [];
+    if (surroundings.paths) {
+      buildPaths(surroundings.paths, objScale, pieceTexture, rnd, distOutside,
+        clearings, MARGIN);
+    }
     // Farm Background setting scales the tree count: Deep Forest = full, Woodland
     // ~half, Light Meadow ~a tenth. Same seed, so the sparser sets are subsets of
     // the denser ones and switching just thins/thickens the same forest. The theme
@@ -488,6 +820,10 @@ async function main() {
         // off the farm + its clearing margin.
         if (wx < boundL - HW || wx > boundR + HW || wy < treeTop || wy > boundB + HH) continue;
         if (d < MARGIN) continue;
+        // the street dresses its own carriageway, verges and branch
+        if (onRoad(col, row)) continue;
+        // A spring is meant to be somewhere the wood stops, so nothing fills it in.
+        if (clearings.some((c) => Math.hypot(c.x - wx, c.y - wy) < c.r)) continue;
         // Woodland fill: the far band is `treeShare` trees and the rest props, and
         // everything nearer the clearing edge is a prop. `accept` sets how much of
         // the lattice is populated at all.
@@ -504,7 +840,10 @@ async function main() {
           (isTree ? 0.85 + r3 * 0.30 : 0.80 + r3 * 0.35);
         const sp = new Sprite(tex);
         sp.anchor.set(0.5, 1);
-        sp.scale.set(s);
+        // A flipped piece mirrors about its own vertical axis. The anchor is already
+        // horizontally centred, so a negative x scale turns the art in place — it
+        // does not shift off its ground point (see SceneryPiece.flip).
+        sp.scale.set(piece.flip ? -s : s, s);
         sp.position.set(wx, wy);
         // Point footprint on its tile so it depth-sorts with trees/actors.
         const fc = Math.round(col), fr = Math.round(row);
@@ -584,6 +923,18 @@ async function main() {
   const start = assets.field.start;
   const walk = new WalkController(actor, field, start.col, start.row);
 
+  // The one head bonus that moves the farmer rather than the farm (the ninja masks,
+  // +25%). Keyed off the BONUS head, not the worn one, so a pinned ninja keeps paying
+  // while another head is on show — the same rule every other head bonus follows.
+  let appliedSpeedHead = -1;
+  const applyFarmerSpeed = () => {
+    if (appliedSpeedHead === state.bonusHeadId()) return;
+    appliedSpeedHead = state.bonusHeadId();
+    walk.setSpeedPx(state.farmerWalkSpeedPx(SPEED_PX));
+  };
+  state.onChange(applyFarmerSpeed);
+  applyFarmerSpeed();
+
   // Owned zombies (Phase 3): grown from harvested zombie crops, they wander the
   // farm (routing around objects) and can be selected to inspect their stats.
   const zombies = new ZombieField(
@@ -635,9 +986,11 @@ async function main() {
     // hills; they read as one continuous surface instead of the hills floating over
     // a near-black void.
   };
-  let dayNightMode: DayNightMode = getDayNightMode();
   const syncEnvironment = () => {
     setNight(dayNightMode === "night" || (dayNightMode === "auto" && isLocalNight()));
+    // The clock can cross into or out of the dusk window while the farm is open, so
+    // the horizon is re-dressed here too rather than only when the skin changes.
+    if (wantDusk() !== duskShown) dressBackdrop();
   };
   hud.getNight = () => isNight;
   hud.onSetNight = (on) => setNight(on); // retained for the developer menu
@@ -713,6 +1066,36 @@ async function main() {
     skyExtension.width = background.width;
     skyExtension.height = app.screen.height / MIN_ZOOM + TILE_H;
     skyExtension.position.set(background.position.x, top + TILE_H);
+    fitGroundFill();
+  };
+
+  /** Size the tiled ground to cover every bit of land the camera can reveal below the
+   *  horizon — the mirror of fitSkyExtension, and generous for the same reason: it is
+   *  one tiling quad, and coming up short leaves a band of bare filler along an edge.
+   *
+   *  `tilePosition` pins the pattern to the WORLD origin rather than to the sprite,
+   *  which matters twice. A Farm Size upgrade widens the backdrop and therefore moves
+   *  this sprite's left edge, and without the correction the whole ground would jump
+   *  sideways under the farm. And because the emitted fill uses the same lattice phase
+   *  as Field.fit, anchoring both to the origin is what makes the stones outside the
+   *  fence line up with the stones inside it. */
+  const fitGroundFill = () => {
+    if (!groundFill.visible) return;
+    const top = background.position.y;
+    const left = background.position.x - background.width / 2;
+    groundFill.width = background.width;
+    groundFill.height = app.screen.height / MIN_ZOOM + BG_GAP_TILES * TILE_H;
+    groundFill.position.set(left, top);
+    // The fill is emitted on the source 48px grid but the farm draws its own tiles
+    // at TILE_W (47), so without this the two patterns are 2% out and drift apart
+    // the further you get from the origin. Same ratio the objects use (objectScale).
+    const scale = TILE_W / assets.field.tileW;
+    groundFill.tileScale.set(scale);
+    const pw = groundFill.texture.width * scale;
+    const ph = groundFill.texture.height * scale;
+    if (pw && ph) {
+      groundFill.tilePosition.set(((-left % pw) + pw) % pw, ((-top % ph) + ph) % ph);
+    }
   };
 
   // Box the camera into the world: the view can pan/zoom to reveal the full sky
@@ -744,17 +1127,54 @@ async function main() {
   // beyond it. The filler must stay the backdrop's own mid-hill colour so the two
   // read as one surface — at night the darkness overlay dims both by the same
   // amount, and any mismatch shows up as the hills floating over a void.
+  /** Put the right horizon up: the skin's own, or its sunset variant during the
+   *  hours around nightfall. The filler and the sky band travel WITH the backdrop —
+   *  they are that image's own mid-hill and top-row colours, so swapping the art
+   *  without them leaves the hills floating on the wrong ground.
+   *
+   *  A hoisted `function`, not a `const` arrow like its neighbours, and deliberately:
+   *  syncEnvironment() is CALLED during startup well above this line, and it re-dresses
+   *  the backdrop when the clock has crossed the dusk boundary. That is unreachable
+   *  today only because the boot theme is always the dusk-less Grass (Field.climate
+   *  defaults to it and the save's skin arrives later, through applySurroundings). Give
+   *  the boot theme a `dusk` and an arrow here would throw on every startup during the
+   *  dusk window — a temporal-dead-zone crash with nothing on screen to explain it. */
+  function dressBackdrop() {
+    const theme = surroundings;
+    const dusk = wantDusk() ? theme.dusk! : null;
+    duskShown = !!dusk;
+    app.renderer.background.color = dusk?.filler ?? theme.filler;
+    skyExtension.tint = dusk?.sky ?? theme.sky;
+    const file = dusk?.background ?? theme.background;
+    void ensureBackgroundTexture(assets, file).then((tex) => {
+      // Bail if the skin changed, or the clock crossed the dusk boundary, while
+      // this was loading — either way a later dress has already had the last word.
+      if (surroundings !== theme || duskShown !== !!dusk) return;
+      background.texture = tex;
+    }).catch((e) => console.warn(`[surroundings] backdrop ${file} failed`, e));
+  }
+
   const applySurroundings = (terrain: string) => {
     const theme = surroundingsTheme(terrain);
     if (theme === surroundings) return;
     surroundings = theme;
     buildFoliage();
-    app.renderer.background.color = theme.filler;
-    skyExtension.tint = theme.sky; // continue THIS backdrop's sky, not the last one's
-    void ensureBackgroundTexture(assets, theme.background).then((tex) => {
-      if (surroundings !== theme) return; // skin changed again while loading
-      background.texture = tex;
-    }).catch((e) => console.warn(`[surroundings] backdrop ${theme.background} failed`, e));
+    dressBackdrop();
+    // Tiled ground for the land outside the farm, for themes that have one. Hidden
+    // immediately on a switch rather than when the new art arrives, so changing away
+    // from a textured skin cannot leave the old terrain lying under the new one.
+    groundFill.visible = false;
+    if (theme.groundFill) {
+      void ensureBackgroundTexture(assets, theme.groundFill).then((tex) => {
+        if (surroundings !== theme) return;
+        // A tiling quad samples past the texture's edge by definition; without this
+        // the sampler clamps and the whole fill is one smeared row of edge pixels.
+        tex.source.addressMode = "repeat";
+        groundFill.texture = tex;
+        groundFill.visible = true;
+        fitGroundFill();
+      }).catch((e) => console.warn(`[surroundings] fill ${theme.groundFill} failed`, e));
+    }
   };
   // Fires for a Market purchase, re-applying an owned skin, AND a save load
   // restoring one. Wired after the first world sync so a callback can never run
@@ -980,17 +1400,30 @@ async function main() {
   const questBus = new QuestBus();
   let tutorial: TutorialController | null = null;
 
-  let latestBossTokenHarvest: { x: number; y: number } | null = null;
-  const awardOfflineEpicBossToken = (growMs: number, value: number, x: number, y: number): boolean => {
-    if (state.onFarm) {
-      latestBossTokenHarvest = { x, y };
-      return false;
-    }
+  /** Roll a harvested crop for a Boss Token and, when it hits, award it HERE — in the
+   *  same frame, out of the plot that produced it.
+   *
+   *  The roll used to be the server's online: the client harvested, the Worker rolled
+   *  during replay, and the token only appeared when that batch settled — a window
+   *  later, over a plot the player had already replanted, with no float text. The roll
+   *  is now the client's in both modes and the server simply records what it reports
+   *  (see `epicBoss.token` in net/protocol.ts). An edited client can therefore mint
+   *  tokens; that is deliberate. A token buys one Epic Boss attempt, the drop is
+   *  common, and the paid alternative is a single brain. */
+  const awardEpicBossToken = (growMs: number, value: number, x: number, y: number): boolean => {
     const run = state.epicBossRun;
     const def = epicBossById(run?.bossId);
     if (!run || !def || !new EpicBossManager(def).isActive(run) || !dropsEpicBossToken(growMs, value)) return false;
     state.setEpicBossRun({ ...run, tokenCount: (run.tokenCount ?? 0) + 1 });
+    // Online, tell the server about it. Grants for THIS run fold into one command, so a
+    // field-wide Insta-Harvest that turns up a dozen tokens still costs one command.
+    if (state.onFarm) economy?.submitEpicBossToken(run.runId);
     popBossToken(x, y, def.id, def.portrait);
+    // No toast: the token portrait rises out of the plot and the caller floats
+    // "+1 Boss Token!" over it. Online used to need a toast because the token arrived
+    // with nothing on screen to attach it to; an Insta-Harvest turning up several would
+    // now stack that many identical toasts on top of each other.
+    audio.play("xp");
     return true;
   };
 
@@ -1006,7 +1439,7 @@ async function main() {
     questBus,
     (oc, or) => zombies.tryFertilize(oc, or),
     (oc, or) => tutorial?.onPlotPlowed(oc, or),
-    awardOfflineEpicBossToken,
+    awardEpicBossToken,
     (currency, needed) => hud.showToast(
       currency === "gold" ? "Not enough coins." : `Not enough brains (need ${needed}).`
     ),
@@ -1380,7 +1813,7 @@ async function main() {
           r.name, 1, harvestAliases
         );
         const bossToken = !r.isZombie &&
-          awardOfflineEpicBossToken(r.growMs, r.sell, cropCenter.x, cropCenter.y);
+          awardEpicBossToken(r.growMs, r.sell, cropCenter.x, cropCenter.y);
         // Each plot pops its OWN reward numbers, in this one frame, so the farm
         // reads as having been harvested all at once (as the original game did).
         if (r.zombieKey) {
@@ -2036,6 +2469,10 @@ async function main() {
       hud.hideWriterLock();
     };
     economy.onCommandRejected = (command, error) => {
+      // A refused Boss Token grant means the event it belonged to has just ended, and
+      // the run projection already carries the correction. There is nothing the player
+      // could have done differently, so it passes without a rollback toast.
+      if (command?.type === "epicBoss.token") return;
       if (command?.type === "roster.combine_start") {
         zombies.cancelCombine(command.potId);
         saveManager.flushCritical();
@@ -3011,7 +3448,9 @@ async function main() {
     if (epicBoss.def.id !== def.id) epicBoss = new EpicBossManager(def);
     return def;
   };
-  const epicAsset = (def: typeof DR_GROUNDHOG, file: string) => `${BASE}assets/epic-bosses/${def.id}/${file}`;
+  // The prize panel shows each drop's OWN art (epicBoss/lootImage); `def.lootIcon` is
+  // the one-per-boss badge it falls back to, and used to be all any drop ever showed.
+  const epicLootArt = { placeables: assets.placeables, pets: assets.pets };
   const epicRun = () => {
     selectEpicBoss(state.epicBossRun?.bossId);
     return epicBoss.normalize(state.epicBossRun);
@@ -3048,17 +3487,12 @@ async function main() {
     const days = active && run ? Math.max(1, Math.ceil((run.expiresAt - Date.now()) / 86_400_000)) : 0;
     hud.setBossShortcut(active, days ? `Boss · ${days}d` : "Boss");
   };
+  // No token FX here any more: a harvested token is popped by awardEpicBossToken, at
+  // the plot it came from, in the frame the crop was pulled. This handler now only
+  // adopts the authoritative run (the count it carries already includes any grant still
+  // waiting in the outbox — see EconomyClient.withPendingBossTokens).
   if (economy) economy.onEpicBossState = (run) => {
-    const previous = state.epicBossRun;
     state.setEpicBossRun(run ?? null);
-    if (run && previous?.runId === run.runId && run.tokenCount > (previous.tokenCount ?? 0)) {
-      const def = epicBossById(run.bossId);
-      const spot = latestBossTokenHarvest ?? { x: actor.container.x, y: actor.container.y };
-      if (def) popBossToken(spot.x, spot.y, def.id, def.portrait);
-      latestBossTokenHarvest = null;
-      hud.showToast("You found a Boss Token!");
-      audio.play("xp");
-    }
     syncEpicBossUi();
   };
   hud.onActivateEpicBoss = async (bossId) => {
@@ -3707,7 +4141,7 @@ async function main() {
             if (loot.stageActor) state.unlockPet(loot.stageActor);
             else state.receiveItem(loot.name);
             questBus.post(QuestEvent.EpicBossEpicItemWon, loot.name, 1);
-            drops.push({ name: loot.name, icon: epicAsset(def, def.lootIcon) });
+            drops.push({ name: loot.name, icon: epicLootImage(epicLootArt, def, loot) });
           }
         }
         saveManager.flush();
@@ -3758,7 +4192,9 @@ async function main() {
               escaped: server.escaped,
             };
             presentResult(result, [
-              ...(server.loot ? [{ name: server.loot.name, icon: epicAsset(def, def.lootIcon) }] : []),
+              ...(server.loot
+                ? [{ name: server.loot.name, icon: epicLootImageByName(epicLootArt, def, server.loot.name) }]
+                : []),
               ...rewardDrops,
             ]);
           }).catch(() => {
@@ -4253,7 +4689,11 @@ async function main() {
           // Only the catalog sprite carries the def's tint; a loot atlas image is
           // already coloured and must not be multiplied again.
           tint: dropArt ? undefined : objectTint(pdef.color),
-          kind: "placeable", actionLabel: "Place", sellable: pdef.category !== "functional",
+          kind: "placeable", actionLabel: "Place",
+          sellable: pdef.category !== "functional",
+          // Asked of the def rather than of a placed object, because there is no
+          // object yet — same rule, one step earlier (see canStore).
+          storable: canStore(pdef),
         };
       return { index, name: entry, icon: dropArt, kind: "trophy", actionLabel: "" };
     });
@@ -4315,6 +4755,32 @@ async function main() {
     await ensureObjectTextures(assets, def);
     hud.setPlacing(def);
     receiving = index; // arm after setPlacing so onModeChange doesn't clear it
+  };
+
+  // Shelve a decoration reward without ever putting it on the farm. The two-step
+  // place-then-store dance it replaces also meant finding somewhere to drop an object
+  // you did not want out, which on a full farm could be nowhere at all.
+  hud.onStoreReceived = (index) => {
+    if (onlineGameplayBlocked()) return false;
+    const entry = state.received[index];
+    const def = entry ? receivedDef(entry) : undefined;
+    // Re-checked here rather than trusted from the card: the shed can fill up between
+    // the panel rendering and the tap (a second reward stored, a reconcile landing).
+    if (!entry || !def || !canStore(def)) {
+      if (def) hud.showToast("Your shed is full.");
+      return false;
+    }
+    if (economy) {
+      // Claim into an authoritative object and shelve it in the same ordered batch —
+      // the same two-command shape the direct sale uses, so the object exists only
+      // long enough to be filed. The shed count then arrives with the reconcile.
+      const instanceId = `reward-store-${crypto.randomUUID()}`;
+      if (!economy.submitStorageClaim(entry, { localObjectId: instanceId })) return false;
+      economy.submitObjectStatus(instanceId, "stored");
+    } else if (!state.storeItem(def.key)) return false; // offline: the save owns the shed
+    state.takeReceivedAt(index);
+    audio.play("menuClick");
+    return true;
   };
 
   // The object currently being relocated by the Move tool (null = none). `flipped`
@@ -5553,6 +6019,12 @@ async function main() {
     zombies.update(dt);
     zombies.setInvasionReady(!raidActive && raids.cooldownRemaining() <= 0);
     field.updatePetPenOcclusion(penPetActors.map((pet) => pet.container));
+    // What the camera can see, in world coordinates. The Sakura skin's falling
+    // blossom is seeded across this rather than across the farm, so its on-screen
+    // density stays the same however much land you own and however far you zoom.
+    const viewTL = world.toLocal({ x: 0, y: 0 });
+    const viewBR = world.toLocal({ x: app.screen.width, y: app.screen.height });
+    field.setViewBounds(viewTL.x, viewTL.y, viewBR.x, viewBR.y);
     field.update(dt);
     // Farmer's lantern light follows the lamp carried in his hand, only at night.
     if (isNight) {
@@ -5668,6 +6140,16 @@ async function main() {
     giveBoost: (key: string, n = 1) => state.addBoost(key, n),
     // Mark a tier boss beaten so its abilities unlock across the roster.
     winRaid: (tier: number) => state.completeRaid(String(tier)),
+    // Grow the farm as the Farm Size upgrade does, so the surroundings (backdrop,
+    // camera bounds, scenery ring, and the road laid across it) rebuild for the new
+    // size. The ring's extents are derived from those bounds, so this is the only
+    // honest way to check them at 40/50/60/70 without buying four upgrades.
+    growFarm: (size: number) => {
+      field.resizeAuthoritative(size, size);
+      syncWorldToFarm();
+      clampCamera();
+      return { w: field.w, h: field.h };
+    },
     // Debug: place a catalog object by key (loads its texture first).
     place: async (key: string, oc: number, or: number) => {
       const def = placeCatalog.get(key);

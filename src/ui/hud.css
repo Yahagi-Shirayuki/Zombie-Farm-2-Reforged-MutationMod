@@ -1519,6 +1519,11 @@
 #hud .info-name { font-weight: 700; font-size: 18px; color: #4f2f13;
   text-shadow: 0 1px 0 rgba(255,255,255,.4); }
 #hud .info-desc { font-size: 14px; line-height: 1.42; color: #48300f; }
+/* Artist credit for contributed art. Set apart from the blurb above it — smaller,
+   italic, behind a hairline rule — because it is a signature on the parchment
+   rather than another sentence about the item. */
+#hud .info-credit { align-self: stretch; padding-top: 7px; font-size: 12px;
+  font-style: italic; color: #6b4a22; border-top: 1px solid rgba(107,74,34,.28); }
 
 /* ---- Storage menu (the tool shed) ---- */
 #hud .st-bg { position: fixed; inset: 0; pointer-events: auto; z-index: 21;

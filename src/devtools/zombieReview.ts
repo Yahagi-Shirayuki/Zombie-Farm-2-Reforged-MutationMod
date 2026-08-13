@@ -590,10 +590,11 @@ function mutationRow(def: MutationDef, headless: boolean, speciesKey: string): H
   const stats = statEffectsOf(def)
     .map((e) => `${e.amount > 0 ? "+" : ""}${e.amount} ${e.stat.toUpperCase()}`)
     .join(" ");
-  // A Tier-4 variant RIDES a lower tier's mutation but shows its own art and name
-  // (Eyebiscus on carrot, Heartichoke on cauli). Listing the shared catalog name here
-  // would call a Heartichoke's body "Cauli-hair", which is the name of neither the art
-  // on screen nor the thing the game's own cards print.
+  // Eyebiscus and Heartichoke are catalogued mutations of their own, so this table only
+  // still matters for a LEGACY unit that has yet to shed the lower tier's bit it used
+  // to ride (see variantMutations). While it holds one, listing the shared catalog name
+  // would call a Heartichoke's body "Cauli-hair" — the name of neither the art on
+  // screen nor the thing the game's own cards print.
   const variant = MUTATION_VARIANTS[speciesKey]?.[def.key];
   row.innerHTML =
     `<span class="box"></span><span class="nm">${escapeHtml(variant?.name ?? def.name)}</span>` +

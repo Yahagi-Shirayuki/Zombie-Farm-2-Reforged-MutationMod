@@ -164,6 +164,10 @@ export interface ReceivedView {
   kind: "placeable" | "boost" | "brains" | "zombie" | "trophy";
   actionLabel: string; // "Place" | "Claim" | "" (trophy: display only)
   sellable?: boolean;
+  /** Can this reward go straight into the shed, skipping the farm? False when the
+   *  shed is full or the item is a building that can't be shelved — the same rule a
+   *  placed object's Store action follows, asked before the object exists. */
+  storable?: boolean;
 }
 
 /** Colored grave a zombie class needs before it can be planted (null = none). */

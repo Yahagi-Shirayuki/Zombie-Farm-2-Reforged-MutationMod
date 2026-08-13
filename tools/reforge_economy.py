@@ -115,6 +115,10 @@ EXTRA_SIZE_TIERS = [
 # land around a farm wearing the skin.
 EXTRA_CLIMATES = [
     {"name": "Autumn Ground", "terrain": "autumn", "level": 1, "gold": 3000},
+    # Sakura sits on the rung the ladder was missing, between the 5000 pair
+    # (snow/sand) and the 10000 moon — it is the most elaborate skin in the set
+    # (its own trees, its own falling petals) without being the end of the ladder.
+    {"name": "Sakura Ground", "terrain": "sakura", "level": 1, "gold": 7500},
 ]
 
 # ---- Mutant zombies -------------------------------------------------------
@@ -208,6 +212,34 @@ MUTANT_CLASS_REBALANCE = {
     "ZombieActorRegularTier3VenusFlytrap": (4, "Silver", "#cfd4dd"),  # L30
     "ZombieActorRegularTier3DragonFruit":  (4, "Silver", "#cfd4dd"),  # L32
 }
+
+
+# ---- Tier-4 mutant bits ---------------------------------------------------
+# ZF2 shipped Eyebiscus and Heartichoke carrying a LOWER tier's mutation bit —
+# Carrot's 4 and Cauliflower's 512 — even though Market.json advertises "+3" on
+# Eyebiscus against Carrot's "+1". So the game's two priciest, slowest mutation
+# crops granted the Tier-1 bonus, and the Heartichoke filed itself under the hair
+# slot while visibly wearing a body (heartichokeBody replaces the body exactly as
+# limaBeanBody does). Both are mutations of their own now — appended to the catalog
+# in src/zombie/mutations.ts, which is where their slot and stats are authored — so
+# the source bit has to be overridden here or the join in prep_market.py reverts it.
+MUTANT_BIT_REBALANCE = {
+    "ZombieActorRegularTier4Eyebiscus":   16384,  # hair_eye, +1 attack +1 speed
+    "ZombieActorRegularTier4Heartichoke": 32768,  # body (with Lima Bean), +5 life
+}
+
+
+def rebalance_mutant_bit(key, entry):
+    """Overwrite one zombies.json entry's guaranteed mutation bit, in place.
+
+    Returns True if the zombie's bit is overridden, False if it is not in the table.
+    Must run AFTER the source `mutation` read, since it overrides it.
+    """
+    bit = MUTANT_BIT_REBALANCE.get(key)
+    if bit is None:
+        return False
+    entry["mutation"] = bit
+    return True
 
 
 def rebalance_mutant_class(key, entry):

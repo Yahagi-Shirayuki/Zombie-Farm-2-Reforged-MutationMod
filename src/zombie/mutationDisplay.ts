@@ -40,6 +40,7 @@ export const MUTATION_ICON: Record<string, string> = {
   celery: iconFile("celery"), broccoli: iconFile("broccoli"), garlic: iconFile("garlic"),
   cauli: iconFile("cauliflower"), limabean: iconFile("limabean"), flytrap: iconFile("flytrap"),
   dragon: iconFile("dragonfruit"), pumpking: iconFile("pumpking"),
+  eyebiscus: iconFile("eyebiscus"), heartichoke: iconFile("heartichoke"),
 };
 
 /** One species' replacement art and name for a mutation it shares with others. */
@@ -47,13 +48,20 @@ export interface MutationVariant {
   part: string; // mutations.json key for the rig art
   name: string;
   icon: string;
+  /** The slot the variant's ART actually occupies, when it differs from the shared
+   *  mutation's. Heartichoke rides Cauli-hair's bit but wears a BODY (heartichokeBody
+   *  `replaces: "body"`, exactly like Lima Bean), so naming its slot off the shared
+   *  mutation called it a hair mutation — the reported bug. Display only: slot
+   *  OCCUPANCY is a property of the bit and stays with the shared mutation. */
+  slot?: Slot;
 }
 
-/** Tier-4 variants share a lower tier's MUTATION for stats and slot occupancy but ship
- *  their OWN art and name — Eyebiscus rides Carrot's, Heartichoke rides Cauliflower's.
- *  Naming such a zombie's mutation off the shared one alone is simply wrong (the
- *  reported "Cauli-hair" text on Heartichoke), so the two species get an explicit
- *  override here, art included: the game authored icons for both.
+/** LEGACY. Eyebiscus and Heartichoke used to ride Carrot's and Cauliflower's mutation
+ *  for stats and slot occupancy while shipping their OWN art and name, and naming such
+ *  a zombie's mutation off the shared one was simply wrong (the reported "Cauli-hair"
+ *  text on Heartichoke). Both are catalogued mutations of their own now, so a unit
+ *  grown today never reaches this table — but one grown BEFORE still carries the shared
+ *  bit until variantMutations upgrades it, and it must read correctly meanwhile.
  *
  *  Species key -> mutation key -> what that species shows instead. MIRRORS
  *  `mutationOverrides` in zombie/models.json — pinned against it by the tests. */
@@ -62,7 +70,10 @@ export const MUTATION_VARIANTS: Record<string, Record<string, MutationVariant>> 
     carrot: { part: "eyebiscusHat", name: "Eyebiscus", icon: iconFile("eyebiscus") },
   },
   ZombieActorRegularTier4Heartichoke: {
-    cauli: { part: "heartichokeBody", name: "Heartichoke", icon: iconFile("heartichoke") },
+    cauli: {
+      part: "heartichokeBody", name: "Heartichoke", icon: iconFile("heartichoke"),
+      slot: "body", // wears Lima Bean's silhouette, not Cauli-hair's
+    },
   },
 };
 
@@ -156,7 +167,7 @@ export function mutationEntriesFrom(
       partKey: variant?.part ?? def.key,
       icon: variant?.icon ?? MUTATION_ICON[def.key],
       name: variant?.name ?? def.name,
-      slotLabel: SLOT_LABELS[def.slot],
+      slotLabel: SLOT_LABELS[variant?.slot ?? def.slot],
       effects,
     };
   });

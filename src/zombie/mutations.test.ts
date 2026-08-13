@@ -58,8 +58,12 @@ describe("headless restriction — no head or hair/eye mutations", () => {
   it("covers every head and hair/eye bit except the headless family's own Pumpking", () => {
     expect(HEADLESS_FORBIDDEN_MASK)
       .toBe(maskWithout(maskUnion(SLOT_MASK.head, SLOT_MASK.hair_eye), HEADLESS_HEAD_MASK));
-    // Pinned: server/migrations/0035_headless_mutation_repair.sql clears this literal.
-    expect(HEADLESS_FORBIDDEN_MASK).toBe(951);
+    // server/migrations/0035_headless_mutation_repair.sql clears the literal 951 — the
+    // value of this mask when it ran, and still the right repair for the rows it was
+    // written for. Eyebiscus (16384) widened it afterwards; nothing needs re-repairing,
+    // because a headless zombie was never able to acquire the new bit in the first
+    // place (bitGrowable refuses it, legalMutation strips it).
+    expect(HEADLESS_FORBIDDEN_MASK).toBe(951 + 16384);
   });
 
   it("drops the eye mutations a headless zombie cannot wear", () => {
@@ -73,8 +77,12 @@ describe("headless restriction — no head or hair/eye mutations", () => {
 
 describe("Pumpking — grown only on the headless family, worn by anyone", () => {
 
-  it("pays the head slot's best attack bonus", () => {
-    expect(mutationBonus(PUMPKING)).toEqual({ str: 3, con: 0, dex: 0 });
+  it("pays the head slot's best attack bonus, beating Garlichead outright", () => {
+    // It used to MATCH garlic at +3, which made the level-39 capstone crop pay what
+    // garlic pays at 25 and made an inherited Pumpking worth nothing over the
+    // Garlichead it evicts in the Pot. See mutationRedundancy.test.ts.
+    expect(mutationBonus(PUMPKING)).toEqual({ str: 4, con: 0, dex: 0 });
+    expect(mutationBonus(PUMPKING).str).toBeGreaterThan(mutationBonus(GARLIC).str);
     expect(mutationLabel(PUMPKING)).toBe("Pumpking");
   });
 
@@ -128,6 +136,7 @@ describe("mutation catalog", () => {
   const SHIPPED_ORDER = [
     "tomato", "onion", "carrot", "turnip", "potato", "coffee", "celery",
     "broccoli", "garlic", "cauli", "limabean", "flytrap", "dragon", "pumpking",
+    "eyebiscus", "heartichoke",
   ];
 
   it("assigns every shipped mutation the bit it has always had", () => {
@@ -143,7 +152,11 @@ describe("mutation catalog", () => {
     });
     expect(bitOf("tomato")).toBe(1);
     expect(bitOf("pumpking")).toBe(8192);
-    expect(ALL_MUTATIONS_MASK).toBe(16383);
+    // The two Tier-4 crops, appended when they stopped riding carrot's and cauli's
+    // bits. server/migrations/0050 rewrites the old bits to exactly these.
+    expect(bitOf("eyebiscus")).toBe(16384);
+    expect(bitOf("heartichoke")).toBe(32768);
+    expect(ALL_MUTATIONS_MASK).toBe(65535);
   });
 
   it("keeps one mutation per slot resolvable from either its key or its bit", () => {
@@ -182,7 +195,7 @@ describe("mutation catalog", () => {
     // The next mutation appended to CATALOG lands here, and everything downstream —
     // slots, bonuses, combine — is bit-agnostic, so no other file has to learn it.
     const nextBit = bitValue(MUTATION_LIST.length);
-    expect(nextBit).toBe(16384);
+    expect(nextBit).toBe(65536);
     expect(maskHas(ALL_MUTATIONS_MASK, nextBit)).toBe(false);
     expect(sanitizeMutationMask(nextBit)).toBe(0); // unknown until it is catalogued
   });

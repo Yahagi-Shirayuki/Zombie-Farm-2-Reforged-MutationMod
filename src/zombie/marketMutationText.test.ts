@@ -78,30 +78,47 @@ describe("every Market mutant's promise matches what its card will read", () => 
   });
 });
 
-describe("Tier-4 mutants that reuse a lower tier's bit", () => {
-  it("describes Heartichoke by its bonus, not as Cauliflower's mutation", () => {
+describe("the Tier-4 mutants carry a Tier-4 mutation", () => {
+  // Both used to ride a LOWER tier's bit — Heartichoke Cauliflower's 512, Eyebiscus
+  // Carrot's 4 — which made the game's two priciest, slowest mutation crops pay the
+  // Tier-1 bonus, and made the Market line name the wrong mutation ("Cauli-hair" on a
+  // Heartichoke Zombie). Each owns its mutation now, and each beats the one it rode.
+  const gainOf = (base: { str: number; dex: number; con: number }, mask: number, stat: string) =>
+    mutationDisplayGains(base, mask).find((g) => g.stat === stat)?.delta ?? 0;
+
+  it("pays Heartichoke more Life than the Lima Bean it shares the body slot with", () => {
     const heartichoke = row("ZombieActorRegularTier4Heartichoke");
-    // Unlock level is deliberately not asserted here (see the Eyebiscus case
-    // below); it moves with the mutant ladder and is owned by
-    // quest/cropUnlockAlignment.test.ts. What matters here is the shared bit.
-    expect(heartichoke.mutation).toBe(512); // shared with Cauliflower Zombie
+    // Unlock level is deliberately not asserted here; it moves with the mutant ladder
+    // and is owned by quest/cropUnlockAlignment.test.ts.
+    expect(heartichoke.mutation).toBe(32768);
 
+    const base = { str: 5, dex: 2, con: 5 }; // Lima Bean Zombie's own stats
+    expect(gainOf(base, 32768, "con")).toBeGreaterThan(gainOf(base, 1024, "con"));
     const text = mutationMarketDescription(heartichoke, heartichoke.mutation!)!;
-    expect(text).toContain("+10 Life");
+    expect(text).toContain("Life");
     expect(text).not.toContain("Cauli-hair"); // the reported wrong text
-    expect(text).not.toContain("+3 life"); // the raw-unit value
+    expect(text).not.toContain("+5 life"); // the raw-unit value
   });
 
-  it("describes Eyebiscus by its bonus, not as Carrot's mutation", () => {
+  it("pays Eyebiscus double a Carrot's Speed, and Damage on top", () => {
     const eyebiscus = row("ZombieActorRegularTier4Eyebiscus");
-    expect(eyebiscus.mutation).toBe(4); // shared with Carrot Zombie
+    expect(eyebiscus.mutation).toBe(16384);
     const text = mutationMarketDescription(eyebiscus, eyebiscus.mutation!)!;
-    expect(text).toContain("+23 Speed");
+    expect(text).toContain("Speed");
+    expect(text).toContain("Damage"); // what Carrot-eyed hasn't got at all
     expect(text).not.toContain("Carrot-eyed");
+
+    const base = { str: 2, dex: 2, con: 2 }; // Carrot Zombie's own stats
+    // +2 dex against Carrot-eyed's +1, and +1 str against its nothing. Measured
+    // rather than written out, so it survives a change to the display reference.
+    expect(gainOf(base, 16384, "dex")).toBe(2 * gainOf(base, 4, "dex"));
+    expect(gainOf(base, 16384, "str")).toBeGreaterThan(gainOf(base, 4, "str"));
+    // ...and it out-speeds Coffeehead's +2 dex without giving up the head slot.
+    expect(gainOf(base, 16384, "dex")).toBe(gainOf(base, 32, "dex"));
   });
 
-  it("gives a bit-sharing pair the same displayed gain, since the flag is the same", () => {
-    // Normalization is linear, so the gain is a property of the mutation, not the
+  it("gives two species the same displayed gain for the same mask", () => {
+    // Normalization is linear, so a gain is a property of the mutation, not of the
     // species carrying it — even though their base stats differ sharply.
     const cauli = row("ZombieActorRegularTier2Cauliflower");
     const heartichoke = row("ZombieActorRegularTier4Heartichoke");

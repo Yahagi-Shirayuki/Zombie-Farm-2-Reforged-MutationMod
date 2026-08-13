@@ -66,5 +66,14 @@ describe("every surroundings theme continues its own backdrop's sky", () => {
     it(`${theme.key} matches ${theme.background}`, () => {
       expect(theme.sky).toBe(topLeftPixel(`public/assets/${theme.background}`));
     });
+    // A dusk variant swaps the backdrop AND the band tint together, so it needs the
+    // same guarantee. It is the likelier of the two to drift: the sunset art is drawn
+    // by hand rather than derived by a ramp, so a re-export moves its sky by a shade
+    // with nothing in the pipeline to notice.
+    if (theme.dusk) {
+      it(`${theme.key} at dusk matches ${theme.dusk.background}`, () => {
+        expect(theme.dusk!.sky).toBe(topLeftPixel(`public/assets/${theme.dusk!.background}`));
+      });
+    }
   }
 });

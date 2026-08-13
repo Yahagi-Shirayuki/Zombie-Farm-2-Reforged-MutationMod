@@ -55,6 +55,7 @@ const SAMPLES: Record<GameplayCommand["type"], GameplayCommand> = {
   "memorial.enshrine": { type: "memorial.enshrine", instanceId: "obj-1", unitId: "z-1", name: "Bob" },
   "memorial.clear": { type: "memorial.clear", instanceId: "obj-1" },
   "quest.periodic_claim": { type: "quest.periodic_claim", scope: "daily", questId: "daily_invade" },
+  "epicBoss.token": { type: "epicBoss.token", runId: "run-1", count: 3 },
   "tutorial.complete": { type: "tutorial.complete" },
 };
 
@@ -73,6 +74,7 @@ describe("gameplay command validation", () => {
       { type: "roster.combine_start", potId: "p", parentAId: "a", parentBId: "b" },
       { type: "roster.combine", parentAId: "a", parentBId: "b" },
       { type: "memorial.enshrine", instanceId: "obj-1", unitId: "z-1" },
+      { type: "epicBoss.token", runId: "run-1" },
     ];
     for (const command of minimal) expect(validGameplayCommand(command)).toBe(true);
   });
@@ -82,6 +84,10 @@ describe("gameplay command validation", () => {
     expect(validGameplayCommand({ type: "farm.move", oc: 0, or: 0, toOc: 1.5, toOr: 0 })).toBe(false);
     expect(validGameplayCommand({ type: "farm.plow", oc: "0", or: 0 })).toBe(false);
     expect(validGameplayCommand({ type: "nonsense.command" })).toBe(false);
+    // Unverified is not unbounded: the count still has to be a sane whole number.
+    expect(validGameplayCommand({ type: "epicBoss.token", runId: "run-1", count: 0 })).toBe(false);
+    expect(validGameplayCommand({ type: "epicBoss.token", runId: "run-1", count: 5_000 })).toBe(false);
+    expect(validGameplayCommand({ type: "epicBoss.token", runId: "" })).toBe(false);
     expect(validGameplayCommand(null)).toBe(false);
   });
 });

@@ -2,7 +2,7 @@
   "20001": {
     "id": "20001",
     "title": "Groundskeeper",
-    "messageComplete": "Five hundred patches of soil. Your back will never forgive you.",
+    "messageComplete": "Seventy-five patches of soil. Your back will never forgive you.",
     "tip": "Every patch you plow counts, whatever you plant in it.",
     "sprite": "Icon_Quest_Plowing.png",
     "levelRequired": 8,
@@ -11,8 +11,8 @@
       {
         "notificationID": "kSoilPlowedNotification",
         "notificationObject": "",
-        "countTotal": 500,
-        "text": "Plow 500 patches of soil",
+        "countTotal": 75,
+        "text": "Plow 75 patches of soil",
         "type": 2,
         "sprite": ""
       }
@@ -31,7 +31,7 @@
   "20002": {
     "id": "20002",
     "title": "Green Fingers",
-    "messageComplete": "A thousand crops harvested. The farm has never looked better.",
+    "messageComplete": "A hundred crops harvested. The farm has never looked better.",
     "tip": "Vegetable crops and fruit trees. Zombie crops have their own quests.",
     "sprite": "Icon_Quest_HarvestVegetables.png",
     "levelRequired": 14,
@@ -40,14 +40,14 @@
       {
         "notificationID": "kCropHarvestedNotification",
         "notificationObject": "",
-        "countTotal": 1000,
-        "text": "Harvest 1,000 vegetable crops",
+        "countTotal": 100,
+        "text": "Harvest 100 vegetable crops",
         "type": 2,
         "sprite": ""
       }
     ],
     "rewardType": 0,
-    "rewardValue": 90,
+    "rewardValue": 180,
     "rewardItem": "",
     "rewardItemKey": "",
     "tutorialQuest": false,
@@ -60,23 +60,23 @@
   "20003": {
     "id": "20003",
     "title": "Not a Scratch",
-    "messageComplete": "Ten invasions, not one zombie lost. Immaculate.",
+    "messageComplete": "Three invasions, not one zombie lost. Immaculate.",
     "tip": "An invasion counts only if every zombie you sent walks back out.",
     "sprite": "Icon_Quest_Invasion.png",
-    "levelRequired": 10,
+    "levelRequired": 13,
     "prerequisiteQuest": -1,
     "requirements": [
       {
         "notificationID": "kInvasionPerfectGameNotification",
         "notificationObject": "",
-        "countTotal": 10,
-        "text": "Win 10 invasions without losing a zombie",
+        "countTotal": 3,
+        "text": "Win 3 invasions without losing a zombie",
         "type": 2,
         "sprite": ""
       }
     ],
     "rewardType": 0,
-    "rewardValue": 100,
+    "rewardValue": 250,
     "rewardItem": "",
     "rewardItemKey": "",
     "tutorialQuest": false,
@@ -89,7 +89,7 @@
   "20004": {
     "id": "20004",
     "title": "Master Combiner",
-    "messageComplete": "Fifty combines. The Pot knows you by name now.",
+    "messageComplete": "Fifteen combines. The Pot knows you by name now.",
     "tip": "Every zombie the Pot hands over counts, farm or Mausoleum.",
     "sprite": "Icon_Quest_Combining.png",
     "levelRequired": 20,
@@ -98,8 +98,8 @@
       {
         "notificationID": "kCombinerCollectedNotification",
         "notificationObject": "",
-        "countTotal": 50,
-        "text": "Collect 50 zombies from the Zombie Pot",
+        "countTotal": 15,
+        "text": "Collect 15 zombies from the Zombie Pot",
         "type": 2,
         "sprite": ""
       }
@@ -236,7 +236,7 @@
   "20009": {
     "id": "20009",
     "title": "Veteran Commander",
-    "messageComplete": "A hundred invasions. They tell stories about your farm now.",
+    "messageComplete": "Ten invasions. They tell stories about your farm now.",
     "tip": "Every invasion you win counts, on any stage.",
     "sprite": "Icon_Quest_Invasion.png",
     "levelRequired": 25,
@@ -245,8 +245,8 @@
       {
         "notificationID": "kInvasionSuccessfulNotification",
         "notificationObject": "",
-        "countTotal": 100,
-        "text": "Win 100 invasions",
+        "countTotal": 10,
+        "text": "Win 10 invasions",
         "type": 2,
         "sprite": ""
       }
@@ -353,7 +353,7 @@
   "20013": {
     "id": "20013",
     "title": "Elite Operator",
-    "messageComplete": "Ten elite invasions. The tickets were worth every coin.",
+    "messageComplete": "Five elite invasions. The tickets were worth every coin.",
     "tip": "Brain Tickets are bought with gold in the Market.",
     "sprite": "Icon_Quest_Invasion.png",
     "levelRequired": 34,
@@ -362,14 +362,14 @@
       {
         "notificationID": "kEliteInvasionSuccessfulNotification",
         "notificationObject": "",
-        "countTotal": 10,
-        "text": "Win 10 elite invasions",
+        "countTotal": 5,
+        "text": "Win 5 elite invasions",
         "type": 2,
         "sprite": ""
       }
     ],
     "rewardType": 0,
-    "rewardValue": 1800,
+    "rewardValue": 3600,
     "rewardItem": "",
     "rewardItemKey": "",
     "tutorialQuest": false,

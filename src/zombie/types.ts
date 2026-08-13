@@ -5,6 +5,7 @@ import type { ZombieDef } from "../assets";
 import { classify } from "./taxonomy";
 import { applyBodyTypeRestriction, mutationBonus } from "./mutations";
 import { randomZombieName } from "./names";
+import { upgradeVariantMutations } from "./variantMutations";
 
 export const MAX_ZOMBIE_NAME_LENGTH = 24;
 
@@ -65,8 +66,14 @@ export function makeOwned(
 ): OwnedZombie {
   const tax = classify(def.key);
   const group = def.group ?? tax.group;
-  // Enforce the body-type restriction at the one place a mask lands on a unit.
-  const mask = applyBodyTypeRestriction(mutation ?? def.mutation ?? 0, group === "Headless");
+  // Enforce the body-type restriction at the one place a mask lands on a unit, and
+  // retire the shared bit the two Tier-4 variants used to ride while we are here — the
+  // server's raid verifier builds its party through here too, so both sides upgrade a
+  // legacy unit identically (see variantMutations).
+  const mask = applyBodyTypeRestriction(
+    upgradeVariantMutations(def.key, mutation ?? def.mutation ?? 0),
+    group === "Headless",
+  );
   const bonus = mutationBonus(mask);
   return {
     id,

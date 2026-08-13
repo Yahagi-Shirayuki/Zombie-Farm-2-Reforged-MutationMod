@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   befriend, call, commandBody, currentIntegrityHeaders, DEVICE_A, grantBalance, grantFallen,
-  grantRoster, signIn, uniqueSub,
+  grantRoster, signIn, uniqueSub, xpForLevel,
 } from "./helpers";
 import { RAID_RULESET_VERSION } from "../../../src/raid/replay";
 
@@ -1122,6 +1122,38 @@ describe("protocol v3 API", () => {
     const malformed = await call<any>("POST", "/commands", session.token,
       commandBody(boot, "batch-bad-trees", 1, [{ type: "object.harvest_trees", instanceIds: "all" }]));
     expect(malformed.status).toBe(400);
+  });
+
+  // Boss Tokens are rolled by the CLIENT on harvest and merely reported here. Nothing
+  // else writes `epic_boss_runs_v3.token_count` during a command batch any more, so this
+  // covers the whole live path: the command door, the engine, the conditional D1 write
+  // in v3/db.ts, and the count coming back out of a fresh bootstrap.
+  it("records client-rolled Boss Tokens and persists them past the batch", async () => {
+    const session = await signIn(uniqueSub("boss-token-grant"));
+    // Dr Groundhog unlocks at 24 and costs 5 brains to activate.
+    await grantBalance(session, { brains: 20, xp: xpForLevel(24) });
+    const activated = await call<any>("POST", "/epic-boss/activate", session.token, {
+      activationId: uniqueSub("activation"), bossId: "dr-groundhog",
+    });
+    expect(activated.status, JSON.stringify(activated.body)).toBe(200);
+    const runId = activated.body.event.runId;
+    expect(activated.body.event.tokenCount).toBe(0);
+
+    const boot = (await call<any>("POST", "/bootstrap", session.token, {})).body;
+    const granted = await call<any>("POST", "/commands", session.token,
+      commandBody(boot, "batch-boss-tokens", 1, [
+        { type: "epicBoss.token", runId },
+        { type: "epicBoss.token", runId, count: 2 },
+        // A grant for an event this account is not running is dropped, not applied.
+        { type: "epicBoss.token", runId: "some-other-run" },
+      ]));
+    expect(granted.status, JSON.stringify(granted.body)).toBe(200);
+    expect(granted.body.results.map((r: any) => r.status))
+      .toEqual(["applied", "applied", "rejected"]);
+    expect(granted.body.gameplay.epicBoss.tokenCount).toBe(3);
+
+    const after = await call<any>("POST", "/bootstrap", session.token, {});
+    expect(after.body.gameplay.epicBoss.tokenCount).toBe(3);
   });
 });
 

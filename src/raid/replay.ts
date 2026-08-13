@@ -177,7 +177,44 @@ import type { RaidOutcome } from "./types";
 // spread also shortens BAND_ROW_DEPTH, which relaxes the in-row compression for every army.
 // Same cost as v15: an invasion in flight at deploy time settles as stale_ruleset and pays
 // nothing.
-export const RAID_RULESET_VERSION = 24;
+// 25: MUTATION VALUES. Four entries in the mutation CATALOG changed what they are worth,
+// which changes the army a raid is fought with — `buildPlayerUnits` folds the mutation
+// bonus in as a flat addition (v11), so a mutated party's str/dex/con differ from the
+// first frame. Eyebiscus and Heartichoke also stopped RIDING a lower tier's bit and were
+// appended as mutations of their own, so a unit of either species now carries a different
+// mask entirely (upgraded on both sides inside makeOwned — see zombie/variantMutations,
+// which is why the two simulations still agree). The four:
+//   Eyebiscus    (new bit) +1 str, +2 dex — was Carrot-eyed's +1 dex
+//   Heartichoke  (new bit) +5 con         — was Cauli-hair's +3 con, and in the BODY slot
+//   Cauli-hair   +3 -> +4 con             — it was identical to Broccohair, six crop
+//                                           levels earlier, and lost every Pot conflict
+//   Pumpking     +3 -> +4 str             — it was identical to Garlichead, fourteen crop
+//                                           levels earlier
+// A fight ALREADY in flight replays from its pinned `config_json` and so is not affected
+// by the numbers themselves; the bump is for the launch handshake, where a client holding
+// the old catalog would otherwise build a different army than the Worker does. Same cost
+// as v15: an invasion in flight at deploy time settles as stale_ruleset and pays nothing.
+// 26: RESURRECT, brought back to what the binary actually does. Three changes, all in
+// BattleSim, all of which move raid outcomes and so must be versioned:
+//   * A revived zombie is ALIVE BUT SPENT. `-[ZombieActorGarden ressurectZombie:]`
+//     (0x7d3c2-0x7d436) walks the revived actor's abilityList and hands every consumable
+//     ability `setConsumed:YES`; `isUseable` (0x9cafc) then refuses it. So an exploder
+//     pulled out of its own blast can NOT light a second fuse, and a revived Garden holder
+//     can NOT pay the revive forward. It is unconditional — a one-use move the zombie never
+//     got round to using is spent too. This retires the v21 re-arm divergence along with
+//     `SimUnit.abilityRearms` and its back-of-the-queue tiebreak, which existed only to
+//     make the re-arm survivable.
+//   * Resurrect now draws from a CORPSE BACKLOG. `-[ZombieActor fightUpdate:]` (0x4d406)
+//     appends the dead to `ZFFightMan.defeatedZombies`, which nothing drains but a revival,
+//     and the Garden polls `canRez` against it from its own update. The old model fired at
+//     the instant of death and lost the corpse if no holder was deployed yet; a holder that
+//     arrives later now still brings that casualty back. Target is the most recent corpse.
+//   * Resurrect pre-empts Heal on a holder that carries both, matching the single shared
+//     cast slot and the `canRez`-before-`canHeal` order at 0x7c0a8.
+// Same cost as v15: an invasion in flight at deploy time settles as stale_ruleset and pays
+// nothing. In-flight checkpoints are safe — a session pinned to 25 is rejected outright,
+// so no pre-backlog snapshot is ever fed to this code.
+export const RAID_RULESET_VERSION = 26;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

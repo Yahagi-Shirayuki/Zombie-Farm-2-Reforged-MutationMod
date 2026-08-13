@@ -249,11 +249,12 @@ describe("activated ability display window", () => {
   });
 });
 
-// Ruleset 21. ZF2's `canRez` refuses a zombie in state 100 — the state
+// Ruleset 21/26. ZF2's `canRez` refuses a zombie in state 100 — the state
 // `-[ZombieActorSmall suicide:]` sets, i.e. one that blew itself up. Reforged
 // deliberately does not carry that over: the exploder is a normal casualty, so a Garden
-// holder's Resurrect gets its shot at it. What it does NOT get is a free second bomb
-// ahead of everyone else.
+// holder's Resurrect gets its shot at it. What it comes back with is another matter —
+// ruleset 26 restores ZF2's own rule that a revived zombie's one-use moves are spent
+// (`ressurectZombie:` 0x7d3c2-0x7d436), so there is no second bomb at all.
 describe("reviving a zombie that blew itself up", () => {
   const smallExploder = (id: string) => unit({
     id, sourceKey: "ZombieActorSmallTier3", group: "Small", team: "player",
@@ -281,17 +282,20 @@ describe("reviving a zombie that blew itself up", () => {
     for (let i = 0; i < 2000 && !ready(); i++) sim.step(50);
     expect(ready()).toBe(true);
   };
-  /** Light the next fuse and burn it down. Returns whoever the sim chose to spend. */
+  /** Light the next fuse and burn it down. Returns whoever the sim chose to spend.
+   *  The extra step past the blast is the beat a Garden holder polls the corpse backlog
+   *  on — the revive is no longer part of the death itself. */
   const detonate = (sim: BattleSim) => {
     deploy(sim);
     expect(sim.activate("explode")).toBe(true);
     const performer = sim.units.find((u) => u.windupKey === "explode")!;
     for (let i = 0; i < 400 && performer.windupKey; i++) sim.step(50);
     expect(performer.explodeFxSeq).toBeGreaterThan(0);
+    sim.step(50);
     return performer;
   };
 
-  it("brings the exploder back, and gives it its fuse back with it", () => {
+  it("brings the exploder back ALIVE but SPENT — no second fuse", () => {
     const sim = new BattleSim([smallExploder("imp"), medic()], [tank()], null, true);
     const imp = detonate(sim);
     expect(imp.id).toBe("imp");
@@ -299,34 +303,34 @@ describe("reviving a zombie that blew itself up", () => {
     expect(imp.alive).toBe(true); // ZF2 would have left it dead (canRez state 100)
     expect(imp.hp).toBe(imp.maxHp);
     expect(sim.outcome().losses).not.toContain("imp");
-    expect(imp.usedAbilities).toEqual([]); // back in the queue…
-    expect(imp.abilityRearms).toBe(1); // …but marked as having had its turn
+    expect(imp.usedAbilities).toContain("explode"); // still consumed, exactly as ZF2 leaves it
 
-    // It re-enters at the charge line, so it has to walk up again before it can light
-    // another fuse — then it can, because there is nobody else to send.
-    const second = detonate(sim);
-    expect(second.id).toBe("imp");
-    expect(second.alive).toBe(false); // the medic's Resurrect was one-use
-    expect(sim.outcome().losses).toContain("imp");
+    // Walk it all the way back up. Position is no longer the question — the move itself
+    // is gone, so the strip has nothing to offer and a tap is refused.
+    deployAll(sim);
+    for (let i = 0; i < 400; i++) sim.step(50);
+    expect(sim.activatedStatus().find((s) => s.key === "explode")?.ready).toBe(0);
+    expect(sim.activate("explode")).toBe(false);
+    expect(imp.alive).toBe(true);
   });
 
   it("still refuses when there is no healer to do it", () => {
     const sim = new BattleSim([smallExploder("imp")], [tank()], null, true);
     const imp = detonate(sim);
+    for (let i = 0; i < 20; i++) sim.step(50); // the backlog is polled, so give it the chance
     expect(imp.alive).toBe(false);
-    expect(imp.abilityRearms).toBe(0);
     expect(sim.outcome().losses).toContain("imp");
   });
 
-  it("sends the revived exploder to the BACK of the queue, not the front", () => {
+  it("takes a revived exploder out of the rotation, leaving its squadmate to go", () => {
     const sim = new BattleSim(
       [smallExploder("a"), smallExploder("b"), medic()], [tank()], null, true
     );
     const first = detonate(sim);
-    expect(first.alive).toBe(true); // revived, and holding a fresh fuse again
+    expect(first.alive).toBe(true); // revived…
+    expect(first.usedAbilities).toContain("explode"); // …with nothing left to light
 
-    // Put the revived one back in FRONT of its squadmate, so position alone would keep
-    // choosing it — which is exactly the double-kill the ordering exists to prevent.
+    // Put the revived one back in FRONT of its squadmate, so position alone would pick it.
     const other = zombies(sim).find((p) => p.id !== first.id && p.abilities.includes("explode"))!;
     deploy(sim);
     first.x = other.x + 40;
@@ -346,9 +350,11 @@ describe("reviving a zombie that blew itself up", () => {
     const runt = sim.units.find((u) => u.id === "runt")!;
     deployAll(sim); // this army carries no Explode at all, so there is no fuse to wait on
     (sim as any).dealDamage(runt, runt.hp, false);
+    expect(runt.alive).toBe(false); // the revive is polled, not instant
+    sim.step(50);
 
     expect(runt.alive).toBe(true);
-    expect(runt.abilityRearms).toBe(0); // nothing was spent, so nothing was handed back
+    expect(runt.usedAbilities).toEqual([]); // it owned no one-use move to lose
   });
 });
 
@@ -898,55 +904,164 @@ describe("lasers, resurrection, and activated attacks", () => {
     expect(e.hp).toBe(9995);
   });
 
-  it("resurrects one non-Small zombie once at full Life", () => {
+  /** A fighter, a Garden medic, and a punching bag. The medic starts deployed unless the
+   *  test is specifically about an undeployed one. */
+  const rezParty = (deployHealer: boolean) => {
     const fighter = unit({ id: "fighter", sourceKey: "ZombieActorRegularTier1", team: "player" });
     const healer = unit({
-      id: "healer", sourceKey: "ZombieActorGardenTier3", team: "player",
+      id: "healer", sourceKey: "ZombieActorGardenTier3", group: "Garden", team: "player",
       isGarden: true, abilities: ["ressurect"],
     });
     const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
     const sim = new BattleSim([fighter, healer], [enemy], null, true);
     const f = sim.units.find((u) => u.id === "fighter")!;
     const h = sim.units.find((u) => u.id === "healer")!;
+    if (deployHealer) h.state = "advance";
+    return { sim, f, h };
+  };
 
-    h.state = "advance";
+  it("resurrects one zombie once at full Life", () => {
+    const { sim, f, h } = rezParty(true);
+
     (sim as any).dealDamage(f, f.maxHp, false);
+    expect(f.alive).toBe(false); // the backlog is polled from the Garden's own update…
+    sim.step(50);
+    expect(f.alive).toBe(true); // …so the revive lands on the next beat
+    expect(f.hp).toBe(f.maxHp);
+    expect(h.resurrectUsed).toBe(true);
+
+    (sim as any).dealDamage(f, f.maxHp, false);
+    sim.step(50);
+    expect(f.alive).toBe(false); // one revive per Garden zombie, for the whole fight
+  });
+
+  it("does not resurrect while its holder is still queued at the back", () => {
+    const { sim, f, h } = rezParty(false);
+
+    (sim as any).dealDamage(f, f.maxHp, false);
+    sim.step(50);
+    expect(f.alive).toBe(false);
+    expect(h.resurrectUsed).toBe(false);
+  });
+
+  // The corpse backlog: `defeatedZombies` accumulates for the whole fight and nothing
+  // drains it but a revival, so a holder that reaches the field LATER still gets its shot
+  // at a zombie that fell before it arrived. The old instant-on-death model lost that
+  // casualty for good.
+  it("revives a zombie that fell before the holder was deployed", () => {
+    const { sim, f, h } = rezParty(false);
+
+    (sim as any).dealDamage(f, f.maxHp, false);
+    sim.step(50);
+    expect(f.alive).toBe(false); // nobody out there to do it yet
+
+    h.state = "advance"; // the medic finally walks on
+    sim.step(50);
     expect(f.alive).toBe(true);
     expect(f.hp).toBe(f.maxHp);
     expect(h.resurrectUsed).toBe(true);
-    (sim as any).dealDamage(f, f.maxHp, false);
-    expect(f.alive).toBe(false);
   });
 
-  it("does not resurrect until its holder is deployed", () => {
+  it("takes the most recent casualty when several are waiting", () => {
+    const first = unit({ id: "first", sourceKey: "ZombieActorRegularTier1", team: "player" });
+    const second = unit({ id: "second", sourceKey: "ZombieActorRegularTier1", team: "player" });
+    const healer = unit({
+      id: "healer", sourceKey: "ZombieActorGardenTier3", group: "Garden", team: "player",
+      isGarden: true, abilities: ["ressurect"],
+    });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
+    const sim = new BattleSim([first, second, healer], [enemy], null, true);
+    const a = sim.units.find((u) => u.id === "first")!;
+    const b = sim.units.find((u) => u.id === "second")!;
+    const h = sim.units.find((u) => u.id === "healer")!;
+
+    (sim as any).dealDamage(a, a.maxHp, false);
+    (sim as any).dealDamage(b, b.maxHp, false);
+    h.state = "advance";
+    sim.step(50);
+
+    expect(b.alive).toBe(true); // the last to fall is the one `ressurectZombie:` reads
+    expect(a.alive).toBe(false);
+  });
+
+  it("counts the revives left across deployed Garden holders", () => {
     const fighter = unit({ id: "fighter", sourceKey: "ZombieActorRegularTier1", team: "player" });
-    const healer = unit({
-      id: "healer", sourceKey: "ZombieActorGardenTier3", team: "player",
+    const medics = ["m1", "m2"].map((id) => unit({
+      id, sourceKey: "ZombieActorGardenTier3", group: "Garden", team: "player",
       isGarden: true, abilities: ["ressurect"],
-    });
+    }));
     const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
-    const sim = new BattleSim([fighter, healer], [enemy], null, true);
+    const sim = new BattleSim([fighter, ...medics], [enemy], null, true);
     const f = sim.units.find((u) => u.id === "fighter")!;
-    const h = sim.units.find((u) => u.id === "healer")!;
+
+    expect(sim.resurrectsLeft()).toBe(0); // both medics still queued at the back
+    for (const id of ["m1", "m2"]) sim.units.find((u) => u.id === id)!.state = "advance";
+    expect(sim.resurrectsLeft()).toBe(2);
+    expect(sim.teamAbilityStatus()).toContainEqual({ key: "ressurect", count: 2 });
 
     (sim as any).dealDamage(f, f.maxHp, false);
-    expect(f.alive).toBe(false);
-    expect(h.resurrectUsed).toBe(false);
+    sim.step(50);
+    expect(f.alive).toBe(true);
+    expect(sim.resurrectsLeft()).toBe(1); // one spent, one still banked
+    expect(sim.teamAbilityStatus()).toContainEqual({ key: "ressurect", count: 1 });
+
+    (sim as any).dealDamage(f, f.maxHp, false);
+    sim.step(50);
+    expect(f.alive).toBe(true);
+    expect(sim.resurrectsLeft()).toBe(0); // …and now the safety net is gone
   });
 
-  it("does not spend Resurrect on a Small zombie", () => {
-    const mini = unit({ id: "mini", sourceKey: "ZombieActorSmallTier3", team: "player" });
+  // ZF2 marks EVERY consumable ability on the revived actor consumed — including tag 29
+  // itself, which is what stops two Garden holders from reviving each other for the rest
+  // of the fight. `resurrectUsed` is never cleared either way, so an army is bounded at
+  // one revive per Garden zombie it deployed.
+  it("brings a Garden holder back without its own Resurrect", () => {
+    const medics = ["m1", "m2"].map((id) => unit({
+      id, sourceKey: "ZombieActorGardenTier3", group: "Garden", team: "player",
+      isGarden: true, abilities: ["ressurect"],
+    }));
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
+    const sim = new BattleSim(medics, [enemy], null, true);
+    const [m1, m2] = ["m1", "m2"].map((id) => sim.units.find((u) => u.id === id)!);
+    m1.state = "advance";
+    m2.state = "advance";
+    expect(sim.resurrectsLeft()).toBe(2);
+
+    (sim as any).dealDamage(m2, m2.maxHp, false);
+    sim.step(50);
+    expect(m2.alive).toBe(true); // m1 brought it back…
+    expect(m1.resurrectUsed).toBe(true); // …spending its own
+    expect(m2.resurrectUsed).toBe(true); // …and it returned with nothing to give
+    expect(sim.resurrectsLeft()).toBe(0); // so the pair can never chain
+
+    (sim as any).dealDamage(m2, m2.maxHp, false);
+    sim.step(50);
+    expect(m2.alive).toBe(false);
+  });
+
+  it("spends a one-use move the revived zombie never got to use", () => {
+    const bomber = unit({
+      id: "bomber", sourceKey: "ZombieActorSmallTier3", group: "Small", team: "player",
+      abilities: ["explode"],
+    });
     const healer = unit({
-      id: "healer", sourceKey: "ZombieActorGardenTier3", team: "player",
+      id: "healer", sourceKey: "ZombieActorGardenTier3", group: "Garden", team: "player",
       isGarden: true, abilities: ["ressurect"],
     });
     const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
-    const sim = new BattleSim([mini, healer], [enemy], null, true);
-    const m = sim.units.find((u) => u.id === "mini")!;
+    const sim = new BattleSim([bomber, healer], [enemy], null, true);
+    const b = sim.units.find((u) => u.id === "bomber")!;
     const h = sim.units.find((u) => u.id === "healer")!;
-    (sim as any).dealDamage(m, m.maxHp, false);
-    expect(m.alive).toBe(false);
-    expect(h.resurrectUsed).toBe(false);
+    b.state = "advance";
+    h.state = "advance";
+
+    // Cut down before it ever lit the fuse. The revival is unconditional: coming back is
+    // the reward, coming back armed is not.
+    (sim as any).dealDamage(b, b.maxHp, false);
+    expect(b.usedAbilities).toEqual([]);
+    sim.step(50);
+    expect(b.alive).toBe(true);
+    expect(b.usedAbilities).toContain("explode");
   });
 
   it("uses shipped Explode damage/stun once and keeps Ver.1 from hitting bosses", () => {

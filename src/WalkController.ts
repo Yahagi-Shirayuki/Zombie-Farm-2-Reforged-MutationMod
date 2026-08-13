@@ -13,9 +13,13 @@ import { screenToGrid, tileCenter } from "./iso";
 import { setFootprint } from "./depthSort";
 import { findPath } from "./pathfind";
 
-const SPEED_PX = 174; // world px/sec (1.2x the previous 145, user tuning)
+/** Base walk speed in world px/sec (1.2x the previous 145, user tuning). A Farmer head
+ *  can raise it — the ninja masks are worth +25% — so this is the UNBUFFED figure and
+ *  `setSpeedPx` is what the head bonus writes. */
+export const SPEED_PX = 174;
 
 export class WalkController {
+  private speedPx = SPEED_PX;
   private wx = 0;
   private wy = 0;
   private target: { x: number; y: number } | null = null;
@@ -116,12 +120,19 @@ export class WalkController {
     this.actor.setMoving(false);
   }
 
+  /** Set the walk speed in world px/sec. Applied from the next frame, so a head
+   *  swapped mid-stride speeds the farmer up where he stands rather than snapping
+   *  him anywhere. A non-finite or non-positive value is ignored. */
+  setSpeedPx(px: number) {
+    if (Number.isFinite(px) && px > 0) this.speedPx = px;
+  }
+
   update(dt: number) {
     if (this.target) {
       const dx = this.target.x - this.wx;
       const dy = this.target.y - this.wy;
       const dist = Math.hypot(dx, dy);
-      const step = SPEED_PX * dt;
+      const step = this.speedPx * dt;
       if (dist <= step || dist === 0) {
         this.wx = this.target.x;
         this.wy = this.target.y;

@@ -116,7 +116,7 @@ export const ABILITY_POOL: Record<string, AbilityMeta> = {
   explode: { label: "Explode", effect: "One 10× area hit and 3-second stun; the zombie is destroyed", desc: "Zombie will explode and stun the enemy (use when fighting)", icon: `${AB}ability_explode.png` },
   bash: { label: "Bash", effect: "2.75× attack; 10-second recharge", desc: "Bashes the enemy when activated (use when fighting)", icon: `${AB}ability_bash.png` },
   turboSpeed: { label: "Turbo Walking Speed", effect: "2× walking speed", desc: "Zombie walks twice as fast", icon: `${AB}ability_turboSpeed.png` },
-  ressurect: { label: "Resurrect", effect: "Revives one non-mini zombie once", desc: "Resurrect any zombie once", icon: `${AB}ability_ressurect.png` },
+  ressurect: { label: "Resurrect", effect: "Revives one fallen zombie at full Life, once per fight; it returns with its one-use moves spent", desc: "Resurrect any zombie once", icon: `${AB}ability_ressurect.png` },
   // ---- Tier 4 (the ".Ver.2" upgrades of earlier abilities) ----
   zomBeam: { label: "Laser Beam Ver.2", effect: "Automatic laser at 2× the base firing rate", desc: "New and improved", icon: `${AB}ability_zomBeam.png` },
   doubleStrike: { label: "Double Strike", effect: "29% chance of a bonus strike", desc: "Small chance to hit twice", icon: `${AB}ability_doubleStrike.png` },

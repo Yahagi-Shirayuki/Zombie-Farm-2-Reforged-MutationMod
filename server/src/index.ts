@@ -60,7 +60,7 @@ import plantCatalog from "../../public/assets/plants.json";
 import zombieCatalog from "../../public/assets/zombies.json";
 import boostCatalog from "../../public/assets/boosts.json";
 import objectCatalog from "../../public/assets/placeables.json";
-import { CLIENT_INTEGRITY_VERSION, COMMAND_BATCH_LIMIT, FARM_BULK_LIMIT, GAMEPLAY_PROTOCOL, type CommandBatchRequest, type GameplayCommand, type PresentationRequest } from "../../src/net/protocol";
+import { CLIENT_INTEGRITY_VERSION, COMMAND_BATCH_LIMIT, EPIC_BOSS_TOKEN_GRANT_LIMIT, FARM_BULK_LIMIT, GAMEPLAY_PROTOCOL, type CommandBatchRequest, type GameplayCommand, type PresentationRequest } from "../../src/net/protocol";
 import * as v3 from "./v3/db";
 import * as v3Raid from "./v3/raid";
 import * as v3EpicBoss from "./v3/epicBoss";
@@ -925,6 +925,10 @@ export const validGameplayCommand = (value: unknown): value is GameplayCommand =
     case "quest.periodic_claim":
       return (command.scope === "daily" || command.scope === "weekly") &&
         commandString(command.questId, 64);
+    case "epicBoss.token":
+      return commandString(command.runId) &&
+        (command.count === undefined ||
+          (commandInt(command.count) && command.count >= 1 && command.count <= EPIC_BOSS_TOKEN_GRANT_LIMIT));
     case "tutorial.complete": return true;
     default: return false;
   }

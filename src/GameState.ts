@@ -7,6 +7,7 @@ import { TutorialSave } from "./save/schema";
 import type { FarmerCatalog } from "./assets";
 import {
   activeBonusHeadId, farmerCooldownMs, farmerGold, farmerHeadHasEffect, farmerMultiplier,
+  farmerSpeedPx,
   farmerZombieGrowMs,
 } from "./farmer";
 import type { EpicBossRun } from "./epicBoss/types";
@@ -544,6 +545,7 @@ export class GameState {
   farmerZombieStrengthMult(): number { return farmerMultiplier(this.bonusHeadId(), "zombieStrength"); }
   farmerZombieLifeMult(): number { return farmerMultiplier(this.bonusHeadId(), "zombieLife"); }
   farmerInvasionCooldownMs(value: number): number { return farmerCooldownMs(value, this.bonusHeadId()); }
+  farmerWalkSpeedPx(value: number): number { return farmerSpeedPx(value, this.bonusHeadId()); }
   syncObjectStorage(stored: Record<string, number>) {
     this.storedItems = Object.entries(stored).map(([key, count]) => ({ key, count }));
     this.emit();

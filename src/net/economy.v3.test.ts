@@ -677,6 +677,77 @@ describe("v3 raid dependency ids", () => {
     expect(state.lastRaidAt).toBe(6_000);
   });
 
+  // Boss Tokens are rolled by the client on harvest and merely REPORTED here (the
+  // server stopped rolling them). Two things have to hold: a field-wide harvest must
+  // not become one command per lucky plot, and the count must not visibly fall back
+  // between the harvest and the grant reaching the server.
+  describe("client-rolled Boss Tokens", () => {
+    const epicGameplay = (tokenCount: number, runId = "run-1"): any => ({
+      balance: { gold: 0, brains: 0, xp: 0 }, farm: { version: 0, plots: {} },
+      objects: { version: 0, objects: [] }, quests: { version: 0, completed: [], progress: [] },
+      inventory: {}, storage: { received: {}, stored: {} }, roster: [], farmSize: 30,
+      climates: ["grass"], farmerHeads: [], farmerHeadId: 1, ownedPets: [], activePet: null,
+      penPets: [], zombieMax: 16, tutorialRewarded: false, raids: { progress: {}, lastRaidAt: 0 },
+      epicBoss: {
+        runId, bossId: "dr-groundhog", activatedAt: 0, expiresAt: 10_000_000,
+        level: 1, maxHp: 2_000, currentHp: 2_000, encounterStartedAt: 0, retryReadyAt: 0,
+        tokenCount, completedAt: 0, attackOrder: [],
+      },
+    });
+
+    it("folds a burst of tokens from one run into a single command", () => {
+      const economy = new EconomyClient(new GameState(), "boss-token-fold");
+
+      for (let i = 0; i < 5; i++) economy.submitEpicBossToken("run-1");
+
+      expect((economy as any).queue.pending).toHaveLength(1);
+      expect((economy as any).queue.pending[0].command).toEqual({
+        type: "epicBoss.token", runId: "run-1", count: 5,
+      });
+    });
+
+    it("starts a new command for a different run rather than misfiling the token", () => {
+      const economy = new EconomyClient(new GameState(), "boss-token-run-change");
+
+      economy.submitEpicBossToken("run-1");
+      economy.submitEpicBossToken("run-2");
+
+      expect((economy as any).queue.pending.map((item: any) => item.command)).toEqual([
+        { type: "epicBoss.token", runId: "run-1", count: 1 },
+        { type: "epicBoss.token", runId: "run-2", count: 1 },
+      ]);
+    });
+
+    it("keeps unsent tokens on top of a projection that predates them", () => {
+      const economy = new EconomyClient(new GameState(), "boss-token-pending");
+      const counts: number[] = [];
+      economy.onEpicBossState = (run) => { if (run) counts.push(run.tokenCount); };
+      // A grant the client has already shown the player, still waiting to be sent. The
+      // structural defer gate hides most such projections, so this is written the way a
+      // direct adopt (epic boss activate/finish) reaches it: the outbox is not consulted.
+      (economy as any).optimistic.set(1, { gold: 0, brains: 0, xp: 0, bossTokens: 2, bossTokenRunId: "run-1" });
+
+      // The server has 3 recorded and knows nothing yet about the two in flight.
+      (economy as any).adoptGameplay(epicGameplay(3), {}, {}, [], 1);
+      // Once the grant lands, the server's own count already includes them.
+      (economy as any).optimistic.clear();
+      (economy as any).adoptGameplay(epicGameplay(5), {}, {}, [], 1);
+
+      expect(counts).toEqual([5, 5]);
+    });
+
+    it("drops pending tokens belonging to an event that has been replaced", () => {
+      const economy = new EconomyClient(new GameState(), "boss-token-stale-run");
+      let seen = -1;
+      economy.onEpicBossState = (run) => { seen = run?.tokenCount ?? -1; };
+      (economy as any).optimistic.set(1, { gold: 0, brains: 0, xp: 0, bossTokens: 4, bossTokenRunId: "old-run" });
+
+      (economy as any).adoptGameplay(epicGameplay(0, "run-2"), {}, {}, [], 1);
+
+      expect(seen).toBe(0);
+    });
+  });
+
   it("carries harvest id aliases across a deferred roster projection", () => {
     const economy = new EconomyClient(new GameState(), "pending-roster-account");
     (economy as any).commandsBySequence.set(1, { type: "farm.harvest", oc: 1, or: 1 });

@@ -1035,7 +1035,7 @@
   "messageComplete": "You completed Cook Up Some More Zombies!",
   "tip": "Experiment with the Zombie Pot to get these.",
   "sprite": "Icon_Quest_Combining.png",
-  "levelRequired": -1,
+  "levelRequired": 25,
   "prerequisiteQuest": 21,
   "requirements": [
    {
@@ -1064,7 +1064,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 20,
+  "rewardValue": 750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1400,16 +1400,16 @@
    {
     "notificationID": "kCropHarvestedNotification",
     "notificationObject": "Broccoli",
-    "countTotal": 10,
-    "text": "Harvest 10 Broccoli",
+    "countTotal": 25,
+    "text": "Harvest 25 Broccoli",
     "type": 2,
     "sprite": "stex0029.png"
    },
    {
     "notificationID": "kCropHarvestedNotification",
     "notificationObject": "Cauliflower",
-    "countTotal": 10,
-    "text": "Harvest 10 Cauliflower",
+    "countTotal": 25,
+    "text": "Harvest 25 Cauliflower",
     "type": 2,
     "sprite": "stex0029.png"
    }
@@ -2779,16 +2779,16 @@
    {
     "notificationID": "kCropHarvestedNotification",
     "notificationObject": "Eyebiscus",
-    "countTotal": 25,
-    "text": "Harvest 25 Eyebiscuses",
+    "countTotal": 50,
+    "text": "Harvest 50 Eyebiscuses",
     "type": 2,
     "sprite": "stex0029.png"
    },
    {
     "notificationID": "kCropHarvestedNotification",
     "notificationObject": "Heartichoke",
-    "countTotal": 25,
-    "text": "Harvest 25 Heartichokes",
+    "countTotal": 50,
+    "text": "Harvest 50 Heartichokes",
     "type": 2,
     "sprite": "stex0029.png"
    }

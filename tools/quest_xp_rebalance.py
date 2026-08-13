@@ -39,6 +39,24 @@ XP_THRESHOLDS = [
 STANDARD_SHARE = 0.15
 DIFFICULT_SHARE = 0.40
 
+# ---- Hand-priced quests, authoritative over the formula ----------------------
+# The share-of-a-level rule keys off `levelRequired` ALONE: it never looks at how
+# much work the objective asks for. That is fine while every quest asks for a
+# handful of actions, and wrong the moment one asks for hundreds — it priced a
+# 500-plow quest at 75 XP because it unlocked at level 8, while a 250-plow quest
+# gated at 27 paid 750. Where the formula and a deliberate design call disagree,
+# the design call wins and lands here, in the generator, so a regeneration cannot
+# silently revert it (same contract as QUEST_LEVEL_OVERRIDES in prep_quests.py).
+#
+# src/quest/reforgedQuests.test.ts is what fails if one of these drifts back out
+# of line with the rest of its category.
+AUTHORED_XP = {
+    # quest id: (xp, why)
+    "22": (750, "3 combines at an effective gate of 25 (its prerequisite, quest 21, "
+                "is gated there); the -1 level in Quests.plist made the formula "
+                "price it as a level-1 quest and pay 20"),
+}
+
 # Below this the percentage produces single digits, which reads as a bug rather than a
 # reward. Levels 1-7 need 25-250 XP each, so 20 is still a real fraction of them.
 MIN_REWARD = 20
@@ -85,6 +103,9 @@ def rebalanced_value(quest):
         return None  # gold / item / zombie rewards are not on this curve
     if quest.get("epicEvent"):
         return None  # the Epic Boss ladder has its own scaling pass
+    authored = AUTHORED_XP.get(str(quest.get("id", "")))
+    if authored:
+        return authored[0]  # a design call the formula is not allowed to overrule
     # levelRequired -1 means "no gate" — those are the opening tutorial quests, which
     # belong to level 1 for this purpose.
     level = max(1, int(quest.get("levelRequired", 1)))

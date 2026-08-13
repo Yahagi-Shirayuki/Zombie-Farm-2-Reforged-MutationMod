@@ -7,6 +7,7 @@ import {
 } from "../../src/blackMarketRules";
 import { OBJECTS } from "./objectCatalog";
 import { applyBodyTypeRestriction } from "../../src/zombie/mutations";
+import { upgradeVariantMutations } from "../../src/zombie/variantMutations";
 
 // Server-side zombie catalog. Mirrors the `cost` of each unit in
 // public/assets/zombies.json so the server can price a SELL exactly (sell = the
@@ -123,7 +124,7 @@ export function isHeadlessZombie(key: string): boolean {
  *  server-side twin of the client's makeOwned, which scrubs the same bits wherever a
  *  mask lands on a unit — both must agree or the unit's stats diverge. */
 export function legalMutation(key: string, mask: number): number {
-  return applyBodyTypeRestriction(mask, isHeadlessZombie(key));
+  return applyBodyTypeRestriction(upgradeVariantMutations(key, mask), isHeadlessZombie(key));
 }
 
 const TRADABLE_ZOMBIES = new Set(

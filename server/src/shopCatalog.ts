@@ -58,6 +58,7 @@ export const CLIMATE_COST: Readonly<Record<string, number>> = {
   autumn: 3000,
   snow: 5000,
   sand: 5000,
+  sakura: 7500,
   water: 10000,
 };
 

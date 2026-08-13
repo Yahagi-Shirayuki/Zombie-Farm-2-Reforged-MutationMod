@@ -1,8 +1,13 @@
 import { describe, it, expect } from "vitest";
+// The app has no @types/node (it only ever runs in a browser); the node test
+// environment provides this at runtime. Same treatment as skyExtension.test.ts.
+// @ts-ignore
+import { readFileSync } from "node:fs";
 import groundIndex from "../public/assets/ground_index.json";
 import upgrades from "../public/assets/upgrades.json";
 import { FARM_BG_DENSITY, type FarmBackground } from "./prefs";
-import { pickPiece, surroundingsTheme, themeObjectFiles } from "./surroundings";
+import { pickPiece, surroundingsTheme, themeObjectFiles, themePieces } from "./surroundings";
+import placeables from "../public/assets/placeables.json";
 
 // Taken from the generated catalog rather than hand-listed, so adding a ground
 // skin extends every test below instead of needing this line kept up to date.
@@ -19,6 +24,7 @@ const basenames = (glob: Record<string, unknown>) =>
 const SHIPPED_OBJECTS = basenames(import.meta.glob("../public/assets/objects/*.png"));
 const SHIPPED_SCENERY = basenames(import.meta.glob("../public/assets/scenery/*.png"));
 const SHIPPED_BACKDROPS = basenames(import.meta.glob("../public/assets/farm_background*.png"));
+const SHIPPED_GROUND = basenames(import.meta.glob("../public/assets/ground/*.png"));
 
 describe("surroundingsTheme", () => {
   it("dresses every terrain the Market sells", () => {
@@ -54,14 +60,70 @@ describe("surroundingsTheme", () => {
     // Guard the guard: an empty glob would make every assertion below vacuous.
     expect(SHIPPED_OBJECTS.size).toBeGreaterThan(100);
     expect(SHIPPED_SCENERY.size).toBe(4);
-    expect(SHIPPED_BACKDROPS.size).toBe(TERRAINS.length);
+    // One backdrop per terrain, plus one more for each time-of-day variant. Counted
+    // rather than hard-coded so a stray or orphaned backdrop still fails here.
+    const variants = TERRAINS.filter((t) => surroundingsTheme(t).dusk).length;
+    expect(SHIPPED_BACKDROPS.size).toBe(TERRAINS.length + variants);
     for (const t of TERRAINS) {
       const theme = surroundingsTheme(t);
-      for (const p of [...theme.trees, ...theme.props]) {
+      for (const p of themePieces(theme)) {
         const shipped = p.scenery ? SHIPPED_SCENERY : SHIPPED_OBJECTS;
         expect(shipped.has(p.file), `${t}: ${p.file}`).toBe(true);
       }
       expect(SHIPPED_BACKDROPS.has(theme.background), theme.background).toBe(true);
+      if (theme.dusk) {
+        expect(SHIPPED_BACKDROPS.has(theme.dusk.background), theme.dusk.background).toBe(true);
+      }
+      // A groundFill that does not resolve is worse than none: the land around the
+      // farm stays flat filler and the only clue is a console warning.
+      if (theme.groundFill) {
+        expect(theme.groundFill.startsWith("ground/"), theme.groundFill).toBe(true);
+        expect(SHIPPED_GROUND.has(theme.groundFill.slice("ground/".length)),
+          theme.groundFill).toBe(true);
+      }
+    }
+  });
+
+  // The road is laid end to end down one grid row, so its piece has to be the shape
+  // that tiles that way: a 2x2 flat tile. Anything else leaves gaps or steps, and
+  // the road is named by catalog KEY, which no filename check would catch.
+  it("lays roads with a piece that can actually tile", () => {
+    const byKey = new Map((placeables as { key: string }[]).map((p) => [p.key, p]));
+    for (const t of TERRAINS) {
+      const road = surroundingsTheme(t).road;
+      if (!road) continue;
+      const def = byKey.get(road.key) as
+        { tileW: number; tileH: number; flatTile?: boolean; sprite: string } | undefined;
+      expect(def, `${t}: no catalog entry for road ${road.key}`).toBeDefined();
+      expect([def!.tileW, def!.tileH], `${t}: ${road.key} footprint`).toEqual([2, 2]);
+      expect(def!.flatTile, `${t}: ${road.key} is not flat`).toBe(true);
+      expect(SHIPPED_OBJECTS.has(def!.sprite), def!.sprite).toBe(true);
+      // A stride under a tile would stack every lamp on one spot.
+      expect(road.lampSpacing).toBeGreaterThanOrEqual(1);
+      expect(road.litterClumps).toBeGreaterThan(0);
+      expect(road.litterPerClump).toBeGreaterThan(0);
+      // The crossing replaces a straight in the run, so it has to be the same shape.
+      const crossing = byKey.get(road.crossingKey) as
+        { tileW: number; tileH: number; flatTile?: boolean; sprite: string } | undefined;
+      expect(crossing, `${t}: no catalog entry for ${road.crossingKey}`).toBeDefined();
+      expect([crossing!.tileW, crossing!.tileH], road.crossingKey).toEqual([2, 2]);
+      expect(SHIPPED_OBJECTS.has(crossing!.sprite), crossing!.sprite).toBe(true);
+      // The street must clear the scatter's own margin, or it runs into the fence.
+      expect(road.offset).toBeGreaterThan(3);
+    }
+  });
+
+  // The fill is tiled edge to edge, so a non-repeating one shows a hard seam every
+  // 240px. Only its dimensions are checkable here, and they are the thing that goes
+  // wrong: the emitted rect must stay a period of the 48x24 iso lattice.
+  it("tiles the surrounding ground on a lattice period", () => {
+    for (const t of TERRAINS) {
+      const fill = surroundingsTheme(t).groundFill;
+      if (!fill) continue;
+      const bytes = readFileSync(new URL(`../public/assets/${fill}`, import.meta.url));
+      const w = bytes.readUInt32BE(16), h = bytes.readUInt32BE(20);
+      expect(w % 48, `${fill} width`).toBe(0);
+      expect(h % 24, `${fill} height`).toBe(0);
     }
   });
 

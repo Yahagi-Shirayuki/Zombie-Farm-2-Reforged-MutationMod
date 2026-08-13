@@ -72,6 +72,19 @@ describe("mutationEntries", () => {
     expect(mutationEntries(zombie(bitOf("cauli")))[0].name).toBe("Cauli-hair");
   });
 
+  it("names a Heartichoke's slot after the silhouette it wears, not Cauli-hair's", () => {
+    // heartichokeBody `replaces: "body"` — it is Lima Bean's slot on the rig, so
+    // calling it a hair mutation (the reported bug) contradicted the art.
+    const [heartichoke] = mutationEntries(zombie(bitOf("cauli"), { key: "ZombieActorRegularTier4Heartichoke" }));
+    expect(heartichoke.slotLabel).toBe(mutationEntries(zombie(bitOf("limabean")))[0].slotLabel);
+    expect(heartichoke.slotLabel).toBe("Body");
+    // Eyebiscus really is an eye attachment, so it keeps Carrot-eyed's slot.
+    const [eyebiscus] = mutationEntries(zombie(bitOf("carrot"), { key: "ZombieActorRegularTier4Eyebiscus" }));
+    expect(eyebiscus.slotLabel).toBe("Hair & Eyes");
+    // Anybody else's Cauli-hair is unmoved.
+    expect(mutationEntries(zombie(bitOf("cauli")))[0].slotLabel).toBe("Hair & Eyes");
+  });
+
   it("gives every mutation an icon", () => {
     for (const bit of ALL_BITS) {
       const [row] = mutationEntries(zombie(bit));

@@ -105,7 +105,10 @@ const CATALOG: readonly MutationSpec[] = [
   { key: "celery", name: "Celery-arms", slot: "arm", stats: { str: 3 } },
   { key: "broccoli", name: "Broccohair", slot: "hair_eye", stats: { con: 3 } },
   { key: "garlic", name: "Garlichead", slot: "head", stats: { str: 3 } },
-  { key: "cauli", name: "Cauli-hair", slot: "hair_eye", stats: { con: 3 } },
+  // +4, not the +3 it shipped with. Cauliflower is a level-29 crop and Broccoli a
+  // level-23 one; while both paid +3 con in the same slot, the dearer, later crop
+  // granted nothing the earlier one didn't, and lost every Pot conflict to nothing.
+  { key: "cauli", name: "Cauli-hair", slot: "hair_eye", stats: { con: 4 } },
   { key: "limabean", name: "Lima Bean", slot: "body", stats: { con: 3 } },
   { key: "flytrap", name: "Flytrap", slot: "neck", stats: { con: 4 } },
   { key: "dragon", name: "Dragon-arm", slot: "arm", stats: { str: 4 } },
@@ -113,8 +116,27 @@ const CATALOG: readonly MutationSpec[] = [
   // MutationIcons entry or a market mutant in ZF2 — it shipped as a crop-adjacency-only
   // mutation and the one head exception the headless family could wear
   // (MUTATION_CATALOG_CORRECTED.md §"Legacy / crop-adjacency-only", report §11), so its
-  // bonus is ours to choose: +3 attack, matching Garlichead — the best the head slot pays.
-  { key: "pumpking", name: "Pumpking", slot: "head", stats: { str: 3 } },
+  // bonus is ours to choose.
+  //
+  // It was +3 attack, matching Garlichead exactly — which made the level-39 capstone
+  // crop (380g a seed) pay what garlic pays at level 25, and made the Pumpking a
+  // Regular inherits in the Pot worth nothing over the Garlichead it evicts. +4 makes
+  // it the best head in the game, which is what a capstone should be, and is the
+  // headless family's compensation for being locked out of two slots entirely.
+  { key: "pumpking", name: "Pumpking", slot: "head", stats: { str: 4 } },
+  // The two Tier-4 crops. They USED to ride carrot's and cauli's bits — a Tier-4 crop
+  // that cost several times as much and grew for a day granted exactly the Tier-1
+  // mutation, so there was never a reason to plant one. ZF2 itself disagreed with that:
+  // Market.json advertises "+3" on Eyebiscus against Carrot's "+1" (see the note in
+  // tools/prep_market.py). They are their own mutations now, and appending puts each at
+  // the TOP of its slot's ladder, which is where a Tier-4 belongs.
+  //
+  // Eyebiscus is the eye attachment Carrot-eyed is, so it stays in hair_eye. Heartichoke
+  // is NOT: heartichokeBody `replaces: "body"` exactly as limaBeanBody does, so it sits
+  // in the BODY slot with Lima Bean — the slot the art always drew it in, and the one a
+  // player reported it filing itself under wrongly while it wore Cauli-hair's bit.
+  { key: "eyebiscus", name: "Eyebiscus", slot: "hair_eye", stats: { str: 1, dex: 2 } },
+  { key: "heartichoke", name: "Heartichoke", slot: "body", stats: { con: 5 } },
 ];
 
 // The order that has already shipped. A row inserted, removed, or moved in CATALOG
@@ -128,6 +150,7 @@ const CATALOG: readonly MutationSpec[] = [
 const PINNED_ORDER: readonly MutationKey[] = [
   "tomato", "onion", "carrot", "turnip", "potato", "coffee", "celery",
   "broccoli", "garlic", "cauli", "limabean", "flytrap", "dragon", "pumpking",
+  "eyebiscus", "heartichoke",
 ];
 
 /** Ordered mutation defs, bit assigned from catalog position. */

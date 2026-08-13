@@ -232,29 +232,68 @@ describe("protocol v3 command engine", () => {
     expect(plot.state === "planted" ? plot.growMs : 0).toBe(450_000);
   });
 
-  it("authoritatively grants crop tokens only while an Epic Boss event is active", () => {
+  // The token roll now belongs to the client (see `epicBoss.token` in net/protocol.ts):
+  // harvesting must not mint one server-side, and the reporting command is taken on
+  // trust for the RUNNING event only.
+  const activeRun = () => ({
+    runId: "run", bossId: "dr-groundhog", activatedAt: 1, expiresAt: 10_000,
+    level: 1, maxHp: 2_000, currentHp: 2_000, encounterStartedAt: 0,
+    retryReadyAt: 0, tokenCount: 2, completedAt: 0, attackOrder: [],
+  });
+  const ripeCrop = () => ({
+    state: "planted" as const, cropKey: "lima_beans", plantedAt: -86_400_000, growMs: 86_400_000,
+    sell: 205, xp: 1, fertilized: false, zombie: false,
+  });
+
+  it("does not roll crop tokens server-side any more", () => {
     const state = freshGameplayState();
-    state.epicBoss = {
-      runId: "run", bossId: "dr-groundhog", activatedAt: 1, expiresAt: 10_000,
-      level: 1, maxHp: 2_000, currentHp: 2_000, encounterStartedAt: 0,
-      retryReadyAt: 0, tokenCount: 2, completedAt: 0, attackOrder: [],
-    };
-    state.farm.plots["0:0"] = {
-      state: "planted", cropKey: "lima_beans", plantedAt: -86_400_000, growMs: 86_400_000,
-      sell: 205, xp: 1, fertilized: false, zombie: false,
-    };
-    const won = applyCommandBatch(state, commands({ type: "farm.harvest", oc: 0, or: 0 }), {
+    state.epicBoss = activeRun();
+    state.farm.plots["0:0"] = ripeCrop();
+    // random() === 0 wins every roll the old authoritative path could have made.
+    const harvested = applyCommandBatch(state, commands({ type: "farm.harvest", oc: 0, or: 0 }), {
       now: 1_000, random: () => 0,
     });
-    expect(won.state.epicBoss?.tokenCount).toBe(3);
+    expect(harvested.results[0].status).toBe("applied");
+    expect(harvested.state.epicBoss?.tokenCount).toBe(2);
+  });
+
+  it("records client-rolled tokens without re-checking the roll", () => {
+    const state = freshGameplayState();
+    state.epicBoss = activeRun();
+    const granted = applyCommandBatch(state, commands(
+      { type: "epicBoss.token", runId: "run" },
+      { type: "epicBoss.token", runId: "run", count: 3 },
+    ), { now: 1_000 });
+    expect(granted.results.every((r) => r.status === "applied")).toBe(true);
+    expect(granted.state.epicBoss?.tokenCount).toBe(6);
+  });
+
+  it("drops token grants naming a stale, finished or expired event", () => {
+    const wrongRun = freshGameplayState();
+    wrongRun.epicBoss = activeRun();
+    const stale = applyCommandBatch(wrongRun, commands({ type: "epicBoss.token", runId: "other" }), { now: 1_000 });
+    expect(stale.results[0].status).toBe("rejected");
+    expect(stale.state.epicBoss?.tokenCount).toBe(2);
 
     const expired = freshGameplayState();
-    expired.epicBoss = { ...state.epicBoss, expiresAt: 999 };
-    expired.farm.plots["0:0"] = { ...state.farm.plots["0:0"] };
-    const ignored = applyCommandBatch(expired, commands({ type: "farm.harvest", oc: 0, or: 0 }), {
-      now: 1_000, random: () => 0,
-    });
-    expect(ignored.state.epicBoss?.tokenCount).toBe(2);
+    expired.epicBoss = { ...activeRun(), expiresAt: 999 };
+    const late = applyCommandBatch(expired, commands({ type: "epicBoss.token", runId: "run" }), { now: 1_000 });
+    expect(late.results[0].status).toBe("rejected");
+    expect(late.state.epicBoss?.tokenCount).toBe(2);
+
+    const done = freshGameplayState();
+    done.epicBoss = { ...activeRun(), completedAt: 900 };
+    const after = applyCommandBatch(done, commands({ type: "epicBoss.token", runId: "run" }), { now: 1_000 });
+    expect(after.results[0].status).toBe("rejected");
+    expect(after.state.epicBoss?.tokenCount).toBe(2);
+  });
+
+  it("refuses an out-of-range token count", () => {
+    const state = freshGameplayState();
+    state.epicBoss = activeRun();
+    const absurd = applyCommandBatch(state, commands({ type: "epicBoss.token", runId: "run", count: 5_000 }), { now: 1_000 });
+    expect(absurd.results[0].status).toBe("rejected");
+    expect(absurd.state.epicBoss?.tokenCount).toBe(2);
   });
 
   it("accepts the freely placed, non-grid-aligned plot used by the tutorial", () => {

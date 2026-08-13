@@ -209,6 +209,49 @@ export function activatedKeyFor(keys: string[]): string | null {
   return best;
 }
 
+/** Activated moves that SHARE one button in the battle strip, each stack listed
+ *  highest tier first.
+ *
+ *  Bash/Smash and Explode/Explode Ver.2 are the same move twice — the Ver.2 row is
+ *  the tier-4 upgrade of the tier-3 one — and an army that has unlocked everything
+ *  put five buttons in the column. At ABILITY_ACTIVE_STEP apart that runs off the
+ *  bottom of a phone held in landscape, where the whole viewport is ~390 px tall.
+ *  Stacking the two families brings the worst case to three buttons, which fits.
+ *
+ *  The cost is a real one and worth stating: the player no longer chooses between
+ *  Bash (2.75x, no stun) and Smash (1.8x + 1 s stun), nor between Explode and the
+ *  boss-hitting Explode Ver.2. The stack picks — see BattleSim.nextInGroup, which
+ *  resolves highest tier first, so the upgrade is what a tap spends whenever any
+ *  carrier is ready for it. */
+export const ACTIVATED_STACKS: readonly (readonly string[])[] = [
+  ["bashV2", "bash"],
+  ["explodeV2", "explode"],
+];
+
+/** The stack `key` belongs to (highest tier first), or null if it has no stackmate. */
+export function activatedStackOf(key: string): readonly string[] | null {
+  return ACTIVATED_STACKS.find((stack) => stack.includes(key)) ?? null;
+}
+
+/** The battle strip's activated BUTTONS, in slot order: one entry per button, each
+ *  the keys that share it ordered highest tier first. Members the army does not
+ *  carry are dropped, so an unstacked move (or a lone Bash) is a group of one.
+ *
+ *  Slot order follows FIRST APPEARANCE in `keys`, so a group takes the slot its
+ *  earliest member would have taken and the column stays stable for the fight. */
+export function activatedGroupsOf(keys: string[]): string[][] {
+  const groups: string[][] = [];
+  const placed = new Set<string>();
+  for (const key of keys) {
+    if (placed.has(key)) continue;
+    const stack = activatedStackOf(key);
+    const members = stack ? stack.filter((k) => keys.includes(k)) : [key];
+    for (const member of members) placed.add(member);
+    groups.push(members);
+  }
+  return groups;
+}
+
 /** The team-passive abilities in a set (Heal/Protect/Resurrect/Chivalry/…), for
  *  the battle strip's informational icons. */
 export function teamAbilitiesIn(keys: string[]): string[] {

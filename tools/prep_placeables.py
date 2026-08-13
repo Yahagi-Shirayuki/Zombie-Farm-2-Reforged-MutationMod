@@ -28,6 +28,7 @@ import plistlib
 import re
 
 from reforge_economy import brain_price
+import contributed_art
 import memorial_statue
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -551,6 +552,91 @@ def extract_first_animated_frame(tp):
     return None
 
 
+# Tiles whose ANIMATION carries the object and whose declared `frameName` is only
+# the part that stands still.
+#
+# The Worm Holes (handled by extract_first_animated_frame above) rest on a fully BLANK
+# frame, which is easy to spot. The Solar System is the harder shape: frame
+# solarsystem_00 is a real drawing — the little grey plinth — and every planet and the
+# sun live in the 12 animation frames orbiting above it. So the extract succeeded, the
+# object shipped, and it shipped as a bare pedestal ("Solar System decor is not showing
+# the planets"). Measured against the source: its animation covers 11.7x the area of
+# its base frame, where the next-widest animated tile is 3.0x and every other one has
+# its subject in the base frame already — this is the only tile of its kind.
+#
+# The reimplementation draws placeables as single static sprites, so the fix is to bake
+# the orbit's FIRST frame over the plinth, exactly as extract_multiplepieces bakes a
+# rigged object's layers. Frame 01 is also the widest spread of the twelve and the only
+# one the source itself starts on.
+ANIMATION_OVER_BASE = {"spaceSolarSystem"}
+
+
+def extract_animated_over_base(tp):
+    """Base frame + the first frame of each animation, cropped around the base.
+
+    The crop is the fiddly half. A placed object is BOTTOM-CENTERED on its footprint
+    (Field.fitObjectSprite anchors at 0.5, 1), so whatever this returns has its bottom
+    centre pinned to the tile. Returning the composite's own bounds would pin the
+    ORBIT's centre there and hang the plinth off to one side and up in the air. Instead
+    the result keeps the BASE frame's bottom edge as its own bottom edge and is padded
+    symmetrically about the base frame's centre line, so the plinth lands exactly where
+    it lands today and the planets simply extend above and around it.
+    """
+    fl = tp.get("frameList")
+    fr = frames(fl)
+    base_name = tp.get("frameName")
+    if not fr or base_name not in fr:
+        return None
+    atlas = image(fl.replace(".plist", ".png"))
+    if atlas is None:
+        return None
+
+    from PIL import Image
+
+    names = [base_name]
+    for ad in tp.get("animationDictionaries", []) or []:
+        seq = ad.get("animationFrames") or []
+        first = ad.get("animationFrameName") or (seq[0] if seq else None)
+        if first and first in fr and first not in names:
+            names.append(first)
+    if len(names) < 2:
+        return None
+
+    # Every frame is trimmed out of one shared untrimmed canvas; spriteColorRect is
+    # its origin in that canvas, which is what makes the pieces line up.
+    sizes = [list(map(int, re.findall(r"-?\d+", fr[n]["spriteSourceSize"]))) for n in names]
+    canvas = Image.new("RGBA", (max(s[0] for s in sizes), max(s[1] for s in sizes)), (0, 0, 0, 0))
+    for n in names:
+        f = fr[n]
+        x, y, w, h = rect(f["textureRect"])
+        rotated = f.get("textureRotated", False)
+        cw, ch = (h, w) if rotated else (w, h)
+        piece = atlas.crop((x, y, x + cw, y + ch))
+        if rotated:
+            piece = piece.rotate(-90, expand=True)
+        cx, cy, _, _ = rect(f["spriteColorRect"])
+        canvas.alpha_composite(piece, (cx, cy))
+
+    content = canvas.getbbox()
+    if not content:
+        return None
+    bx, by, bw, bh = rect(fr[base_name]["spriteColorRect"])
+    centre = bx + bw / 2
+    bottom = by + bh
+    half = max(centre - content[0], content[2] - centre)
+    left = int(round(centre - half))
+    right = int(round(centre + half))
+    # Anything dipping below the base's ground line would be cut off by this crop.
+    # Frame 01 of the only tile that uses this does not; refuse rather than silently
+    # clip half a planet off a tile added here later.
+    if content[3] > bottom:
+        raise ValueError(
+            f"{tp.get('name')}: animation frame draws {content[3] - bottom}px below the "
+            f"base frame's ground line, which this crop would clip"
+        )
+    return canvas.crop((left, content[1], right, bottom))
+
+
 def extract_multiplepieces(tp):
     """Composite a `multiplePieces` object into one static sprite.
 
@@ -727,6 +813,9 @@ def main():
             if tp.get("multiplePieces"):
                 # frameName is only one fragment; assemble every piece.
                 sprite_img = extract_multiplepieces(tp)
+            elif tile in ANIMATION_OVER_BASE:
+                # frameName is only the part that stands still; bake the orbit on.
+                sprite_img = extract_animated_over_base(tp)
             else:
                 fl, fn = tp.get("frameList"), tp.get("frameName")
                 if fl and fn:
@@ -955,6 +1044,12 @@ def main():
     # sprite is already in OBJDIR, and BEFORE the orphan sweep so its own PNG counts
     # as referenced. See tools/memorial_statue.py.
     catalog.append(memorial_statue.build(OBJDIR))
+
+    # Art drawn for this project rather than extracted from the source atlases, so
+    # it has neither a Market row nor an atlas frame — both halves are authored in
+    # tools/contributed_art.py. Appended here for the same reason as the Memorial
+    # Statue: before the orphan sweep, so its PNGs count as referenced.
+    catalog.extend(contributed_art.build(OBJDIR))
 
     catalog.sort(key=lambda c: (c["category"], c["level"], c["cost"]))
 

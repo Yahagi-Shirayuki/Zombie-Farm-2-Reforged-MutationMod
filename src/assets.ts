@@ -145,7 +145,11 @@ const SPECIAL_GROUP_SCALE: Record<string, number> = {
 // a mouth floating on a diving helmet, eyes on top of a ninja mask, a green jaw under
 // a robot's grille. Each one here supplies a Head (or, for the Diver, a whole helmet)
 // with its expression already drawn on.
-const COMPLETE_SPECIAL_FACES = new Set([
+// Exported so the BAKED portrait can be pinned to the same list the live rig uses:
+// tools/prep_assets.py composites the same actors and had none of these rules, which
+// is how a Zombug ended up with the default eyes on its card but not on the farm.
+// See src/zombie/specialPortrait.test.ts.
+export const COMPLETE_SPECIAL_FACES = new Set([
   "ZombieActorZombug",
   "ZombieActorZwampThing",
   "ZombieActorMasterNinjombie",
@@ -165,10 +169,10 @@ const COMPLETE_SPECIAL_FACES = new Set([
 // has to suppress head-mutation art for the same reason (a pumpkin drawn over a beard
 // has nowhere to sit). Two lists would be two chances to add the fourth masked actor to
 // one rule and not the other, and the failure would be silent art.
-const DEFAULT_FACE_SLOTS = new Set([
+export const DEFAULT_FACE_SLOTS = new Set([
   "EyeL", "EyeR", "UpperTeeth", "LowerTeeth", "Scar", "Jaw",
 ]);
-const MASKED_FACE_SLOTS = new Set(["LowerTeeth"]);
+export const MASKED_FACE_SLOTS = new Set(["LowerTeeth"]);
 
 /** Merge a named actor's replacement attachments over the ordinary skeleton.
  *  The source special-zombie plists are deltas, not complete actors: for example,
@@ -280,6 +284,11 @@ export interface PlaceableDef {
    *  A labelled row is buyable only while its label is on the market allow-list;
    *  see src/decorThemes.ts. */
   theme?: string;
+  /** Who drew this object's art, when it was drawn FOR this project rather than
+   *  extracted from the original game's atlases ("Art by LennyFaze"). Present only
+   *  on contributed rows (see tools/contributed_art.py); the Market shows it on the
+   *  card's magnifier parchment, which is the one place an item's own text lives. */
+  credit?: string;
   tileW: number; // footprint width in tiles
   tileH: number; // footprint height in tiles
   // Movement collision can be WIDER than the placement footprint. A fence occupies a

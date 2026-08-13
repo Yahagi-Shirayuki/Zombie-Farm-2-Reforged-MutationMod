@@ -10,14 +10,16 @@ export type CropMutationTable =
  * catalog in mutations.ts — by key, which is what new entries should use. A crop may
  * grant SEVERAL mutations by listing them: each one rolls on its own (see
  * resolveCropMutations), so a crop naming a head and an arm mutation can produce
- * either, both, or neither. Two crops may also name the SAME mutation — the Tier-4
- * visual variants deliberately do, sharing their base crop's bit — and adjacency
- * counts then pool, exactly as two plots of the base crop would. */
+ * either, both, or neither. Two crops may also name the SAME mutation, and adjacency
+ * counts then pool into a single roll, exactly as two plots of one crop would. (The
+ * Tier-4 pair used to do that — eyebiscus grew carrot's mutation and heartichoke grew
+ * cauli's — which made the game's two priciest mutation crops grant a Tier-1 bonus.
+ * They grow their own now; nothing shipped shares a mutation any more.) */
 export const CROP_MUTATIONS: CropMutationTable = {
   tomato: "tomato",
   onion: "onion",
   carrot: "carrot",
-  eyebiscus: "carrot",
+  eyebiscus: "eyebiscus",
   turnip: "turnip",
   potato: "potato",
   coffee: "coffee",
@@ -25,7 +27,7 @@ export const CROP_MUTATIONS: CropMutationTable = {
   broccoli: "broccoli",
   garlic: "garlic",
   cauliflower: "cauli",
-  heartichoke: "cauli",
+  heartichoke: "heartichoke",
   lima_beans: "limabean",
   venus_flytrap: "flytrap",
   dragon_fruit: "dragon",

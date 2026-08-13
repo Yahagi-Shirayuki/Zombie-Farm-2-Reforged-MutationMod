@@ -7,7 +7,11 @@ import { bitOf, bitsOf, mutationOf, slotOf } from "./mutations";
 export type MutationReplacement = "body" | "armF" | "head";
 
 const CARROT_MUTATION_BIT = bitOf("carrot");
+const EYEBISCUS_MUTATION_BIT = bitOf("eyebiscus");
 const PUMPKING_BIT = bitOf("pumpking");
+
+/** The eye attachments: Carrot-eyed and the Eyebiscus that used to ride its bit. */
+const EYE_MUTATION_BITS: ReadonlySet<number> = new Set([CARROT_MUTATION_BIT, EYEBISCUS_MUTATION_BIT]);
 
 /**
  * The art a mutation draws on a given model, or undefined when this build ships no
@@ -47,8 +51,8 @@ export function mutationCoversFace(bit: number): boolean {
   return bit === PUMPKING_BIT;
 }
 
-/** Carrot-eyed and its Eyebiscus visual override are eye attachments, so they
- * must remain visible above every authored body part, mutation, and actor FX. */
+/** Carrot-eyed and Eyebiscus are eye attachments, so they must remain visible above
+ * every authored body part, mutation, and actor FX. */
 export const EYE_MUTATION_FOREGROUND_Z = 100;
 
 export function mutationPartZIndex(
@@ -56,7 +60,7 @@ export function mutationPartZIndex(
   group: "head" | "root",
   authoredZ: number,
 ): number {
-  if (bit === CARROT_MUTATION_BIT) return EYE_MUTATION_FOREGROUND_Z;
+  if (EYE_MUTATION_BITS.has(bit)) return EYE_MUTATION_FOREGROUND_Z;
   if (group === "head") return 4.5;
   return authoredZ;
 }
@@ -92,9 +96,10 @@ export function hidesHeadMutationArt(key: string): boolean {
 
 /**
  * Mutation bits that should contribute artwork for this species. Named special
- * zombies already have authored faces, so the generic carrot-eye attachment is
- * intentionally omitted there. The bit remains on the zombie and still affects
- * stats; this only controls the rendered rig.
+ * zombies already have authored faces, so the generic eye attachments (Carrot-eyed
+ * and Eyebiscus, which is the same part in a different vegetable) are intentionally
+ * omitted there. The bit remains on the zombie and still affects stats; this only
+ * controls the rendered rig.
  */
 export function mutationBitsForRendering(
   zombies: readonly Pick<ZombieDef, "key" | "category">[] | undefined,
@@ -106,7 +111,7 @@ export function mutationBitsForRendering(
   ) ?? false;
   const maskedFace = hidesHeadMutationArt(key);
   return bitsOf(mutation).filter((bit) =>
-    !(isSpecial && bit === CARROT_MUTATION_BIT)
+    !(isSpecial && EYE_MUTATION_BITS.has(bit))
     && !(maskedFace && slotOf(bit) === "head")
   );
 }

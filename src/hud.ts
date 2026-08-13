@@ -120,6 +120,10 @@ interface MktEntry {
   owned?: boolean;
   equipped?: boolean;
   description?: string; // "what does it do" blurb shown by the card's magnifier
+  /** Artist credit for contributed art, shown under the description on the same
+   *  magnifier parchment. Decor has no description of its own, so a credit is on
+   *  its own enough to earn the card a magnifier. */
+  credit?: string;
   /** Zombies: the magnifier opens the species' full inspect card instead of the
    *  description parchment — stats and abilities are the thing worth reading before
    *  buying, and the blurb rides along under the card. */
@@ -1521,6 +1525,9 @@ export class Hud {
   onClaimReceived: ((index: number) => void) | null = null;
   /** Place a decoration reward at `index` on the farm (enters placement mode). */
   onPlaceReceived: ((index: number) => void) | null = null;
+  /** Put a decoration reward at `index` straight into the shed, without placing it
+   *  on the farm first. Returns false when the shed has no room for it. */
+  onStoreReceived: ((index: number) => Promise<boolean> | boolean) | null = null;
   /** Permanently sell a sellable decoration directly from Received. */
   onSellReceived: ((index: number) => Promise<boolean> | boolean) | null = null;
 
@@ -1953,7 +1960,8 @@ export class Hud {
             timeLabel: c.category === "tree" && c.def.growMs
               ? fmtCooldown(c.def.growMs)
               : undefined,
-            description: functionalDescription(c.def), tint: c.def.color,
+            description: functionalDescription(c.def), credit: c.def.credit,
+            tint: c.def.color,
             theme: themeLabel(themeOf(c.def)),
             onPick: () => { if (this.onBuy) this.onBuy(c.def); bg.remove(); },
           };
@@ -2529,9 +2537,14 @@ export class Hud {
     if (en.inspect) {
       card.appendChild(magnifierButton(
         `See ${en.name}'s card`, "See this zombie's card", en.inspect));
-    } else if (en.description) {
-      card.appendChild(magnifierButton(
-        `What does ${en.name} do?`, "What does this do?", () => this.showItemInfo(en)));
+    } else if (en.description || en.credit) {
+      // A credited item may have no description at all (decor never does), so the
+      // label asks about the item rather than about what it does.
+      card.appendChild(en.description
+        ? magnifierButton(`What does ${en.name} do?`, "What does this do?",
+          () => this.showItemInfo(en))
+        : magnifierButton(`About ${en.name}`, "About this item",
+          () => this.showItemInfo(en)));
     }
     if (!en.equipped && !locked && !poor && !graveLock && !limitLock) card.onclick = en.onPick;
     return card;
@@ -2556,10 +2569,23 @@ export class Hud {
     const name = document.createElement("div");
     name.className = "info-name";
     name.textContent = en.name;
-    const desc = document.createElement("div");
-    desc.className = "info-desc";
-    desc.textContent = en.description ?? "";
-    box.append(close, img, name, desc);
+    box.append(close, img, name);
+    // Decor carries a credit but no blurb; an empty .info-desc would still spend a
+    // row of the box's flex gap, so it is only added when there is something in it.
+    if (en.description) {
+      const desc = document.createElement("div");
+      desc.className = "info-desc";
+      desc.textContent = en.description;
+      box.appendChild(desc);
+    }
+    // Artist credit for contributed art. Its own line under the blurb rather than
+    // appended to it: it is about who drew the thing, not about the thing.
+    if (en.credit) {
+      const credit = document.createElement("div");
+      credit.className = "info-credit";
+      credit.textContent = en.credit;
+      box.appendChild(credit);
+    }
     bg.appendChild(box);
     bindBackdropDismiss(bg, () => bg.remove());
     this.el.appendChild(bg);

@@ -32,7 +32,7 @@
 // lineup-depth band (1.0/0.85/0.7/0.55; enemies ×1.0). See combatStats.lineupDamageBand.
 import type { BossActionChoice, BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidFeats, RaidOutcome } from "./types";
 import { emptyRaidFeats } from "./types";
-import { ACTIVATED_ABILITY, activatedKeyFor, teamAbilitiesIn } from "../zombie/abilities";
+import { ACTIVATED_ABILITY, activatedGroupsOf, activatedKeyFor, teamAbilitiesIn } from "../zombie/abilities";
 import {
   ALIEN_LASER_DAMAGE,
   applyDamage,
@@ -457,7 +457,6 @@ export interface SimUnit {
   explodeFxSeq: number; // increments on the tick this unit blows itself up (renderer trigger)
   abilityRollSeq: number; // replay-safe proc sequence (Block/Stun/Double Strike)
   usedAbilities: string[]; // one-use activated abilities already consumed
-  abilityRearms: number; // times a revival handed this unit its one-use moves back
   resurrectUsed: boolean; // one-use automatic Resurrect latch
   stunMs: number; // ms of stun left — can't act while > 0 (enemies AND zombies)
   /** Live knockback slide (`ActorFightData knockBackPoint` / `knockBackSpeed`). While
@@ -556,6 +555,12 @@ export interface BattleSimSnapshot {
   /** Absent on a snapshot taken before technique attribution existed; restored as
    *  empty, which under-reports that fight rather than corrupting it. */
   feats?: RaidFeats;
+  /** Ids of every player zombie that has fallen and not been brought back, oldest
+   *  first — the source game's `ZFFightMan.defeatedZombies`. Resurrect draws from
+   *  it, so it MUST survive a checkpoint or a restored fight would forget its dead.
+   *  Optional only so a snapshot that predates the backlog still restores — `restore`
+   *  rebuilds it from the units in that case rather than losing every corpse. */
+  fallen?: string[];
   roundLeft: number;
   enraged: boolean;
   specialCast: number;
@@ -673,7 +678,6 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     explodeFxSeq: 0,
     abilityRollSeq: 0,
     usedAbilities: [],
-    abilityRearms: 0,
     resurrectUsed: false,
     stunMs: 0,
     knockBackToX: 0,
@@ -711,6 +715,13 @@ export class BattleSim {
   /** Technique record for achievement quests — see RaidFeats. Part of the snapshot so
    *  a sim restored mid-fight keeps what it has already witnessed. */
   private feats: RaidFeats = emptyRaidFeats();
+  /** GROUND TRUTH (`-[ZombieActor fightUpdate:]` 0x4d406): a zombie that dies is appended
+   *  to `ZFFightMan.defeatedZombies` and removed from `zombies`. Nothing ever drains that
+   *  list except a revival, so it is a BACKLOG that accumulates for the whole fight —
+   *  Resurrect is polled against it (`canRez`), not fired at the instant of a death. That
+   *  is why a Garden zombie deployed AFTER a casualty can still bring that casualty back.
+   *  Ids, not references, so the list survives snapshot/restore intact. */
+  private fallen: string[] = [];
   finished = false;
   // ---- round timer + enrage ----
   private roundLeft: number;
@@ -745,6 +756,10 @@ export class BattleSim {
   private supportX: number;
   /** Distinct ACTIVATED moves present in the army (fixed) — the tappable strip. */
   readonly activatedKeys: string[];
+  /** The same moves grouped into the BUTTONS that show them (fixed): Bash/Smash share
+   *  one, Explode/Explode Ver.2 share one, everything else stands alone. Derived from
+   *  `activatedKeys`, so it needs no snapshot slot. See ACTIVATED_STACKS. */
+  readonly activatedGroups: string[][];
   /** Distinct TEAM-passive abilities present (fixed) — the strip's info icons. */
   readonly teamKeys: string[];
 
@@ -832,6 +847,7 @@ export class BattleSim {
     this.activatedKeys = [
       ...new Set(this.players.flatMap((p) => p.abilities.filter((k) => !!ACTIVATED_ABILITY[k]))),
     ];
+    this.activatedGroups = activatedGroupsOf(this.activatedKeys);
     this.teamKeys = [...new Set(this.players.flatMap((p) => teamAbilitiesIn(p.abilities)))];
     this.refreshTeamAuras();
   }
@@ -859,6 +875,7 @@ export class BattleSim {
         abilityKills: this.feats.abilityKills.map((kill) => ({ ...kill })),
         resurrections: this.feats.resurrections.map((rez) => ({ ...rez })),
       },
+      fallen: [...this.fallen],
       roundLeft: this.roundLeft,
       enraged: this._enraged,
       specialCast: this.specialCast,
@@ -890,7 +907,6 @@ export class BattleSim {
       laserTargetId: u.laserTargetId ?? null,
       abilityRollSeq: u.abilityRollSeq ?? 0,
       usedAbilities: [...(u.usedAbilities ?? [])],
-      abilityRearms: u.abilityRearms ?? 0,
       resurrectUsed: u.resurrectUsed ?? false,
       power: u.power ?? u.damage,
       // An old checkpoint parked at the 1-HP floor has necessarily consumed
@@ -920,6 +936,12 @@ export class BattleSim {
       abilityKills: (snapshot.feats?.abilityKills ?? []).map((kill) => ({ ...kill })),
       resurrections: (snapshot.feats?.resurrections ?? []).map((rez) => ({ ...rez })),
     };
+    // A snapshot with no explicit backlog is reconstructed from the units themselves: every
+    // player zombie already down is a corpse Resurrect could still claim. Deployment order
+    // is the best available stand-in for the order they fell in.
+    this.fallen = snapshot.fallen
+      ? [...snapshot.fallen]
+      : this.players.filter((p) => !p.alive && !p.taken).map((p) => p.id);
     this.roundLeft = snapshot.roundLeft;
     this._enraged = snapshot.enraged;
     this.specialCast = snapshot.specialCast;
@@ -927,6 +949,8 @@ export class BattleSim {
     this.summonsLeft = snapshot.summonsLeft;
     this.spawnSeq = snapshot.spawnSeq;
     this.activatedKeys.splice(0, this.activatedKeys.length, ...snapshot.activatedKeys);
+    // Purely derived, so it is not in the snapshot — re-derive it from the keys that are.
+    this.activatedGroups.splice(0, this.activatedGroups.length, ...activatedGroupsOf(this.activatedKeys));
     this.grabbers.splice(
       0,
       this.grabbers.length,
@@ -1048,15 +1072,59 @@ export class BattleSim {
     }));
   }
 
+  /** Which move a tap on a STACKED button fires right now (see ACTIVATED_STACKS).
+   *
+   *  Highest tier first: the group's keys are already in that order, so the answer is
+   *  the first one with a ready carrier anywhere in the army. That deliberately makes
+   *  the upgrade the move a tap spends — Explode Ver.2 is the only one of the pair that
+   *  can touch a boss, so a rule that could leave it unreachable would cost the player
+   *  a capability rather than a preference.
+   *
+   *  Nothing about `activate` changes: this only decides WHICH key the tap sends, and
+   *  the key it sends is one `activate` will accept, so the recorded transcript still
+   *  names a concrete move and the server's replay is unaffected.
+   *
+   *  Falls back to the highest tier merely PRESENT (a recharging button keeps a stable
+   *  face rather than flickering to its stackmate), then to the group's top key. */
+  nextInGroup(group: string[]): string {
+    for (const key of group) if (this.players.some((p) => this.readyToActivate(p, key))) return key;
+    for (const key of group) if (this.abilityPresent(key)) return key;
+    return group[0];
+  }
+
+  /** Per activated BUTTON, the strip's version of `activatedStatus`: the move a tap
+   *  fires now (`key`), how many zombies could perform ANY move in the group (`ready`,
+   *  the badge count), and whether the group has a carrier on screen (`present`).
+   *
+   *  `ready` counts ZOMBIES, not key-hits — a Silver Small carries both Explode and
+   *  Explode Ver.2 but is one tap's worth of exploder, and summing per-key readiness
+   *  would have advertised it as two. */
+  activatedGroupStatus(): { keys: string[]; key: string; ready: number; present: boolean }[] {
+    return this.activatedGroups.map((keys) => ({
+      keys,
+      key: this.nextInGroup(keys),
+      ready: this.players.filter((p) => keys.some((k) => this.readyToActivate(p, k))).length,
+      present: keys.some((k) => this.abilityPresent(k)),
+    }));
+  }
+
   /** Active deployed-holder count per team ability. Waiting, dead, grabbed, and
-   *  carried zombies do not project team effects. */
+   *  carried zombies do not project team effects.
+   *
+   *  Resurrect is the one ability whose holders can run out while still standing there,
+   *  so its count is REVIVES LEFT rather than holders present — a Garden zombie that has
+   *  already spent its revive contributes an aura of nothing and should not read as if it
+   *  still has one banked. At zero the icon drops off the strip entirely, which is the
+   *  honest signal that the army's safety net is gone. */
   teamAbilityStatus(): { key: string; count: number }[] {
     const deployed = this.players.filter(
       (p) => p.alive && (p.state === "advance" || p.state === "fight")
     );
     return this.teamKeys.map((key) => ({
       key,
-      count: deployed.filter((p) => p.abilities.includes(key)).length,
+      count: key === "ressurect"
+        ? this.resurrectsLeft()
+        : deployed.filter((p) => p.abilities.includes(key)).length,
     }));
   }
 
@@ -1089,15 +1157,11 @@ export class BattleSim {
     }
   }
 
-  /** Which of two eligible zombies performs an activated move. Anyone who has never
-   *  had this move handed back outranks anyone who has, so a revived exploder waits at
-   *  the BACK of the queue: it rejoins it, but only gets the call once every squadmate
-   *  who still owns their one shot has spent it. Among equals, the front-most goes —
-   *  it is nearest the enemy and already in the thick of it. */
+  /** Which of two eligible zombies performs an activated move: the front-most, since it
+   *  is nearest the enemy and already in the thick of it. There is no revived-exploder
+   *  tiebreak to make — a revived zombie comes back with its one-use moves already spent
+   *  (see `resurrect`), so it never re-enters this queue at all. */
   private outranks(candidate: SimUnit, current: SimUnit): boolean {
-    if (candidate.abilityRearms !== current.abilityRearms) {
-      return candidate.abilityRearms < current.abilityRearms;
-    }
     return candidate.x > current.x;
   }
 
@@ -1219,15 +1283,63 @@ export class BattleSim {
     mini.timerMs = this.cycleMs(mini, null);
   }
 
+  /** Deployed Garden holders that still have their one revive banked — the count the
+   *  battle strip shows the player. A holder that is dead, waiting at the back, or
+   *  carried off projects nothing, exactly like every other team ability. */
+  resurrectsLeft(): number {
+    return this.players.filter((p) => this.canResurrect(p)).length;
+  }
+
+  /** GROUND TRUTH (`-[ZombieActorGarden canRez]` 0x7c745): the ability must be `active`
+   *  and `unlocked`, which is the source game's way of spelling "carried and not yet
+   *  spent" — `ressurectZombie:` sets `setConsumed:YES` / `setActive:NO` on tag 29 the
+   *  moment it fires, so each Garden zombie revives exactly once per fight. */
+  private canResurrect(p: SimUnit): boolean {
+    return (
+      p.alive && !p.taken && p.isGarden &&
+      (p.state === "advance" || p.state === "fight") &&
+      p.abilities.includes("ressurect") && !p.resurrectUsed
+    );
+  }
+
+  /** Poll Resurrect against the corpse backlog, the way `-[ZombieActorGarden fightUpdate:]`
+   *  (0x7bf39) does: every holder in a position to cast checks `canRez` each frame rather
+   *  than reacting to a death event. Two consequences the instant-on-death model missed —
+   *  a holder deployed after a casualty still brings that casualty back, and the target is
+   *  the MOST RECENT corpse at cast time (`ressurectZombie:` reads the last element of
+   *  `defeatedZombies` and ignores its own argument), not whoever happened to die last tick.
+   *
+   *  Returns the holders that cast this step. The source game gives Resurrect and Heal ONE
+   *  shared cast slot and checks `canRez` first (0x7c0a8, before the `canHeal` branch), so
+   *  a holder that revives does not also heal on the same beat. */
+  private stepResurrect(): Set<string> {
+    const cast = new Set<string>();
+    if (!this.fallen.length) return cast;
+    for (const healer of this.players) {
+      if (!this.fallen.length) break;
+      if (!this.canResurrect(healer) || this.wallInWay(healer)) continue;
+      const corpseId = this.fallen[this.fallen.length - 1];
+      const corpse = this.players.find((p) => p.id === corpseId);
+      if (!corpse) {
+        this.fallen.pop(); // unreachable in practice; never let a bad id wedge the backlog
+        continue;
+      }
+      this.resurrect(healer, corpse);
+      cast.add(healer.id);
+    }
+    return cast;
+  }
+
   /** Authentic Garden support. Heal selects the most injured OTHER deployed
    *  zombie with missing Life and restores 50% of the healer's Power.
    *  Heal All independently fires every 20 seconds for the same amount. */
-  private stepHealing(dtMs: number) {
+  private stepHealing(dtMs: number, rezCast: Set<string>) {
     const deployed = this.players.filter(
       (p) => p.alive && (p.state === "advance" || p.state === "fight")
     );
     for (const healer of deployed) {
       if (!this.isHealer(healer)) continue;
+      if (rezCast.has(healer.id)) continue; // spent this beat's cast on the revive
       // A lane blocker takes priority over Garden support work.
       if (this.wallInWay(healer)) {
         healer.healTimerMs = Math.max(healer.healTimerMs, 250);
@@ -1598,20 +1710,24 @@ export class BattleSim {
       if (carrier) carrier.buddyId = null;
       foe.buddyCarrierId = null;
     }
-    if (foe.team === "player" && this.tryResurrect(foe)) return;
-    // A downed enemy opens the gate for the next to emerge after a beat.
-    if (fromPlayer && foe.team === "enemy") this.emergeCooldown = ENEMY_EMERGE_GAP_MS;
+    // A fallen zombie joins the corpse backlog a Garden holder's Resurrect draws from.
+    // It is NOT revived here: the source game polls `canRez` from the Garden's own
+    // update, so the revive lands whenever a holder is next in a position to cast —
+    // which may be long after this death, and may be a holder not yet deployed.
+    if (foe.team === "player") {
+      this.fallen.push(foe.id);
+      return;
+    }
+    // Only an enemy reaches here. A downed one opens the gate for the next to emerge.
+    if (fromPlayer) this.emergeCooldown = ENEMY_EMERGE_GAP_MS;
   }
 
   /** Resurrect is automatic and one-use. A living Garden holder revives the
-   *  defeated non-Small zombie at full Life and sends it back into formation. */
-  private tryResurrect(defeated: SimUnit): boolean {
-    const healer = this.players.find(
-      (p) => p.alive && (p.state === "advance" || p.state === "fight") &&
-        p.abilities.includes("ressurect") && !p.resurrectUsed
-    );
-    if (!healer) return false;
+   *  defeated zombie at full Life and sends it back into formation. */
+  private resurrect(healer: SimUnit, defeated: SimUnit): void {
     healer.resurrectUsed = true;
+    const slot = this.fallen.indexOf(defeated.id);
+    if (slot >= 0) this.fallen.splice(slot, 1);
     defeated.alive = true;
     defeated.hp = defeated.maxHp;
     defeated.state = "advance";
@@ -1626,23 +1742,33 @@ export class BattleSim {
     defeated.windupMs = 0;
     defeated.stunMs = 0;
     defeated.oneShotProtectionUsed = false;
-    // A revived zombie comes back WHOLE, one-use moves included — so an exploder that
-    // went up with its own blast can light another fuse. `abilityRearms` is what keeps
-    // that from being free: it sends the unit to the back of the queue those moves are
-    // picked from (see activate), so a second Explode spends a zombie that still has
-    // one rather than killing the same one twice while its squadmates stand there.
-    // Read BEFORE the list is cleared: a zombie that spent Explode and is standing here
-    // as a casualty is, by definition, the one that blew itself up. That combination —
+    // GROUND TRUTH (`-[ZombieActorGarden ressurectZombie:]` 0x7d3c2-0x7d436): the revived
+    // actor's whole `abilityList` is walked and EVERY ability carrying `consumable` is
+    // handed `setConsumed:YES` — and `-[ZFActorAbility isUseable]` (0x9cafc) refuses a
+    // consumed ability outright. So a zombie comes back ALIVE but SPENT: it can never
+    // light a second fuse, and a revived Garden holder can never pay the revive forward
+    // (which is what stops two holders reviving each other for the rest of the fight).
+    // The consumable set is exactly the four one-use abilities (`ZFActorActivatedAbility
+    // initWithTag:` writes the flag for tags 29/30/35/36) — Resurrect, Mini Buddy,
+    // Explode, Explode Ver.2 — which is `useOnce` here plus the Resurrect latch.
+    //
+    // It is UNCONDITIONAL: a move the zombie never got round to using is spent too, so a
+    // bomber cut down before it lit its fuse comes back without one. Coming back at all is
+    // the reward; coming back armed is not.
+    //
+    // Read BEFORE the abilities are marked: a zombie that spent Explode and is standing
+    // here as a casualty is, by definition, the one that blew itself up. That combination —
     // a Garden holder pulling a Small zombie back out of its own blast — is the
     // "Recycled" achievement, and this is the only moment it is observable.
     const exploded = defeated.usedAbilities.some((k) => k === "explode" || k === "explodeV2");
     this.feats.resurrections.push({ exploded });
-    if (defeated.usedAbilities.length) {
-      defeated.usedAbilities.length = 0;
-      defeated.abilityRearms++;
+    for (const key of defeated.abilities) {
+      if (ACTIVATED_ABILITY[key]?.useOnce && !defeated.usedAbilities.includes(key)) {
+        defeated.usedAbilities.push(key);
+      }
     }
+    if (defeated.abilities.includes("ressurect")) defeated.resurrectUsed = true;
     defeated.healFxSeq++;
-    return true;
   }
 
   /** Apply an ordinary enemy hit through the recovered player-zombie one-shot floor. */
@@ -1907,7 +2033,7 @@ export class BattleSim {
     this.stepProjectiles(dtMs);
 
     this.assignFormation();
-    this.stepHealing(dtMs);
+    this.stepHealing(dtMs, this.stepResurrect());
     const frontX = this.frontX;
 
     // Zombies.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   activeBonusHeadId, farmerCooldownMs, farmerGold, farmerHeadHasEffect, farmerHeadXp,
-  farmerMultiplier, farmerZombieGrowMs,
+  farmerMultiplier, farmerSpeedPx, farmerZombieGrowMs,
 } from "./farmer";
 import farmerRows from "../public/assets/farmer.json";
 
@@ -21,6 +21,19 @@ describe("priced Farmer head effects", () => {
   it("leaves unrelated and cosmetic heads neutral", () => {
     expect(farmerGold(100, 15)).toBe(100);
     expect(farmerMultiplier(12, "zombieLife")).toBe(1);
+  });
+
+  it("walks the farmer a quarter faster in either ninja mask", () => {
+    // The one bonus that moves the FARMER rather than the farm, and ours rather than
+    // ZF2's — the source shipped both masks with no bonus line at all.
+    expect(farmerSpeedPx(174, 23)).toBe(217.5); // Ninja Male
+    expect(farmerSpeedPx(174, 22)).toBe(217.5); // Ninja Female
+    expect(farmerSpeedPx(174, 15)).toBe(174); // Jester Mask: cosmetic, unchanged
+    expect(farmerSpeedPx(174, 12)).toBe(174); // a bonus head with a DIFFERENT bonus
+    // ...and it moves nothing else: a ninja is not a better farm, just a faster farmer.
+    expect(farmerGold(100, 23)).toBe(100);
+    expect(farmerCooldownMs(1_000, 23)).toBe(1_000);
+    expect(farmerMultiplier(23, "zombieLife")).toBe(1);
   });
 
   it("knows which heads carry a bonus at all", () => {

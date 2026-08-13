@@ -59,4 +59,7 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0046_epic_boss_twenty_level_ladder.sql'),
   ('0047_fallen_zombies.sql'),
   ('0048_fallen_released_at.sql'),
-  ('0049_periodic_quests.sql');
+  ('0049_periodic_quests.sql'),
+  -- Data repair only (retires the lower-tier mutation bit the two Tier-4 variants used
+  -- to ride); a fresh database has no rows to repair, so baselining it is a no-op.
+  ('0050_tier4_variant_mutations.sql');

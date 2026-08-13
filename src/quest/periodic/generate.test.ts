@@ -226,11 +226,20 @@ describe("periodic quest generation", () => {
 describe("periodic quest rewards", () => {
   // The two anchors the curve was fitted to. They are what makes a daily feel worth
   // doing at both ends of a 28x XP curve; a flat share of the level cannot hit both.
-  it("pays roughly 30 XP for a daily around level 10 and roughly 600 in the forties", () => {
+  it("pays roughly 30 XP for a daily around level 10 and roughly 330 at the cap", () => {
     expect(dailyUnitXp(10, toNext(10))).toBeGreaterThanOrEqual(20);
     expect(dailyUnitXp(10, toNext(10))).toBeLessThanOrEqual(40);
-    expect(dailyUnitXp(45, toNext(45))).toBeGreaterThanOrEqual(500);
-    expect(dailyUnitXp(45, toNext(45))).toBeLessThanOrEqual(800);
+    expect(dailyUnitXp(45, toNext(45))).toBeGreaterThanOrEqual(250);
+    expect(dailyUnitXp(45, toNext(45))).toBeLessThanOrEqual(420);
+  });
+
+  // The point of the halved max-level endpoint: the top of the curve must not be able
+  // to out-earn the early game's SHARE of a level. A regression that walked the cap
+  // share back up would show here first.
+  it("pays a smaller share of the level at the cap than at the unlock level", () => {
+    const shareAt = (level: number) => (dailyUnitXp(level, toNext(level)) * 3) / toNext(level);
+    expect(shareAt(45)).toBeLessThan(shareAt(DAILY_UNLOCK_LEVEL) / 2);
+    expect(shareAt(45)).toBeCloseTo(0.04, 3);
   });
 
   it("makes one weekly worth about seven dailies", () => {

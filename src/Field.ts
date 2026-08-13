@@ -11,7 +11,7 @@ import { clampPointToGrid, footprintOrigin, gridToScreen, HH, HW, screenToGrid, 
 import { setFootprint, sortLayer } from "./depthSort";
 import { makeLight, OBJECT_GLOWS } from "./lighting";
 import { mintObjectId, objectIdFloor } from "./objectIds";
-import { leafTexture, ParticleConfig, ParticleField } from "./raid/Particles";
+import { leafTexture, ParticleConfig, ParticleField, petalTexture } from "./raid/Particles";
 import type { PlacedObjectSave, PlotSave } from "./save/schema";
 import { plotsTouch } from "./zombie/cropMutations";
 import { sanitizeFallenUncapped, type FallenZombie } from "./zombie/memorial";
@@ -63,6 +63,53 @@ const FERTILIZE_FX: ParticleConfig = {
 };
 const FERT_EMIT_MS = 900; // one leaf ≈ every 0.9s per fertilized crop (source ~0.75/s)
 const FERT_CANOPY_DY = 52; // leaves emit this far above the crop's ground contact
+
+// Falling blossom, for the Sakura ground skin — the one climate that dresses the
+// farm with WEATHER rather than only with paint and scenery. Nothing in ZF2 does
+// this; the source has no ambient climate effect of any kind, so the numbers below
+// are authored rather than recovered.
+//
+// The petals fall over the farm itself, not just past its edges, so they are seeded
+// uniformly across the whole field rectangle rather than along its top edge. That
+// is what keeps the density even: a top-edge curtain with a survivable lifespan
+// only ever fills the top of a 70x70 farm, and a lifespan long enough to cross one
+// costs many times the particles for the same look. The price is that a petal
+// appears mid-air rather than blowing in, which at 13px and 0.9 alpha is not a
+// thing the eye catches.
+const SAKURA_PETAL_FX: ParticleConfig = {
+  maxParticles: 1, // emitted one at a time on a cadence (see petalEmitMs)
+  angle: -90, angleVariance: 22, // downward, fanning slightly
+  speed: 21, speedVariance: 9,
+  // A steady crosswind (gravityx) plus a gentle downward pull. cocos is y-up, so a
+  // NEGATIVE gravityy accelerates the petal down the screen.
+  gravityx: 9, gravityy: -11,
+  particleLifespan: 5, particleLifespanVariance: 1.4,
+  startParticleSize: 16, finishParticleSize: 13,
+  // Zero: each petal is positioned individually across the view (randomPetalOrigin).
+  sourcePositionVariancex: 0, sourcePositionVariancey: 0,
+  // A rose several shades DEEPER than either the blossom art (#ffa2e7) or the
+  // ground it falls on. Matching the canopy is the obvious choice and the wrong
+  // one: the Sakura skin paints the whole farm pale pink, so a petal the colour of
+  // the tree it fell off is pink on pink and disappears — the fall only reads if
+  // the petals are darker than everything behind them.
+  startColorRed: 0.933, startColorGreen: 0.435, startColorBlue: 0.659, startColorAlpha: 0.95,
+  finishColorAlpha: 0,
+  rotatePerSecond: 65, // petals tumble as they fall
+  blendFuncDestination: 0, // normal, NOT additive — additive turns the pink to white glare
+};
+const SAKURA_TERRAIN = "sakura";
+// Petals alive at once. A flat count, seeded across WHAT THE CAMERA CAN SEE rather
+// than across the farm, which is what makes it flat: spreading a per-tile density
+// over a 70x70 farm puts almost every petal off-screen, so the budget buys
+// invisible weather and the visible fall thins out the more land you own. Seeding
+// the view instead keeps the on-screen density identical at every farm size and
+// every zoom — the petals live in world space, so zooming out shrinks them and
+// widens their spread together, exactly as real distance would.
+const PETAL_TARGET_LIVE = 60;
+// Fraction of a screen height petals are ALSO seeded above the top of the view, so
+// they visibly blow in from off-camera rather than every petal on screen having
+// popped into existence inside it.
+const PETAL_SPAWN_HEADROOM = 0.25;
 
 // Fruit trees are packed closely enough that a full-sprite rectangular tap target
 // makes the transparent space beside one trunk cover its neighbours. Keep a broad
@@ -252,6 +299,16 @@ export class Field {
   // leaves draw over crops/actors. The leaves are tinted per the fertilize colour.
   readonly fxLayer = new Container();
   private fx = new ParticleField(leafTexture());
+  // Sakura blossom, on its own field because a ParticleField owns ONE texture and
+  // petals are not leaves. Built on demand: every farm pays for the fertilize
+  // leaves, but only a farm actually wearing the Sakura skin should pay for a
+  // second canvas texture, container and pool. See tickSakuraPetals.
+  private petals: ParticleField | null = null;
+  private petalEmitMs = 0;
+  // What the camera can currently see, in world coordinates. main pushes this each
+  // frame (setViewBounds); until it does, the petals fall over the farm rectangle
+  // instead, which is what a headless test or the very first frame gets.
+  private viewBounds: { x0: number; y0: number; x1: number; y1: number } | null = null;
   // Night lights for glowing objects. main parents this into the NightLayer, which
   // erases them out of the darkness so a glow reveals the scene around it at night.
   readonly objectLights = new Container();
@@ -935,6 +992,7 @@ export class Field {
       }
     }
     this.fx.update(dt);
+    this.tickSakuraPetals(dt);
     // Ripen fruit trees: when the timer elapses, swap to the fruit-bearing sprite.
     for (const o of this.objects.values()) {
       if (!o.def.harvestValue || o.ready || now < o.readyAt) continue;
@@ -954,6 +1012,66 @@ export class Field {
     // front of it (whichever grew most recently "won").
     for (const p of this.plots.values())
       if (p.crop?.groundSprite) p.crop.groundSprite.zIndex = p.crop.sprite.zIndex;
+  }
+
+  /** Falling blossom over a farm wearing the Sakura ground skin.
+   *
+   *  Deliberately keeps ticking after the skin is changed away: petals already in
+   *  the air finish their fall and fade instead of vanishing the instant the player
+   *  buys a different ground. Once the last one dies the field is idle — an empty
+   *  pool — so there is nothing to tear down. */
+  private tickSakuraPetals(dt: number) {
+    const sakura = this.climate === SAKURA_TERRAIN;
+    if (sakura && !this.petals) {
+      this.petals = new ParticleField(petalTexture());
+      this.fxLayer.addChild(this.petals.container);
+    }
+    if (!this.petals) return;
+    if (sakura && this.w > 0 && this.h > 0) {
+      // One petal per (life / target) seconds keeps roughly `target` of them alive
+      // at once, since each lives `particleLifespan` and they are emitted evenly.
+      const emitMs = SAKURA_PETAL_FX.particleLifespan * 1000 / PETAL_TARGET_LIVE;
+      this.petalEmitMs -= dt * 1000;
+      // A loop, not an `if`: after a long frame more than one petal is due, and
+      // dropping the surplus would silently thin the fall out exactly when the
+      // frame rate is already suffering. Bounded so a paused tab cannot come back
+      // and emit a year of blossom in one go.
+      let guard = PETAL_TARGET_LIVE;
+      while (this.petalEmitMs <= 0 && guard-- > 0) {
+        const p = this.randomPetalOrigin();
+        this.petals.burst(SAKURA_PETAL_FX, p.x, p.y, 1);
+        this.petalEmitMs += emitMs;
+      }
+      if (guard <= 0) this.petalEmitMs = emitMs; // drop the rest of a long backlog
+    }
+    this.petals.update(dt);
+  }
+
+  /** Where the camera is looking, in world coordinates, so the blossom falls where
+   *  it can be seen. Cheap enough to push every frame; main derives it from the
+   *  world container's transform. */
+  setViewBounds(x0: number, y0: number, x1: number, y1: number) {
+    this.viewBounds = { x0, y0, x1, y1 };
+  }
+
+  /** A uniformly random point to drop a petal from: across the visible world, and
+   *  some way above the top of it so petals also drift in from off-camera.
+   *
+   *  With no view yet, falls back to the farm itself — uniform in TILE space, not
+   *  in the bounding box, because the field is an iso diamond and seeding its box
+   *  would pile three quarters of the petals off the land to either side. */
+  private randomPetalOrigin(): { x: number; y: number } {
+    const v = this.viewBounds;
+    if (!v) {
+      const at = gridToScreen(Math.random() * this.w, Math.random() * this.h);
+      return { x: at.x, y: at.y };
+    }
+    const height = v.y1 - v.y0;
+    return {
+      x: v.x0 + Math.random() * (v.x1 - v.x0),
+      y: v.y0 - height * PETAL_SPAWN_HEADROOM
+        + Math.random() * height * (1 + PETAL_SPAWN_HEADROOM),
+    };
   }
 
   // Position the cursor. "till" resolves free placement (green valid / red invalid);

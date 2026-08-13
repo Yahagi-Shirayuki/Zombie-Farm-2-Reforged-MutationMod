@@ -2,6 +2,7 @@ import type { GameState } from "../GameState";
 import * as api from "./api";
 import { CommandQueue } from "./commandQueue";
 import {
+  EPIC_BOSS_TOKEN_GRANT_LIMIT,
   FARM_BULK_LIMIT,
   type BootstrapResponse, type CommandBatchResponse, type GameplayCommand,
   type PeriodicQuestProjection,
@@ -54,6 +55,12 @@ interface OptimisticDelta {
   localUnitId?: string;
   localZombieHarvests?: { id: string; oc: number; or: number }[];
   localObjectId?: string;
+  /** Boss Tokens this command reports, and the run they belong to. The client has
+   *  already added them to the run it is showing, so every server projection that
+   *  arrives before this command settles must be topped up by them or the counter
+   *  visibly drops back and then climbs again. */
+  bossTokens?: number;
+  bossTokenRunId?: string;
 }
 
 interface PendingRaidFinish {
@@ -429,6 +436,8 @@ export class EconomyClient {
         localUnitId: delta.localUnitId,
         localZombieHarvests: delta.localZombieHarvests,
         localObjectId: delta.localObjectId,
+        bossTokens: delta.bossTokens,
+        bossTokenRunId: delta.bossTokenRunId,
       });
       this.reconcile();
       return sequence;
@@ -696,6 +705,30 @@ export class EconomyClient {
     this.enqueue({ type: "tutorial.complete" }, { gold: 200 });
   }
 
+  /** Report a Boss Token the client rolled on a harvest. The token is already showing
+   *  on the farm; this only records it, and the server does not second-guess the roll.
+   *
+   *  Folded into a pending grant for the same run exactly like a drag-paint stroke:
+   *  an Insta-Harvest over a full field can turn up a dozen tokens in one frame, and
+   *  the Worker's budget counts SEMANTIC commands. */
+  submitEpicBossToken(runId: string, count = 1): void {
+    if (!runId || count < 1) return;
+    let folded: GameplayCommand | null = null;
+    const merged = this.queue.coalesceLast((last) => {
+      if (last.type !== "epicBoss.token" || last.runId !== runId) return null;
+      if ((last.count ?? 1) + count > EPIC_BOSS_TOKEN_GRANT_LIMIT) return null;
+      folded = { ...last, count: (last.count ?? 1) + count };
+      return folded;
+    });
+    if (merged !== null && folded) {
+      const pending = this.optimistic.get(merged);
+      if (pending) pending.bossTokens = (pending.bossTokens ?? 0) + count;
+      this.commandsBySequence.set(merged, folded);
+      return;
+    }
+    this.enqueue({ type: "epicBoss.token", runId, count }, { bossTokens: count, bossTokenRunId: runId });
+  }
+
   submitQuest(_questId: string): void {
     // Completion and reward happen inside the accepted command/raid transaction.
   }
@@ -825,7 +858,7 @@ export class EconomyClient {
     this.onQuestChanges?.(result.questChanges);
     this.onQuestState?.({ completed: result.quests.completed, progress: result.quests.progress, questChanges: result.questChanges });
     const serverTime = result.serverTime ?? Date.now();
-    this.onEpicBossState?.(epicBossRunToClient(result.event, serverTime));
+    this.onEpicBossState?.(this.withPendingBossTokens(epicBossRunToClient(result.event, serverTime)));
     if (result.lastRaidAt != null) this.state.syncRaidCooldown(serverTimestampToClient(
       result.lastRaidAt,
       serverTime,
@@ -841,7 +874,7 @@ export class EconomyClient {
     quests?: import("./protocol").QuestProjection,
   ): void {
     this.base = balance;
-    this.onEpicBossState?.(epicBossRunToClient(event, serverTime));
+    this.onEpicBossState?.(this.withPendingBossTokens(epicBossRunToClient(event, serverTime)));
     // After onEpicBossState, never before: that call is what marks the event active,
     // and a reopened epic quest is only eligible for the rail while it is.
     if (quests) this.onQuestState?.({ completed: quests.completed, progress: quests.progress, questChanges: [] });
@@ -1129,10 +1162,31 @@ export class EconomyClient {
         this.queue.size === 0,
       );
       this.deferredRosterAliases = {};
-      this.onEpicBossState?.(epicBossRunToClient(gameplay.epicBoss, serverTime, clientTime));
+      this.onEpicBossState?.(this.withPendingBossTokens(
+        epicBossRunToClient(gameplay.epicBoss, serverTime, clientTime)
+      ));
       this.onTutorialState?.(gameplay.tutorialRewarded);
     }
     this.reconcile();
+  }
+
+  /** Layer still-unsent Boss Tokens back onto an authoritative run.
+   *
+   *  The client mints these itself (submitEpicBossToken) and shows them immediately, so
+   *  a projection built before the grant reached the server legitimately does not know
+   *  about them; adopting it raw would drop the counter back and then re-climb it.
+   *  adoptGameplay's structural defer gate hides most of those, but the direct epic-boss
+   *  adopts (activation, fight result) have no such gate. Grants naming a different run
+   *  are dropped — that event is over, and its tokens with it. */
+  private withPendingBossTokens(
+    run: ReturnType<typeof epicBossRunToClient>
+  ): ReturnType<typeof epicBossRunToClient> {
+    if (!run || run.completedAt || Date.now() >= run.expiresAt) return run;
+    let pending = 0;
+    for (const delta of this.optimistic.values()) {
+      if (delta.bossTokens && delta.bossTokenRunId === run.runId) pending += delta.bossTokens;
+    }
+    return pending ? { ...run, tokenCount: run.tokenCount + pending } : run;
   }
 
   private reconcile(): void {

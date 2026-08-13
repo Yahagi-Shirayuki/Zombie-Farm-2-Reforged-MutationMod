@@ -22,6 +22,93 @@ export interface SceneryPiece {
   scenery?: boolean;
   /** Multiplier on the piece's native object size. 1 = exactly as a placed object. */
   scale?: number;
+  /** Draw this piece mirrored about its own vertical axis.
+   *
+   *  A theme with few distinct pieces reads as one stamp repeated, and the scatter
+   *  cannot hide that — it only varies size. Listing a piece twice, once flipped,
+   *  doubles the silhouettes for no new art: a tree leaning left and the same tree
+   *  leaning right are not obviously the same tree.
+   *
+   *  The theme author is responsible for only flipping art that CAN be flipped —
+   *  the same rule `noMirror` enforces for placed objects (see canMirrorObject).
+   *  Anything with baked-in lettering reads backwards. */
+  flip?: boolean;
+}
+
+/**
+ * A street laid through the surrounding land, with its two verges dressed.
+ *
+ * The scatter can only ever produce a FIELD of things — it walks a lattice and
+ * rolls for each point, which is right for a wood or a beach and cannot express a
+ * line. A street is a line, and the things beside a street are lined up along it
+ * too: lights march at an even spacing down one kerb, and what is dumped on the far
+ * side sits on the other. Laying that as a separate pass is what makes the urban
+ * skin read as a lot beside a road rather than as street furniture in a meadow.
+ */
+export interface RoadSpec {
+  /** Catalog key of the road piece. Must be a 2x2 flat tile whose art runs along
+   *  +col — the surface is laid end to end down a single row. The branch off the
+   *  crossing reuses it MIRRORED, which in iso swaps the two axes and turns the lane
+   *  markings through ninety degrees (the same trick "rotate" plays on placed art). */
+  key: string;
+  /** Catalog key of the four-way crossing dropped into the run. */
+  crossingKey: string;
+  /** Tiles beyond the farm's near edge that the road runs, clear of the scatter's
+   *  own MARGIN so the street never crowds the fence. */
+  offset: number;
+  /** Lamps marching down the kerb nearer the farm, and the tiles between them.
+   *  That even stride is most of what makes a line of them read as a street. */
+  lamps: SceneryPiece[];
+  lampSpacing: number;
+  /** What has been dumped on the far side. Dropped in CLUMPS at random rather than
+   *  marched like the lamps: waste collects where someone tipped it, and an evenly
+   *  spaced row of barrels reads as a barricade someone installed. */
+  litter: SceneryPiece[];
+  litterClumps: number;
+  litterPerClump: number;
+}
+
+/** A line of tall pieces marching across the screen just below the hills. */
+export interface SkylineSpec {
+  pieces: SceneryPiece[];
+  /** Tiles along the line between successive pieces. */
+  spacing: number;
+}
+
+/**
+ * A handful of landmarks placed with room kept around them.
+ *
+ * The scatter has no idea what it is placing, so a pond comes out wedged between two
+ * trees like any other prop — and a pond is the one thing in a wood you can see
+ * across. Placing these first and holding a clearing open around each is what makes
+ * them read as somewhere the trees stop rather than as scenery in a gap.
+ */
+export interface SpringSpec {
+  pieces: SceneryPiece[];
+  count: number;
+  /** Tiles of clear ground around each; the scatter drops anything inside. */
+  clearing: number;
+  /** Tiles beyond the farm's edge before one may sit. */
+  minDistance: number;
+}
+
+/**
+ * Stones laid as meandering trails rather than strewn at random.
+ *
+ * Same limit as the road (see RoadSpec): the scatter can make a field of stones and
+ * never a path. A trail is a walk — a heading that wanders a little at each step —
+ * so it has to be generated as one.
+ */
+export interface PathSpec {
+  pieces: SceneryPiece[];
+  /** How many separate trails. */
+  count: number;
+  /** World px between successive stones. */
+  step: number;
+  /** Stones per trail. */
+  length: number;
+  /** Radians the heading may turn per step. Small enough to read as a curve. */
+  wander: number;
 }
 
 export interface SurroundingsTheme {
@@ -33,6 +120,35 @@ export interface SurroundingsTheme {
   props: SceneryPiece[];
   /** Backdrop image under /assets/ (see tools/prep_backgrounds.py). */
   background: string;
+  /**
+   * Seamless ground image under /assets/, tiled over the land AROUND the farm.
+   *
+   * Absent by default, and that is the right answer for most skins: the surrounding
+   * land is normally just `filler` showing through, which nobody can tell from real
+   * ground while the terrain is a flat wash. A terrain with visible TEXTURE breaks
+   * that illusion — the farm becomes a detailed diamond on a blank sheet — so those
+   * skins ship a tile of themselves here. See build_ground_fill in prep_assets.py.
+   */
+  groundFill?: string;
+  /** A street through the surrounding land. Absent for every theme but Urban —
+   *  see RoadSpec for why it is a separate pass from the scatter. */
+  road?: RoadSpec;
+  /** A line of pieces along the far edge of the land, under the hills. */
+  skyline?: SkylineSpec;
+  /** Landmarks placed first, with the scatter held off around them. */
+  springs?: SpringSpec;
+  /** Trails winding through the land, laid instead of scattered. */
+  paths?: PathSpec;
+  /**
+   * An alternative horizon for the hours around nightfall (see isLocalDusk).
+   *
+   * Unlike every other backdrop here this one is NOT derived from the base art by a
+   * ramp — a sunset is a gradient sky and warm rim light, which no per-pixel
+   * luminance remap of a flat blue afternoon can produce. It is drawn as a finished
+   * piece and shipped whole, so it carries its own filler and sky rather than
+   * inheriting the theme's.
+   */
+  dusk?: { background: string; filler: number; sky: number };
   /**
    * Viewport filler: what the renderer clears to beyond the backdrop's edges.
    * Must be the backdrop's mid-hill colour, so the two read as one continuous
@@ -156,9 +272,7 @@ const AUTUMN: SurroundingsTheme = {
   props: [
     ...rep(4, { file: "leafPile.png", scale: 1.1 }),
     ...rep(2, { file: "pumpkin.png", scale: 1 }),
-    ...rep(2, { file: "haystack.png", scale: 0.7 }),
     ...rep(2, { file: "toadStool.png", scale: 1 }),
-    { file: "scarecrowNormal.png", scale: 0.8 },
     { file: "cornucopia.png", scale: 0.9 },
     { file: "rocks.png", scale: 0.9 },
   ],
@@ -166,6 +280,117 @@ const AUTUMN: SurroundingsTheme = {
   filler: 0xdea967,
   sky: 0x96d0ec,
   treeShare: 0.7,
+  dusk: {
+    background: "farm_background_autumn_dusk.png",
+    filler: 0xa37047,
+    sky: 0x8288b4,
+  },
+};
+
+// "Sakura Ground": a farm cleared inside a cherry grove in bloom. The one theme
+// built around art drawn FOR this project — both sakura are LennyFaze's (see
+// tools/contributed_art.py), and the player can buy the same two trees from the
+// Market to carry the grove inside the fence.
+//
+// The brief is deliberately narrow: blossom, and then almost nothing else. Rocks
+// and water are the only other things out there, and the ponds are kept to one
+// entry each so they read as the occasional feature of the valley rather than as
+// scenery the ring is made of — a pond every few tiles would turn a grove into a
+// water garden. Bamboo is the single note of green, at low weight, so the pink has
+// something to be pink AGAINST; drop it and the whole ring flattens into one wash.
+// Full-grown cherries are drawn at exactly their placed size — scale 1, the rule
+// this file's header describes and the one thing that stops a bought tree from
+// towering over the grove it came out of. Both sakura ship the same height (see
+// SAKURA_HEIGHT in tools/contributed_art.py), so ONE constant covers both; the
+// upright and the weeping are told apart by width now, not by height. That authored
+// height is the only place the grove's size lives — this stays 1 and follows it.
+const SAKURA_TREE = 1;
+
+const SAKURA: SurroundingsTheme = {
+  key: "sakura",
+  // All three cuts appear mirrored as well as upright: three pieces of art, six
+  // silhouettes. None has any lettering or asymmetric detail that reads as wrong
+  // reversed — a cherry leaning the other way is just another cherry.
+  trees: [
+    ...rep(4, { file: "sakuraTree.png", scale: SAKURA_TREE }),
+    ...rep(4, { file: "sakuraTree.png", scale: SAKURA_TREE, flip: true }),
+    ...rep(3, { file: "sakuraTreeWeeping.png", scale: SAKURA_TREE }),
+    ...rep(3, { file: "sakuraTreeWeeping.png", scale: SAKURA_TREE, flip: true }),
+    // The pale one, at a slightly lower weight: it is the lightest of the three, so
+    // a even share of it washes the treeline out.
+    ...rep(3, { file: "sakuraTreeFlowering.png", scale: SAKURA_TREE }),
+    ...rep(2, { file: "sakuraTreeFlowering.png", scale: SAKURA_TREE, flip: true }),
+    // The only green in the theme, and deliberately the rarest thing in the list:
+    // one stand in 25 trees. Enough to stop the ring being one flat pink wash,
+    // few enough that the valley is unmistakably a cherry wood and not a mixed one.
+    { file: "bambooTree.png", scale: 0.78 },
+  ],
+  // Every tree in this wood is full grown: no seedlings or half-height saplings, and
+  // no boulders either. What is strewn between them is the SAME little rocks the
+  // trails are made of, so a trail is just where they happen to run together — the
+  // stones on and off the path are one kind of thing, not two.
+  props: [
+    ...rep(3, { file: "rocks.png", scale: 0.9 }),
+    ...rep(3, { file: "rocks.png", scale: 0.9, flip: true }),
+    ...rep(2, { file: "rocks.png", scale: 0.72 }),
+    ...rep(2, { file: "rocks.png", scale: 0.72, flip: true }),
+  ],
+  // Two springs, well out from the fence and with the wood held back around each.
+  springs: {
+    pieces: [{ file: "koiPond.png", scale: 0.85 }],
+    count: 2,
+    clearing: 7,
+    minDistance: 14,
+  },
+  // Stone trails winding between the trees, laid as a SUGGESTION of a path rather
+  // than a paved one: the step is roughly twice a stone's own width, so the eye joins
+  // them up instead of reading a gravel strip. Many short trails rather than a few
+  // long ones, one per cell of the stratified grid, so they turn up all over the wood
+  // instead of in the handful of places a few long walks happen to reach.
+  //
+  // `wander` is low for the same reason. At 0.42 a walk coiled back over itself often
+  // enough to leave dense knots — which is exactly the concentration the spread is
+  // meant to avoid, arriving by a different route.
+  paths: {
+    // SMALL stones, close together. `rocks.png` is not one stone, it is a little pile
+    // of them — so spacing it out can only ever give a row of piles, however straight
+    // the walk. Two passes at making it read as a path failed on that: at 50px the
+    // piles merged into a paved gravel strip, at 74-108 they read as separate heaps.
+    // Shrunk to about half, they stop looking like heaps at all, and laid nearly
+    // touching they join into one narrow line — light, but continuous, which is what
+    // separates a path from things that happen to lie in a row.
+    pieces: [
+      { file: "rocks.png", scale: 0.44 },
+      { file: "rocks.png", scale: 0.44, flip: true },
+      { file: "rocks.png", scale: 0.37 },
+      { file: "rocks.png", scale: 0.37, flip: true },
+    ],
+    count: 12,
+    step: 36,
+    length: 34,
+    wander: 0.18,
+  },
+  background: "farm_background_sakura.png",
+  // The one skin whose terrain is textured rather than a wash, so the one that
+  // needs its ground continued past the fence.
+  groundFill: "ground/sakura_fill.png",
+  filler: 0xe6b7ca,
+  // The one skin whose sky is not the base art's afternoon blue — see SKY_RAMPS in
+  // prep_backgrounds.py. Flat, so the band above it continues it exactly.
+  sky: 0xf4bc97,
+  // A blossom wood stands in open ground, not packed shoulder to shoulder like the
+  // temperate forest — and with pieces this large a full-density ring closes the
+  // horizon off entirely. The floor here is the built themes' contract, not taste:
+  // Urban and Lunar at their lushest must still land near the NATURAL themes at
+  // their sparsest (see the density test in surroundings.test.ts).
+  density: 0.75,
+  // High, and it is the trails that push it there rather than the treeline. Every
+  // prop in this theme is a rock, so props scattered at random are rocks lying in
+  // exactly the places a trail is trying to be legible against — camouflage for the
+  // very thing they are made of. Thinning them is most of what makes a path read as
+  // a path; the loose stones that remain sit near the fence, where the near band is
+  // always props and no trail runs anyway.
+  treeShare: 0.88,
 };
 
 // "Snowy Ground": a frozen clearing in an evergreen forest.
@@ -198,24 +423,65 @@ const SNOWY: SurroundingsTheme = {
 // emptiest theme alongside LUNAR — see `density`.
 const URBAN: SurroundingsTheme = {
   key: "stone",
+  // Most of this theme's big pieces have left the scatter for a structure that suits
+  // them: street lights onto the road, barrels into the tipped clumps beside it, the
+  // telephone line onto the skyline. Each is something the scatter cannot place
+  // honestly — a street light exists to light a road, and a pole carrying no line is
+  // just a post.
+  //
+  // The odd pole is left in the mix anyway, because a list of ONE piece is its own
+  // problem: with the lamp alone, every tall thing on the lot was the same lamp
+  // twenty times over. See `treeShare` for the other half of that fix.
   trees: [
-    ...rep(3, { file: "streetLight.png", scale: 0.95 }),
-    ...rep(2, { file: "telephonePole.png", scale: 0.95 }),
     ...rep(3, { file: "cityLamp.png", scale: 1 }),
+    { file: "telephonePole.png", scale: 0.9 },
   ],
   props: [
     ...rep(2, { file: "crate.png", scale: 1 }),
-    ...rep(2, { file: "barrelNormal.png", scale: 1 }),
     ...rep(2, { file: "hazardFence.png", scale: 0.8 }),
-    { file: "toxicDrum.png", scale: 0.8 },
     { file: "hotdogCart.png", scale: 0.85 },
     { file: "bike.png", scale: 0.9 },
     { file: "rocks.png", scale: 0.9 },
   ],
   background: "farm_background_stone.png",
-  filler: 0x9fa3a7,
-  sky: 0x96d0ec,
+  filler: 0x9ea2a6,
+  sky: 0x93cbe8,
   density: SPARSE_THEME_DENSITY,
+  // Well under the 0.5 default: now that the street carries the lights and the
+  // skyline carries the poles, a tall piece standing loose on the lot is the
+  // exception rather than the rule. At the default the lot read as a lamp farm.
+  treeShare: 0.25,
+  road: {
+    key: "roadStraight",
+    crossingKey: "roadIntersection",
+    // Five tiles clear of the fence: past the scatter's own 2.5-tile margin, close
+    // enough that the street is in shot at the zoom the farm is usually played at.
+    offset: 5,
+    // MIRRORED so the lamp head overhangs the carriageway. The art hangs its arm out
+    // to the RIGHT of the pole, and on this kerb the road is to the pole's left — a
+    // lamp lighting the empty lot behind it is the detail that gives a street away.
+    lamps: [{ file: "streetLight.png", scale: 0.95, flip: true }],
+    lampSpacing: 8,
+    // The Toxic Drum's art is 128x128 — nearly three tiles wide at full size, where
+    // the plain Barrel is 49x73 and reads as one. It is scaled to match rather than
+    // to its own catalog size, or a single drum covers half the carriageway.
+    litter: [
+      { file: "toxicDrum.png", scale: 0.5 },
+      { file: "barrelNormal.png", scale: 1 },
+      { file: "toxicDrum.png", scale: 0.42 },
+      { file: "barrelNormal.png", scale: 0.85 },
+      { file: "crate.png", scale: 1 },
+      { file: "hazardFence.png", scale: 0.7 },
+    ],
+    litterClumps: 8,
+    litterPerClump: 4,
+  },
+  // A telephone line running the width of the land under the hills. Wide apart: the
+  // spacing is what reads as a line stretching away rather than as a fence.
+  skyline: {
+    pieces: [{ file: "telephonePole.png", scale: 0.95 }],
+    spacing: 20,
+  },
 };
 
 // "Dead Ground": parched wasteland — bare trees, cacti, and old graves.
@@ -243,8 +509,8 @@ const DEAD: SurroundingsTheme = {
     { file: "leafPile.png", scale: 1 },
   ],
   background: "farm_background_sand.png",
-  filler: 0xbda553,
-  sky: 0x96d0ec,
+  filler: 0xbca453,
+  sky: 0x93cbe8,
   treeShare: 0.65,
 };
 
@@ -271,14 +537,14 @@ const LUNAR: SurroundingsTheme = {
     { file: "spaceWormHoleA.png", scale: 0.7 },
   ],
   background: "farm_background_water.png",
-  filler: 0x5c5f66,
-  sky: 0x191932,
+  filler: 0x5b5e65,
+  sky: 0x181831,
   density: SPARSE_THEME_DENSITY,
   treeShare: 0.2,
 };
 
 const THEMES: Record<string, SurroundingsTheme> = {
-  grass: GRASS, dirt: SANDY, autumn: AUTUMN, snow: SNOWY,
+  grass: GRASS, dirt: SANDY, autumn: AUTUMN, sakura: SAKURA, snow: SNOWY,
   stone: URBAN, sand: DEAD, water: LUNAR,
 };
 
@@ -294,8 +560,16 @@ export function surroundingsTheme(terrain: string): SurroundingsTheme {
  *  already preloaded at boot, so they are not listed). */
 export function themeObjectFiles(theme: SurroundingsTheme): string[] {
   const files = new Set<string>();
-  for (const p of [...theme.trees, ...theme.props]) if (!p.scenery) files.add(p.file);
+  for (const p of themePieces(theme)) if (!p.scenery) files.add(p.file);
   return [...files];
+}
+
+/** Every scenery piece a theme can draw — scatter, roadside and skyline alike. For
+ *  checks that must cover all of them: a lamp is as easy to typo as a tree. */
+export function themePieces(theme: SurroundingsTheme): SceneryPiece[] {
+  return [...theme.trees, ...theme.props, ...(theme.road?.lamps ?? []),
+    ...(theme.road?.litter ?? []), ...(theme.skyline?.pieces ?? []),
+    ...(theme.springs?.pieces ?? []), ...(theme.paths?.pieces ?? [])];
 }
 
 /** Deterministically choose a piece for a lattice point. Deliberately hashed off

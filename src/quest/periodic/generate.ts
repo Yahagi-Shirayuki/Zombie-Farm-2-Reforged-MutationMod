@@ -30,10 +30,19 @@ export const WEEKLY_UNLOCK_LEVEL = 15;
  *  abstract but paid far too little where it matters: the XP curve steepens ~28x from
  *  level 10 to level 40 while the farm's own XP income barely doubles, so a flat share
  *  produces a daily worth a rounding error early and a windfall late. Interpolating
- *  between these two endpoints lands a single daily at roughly 28 XP around level 10,
- *  390 around level 40 and 600 at the cap, which is the intended feel across the range. */
+ *  between these two endpoints lands a single daily at roughly 27 XP around level 10,
+ *  270 around level 40 and 330 at the cap, which is the intended feel across the range.
+ *
+ *  The max-level endpoint was HALVED (0.08 -> 0.04) after modelling what the board is
+ *  actually worth up there: above level 35 the farm loop and raid gold have both gone
+ *  flat (no crop unlocks past 45), so periodic XP was carrying ~70% of a level on its
+ *  own and the endgame cleared at a near-constant ~5 days a level however steep the
+ *  curve got. Because the reward is a SHARE of the requirement, raising thresholds
+ *  could never slow that down — only this number can. The unlock endpoint is untouched:
+ *  early dailies were never the problem, and the taper means levels under ~20 barely
+ *  move (a level-10 daily goes 28 -> 27). */
 const DAILY_SHARE_AT_UNLOCK = 0.18;
-const DAILY_SHARE_AT_MAX_LEVEL = 0.08;
+const DAILY_SHARE_AT_MAX_LEVEL = 0.04;
 const MAX_LEVEL = 45;
 
 /** One weekly quest PAYS seven dailies — literally "a week of showing up".

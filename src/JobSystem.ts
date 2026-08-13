@@ -91,8 +91,8 @@ export class JobSystem {
     private onCropPlanted: (oc: number, or: number, cfg: CropConfig) => string | null = () => null,
     // Carries the exact free-placement origin into the tutorial's next beat.
     private onPlotPlowed: (oc: number, or: number) => void = () => {},
-    // Offline Epic Boss token roll. Online harvests are rolled authoritatively by
-    // the server and arrive through the reconciled Epic Boss projection.
+    // Epic Boss token roll, performed HERE in both modes and returning whether this
+    // crop yielded one. Online it is reported to the server rather than checked by it.
     private onCropHarvested: (growMs: number, value: number, x: number, y: number) => boolean = () => false,
     // Immediate affordability feedback. Queue validation used to fail silently,
     // making a valid plot look unresponsive when the player lacked currency.
@@ -625,9 +625,8 @@ export class JobSystem {
           if (r.sell) this.state.addGold(r.sell);
           this.state.addXp(xp);
         }
-        // Always report veggie harvests. Offline this performs the token roll now;
-        // online it remembers the plot so the later server-confirmed token can pop
-        // out of the crop that produced it.
+        // Always report veggie harvests: the Boss Token roll happens now, in both
+        // modes, so the token pops out of the crop that produced it.
         const bossToken = !r.isZombie && this.onCropHarvested(r.growMs, r.sell, job.cx, job.cy);
         // Zombie crops pay no gold — they yield an owned zombie unit instead.
         if (r.zombieKey) {
