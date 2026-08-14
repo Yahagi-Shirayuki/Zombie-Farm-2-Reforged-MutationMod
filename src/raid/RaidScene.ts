@@ -17,7 +17,8 @@ import { EnemyActor, type EnemyAttackPose } from "./EnemyActor";
 import { ParticleField, ParticleConfig } from "./Particles";
 import { ABILITY_POOL } from "../zombie/traits";
 import { ACTIVATED_ABILITY } from "../zombie/abilities";
-import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidLevelAsset, RaidOutcome } from "./types";
+import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidLevelAsset, RaidOutcome, SummonConfig, WaveCadence } from "./types";
+import { ABDUCTEE_KEYS, alienTintFor } from "./alienStage";
 import { RAID_MAX_INPUTS, RAID_TICK_MS, type RaidReplayInput } from "./replay";
 import {
   extrapolatePosition,
@@ -32,7 +33,7 @@ import { zombieBasicAttackName } from "./zombieAttackPresentation";
 import { zombieFacingDelta } from "./zombieFacing";
 import { isMobile } from "../platform";
 import { readSafeAreaInsets } from "../safeArea";
-import { computeRaidHudLayout } from "./raidHudLayout";
+import { abilityColumnStep, computeRaidHudLayout } from "./raidHudLayout";
 
 type RaidInputDraft =
   | { type: "bubble"; unitId: string }
@@ -49,8 +50,10 @@ export interface RaidSceneParams {
   bossThrow: BossThrowConfig | null;
   /** Boss special (non-throw) actions to schedule during the fight. */
   bossSpecials?: BossSpecial[];
-  /** Minion the boss's summonBoss action spawns (null/omitted = none). */
-  summonTemplate?: CombatUnit | null;
+  /** The alien boss's abductee queue (null/omitted = this boss can't summon). */
+  summon?: SummonConfig | null;
+  /** How this stage feeds its wave in (omitted = the one-at-a-time default). */
+  waveCadence?: WaveCadence;
   /** Blocker the boss's wall action spawns (null/omitted = none). */
   wallTemplate?: CombatUnit | null;
   /** Carried-grab hazard (Circus Trapeze Artist) for this raid (null/omitted = none). */
@@ -387,6 +390,14 @@ interface Token {
   }; // authentic pre-rendered Video Games frames
   epicActor?: AnimatedSprite;
   epicAnim?: string;
+  /** The alien boss's two saucer halves. GROUND TRUTH: `-[AlienStageActorBoss
+   *  bossUpdate:]` (0xc6bb8) attaches them while the boss is perched (state 19) and
+   *  `removeChild`s BOTH — nilling the ivars, so it is permanent — the moment it finishes
+   *  its descent and lands (state 9). The alien boss fights the ground phase on foot. */
+  ufoParts?: Sprite[];
+  /** Bar geometry for the alien boss ALONE, applied when the saucer above is destroyed —
+   *  the bars were sized to the 140x128 ship and have to shrink onto the 0.58 pilot. */
+  pilotBars?: { base: number; hpCenterX: number; topY: number };
   hp: Graphics;
   charge: Graphics; // focus bar (zombies, while charging)
   base: number; // half-width for the bars
@@ -475,6 +486,7 @@ export class RaidScene {
   // Boss projectiles.
   private bossThrow: BossThrowConfig | null;
   private wallTemplate: CombatUnit | null; // preloaded so a spawned wall renders as a sprite
+  private summon: SummonConfig | null; // alien abductee queue (drives their art preload)
   private grabberSprite = ""; // Trapeze Artist art (preloaded), "" if this raid has none
   private crabSprite = ""; // Beach crab art (preloaded), "" if this raid has none
   private grabTex: Texture | null = null; // trapeze texture
@@ -589,7 +601,13 @@ export class RaidScene {
     icons?: Map<string, Texture | null>;
     /** The key currently on the face — so the swap is skipped unless it changed. */
     shown?: string;
+    /** Activated cells only: fixed index down the button column (-1 on a passive
+     *  cell, which is laid out horizontally by its own slot counter). The pixel
+     *  pitch is a layout-time decision; this index never changes. */
+    slot: number;
   }[] = [];
+  /** How many buttons the activated column holds — the divisor for its pitch. */
+  private activeAbilityCount = 0;
   /** Whether the army carries any team passive at all — decides how far down the
    *  active column starts. Static for the whole fight, so the buttons never move. */
   private hasPassiveAbilities = false;
@@ -625,6 +643,7 @@ export class RaidScene {
     this.onVictory = params.onVictory ?? null;
     this.bossThrow = params.bossThrow;
     this.wallTemplate = params.wallTemplate ?? null;
+    this.summon = params.summon ?? null;
     this.grabberSprite = params.grabber?.sprite ?? "";
     this.crabSprite = params.crab?.sprite ?? "";
     this.imageBase = params.imageBase ?? null;
@@ -642,14 +661,15 @@ export class RaidScene {
       !!params.concentration,
       params.bossSpecials ?? [],
       params.roundMs,
-      params.summonTemplate ?? null,
+      params.summon ?? null,
       params.wallTemplate ?? null,
       !!params.noDistractions,
       !!params.escapeOnRoundEnd,
       !!params.bossFallsFromSky,
       params.bossEngageDistance,
       params.grabber ?? null,
-      params.crab ?? null
+      params.crab ?? null,
+      params.waveCadence
     );
     this.maxPlayerHp = Math.max(1, sumMax(params.playerUnits));
     this.maxEnemyHp = Math.max(1, sumMax(params.enemyUnits));
@@ -690,7 +710,13 @@ export class RaidScene {
 
     // Enemy sprites: one composited actor per enemy type (farmhand/boss/…). Fall
     // back to the raid's flat enemy icon / boss portrait for types without one.
-    const enemyKeys = [...new Set(this.sim.units.filter((u) => u.team === "enemy").map((u) => u.sourceKey))];
+    // The alien boss's abductees arrive mid-fight, so their art has to be preloaded here
+    // with the wave's — a token built at summon time has nothing to load from.
+    const summonKeys = this.summon ? ABDUCTEE_KEYS : [];
+    const enemyKeys = [...new Set([
+      ...this.sim.units.filter((u) => u.team === "enemy").map((u) => u.sourceKey),
+      ...summonKeys,
+    ])];
     await Promise.all(
       enemyKeys.map(async (k) => {
         // Prefer the animated rig (part strip) when a model exists; else the flat
@@ -870,10 +896,15 @@ export class RaidScene {
    *  player's thumb was already aimed at, and the next tap blew up a Small instead.
    *  A move that can't be used is darkened in place.
    *
-   *  A button can, however, cover a FAMILY of moves (Bash/Smash, Explode/Explode
-   *  Ver.2 — see ACTIVATED_STACKS), because five separate buttons overran the bottom
-   *  of a landscape phone. Only the face changes; the slot never moves, so the thumb
-   *  target the fix above protects is untouched. */
+   *  A button can, however, cover a FAMILY of moves (Explode/Explode Ver.2 — see
+   *  ACTIVATED_STACKS), because five separate buttons overran the bottom of a
+   *  landscape phone. Only the face changes; the slot never moves, so the thumb
+   *  target the fix above protects is untouched.
+   *
+   *  The slot INDEX is fixed here; the pixel pitch between slots is not, because it
+   *  depends on the viewport (see abilityColumnStep in layout). A slot never changes
+   *  its index, and the column only re-spaces on a resize — never mid-fight from sim
+   *  state — so the ordering guarantee above survives intact. */
   private async buildAbilityStrip() {
     const groups = [
       ...this.sim.activatedGroups.map((keys) => ({ keys, activated: true })),
@@ -890,14 +921,20 @@ export class RaidScene {
     for (const { keys, activated } of groups) {
       const shown = activated ? this.sim.nextInGroup(keys) : keys[0];
       const cell = this.makeAbilityCell(keys, icons.get(shown) ?? null, activated);
-      if (activated) cell.cell.y = activeSlot++ * ABILITY_ACTIVE_STEP;
+      const slot = activated ? activeSlot++ : -1;
       (activated ? this.activeAbilityStrip : this.passiveAbilityStrip).addChild(cell.cell);
       // Only THIS button's art, so a face swap can't reach for a move the button
       // does not cover.
       const own = new Map(keys.map((key) => [key, icons.get(key) ?? null]));
-      this.abilityCells.push({ key: keys[0], ...cell, activated, icons: own, shown });
+      this.abilityCells.push({ key: keys[0], ...cell, activated, icons: own, shown, slot });
       if (!activated) this.hasPassiveAbilities = true;
     }
+    this.activeAbilityCount = activeSlot;
+    // The column's pitch is decided in `layout`, which only re-runs its chrome pass on a
+    // resize — and this build is async, so a layout can have already happened and banked
+    // the current viewport. Invalidate that so the next one places these cells; without
+    // it a strip built after the first layout sits piled at y = 0 until something resizes.
+    this.chromeW = -1;
     this.container.addChild(this.passiveAbilityStrip, this.activeAbilityStrip);
   }
 
@@ -1016,6 +1053,8 @@ export class RaidScene {
     let topY = -60;
     let actorBaseScale = 1;
     let actorBaseY = 0;
+    const ufoParts: Sprite[] = [];
+    let pilotBars: Token["pilotBars"];
 
     if (u.team === "player") {
       // Real farm-style zombie rig (with the walk animation). Most families use
@@ -1091,6 +1130,8 @@ export class RaidScene {
         hpCenterX = (b.x + b.width / 2) * s - forwardX;
         topY = -(b.height * s);
         enemyActor = ea;
+        const tint = alienTintFor(u.sourceKey, u.id);
+        if (tint !== null) ea.applyTint(tint);
       } else if (tex) {
         const sp = new Sprite(tex);
         sp.anchor.set(0.5, 1); // feet at the origin
@@ -1143,17 +1184,28 @@ export class RaidScene {
         back.scale.set(k);
         back.position.set(0, UFO_ANCHOR_DY * k);
         root.addChildAt(back, 0); // zOrder - 1: behind the pilot rig
+        ufoParts.push(back);
       }
       const front = new Sprite(this.ufoFrontTex);
       front.anchor.set(UFO_FRONT_ANCHOR.x, 1 - UFO_FRONT_ANCHOR.y);
       front.scale.set(k);
       front.position.set(0, UFO_ANCHOR_DY * k);
       root.addChild(front); // zOrder + 1: in front of the pilot, below the bars added next
+      ufoParts.push(front);
 
       // Bars and hit-width now belong to the saucer, not the pilot inside it.
       base = (UFO_GROUP_W * k) / 2;
       hpCenterX = (UFO_SHIP_BOX.left + UFO_GROUP_W / 2) * k;
       topY = UFO_SHIP_BOX.top * k;
+      // …until he lands and the saucer is destroyed, at which point the silhouette is the
+      // 0.58 pilot alone and the bars have to shrink onto him. Derived from the same rig
+      // box the seating above uses: its left edge and top are the authored UFO_PILOT_BOX
+      // (times the fit factor), and its width is the rig's own, drawn at the pilot scale.
+      pilotBars = {
+        base: (b.width * ps) / 2,
+        hpCenterX: UFO_PILOT_BOX.left * k + (b.width * ps) / 2,
+        topY: UFO_PILOT_BOX.top * k,
+      };
     }
 
     // Weapon reach should not dictate health-bar width. Enemy bars use compact,
@@ -1192,6 +1244,8 @@ export class RaidScene {
     }
     return {
       root, actor, enemyActor, frameActor, epicActor, epicAnim: epicActor ? epicAnim : undefined,
+      ufoParts: ufoParts.length ? ufoParts : undefined,
+      pilotBars,
       hp, charge, base, hpCenterX, topY, atkCount: 0,
       deathAnim: -1, emerged: false, hpKey: -1, chargeKey: -1,
       smashSlam: -1, wasSmashWindup: 0, actorBaseScale, actorBaseY,
@@ -1566,6 +1620,21 @@ export class RaidScene {
       if (u.isBoss && u.state !== "structure" && u.state !== "descending") {
         sx += this.bossGroundOffset.x * szs;
         sy += groundDrop + this.bossGroundOffset.y * szs;
+        // …and the alien boss loses its saucer at exactly that moment. `bossUpdate:`
+        // removes both halves and nils the ivars on state 9 — the landed state — so this
+        // is one-way: the UFO never comes back for the rest of the fight.
+        if (tok.ufoParts) {
+          for (const part of tok.ufoParts) part.destroy();
+          tok.ufoParts = undefined;
+          if (tok.pilotBars) {
+            tok.base = Math.min(tok.pilotBars.base, 55); // same enemy-bar cap as makeToken
+            tok.hpCenterX = tok.pilotBars.hpCenterX;
+            tok.topY = tok.pilotBars.topY;
+            tok.hp.x = tok.hpCenterX;
+            tok.hp.y = tok.topY - 8;
+            tok.hpKey = -1; // force the bar to redraw at its new width
+          }
+        }
       }
       // Epic Bosses leave through the same sky edge they entered from. This is
       // presentation-only: the deterministic fight has already ended, while the
@@ -1962,12 +2031,22 @@ export class RaidScene {
         hudLayout.abilityLeft + ABILITY_PASSIVE_R,
         topHudH + ABILITY_PASSIVE_GAP + ABILITY_PASSIVE_R,
       );
-      this.activeAbilityStrip.position.set(
-        hudLayout.abilityLeft + ABILITY_ACTIVE_R,
-        topHudH + ABILITY_ACTIVE_R + (this.hasPassiveAbilities
-          ? ABILITY_PASSIVE_GAP + 2 * ABILITY_PASSIVE_R + 10
-          : ABILITY_ACTIVE_GAP),
+      const columnTop = topHudH + ABILITY_ACTIVE_R + (this.hasPassiveAbilities
+        ? ABILITY_PASSIVE_GAP + 2 * ABILITY_PASSIVE_R + 10
+        : ABILITY_ACTIVE_GAP);
+      this.activeAbilityStrip.position.set(hudLayout.abilityLeft + ABILITY_ACTIVE_R, columnTop);
+      // Four buttons is the worst case an army can ask for, and four at the authored
+      // pitch overhang a landscape phone's home indicator — so the pitch, not the
+      // column, gives way. Re-spaced only on a resize: slot INDEXES are fixed at build
+      // time, so nothing here can slide a different move under a waiting thumb.
+      const step = abilityColumnStep(
+        this.activeAbilityCount,
+        columnTop,
+        H - safeArea.bottom - 8,
+        ABILITY_ACTIVE_R,
+        ABILITY_ACTIVE_STEP,
       );
+      for (const c of this.abilityCells) if (c.activated) c.cell.y = c.slot * step;
     }
     // Both team bars read green when full (drain as the team loses HP).
     this.drawTeamBar(this.pBar, this.pFill, barW, barH, pHp / this.maxPlayerHp, PLAYER_COLOR, this.pBarState);

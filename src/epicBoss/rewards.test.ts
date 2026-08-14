@@ -5,6 +5,7 @@ import { purchasableZombies, type ZombieDef } from "../assets";
 import { EPIC_BOSSES, epicBossUnlockLevel } from "./catalog";
 import {
   EPIC_QUEST_ZOMBIE_REWARDS,
+  EPIC_BRAIN_DROP_CHANCE,
   epicBossCurrencyReward,
   epicQuestZombieReward,
   reopenEpicQuests,
@@ -70,42 +71,75 @@ describe("reopening an Epic Boss's quests for a new run", () => {
 });
 
 describe("Epic Boss currency rewards", () => {
-  it("awards brains only on every 5th level, with a bonus on the final one", () => {
-    // Non-milestone levels grant no brains (post-brainflation revert).
-    expect(epicBossCurrencyReward(1).brains).toBe(0);
-    expect(epicBossCurrencyReward(6).brains).toBe(0);
-    expect(epicBossCurrencyReward(19).brains).toBe(0);
-    // Every 5th level grants one brain.
-    expect(epicBossCurrencyReward(5).brains).toBe(1);
-    expect(epicBossCurrencyReward(10).brains).toBe(1);
-    expect(epicBossCurrencyReward(15).brains).toBe(1);
-    // The last rung of the ladder grants a bonus brain: 5 for a full clear.
-    expect(epicBossCurrencyReward(20).brains).toBe(2);
+  it("makes a brain a rare drop rather than a schedule", () => {
+    // An epic event is not a brain faucet: it costs 3-5 brains to activate and every
+    // attempt past your harvested tokens costs another, so a guaranteed payout made
+    // finishing one profitable in the currency it was priced in. It now rolls.
+    const never = () => 0.99;
+    const always = () => 0;
+    // Rungs 1-9 roll: the old milestone schedule (1 at rung 5, 4 at rung 10) is gone.
+    for (let rung = 1; rung < 10; rung++) {
+      expect(epicBossCurrencyReward(rung, 10, never).brains).toBe(0);
+      expect(epicBossCurrencyReward(rung, 10, always).brains).toBe(1);
+    }
+    expect(epicBossCurrencyReward(5, 10, () => EPIC_BRAIN_DROP_CHANCE - 1e-9).brains).toBe(1);
+    expect(epicBossCurrencyReward(5, 10, () => EPIC_BRAIN_DROP_CHANCE).brains).toBe(0);
   });
 
-  it("pays the bonus at each boss's own top, not a hardcoded level", () => {
-    expect(epicBossCurrencyReward(20, 20).brains).toBe(2);
-    expect(epicBossCurrencyReward(15, 20).brains).toBe(1);
-    // A hypothetical longer event pays its bonus at its own final rung instead.
-    expect(epicBossCurrencyReward(20, 30).brains).toBe(1);
-    expect(epicBossCurrencyReward(30, 30).brains).toBe(2);
+  it("guarantees the brain on the fight that ENDS a ladder", () => {
+    // The capstone should never be the one clear that hands back nothing.
+    expect(epicBossCurrencyReward(10, 10, () => 0.99).brains).toBe(1);
+    // …at each event's own top rung, not a hardcoded 10.
+    expect(epicBossCurrencyReward(20, 20, () => 0.99).brains).toBe(1);
+    expect(epicBossCurrencyReward(10, 20, () => 0.99).brains).toBe(0);
   });
 
-  it("pays every ladder the same 5 brains for a full clear", () => {
-    for (const boss of EPIC_BOSSES) {
-      let brains = 0;
-      for (let level = 1; level <= boss.maxLevel; level++) {
-        brains += epicBossCurrencyReward(level, boss.maxLevel).brains;
+  it("draws from the generator whether or not the brain is guaranteed", () => {
+    // The server hands the SAME generator on to the decor and ticket rolls, so a branch
+    // that skipped the draw would shift every later roll on exactly the clears that
+    // finish a ladder. Both paths must consume one number.
+    const draws = (level: number) => {
+      let n = 0;
+      epicBossCurrencyReward(level, 10, () => { n++; return 0.99; });
+      return n;
+    };
+    expect(draws(5)).toBe(1);
+    expect(draws(10)).toBe(1);
+  });
+
+  it("leaves a full clear reliably brain-NEGATIVE", () => {
+    // The property that matters: expected brains out must sit well under the cheapest
+    // entry price, or the event pays for itself and becomes a brain source.
+    // Nine rolled rungs plus the guaranteed final one.
+    const expectedPerClear = 9 * EPIC_BRAIN_DROP_CHANCE + 1;
+    expect(expectedPerClear).toBeCloseTo(1.72, 10);
+    const cheapestEntry = Math.min(...EPIC_BOSSES.map((boss) => boss.costBrains));
+    expect(expectedPerClear).toBeLessThan(cheapestEntry);
+  });
+
+  it("rolls independently per rung, at the stated rate", () => {
+    // A deterministic sweep over the unit interval: the share of rungs that pay must be
+    // the drop chance, not some rung-dependent schedule hiding behind it.
+    const SAMPLES = 10_000;
+    for (const rung of [1, 5, 9]) {
+      let paid = 0;
+      for (let i = 0; i < SAMPLES; i++) {
+        if (epicBossCurrencyReward(rung, 10, () => i / SAMPLES).brains) paid++;
       }
-      expect(brains).toBe(5);
+      expect(paid / SAMPLES).toBeCloseTo(EPIC_BRAIN_DROP_CHANCE, 3);
     }
   });
 
-  it("leaves the gold reward at its pre-revert per-level curve", () => {
-    expect(epicBossCurrencyReward(1).gold).toBe(100);
-    expect(epicBossCurrencyReward(5).gold).toBe(100);
-    expect(epicBossCurrencyReward(6).gold).toBe(200);
-    expect(epicBossCurrencyReward(20).gold).toBe(500);
+  it("pays each rung the gold of the two it replaced", () => {
+    // `max(2, rung) x 100`. Rung 1 merges the old rungs 1+2 (100+100), rung 10 merges
+    // 19+20 (500+500), and a full ladder still totals the same 5,600 gold.
+    expect(epicBossCurrencyReward(1).gold).toBe(200);
+    expect(epicBossCurrencyReward(2).gold).toBe(200);
+    expect(epicBossCurrencyReward(5).gold).toBe(500);
+    expect(epicBossCurrencyReward(10).gold).toBe(1000);
+    let total = 0;
+    for (let rung = 1; rung <= 10; rung++) total += epicBossCurrencyReward(rung).gold;
+    expect(total).toBe(5600);
   });
 });
 
@@ -119,15 +153,46 @@ describe("Epic Boss damage ramp", () => {
       (a, b) => epicBossUnlockLevel(a) - epicBossUnlockLevel(b)
     );
     expect(byUnlock.map((b) => [b.id, Math.round(bossDps(b))])).toEqual([
-      ["dr-groundhog", 40],
-      ["bully-frog", 48],
-      ["rocky-rhino", 56],
-      ["general-larvaelus", 64],
-      ["mystical-mamba", 72],
-      ["foul-owl", 80],
-      ["skunkarella", 90],
-      ["loco-locust", 100],
+      ["dr-groundhog", 48],
+      ["bully-frog", 60],
+      ["rocky-rhino", 72],
+      ["general-larvaelus", 84],
+      ["mystical-mamba", 96],
+      ["foul-owl", 110],
+      ["skunkarella", 125],
+      ["loco-locust", 140],
     ]);
+  });
+
+  it("prices activation in three bands up the unlock ladder", () => {
+    // 3 / 3 / 4 / 4 / 4 / 4 / 5 / 5 by unlock order. Banded rather than flat because brain
+    // income barely moves across the game by design (~1.6/day at level 4, ~2.9 at 44), so
+    // one price would mean the entry event and the endgame event cost the same share of a
+    // near-static budget. Authored in tools/prep_all_epic_bosses.py EPIC_BOSS_COST_BRAINS.
+    const byUnlock = [...EPIC_BOSSES].sort(
+      (a, b) => epicBossUnlockLevel(a) - epicBossUnlockLevel(b)
+    );
+    expect(byUnlock.map((b) => b.costBrains)).toEqual([3, 3, 4, 4, 4, 4, 5, 5]);
+    // …and the price never falls as the ladder climbs.
+    for (let i = 1; i < byUnlock.length; i++) {
+      expect(byUnlock[i].costBrains).toBeGreaterThanOrEqual(byUnlock[i - 1].costBrains);
+    }
+  });
+
+  it("crosses the unsupported wall's death line partway up", () => {
+    // The ramp's whole shape (see EPIC_BOSS_DAMAGE): a level-appropriate best-mutated
+    // headless dies unaided at 100 DPS, so the early events sit under that line and the
+    // late ones above it. An army that brings only damage keeps its front-liner early and
+    // starts losing it every attempt later. combat.test.ts measures this against the real
+    // sim; this is the cheap arithmetic version that fails first if the table drifts.
+    const UNAIDED_DEATH_DPS = 100;
+    const below = EPIC_BOSSES.filter((b) => bossDps(b) < UNAIDED_DEATH_DPS);
+    const above = EPIC_BOSSES.filter((b) => bossDps(b) >= UNAIDED_DEATH_DPS);
+    expect(below.length).toBeGreaterThanOrEqual(3);
+    expect(above.length).toBeGreaterThanOrEqual(3);
+    // …and the entry event is comfortably on the survivable side of it.
+    expect(bossDps(EPIC_BOSSES.find((b) => b.id === "dr-groundhog")!))
+      .toBeLessThan(UNAIDED_DEATH_DPS * 0.6);
   });
 
   it("never lets a later event hit softer than an earlier one", () => {
@@ -139,23 +204,31 @@ describe("Epic Boss damage ramp", () => {
     }
   });
 
-  it("caps the ramp where the top boss's own top prize can still tank it", () => {
-    // Vagabond Zombie (Loco Locust's omega, 2835 HP with its +5% All) has to remain a
-    // legal front unit for its own event. Measured in BattleSim with the fight played
-    // correctly: it survives 100 DPS and dies at 120. Do not raise this without
-    // re-measuring — casualties are permanent and a full clear is 40+ attempts, so a
-    // multiplier that kills the front unit costs one zombie PER ATTEMPT, not per level.
+  it("caps the ramp where a level-appropriate SUPPORTED wall can still hold", () => {
+    // The bounding rule is stated on the ARMY, not on one zombie, and lives in
+    // combat.test.ts: a level-appropriate best-mutated headless survives its event backed
+    // by two level-appropriate healers. Measured, that supported wall is untouched to
+    // 240 DPS and only dies at 800.
+    //
+    // 200 is the fence: comfortably above the top boss's 140, comfortably below where the
+    // supported wall starts taking real damage. It is kept as a blunt second check because
+    // casualties are permanent and a full clear is 20+ attempts, so a ramp that kills the
+    // front unit costs one zombie PER ATTEMPT, not per level. Raising it without
+    // re-measuring combat.test.ts is the mistake it exists to catch.
     const hardest = Math.max(...EPIC_BOSSES.map(bossDps));
-    expect(hardest).toBeLessThanOrEqual(100);
+    expect(hardest).toBeLessThanOrEqual(200);
   });
 
   it("keeps each boss's hit rhythm — only power is retuned", () => {
-    // dex is character, not difficulty: Skunkarella throws fast small hits and ramps
-    // from a str 1 base, so scaling it like the str 2 bosses would double its damage.
+    // dex is character, not difficulty: Skunkarella throws fast small hits from a lower
+    // str, so it reaches its rung on rhythm rather than on power. Every ramp change scales
+    // str and leaves dex alone, which is what keeps each boss feeling like itself.
     const skunk = EPIC_BOSSES.find((b) => b.id === "skunkarella")!;
     expect(skunk.unitStats.dex).toBe(4);
-    expect(skunk.unitStats.str).toBe(2.25);
-    expect(bossDps(skunk)).toBe(90);
+    expect(bossDps(skunk)).toBe(125);
+    // …and it still sits on its own rung despite the lower str — second-hardest event.
+    const ranked = [...EPIC_BOSSES].sort((a, b) => bossDps(b) - bossDps(a));
+    expect(ranked[1].id).toBe("skunkarella");
     for (const boss of EPIC_BOSSES.filter((b) => b.id !== "skunkarella")) {
       expect(boss.unitStats.dex).toBe(2);
     }
@@ -163,14 +236,24 @@ describe("Epic Boss damage ramp", () => {
 });
 
 describe("Epic Boss ladders", () => {
-  it("runs every event over the 20 rungs ZF2 actually authored", () => {
+  it("runs every event over 10 rungs, pair-compressed from the 20 ZF2 authored", () => {
+    // ZF2 authored 20 multipliers summing to 645x baseHp. The ladder is re-cut into ten
+    // rungs of two, so the TOTAL is untouched — the same fight, in half as many pieces.
+    // That total is the load-bearing number: it is what keeps the top of the ladder
+    // costing the attempts it always did while the one-attempt formalities at the bottom
+    // disappear. If a future cut changes it, the ladder got easier or harder rather than
+    // shorter, and this is where that shows up.
+    const AUTHORED_TOTAL = 645;
     for (const boss of EPIC_BOSSES) {
-      expect(boss.maxLevel).toBe(20);
-      expect(boss.multipliers).toHaveLength(20);
-      // The curve must still climb to the top: the old 40-rung ladders were padding
-      // levels 21-40 with a copy of level 20, which is exactly what was cut.
+      expect(boss.maxLevel).toBe(10);
+      expect(boss.multipliers).toHaveLength(10);
+      expect(boss.multipliers.reduce((a, b) => a + b, 0)).toBeCloseTo(AUTHORED_TOTAL, 3);
+      // The curve must still climb, and every rung must be a distinct step.
       expect(boss.multipliers[boss.maxLevel - 1]).toBeGreaterThan(boss.multipliers[0]);
       expect(new Set(boss.multipliers).size).toBe(boss.multipliers.length);
+      for (let i = 1; i < boss.multipliers.length; i++) {
+        expect(boss.multipliers[i]).toBeGreaterThan(boss.multipliers[i - 1]);
+      }
     }
   });
 });

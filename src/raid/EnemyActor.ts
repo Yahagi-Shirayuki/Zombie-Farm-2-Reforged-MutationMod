@@ -146,6 +146,9 @@ export class EnemyActor {
   private tiltPhase = 0;
   private stepPhase = 0;
   private t = 0;
+  /** Parts that take the actor's runtime colour — everything except the rig's own
+   *  `noTint` parts (the source's `setInheritColor: NO`). See applyTint. */
+  private tintable: Sprite[] = [];
 
   constructor(strip: Texture, model: EnemyModel, sourceKey = "") {
     this.container.addChild(this.root);
@@ -169,6 +172,7 @@ export class EnemyActor {
       sp.rotation = p.rot;
       sp.zIndex = p.z;
       this.root.addChild(sp);
+      if (!p.noTint) this.tintable.push(sp);
       if (p.group === "head") this.headParts.push({ sp, bx: p.px, by: p.py });
       else if (p.group === "leg")
         this.legs.push({ sp, baseX: p.px, baseY: p.py, baseRot: p.rot, back: p.back });
@@ -199,6 +203,14 @@ export class EnemyActor {
         this.shoulder = { x: top.baseX, y: top.baseY };
       }
     }
+  }
+
+  /** Tint the actor's body, the way `-[Actor resetColor]` walks the attachments and
+   *  applies `colorFromSubType:` to every one whose `inheritColor` is YES. Parts the rig
+   *  marks `noTint` are skipped — for the alien minion those are its face and body
+   *  detail, which stay grey while the rest of it takes a random hue. */
+  applyTint(color: number) {
+    for (const sp of this.tintable) sp.tint = color;
   }
 
   /** Face toward a horizontal movement delta (art faces left at facing +1). */

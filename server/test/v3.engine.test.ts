@@ -402,9 +402,10 @@ describe("protocol v3 command engine", () => {
   it("grants a quest boost reward into the authoritative inventory", () => {
     const state = freshGameplayState();
     state.quests.completed = ["1002"]; // quest 1003's prerequisite
-    // Epic quest 1003 "Defeat Dr. Groundhog Level 20" pays a Golden Dice.
+    // Epic quest 1003 pays a Golden Dice at the top of the ladder — rung 10 since the
+    // 20 authored rungs were merged in pairs (prep_all_epic_bosses.multipliers).
     applyQuestEvents(state.balance, state.quests, [
-      { type: "kEpicStageEnemyDefeatedNotification", subject: "20" },
+      { type: "kEpicStageEnemyDefeatedNotification", subject: "10" },
     ], {
       includeEpic: true,
       epicQuestIds: new Set(["1003"]),
@@ -2029,16 +2030,20 @@ describe("protocol v3 command engine", () => {
       type: "kEpicStageEnemyDefeatedNotification",
       subject: String(level),
     }];
+    // Rungs are the 10-rung ladder's: the ordinary prize is pinned to 5, the omega to 10
+    // (prep_quests.py EPIC_PRIZE_RUNGS), with the middle milestones spread between.
     expect(applyQuestEvents(state.balance, state.quests, event(5))).toEqual([]);
+    // Rung 5 carries both the zombie prize and the voucher milestone.
     expect(applyQuestEvents(state.balance, state.quests, event(5), { includeEpic: true, epicQuestIds: groundhog }))
-      .toContainEqual(expect.objectContaining({ questId: "1000", completed: true }));
-    expect(applyQuestEvents(state.balance, state.quests, event(10), { includeEpic: true, epicQuestIds: groundhog }))
-      .toContainEqual(expect.objectContaining({ questId: "1001", completed: true }));
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ questId: "1000", completed: true }),
+        expect.objectContaining({ questId: "1001", completed: true }),
+      ]));
     const brains = state.balance.brains;
-    expect(applyQuestEvents(state.balance, state.quests, event(15), { includeEpic: true, epicQuestIds: groundhog }))
+    expect(applyQuestEvents(state.balance, state.quests, event(8), { includeEpic: true, epicQuestIds: groundhog }))
       .toContainEqual(expect.objectContaining({ questId: "1002", completed: true }));
     expect(state.balance.brains).toBe(brains + 1);
-    const final = applyQuestEvents(state.balance, state.quests, event(20), { includeEpic: true, epicQuestIds: groundhog });
+    const final = applyQuestEvents(state.balance, state.quests, event(10), { includeEpic: true, epicQuestIds: groundhog });
     expect(final).toEqual(expect.arrayContaining([
       expect.objectContaining({ questId: "1003", completed: true }),
       expect.objectContaining({ questId: "1011", completed: true }),

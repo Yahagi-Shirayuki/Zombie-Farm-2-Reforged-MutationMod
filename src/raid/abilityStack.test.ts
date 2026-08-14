@@ -1,11 +1,15 @@
-// The battle strip's STACKED buttons: Bash/Smash share one, Explode/Explode Ver.2
-// share one (ACTIVATED_STACKS). The reason is layout — five separate buttons ran the
-// active column off the bottom of a phone held in landscape — so the arithmetic that
-// the column now fits is pinned here alongside the behaviour.
+// The battle strip's STACKED buttons: Explode and Explode Ver.2 share one
+// (ACTIVATED_STACKS). The reason is layout — five separate buttons ran the active
+// column off the bottom of a phone held in landscape — so the arithmetic that the
+// column fits is pinned here alongside the behaviour.
+//
+// Bash and Smash were stacked too and no longer are: they are a trade, not an upgrade
+// (2.75x against 1.8x + a 1 s area stun), so the choice is the player's. That costs a
+// fourth button, which the column's adaptive pitch pays for — also pinned below.
 import { describe, expect, it } from "vitest";
 import { BattleSim } from "./BattleSim";
 import { activatedGroupsOf, ACTIVATED_STACKS } from "../zombie/abilities";
-import { computeRaidHudLayout } from "./raidHudLayout";
+import { abilityColumnStep, computeRaidHudLayout } from "./raidHudLayout";
 import type { CombatUnit } from "./types";
 
 function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | "team">): CombatUnit {
@@ -33,9 +37,19 @@ function stepUntilReady(sim: BattleSim, group: string[], want = 1): void {
 }
 
 describe("activatedGroupsOf", () => {
-  it("puts each family on one button and leaves everything else alone", () => {
+  it("stacks the explode family and leaves everything else alone", () => {
     expect(activatedGroupsOf(["attachMini", "bash", "bashV2", "explode", "explodeV2"]))
-      .toEqual([["attachMini"], ["bashV2", "bash"], ["explodeV2", "explode"]]);
+      .toEqual([["attachMini"], ["bash"], ["bashV2"], ["explodeV2", "explode"]]);
+  });
+
+  it("gives Bash and Smash a button each — they are a trade, not an upgrade", () => {
+    // The whole point of the split: an army carrying both can spend either one. If
+    // these ever collapse back into one group, the player has silently lost the
+    // choice between 2.75x and 1.8x-plus-a-stun.
+    const groups = activatedGroupsOf(["bash", "bashV2"]);
+    expect(groups).toEqual([["bash"], ["bashV2"]]);
+    expect(ACTIVATED_STACKS.flat()).not.toContain("bash");
+    expect(ACTIVATED_STACKS.flat()).not.toContain("bashV2");
   });
 
   it("drops members the army does not carry, so a lone move is a group of one", () => {
@@ -47,10 +61,10 @@ describe("activatedGroupsOf", () => {
   });
 
   it("gives a group the slot its earliest member would have had", () => {
-    // Explode is named before Bash, so the explosion button sits above the bash one —
-    // slot order still follows first appearance, which is what keeps the column stable.
+    // Explode is named first, so the explosion button sits above the bash ones — slot
+    // order still follows first appearance, which is what keeps the column stable.
     expect(activatedGroupsOf(["explode", "bash", "bashV2", "explodeV2"]))
-      .toEqual([["explodeV2", "explode"], ["bashV2", "bash"]]);
+      .toEqual([["explodeV2", "explode"], ["bash"], ["bashV2"]]);
   });
 
   it("is idempotent — regrouping an already-grouped list changes nothing", () => {
@@ -99,22 +113,53 @@ describe("the stacked button's next move", () => {
     // concrete key, and it is a key the sim (and therefore the server's replay of the
     // recorded transcript) will honour. A stack that could hand back a refused key
     // would turn every tap into a wasted input.
-    const both = unit({
-      id: "lep", sourceKey: "ZombieActorSmallTier5", team: "player",
-      abilities: ["explode", "explodeV2"],
-    });
-    const basher = unit({
-      id: "large", sourceKey: "ZombieActorLargeTier4", team: "player",
-      abilities: ["bash", "bashV2"],
-    });
-    const sim = new BattleSim([both, basher], [enemy()], null, true);
-    expect(sim.activatedGroups).toHaveLength(2);
-    for (const group of sim.activatedGroups) {
+    //
+    // One button per sim, deliberately: a zombie's cooldown is per-ZOMBIE, not per
+    // move, so firing one of its buttons legitimately refuses the rest for ten
+    // seconds. That is the subject of the next test, not a disagreement here.
+    const army = () => [
+      unit({
+        id: "lep", sourceKey: "ZombieActorSmallTier5", team: "player",
+        abilities: ["explode", "explodeV2"],
+      }),
+      unit({
+        id: "large", sourceKey: "ZombieActorLargeTier4", team: "player",
+        abilities: ["bash", "bashV2"],
+      }),
+    ];
+    // One stacked explode button plus a button each for Bash and Smash.
+    expect(new BattleSim(army(), [enemy()], null, true).activatedGroups).toHaveLength(3);
+
+    for (let i = 0; i < 3; i++) {
+      const sim = new BattleSim(army(), [enemy()], null, true);
+      const group = sim.activatedGroups[i];
       stepUntilReady(sim, group);
       const key = sim.nextInGroup(group);
       expect(group).toContain(key);
       expect(sim.activate(key), key).toBe(true);
     }
+  });
+
+  it("spends the zombie, not the move: one Large's two buttons share one cooldown", () => {
+    // The split hands the player a choice, not a second charge. A rank-4 Large shows
+    // up ready on BOTH the Bash and the Smash button — it can perform either — and
+    // committing one takes the other away until its ten seconds are up. Anything else
+    // would double every veteran Large's output.
+    const basher = unit({
+      id: "large", sourceKey: "ZombieActorLargeTier4", team: "player",
+      abilities: ["bash", "bashV2"],
+    });
+    const sim = new BattleSim([basher], [enemy()], null, true);
+    const [bashGroup, smashGroup] = sim.activatedGroups;
+    expect([bashGroup, smashGroup]).toEqual([["bash"], ["bashV2"]]);
+
+    stepUntilReady(sim, bashGroup);
+    const ready = () => sim.activatedGroupStatus().map((s) => s.ready);
+    expect(ready()).toEqual([1, 1]); // either move is available…
+
+    expect(sim.activate("bash")).toBe(true);
+    expect(ready()).toEqual([0, 0]); // …and spending one spends the zombie
+    expect(sim.activate("bashV2")).toBe(false);
   });
 
   it("keeps a stable face when nothing is ready", () => {
@@ -159,37 +204,74 @@ describe("the stacked button's badge", () => {
 });
 
 describe("the active column fits a landscape phone", () => {
-  // The bug this whole stack exists for. Constants mirror RaidScene's (ABILITY_ACTIVE_R
-  // 27, ABILITY_ACTIVE_STEP 64, ABILITY_PASSIVE_R 15, ABILITY_PASSIVE_GAP 7) and the
-  // placement at RaidScene.layout: the column starts below the top HUD, and below the
-  // passive row when the army has one.
+  // The bug the stack exists for, and the budget the un-stacked Bash/Smash pair has to
+  // live inside. Constants mirror RaidScene's (ABILITY_ACTIVE_R 27, ABILITY_ACTIVE_STEP
+  // 64, ABILITY_PASSIVE_R 15, ABILITY_PASSIVE_GAP 7) and the placement at
+  // RaidScene.layout: the column starts below the top HUD, and below the passive row
+  // when the army has one.
   const R = 27, STEP = 64, PASSIVE_R = 15, PASSIVE_GAP = 7;
-  const bottomOf = (buttons: number, height: number, width: number) => {
-    // Worst case on both counts: an army that also carries a team passive (so the
-    // column starts below the passive row), on a device reporting no safe-area inset
-    // to spare. A notched phone in landscape only shrinks the usable height further,
-    // which is why the assertions leave no slack to spend.
-    const hud = computeRaidHudLayout(width, height, { top: 0, right: 0, bottom: 0, left: 0 }, true);
-    const top = hud.topHudHeight + R + PASSIVE_GAP + 2 * PASSIVE_R + 10;
-    return top + (buttons - 1) * STEP + R;
+
+  // Worst case: an army that also carries a team passive, so the column starts below
+  // the passive row as well as the top HUD.
+  const columnTop = (height: number, width: number, safeBottom: number) =>
+    computeRaidHudLayout(width, height, { top: 0, right: 0, bottom: safeBottom, left: 0 }, true)
+      .topHudHeight + R + PASSIVE_GAP + 2 * PASSIVE_R + 10;
+
+  /** Bottom edge of the last button, at the pitch `layout` would actually choose. */
+  const bottomOf = (buttons: number, height: number, width: number, safeBottom = 0) => {
+    const top = columnTop(height, width, safeBottom);
+    const step = abilityColumnStep(buttons, top, height - safeBottom - 8, R, STEP);
+    return top + (buttons - 1) * step + R;
   };
+
+  /** What the column would measure at the authored pitch, with no tightening. */
+  const rigidBottomOf = (buttons: number, height: number, width: number, safeBottom = 0) =>
+    columnTop(height, width, safeBottom) + (buttons - 1) * STEP + R;
 
   // 375x812 held sideways — the smallest modern phone in landscape.
   const W = 812, H = 375;
+  // An iPhone's home indicator in landscape. The original fix measured against a bare
+  // viewport; four buttons only fit once this is honoured, so it is honoured here.
+  const INDICATOR = 21;
 
-  it("stacking is what makes it fit: five buttons overflow, three do not", () => {
+  it("five buttons overflow — which is why the explode pair still shares one", () => {
     const everything = ["attachMini", "bash", "bashV2", "explode", "explodeV2"];
     expect(everything.length).toBe(5);
-    expect(bottomOf(everything.length, H, W)).toBeGreaterThan(H); // the reported bug
-    expect(activatedGroupsOf(everything)).toHaveLength(3);
-    expect(bottomOf(activatedGroupsOf(everything).length, H, W)).toBeLessThanOrEqual(H);
+    expect(rigidBottomOf(5, H, W)).toBeGreaterThan(H); // the reported bug
+    expect(activatedGroupsOf(everything)).toHaveLength(4);
+  });
+
+  it("four buttons need the adaptive pitch once the home indicator is honoured", () => {
+    // This is the whole cost of un-stacking Bash and Smash, stated as arithmetic: at
+    // the authored 64 px pitch the fourth button clears the viewport but not the
+    // indicator. Tightening the pitch is what buys it back.
+    const limit = H - INDICATOR;
+    expect(rigidBottomOf(4, H, W, INDICATOR)).toBeGreaterThan(limit);
+    expect(bottomOf(4, H, W, INDICATOR)).toBeLessThanOrEqual(limit);
   });
 
   it("holds for the worst case a real army can produce", () => {
     // A fully unlocked roster is the most buttons the strip can ever be asked for:
-    // every activated move in the catalog, which is every member of every stack plus
-    // the unstacked ones.
-    const all = [...new Set(["attachMini", ...ACTIVATED_STACKS.flat()])];
-    expect(bottomOf(activatedGroupsOf(all).length, H, W)).toBeLessThanOrEqual(H);
+    // every activated move in the catalog — every member of every stack, plus the
+    // unstacked ones.
+    const all = [...new Set(["attachMini", "bash", "bashV2", ...ACTIVATED_STACKS.flat()])];
+    const buttons = activatedGroupsOf(all).length;
+    expect(buttons).toBe(4);
+    expect(bottomOf(buttons, H, W, INDICATOR)).toBeLessThanOrEqual(H - INDICATOR);
+  });
+
+  it("leaves a short column at the authored spacing", () => {
+    // Only a column that would otherwise overhang pays anything. An army with one or
+    // two buttons must look exactly as it did before.
+    const top = columnTop(H, W, INDICATOR);
+    expect(abilityColumnStep(1, top, H - INDICATOR - 8, R, STEP)).toBe(STEP);
+    expect(abilityColumnStep(2, top, H - INDICATOR - 8, R, STEP)).toBe(STEP);
+  });
+
+  it("never tightens buttons into each other, even on a viewport too short to fit", () => {
+    // Past the point where the pitch would overlap thumb targets it clamps and lets the
+    // column overflow instead — an unreachable button beats a pile of ambiguous ones.
+    const step = abilityColumnStep(4, columnTop(240, W, 0), 240, R, STEP);
+    expect(step).toBeGreaterThanOrEqual(2 * R + 2);
   });
 });

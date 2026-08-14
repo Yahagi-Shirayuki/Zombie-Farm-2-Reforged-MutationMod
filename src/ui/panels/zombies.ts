@@ -20,6 +20,7 @@ import {
 import { mutationEntries, mutationTipText } from "../../zombie/mutationDisplay";
 import { statBreakdown } from "../../zombie/statDisplay";
 import { classTierRank } from "../../zombie/taxonomy";
+import type { AlmanacGuideTopic } from "../../zombie/almanacGuide";
 import { ZOMBIE_SORTS, isZombieSort, sortZombies, type ZombieSort } from "../../zombie/rosterSort";
 import { getZombieSort, setZombieSort } from "../../prefs";
 import { keepScroll, recallOneOf, remember } from "../viewState";
@@ -584,6 +585,32 @@ export function openZombiesPanel(hud: Hud, initialTab?: ZombiesPanelTab) {
     cnt.textContent = `${found} / ${entries.length} discovered`;
     head.append(title, cnt);
 
+    // Field notes sit ABOVE the collection: the three systems that actually hand out
+    // the species below (the Pot, Brain Tickets, the Epic events) are what a player
+    // staring at a wall of silhouettes needs, and a per-entry hint has no room for
+    // them. Chips rather than prose so the grid still starts near the top.
+    const topics = hud.getAlmanacGuide ? hud.getAlmanacGuide() : [];
+    if (topics.length) {
+      const notes = document.createElement("div");
+      notes.className = "alm-notes";
+      const label = document.createElement("div");
+      label.className = "alm-notes-label";
+      label.textContent = "How to find new zombies";
+      notes.appendChild(label);
+      for (const topic of topics) {
+        const chip = document.createElement("button");
+        chip.className = "alm-note";
+        const title = document.createElement("b");
+        title.textContent = topic.title;
+        const blurb = document.createElement("span");
+        blurb.textContent = topic.blurb;
+        chip.append(title, blurb);
+        chip.onclick = () => openAlmanacGuide(hud, topic);
+        notes.appendChild(chip);
+      }
+      body.appendChild(notes);
+    }
+
     const grid = document.createElement("div");
     grid.className = "zr-grid alm-grid";
     body.appendChild(grid);
@@ -729,4 +756,21 @@ function openAlmanacEntry(hud: Hud, entry: AlmanacEntryView) {
   hint.textContent = entry.hint;
   wrap.append(por, title, status, hint);
   panel.appendChild(wrap);
+}
+
+/** One field-note page: the topic's title over its paragraphs. Text only — these
+ *  explain a system rather than a species, so there is nothing to illustrate, and
+ *  the modal scrolls because the Pot's page is deliberately long. */
+function openAlmanacGuide(hud: Hud, topic: AlmanacGuideTopic) {
+  const { panel } = openModal({
+    host: hud.el, panelClass: "zpanel alm-guide", bgClass: "alm-bg", replaceSelector: ".alm-bg",
+  });
+  const title = document.createElement("h2");
+  title.textContent = topic.title;
+  panel.appendChild(title);
+  for (const paragraph of topic.paragraphs) {
+    const p = document.createElement("p");
+    p.textContent = paragraph;
+    panel.appendChild(p);
+  }
 }

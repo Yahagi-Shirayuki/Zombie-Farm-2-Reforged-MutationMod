@@ -172,6 +172,66 @@ describe("QuestSystem client-paced progress", () => {
     expect(system.views()[0].objectives[0].count).toBe(1);
   });
 
+  it("closes out a restored quest whose requirement is already satisfied", () => {
+    // Reported from the field: "One of the quests is completed, but still showing up"
+    // — Master Combiner sitting in the quest log at "Collect 15 zombies from the
+    // Zombie Pot (15/15) ✓", forever, reward never paid. Its countTotal was lowered
+    // from 50 to 15, so a save carrying 15+ collections restores already finished.
+    // Completion used to be tested only when an event ADVANCED a counter, and a
+    // capped requirement can never advance again — so nothing ever re-checked it.
+    const bus = new QuestBus();
+    const state = new GameState();
+    const completed = vi.fn();
+    const system = new QuestSystem(new Map([["1", quest()]]), state, bus, {
+      authoritative: false,
+      grantItem: vi.fn(), grantZombie: vi.fn(), completed, render: vi.fn(),
+    });
+
+    // countTotal is 2; the save was written when the requirement still asked for more.
+    system.restore({ active: [{ id: "1", counts: [7] }], completed: [] });
+
+    expect(system.views()).toEqual([]);
+    expect(system.completedCount).toBe(1);
+    expect(completed).toHaveBeenCalledTimes(1);
+    expect(state.xp).toBe(10); // the reward it was owed, paid once
+  });
+
+  it("leaves a satisfied quest to the server when the server owns completion", () => {
+    // The mirror of the case above: online the Worker re-checks every eligible quest
+    // on each command batch, so it heals itself. Completing here would pay a reward
+    // the server never granted (and bounce off the spend-only economy endpoint).
+    const bus = new QuestBus();
+    const grantReward = vi.fn(() => true);
+    const completed = vi.fn();
+    const system = new QuestSystem(new Map([["1", quest()]]), new GameState(), bus, {
+      authoritative: true,
+      grantReward, grantItem: vi.fn(), grantZombie: vi.fn(), completed, render: vi.fn(),
+    });
+
+    system.restoreAuthoritative({ completed: [], progress: [{ questId: "1", counts: [2] }] });
+
+    expect(system.completedCount).toBe(0);
+    expect(grantReward).not.toHaveBeenCalled();
+    expect(completed).not.toHaveBeenCalled();
+
+    system.applyAuthoritativeChanges([{ questId: "1", counts: [2], completed: true }]);
+    expect(system.completedCount).toBe(1);
+  });
+
+  it("unlocks a successor when a satisfied quest is closed out on restore", () => {
+    const bus = new QuestBus();
+    const second = { ...quest(), id: "2", prerequisiteQuest: 1 };
+    const system = new QuestSystem(
+      new Map([["1", quest()], ["2", second]]), new GameState(), bus, {
+        authoritative: false,
+        grantItem: vi.fn(), grantZombie: vi.fn(), completed: vi.fn(), render: vi.fn(),
+      });
+
+    system.restore({ active: [{ id: "1", counts: [2] }], completed: [] });
+
+    expect(system.views().map((v) => v.id)).toEqual(["2"]);
+  });
+
   it("hides inactive Epic quests without discarding lifetime progress", () => {
     const bus = new QuestBus();
     const epic = { ...quest(), id: "1000", epicEvent: true, requirements: [{

@@ -52,9 +52,11 @@ describe("Epic Boss market", () => {
   it("describes special zombie rewards at their quest milestones", () => {
     const quests = questRows as Record<string, QuestDef>;
     const notes = epicZombieRewardNotes(SKUNKARELLA, quests);
+    // Diva's collection chain spreads under the pinned ordinary-prize rung; Madame is
+    // the omega and sits on the ladder's top rung (see EPIC_PRIZE_RUNGS in prep_quests).
     expect(notes).toEqual([
-      "Levels 3, 5, 8, 10: Diva Zombie",
-      "Level 20: Madame Zombie",
+      "Levels 2, 3, 4, 5: Diva Zombie",
+      "Level 10: Madame Zombie",
     ]);
     expect(EPIC_BOSSES.flatMap((boss) => epicZombieRewardNotes(boss, quests))).toHaveLength(15);
   });

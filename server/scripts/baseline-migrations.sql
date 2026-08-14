@@ -62,4 +62,14 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0049_periodic_quests.sql'),
   -- Data repair only (retires the lower-tier mutation bit the two Tier-4 variants used
   -- to ride); a fresh database has no rows to repair, so baselining it is a no-op.
-  ('0050_tier4_variant_mutations.sql');
+  ('0050_tier4_variant_mutations.sql'),
+  -- Data repair only (pulls runs parked above the re-cut 10-rung Epic ladder down to its
+  -- top and corrects their HP); a fresh database has no rows to repair, so baselining it
+  -- is a no-op.
+  ('0051_epic_boss_ten_rung_ladder.sql'),
+  -- Data repair only (re-fits in-flight Epic runs onto the per-boss baseHp ramp); a fresh
+  -- database has no rows to repair, so baselining it is a no-op.
+  ('0052_epic_boss_per_boss_base_hp.sql'),
+  -- Data repair only (buries Epic Boss casualties that settled before the graveyard
+  -- write existed); a fresh database has no rows to repair, so baselining it is a no-op.
+  ('0053_epic_boss_graveyard_backfill.sql');

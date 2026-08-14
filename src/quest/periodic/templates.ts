@@ -47,11 +47,27 @@ const DAILY_COUNTS = {
   // The wildcard "harvest any" below is what carries the bulk numbers.
   harvestNamed: [15, 20, 25, 30, 35],
   plantNamed: [15, 20, 25, 30, 35],
-  harvestAny: [45, 75, 105, 135, 165],
+  // CEILING: 60. Measured against what an hour a day actually produces, the old top
+  // bands asked for essentially the whole farm — 165 harvests against the ~176 a level-44
+  // player with a full field manages in four sessions, i.e. 94% of the day's total output
+  // for ONE of three daily slots, at every band. A slot a normal day cannot clear with
+  // room to spare is not an objective, it is a tax, and since the daily board now carries
+  // most of the back half's XP it converted straight into slower levelling. The ramp is
+  // kept (a level-44 daily should still out-ask a level-6 one) but it now tops out where
+  // a short session can still finish it.
+  harvestAny: [45, 50, 55, 58, 60],
   // Plowing tracks harvesting one-for-one over time — every spent plot is re-tilled
-  // before it is replanted — so a plow target that lagged the harvest one was met
-  // incidentally and never read as an objective at all.
-  plow: [40, 65, 90, 115, 140],
+  // before it is replanted — so this used to run AHEAD of the harvest target, on the
+  // reasoning that a plow ask which lagged it was met incidentally and never read as an
+  // objective at all.
+  //
+  // It now shares the harvest ceiling instead. Once harvestAny was capped at 60, a plow
+  // target of 140 simply became the binding farm chore and inherited the whole problem
+  // the cap was meant to solve — the board still asked for most of the day's field work,
+  // just through a different slot. Running level with harvest is the deliberate trade:
+  // the two objectives now largely satisfy each other, which is the price of neither of
+  // them being able to eat the day.
+  plow: [40, 47, 53, 57, 60],
   // A long crop turns over once or twice a day at best, so its "daily" is notional —
   // it exists only to give the weekly long-crop objective something to be five times.
   harvestLong: [6, 9, 12, 15, 18],
@@ -68,6 +84,41 @@ const DAILY_COUNTS = {
 /** A weekly asks five times what the same objective asks for in a day. */
 export const WEEKLY_COUNT_MULTIPLIER = 5;
 
+/** Per-objective overrides of that multiplier.
+ *
+ *  `harvestAny` needs one because its two ceilings disagree with the 5x rule: the daily
+ *  tops out at 60 and a week is not meant to ask beyond 200, but 60 x 5 is 300. Capping
+ *  alone would flatten the whole ladder — even the lowest band's 45 x 5 = 225 clears 200,
+ *  so every band would land on the ceiling and the weekly would stop scaling with level
+ *  entirely. A smaller multiplier keeps the ramp underneath the ceiling instead
+ *  (149 → 198 across the bands).
+ *
+ *  Note what this costs: a weekly still PAYS seven dailies (WEEKLY_MULTIPLIER in
+ *  generate.ts) while this one now COSTS 3.3, so the harvest weekly is the most generous
+ *  on the board per unit of work. That is deliberate — it is the slot most likely to be
+ *  missed by a player who skips a couple of days — but it is the number to revisit first
+ *  if weeklies start feeling like free XP.
+ *
+ *  `plow` has no weekly template of its own (the weekly board's field slot is the harvest
+ *  one), so it needs no override — but it shares the DAILY ceiling, since the two chores
+ *  track each other one-for-one. */
+const WEEKLY_MULTIPLIER_OVERRIDE: Partial<Record<keyof typeof DAILY_COUNTS, number>> = {
+  harvestAny: 3.3,
+};
+
+/** How many dailies one weekly of `key` COSTS. Exported so the derivation invariant in
+ *  generate.test.ts checks the real rule rather than restating a literal 5. */
+export const weeklyMultiplierFor = (key: keyof typeof DAILY_COUNTS): number =>
+  WEEKLY_MULTIPLIER_OVERRIDE[key] ?? WEEKLY_COUNT_MULTIPLIER;
+
+/** Ceilings the board must respect whatever the bands say. A daily farm chore stays
+ *  inside what an hour of play produces; a week may ask for a multiple of that but not an
+ *  open-ended one. These bound BOTH field objectives — harvesting and plowing — because
+ *  the two track each other one-for-one, so a ceiling on one alone just moves the load.
+ *  Asserted directly in generate.test.ts. */
+export const DAILY_FIELD_MAX = 60;
+export const WEEKLY_FIELD_MAX = 200;
+
 /** Ceilings a weekly may not cross whatever the 5x rule produces.
  *
  *  Only the ordinary invasion win needs one: five times its daily target is ten wins, and
@@ -78,7 +129,9 @@ export const WEEKLY_COUNT_MULTIPLIER = 5;
  *  it — five flawless wins is a fair week's asking FOR A FARM THAT CAN WIN ONE, and the
  *  real question is whether this farm can. That is a level gate, and both scopes answer
  *  it the same way (see FLAWLESS_MIN_BAND). */
-const WEEKLY_MAX: Partial<Record<keyof typeof DAILY_COUNTS, number>> = { invade: 8 };
+const WEEKLY_MAX: Partial<Record<keyof typeof DAILY_COUNTS, number>> = {
+  invade: 8, harvestAny: WEEKLY_FIELD_MAX,
+};
 
 /** Below this band, NEITHER scope asks for a flawless invasion.
  *
@@ -93,7 +146,9 @@ export const FLAWLESS_MIN_BAND = 2;
 const dailyCount = (band: number, key: keyof typeof DAILY_COUNTS): number =>
   byBand(band, DAILY_COUNTS[key]);
 export const weeklyCount = (band: number, key: keyof typeof DAILY_COUNTS): number => {
-  const scaled = dailyCount(band, key) * WEEKLY_COUNT_MULTIPLIER;
+  const scaled = Math.round(
+    dailyCount(band, key) * (WEEKLY_MULTIPLIER_OVERRIDE[key] ?? WEEKLY_COUNT_MULTIPLIER)
+  );
   const cap = WEEKLY_MAX[key];
   return cap === undefined ? scaled : Math.min(scaled, cap);
 };

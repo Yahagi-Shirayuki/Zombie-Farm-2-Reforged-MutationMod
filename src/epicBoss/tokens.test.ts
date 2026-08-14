@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  dropsEpicBossToken, epicBossTokenChance, epicBossTokenRatePerPlotDay, MAX_TOKEN_CHANCE,
+  dropsEpicBossToken, epicBossTokenChance, epicBossTokenRatePerPlotDay,
+  EFFECTIVE_MAX_TOKEN_CHANCE, FLAT_BONUS, SUPPLY_SCALE,
 } from "./tokens";
 
 const H = 3_600_000;
@@ -25,9 +26,10 @@ describe("Epic Boss crop tokens", () => {
   it("gives every crop a live roll, so no harvest is ever a dead pull", () => {
     // The bare grow-time curve puts a 15-minute crop near 0.4% per harvest, which
     // reads as "never" to a player pulling carrots. The flat bonus is a floor on
-    // FEEL and every crop must clear it.
+    // FEEL and every crop must clear it — at the current supply scale, which moves the
+    // curve's height without touching its shape (see SUPPLY_SCALE).
     for (const crop of Object.values(CROP)) {
-      expect(chance(crop)).toBeGreaterThanOrEqual(0.03);
+      expect(chance(crop)).toBeGreaterThanOrEqual(FLAT_BONUS * SUPPLY_SCALE);
     }
   });
 
@@ -54,14 +56,16 @@ describe("Epic Boss crop tokens", () => {
   });
 
   it("caps at the recovered ceiling so no crop is ever a guaranteed token", () => {
-    expect(chance(CROP.onion)).toBe(MAX_TOKEN_CHANCE);
-    expect(chance(CROP.heartichoke)).toBe(MAX_TOKEN_CHANCE);
+    // The pin still exists, at the scaled height: the 24-hour band sits ON the ceiling,
+    // which is what stops harvest value separating those crops from each other.
+    expect(chance(CROP.onion)).toBeCloseTo(EFFECTIVE_MAX_TOKEN_CHANCE, 10);
+    expect(chance(CROP.heartichoke)).toBeCloseTo(EFFECTIVE_MAX_TOKEN_CHANCE, 10);
     for (const crop of Object.values(CROP)) {
-      expect(chance(crop)).toBeLessThanOrEqual(MAX_TOKEN_CHANCE);
+      expect(chance(crop)).toBeLessThanOrEqual(EFFECTIVE_MAX_TOKEN_CHANCE);
     }
     // The bonus pushes the ceiling down into the 12-hour band; it must not reach
     // the 6-hour band, or harvest value would stop separating the mid crops too.
-    expect(chance(CROP.corpseFlower)).toBeLessThan(MAX_TOKEN_CHANCE);
+    expect(chance(CROP.corpseFlower)).toBeLessThan(EFFECTIVE_MAX_TOKEN_CHANCE);
   });
 
   it("still ranks crops of equal grow time by harvest value", () => {

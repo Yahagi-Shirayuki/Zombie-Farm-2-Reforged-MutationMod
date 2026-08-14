@@ -214,7 +214,58 @@ import type { RaidOutcome } from "./types";
 // Same cost as v15: an invasion in flight at deploy time settles as stale_ruleset and pays
 // nothing. In-flight checkpoints are safe — a session pinned to 25 is rejected outright,
 // so no pre-backlog snapshot is ever fed to this code.
-export const RAID_RULESET_VERSION = 26;
+// 27: THE ALIEN RAID, run against the binary a second time after a tester's report. Full
+// disassembly in docs/mechanics/ALIEN_RAID_RECOVERED.md §7. Three of the fixes move raid
+// outcomes and so must be versioned:
+//   * ZOMBIES VS ALIENS IS A SWARM. `-[ZFFightMan spawnEnemyIn:]` fills a five-slot
+//     `enemySlots` array beside the one "current" enemy — six at once — and `spawnTimer`
+//     seeds to 10 s on stage 6 and 3600 s everywhere else, so the alien raid is the only
+//     one whose slots are ever filled. The other ten stay one-at-a-time, unchanged.
+//   * A LANDED BOSS HAS NO ACTIONS. `-[CivilianActorFight bossUpdate:]` only rolls an
+//     action in state 19, and a boss that has finished its descent is in state 9 — below
+//     the 15..27 window — so it drops through to `civilianUpdate` and just swings. This
+//     used to be enforced for throws and walls only, which left Zedzox casting turnZombie
+//     and the alien boss firing its laser for the whole ground phase.
+//   * `summonBoss` ABDUCTS HUMANS. `bossSummonList` is seeded with four of them and
+//     refilled by a five-way roll on every cast, so it never runs dry; the real limit is
+//     `allowedToSummonBoss` refusing a second while the first still lives. It replaces a
+//     cap of three copies of the wave's own minion, and the abductee is off-budget.
+// ELITE_PROFILES 6 and 9 are re-fitted in the same change — both raids' difficulty moved
+// under the rules above, and the profiles are pinned to a measured ladder.
+// Same cost as v15: an invasion in flight at deploy time settles as stale_ruleset and pays
+// nothing. The v26 checkpoint fields it retires (`summonsLeft`) are read defensively in
+// BattleSim.restore, but a session pinned to 26 is rejected at the handshake anyway.
+// v28 — EPIC BOSS RETUNE, two coupled edits in tools/prep_all_epic_bosses.py, mirrored
+// into every epic catalog:
+//   * the attempt window (EPIC_BOSS_FIGHT_MS) 30 s -> 60 s, and
+//   * every rung of EPIC_BOSS_DAMAGE scaled by 0.8 (the ramp's SHAPE is unchanged, so
+//     "higher unlock, higher damage" still holds exactly).
+// Epic fights are server-replayed through this module and the window is the fight's
+// deadline, so a transcript recorded under 30 s does not replay under 60 s.
+//
+// A BALANCE change, not a mechanics one — no rule here moved. Zombies still enter one at
+// a time every CHARGE_MS, which is precisely why the window is load-bearing: it decides
+// how much of the army ever reaches the boss (6 of 20 at 30 s, 13 at 60 s), so damage per
+// attempt is super-linear in it and a 20-rung ladder cost 135 attempts for an ordinary
+// army. Cutting that to roughly a third was the point. The second effect is that the
+// per-boss ramp finally becomes legible — it was worth about one zombie across the whole
+// ladder at 30 s — and the 0.8x scale is what keeps that from overshooting into
+// "own the one right tank or do not play".
+// Same cost as every bump: an epic attempt in flight at deploy settles as stale_ruleset.
+//
+// v29 — EPIC BOSS DAMAGE COMPOUNDS 5% PER RUNG (epicBossDamage in epicBoss/catalog.ts).
+// Rung 1 keeps its authored value, so the entry fight of every event is unchanged; the top
+// of a ten-rung ladder now hits 1.05^9 = 1.55x. Both the client sim and this module's
+// replay read the same helper, so a fight recorded on rung N replays at rung N's damage.
+//
+// WHY. Play-tested: a maxed army cleared Loco Locust — the hardest event in the game — in
+// 11 attempts without losing a single zombie, taking the top rung in two. HP could not fix
+// that. HP only buys attempts (the fight is capped and damage carries over), so a ladder
+// tuned by HP alone is walkable by any army with enough patience, which is precisely what
+// an endgame event should not be. Damage is regressive by design here: it costs a weak
+// roster far more than a developed one, and that IS the gate. The bounding rule is
+// unchanged and still holds at the new top-rung values — see epicBoss/combat.test.ts.
+export const RAID_RULESET_VERSION = 29;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

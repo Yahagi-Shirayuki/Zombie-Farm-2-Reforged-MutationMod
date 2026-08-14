@@ -32,7 +32,8 @@ import {
 } from "./RaidCatalog";
 import { ABILITY_TIER, ABILITY_POOL } from "../zombie/traits";
 import { displayTotals } from "../zombie/statDisplay";
-import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidOutcome, RaidStage } from "./types";
+import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidOutcome, RaidStage, SummonConfig, WaveCadence } from "./types";
+import { summonConfigFor, waveCadenceFor } from "./alienStage";
 import { rollLootTier } from "./LootTable";
 import { rollBrainDropWithPity, nextBrainDryStreak, brainDropChance, brainDropTable } from "./brainDrops";
 import { orderPartyRoster } from "./partySelection";
@@ -217,8 +218,10 @@ export interface RaidSetup {
   bossThrow: BossThrowConfig | null;
   /** Boss special (non-throw) actions for the live scene ([] if none). */
   bossSpecials: BossSpecial[];
-  /** Minion the boss's summonBoss action spawns (null if it can't summon). */
-  summonTemplate: CombatUnit | null;
+  /** The alien boss's abductee queue (null if this boss can't summon). */
+  summon: SummonConfig | null;
+  /** How this stage feeds its wave onto the field (raid 6 is the only swarm). */
+  waveCadence: WaveCadence;
   /** Blocker the boss's wall action spawns (null if it has no wall). */
   wallTemplate: CombatUnit | null;
   /** Carried-grab hazard (Circus Trapeze Artist) for the live scene (null if none). */
@@ -510,7 +513,11 @@ export class RaidManager {
       bossSpecials: eliteBossSpecials(this.bossSpecialsOf(stage), profile),
       grabber: this.grabberOf(raid),
       crab: this.crabOf(raid),
-      ...this.summonWallTemplatesOf(stage, enemyUnits, profile),
+      // Alien-stage divergences (raid 6 only) — see raid/alienStage.ts. The verifier
+      // builds both from the same helpers, off the same elite/level context.
+      waveCadence: waveCadenceFor(raid.id),
+      summon: this.summonConfigOf(raid, stage, profile),
+      wallTemplate: this.wallTemplateOf(stage, profile),
       dice,
       concentration,
       brainDrop,
@@ -551,50 +558,56 @@ export class RaidManager {
     };
   }
 
-  /** Build the templates the boss can spawn: `summonBoss` reinforces with a copy of
-   *  the wave's minion; `wall` drops a high-HP blocker sized from the action's `hp`.
-   *  Each is null unless the stage's BOSS actually carries that action. */
-  private summonWallTemplatesOf(
+  /** The alien boss's abductee queue. `summonBoss` is the ALIEN boss's action and no
+   *  other's, and what it summons is a rota of abducted humans rather than a copy of the
+   *  wave — see raid/alienStage.ts for the disassembly. */
+  private summonConfigOf(
+    raid: RaidDef,
     stage: RaidStage,
-    enemyUnits: CombatUnit[],
     elite: EliteProfile | null = null
-  ): { summonTemplate: CombatUnit | null; wallTemplate: CombatUnit | null } {
-    let summonTemplate: CombatUnit | null = null;
-    let wallTemplate: CombatUnit | null = null;
-    if (stage.bossKey && !stage.throwingDisabled) {
-      const actions = this.assets.enemyStats[stage.bossKey]?.bossActions ?? [];
-      if (actions.some((a) => a.name === "summonBoss")) {
-        const minion = enemyUnits.find((u) => !u.isBoss);
-        if (minion) summonTemplate = { ...minion };
-      }
-      const wall = actions.find((a) => a.name === "wall");
-      if (wall) {
-        const hp = Math.max(1, Math.round(eliteWallHp(wall.hp ?? 1500, elite)));
-        // Use the action's own wall art (Ninja carrotWall.png / Robot junkWall.png); the
-        // sourceKey strips ".png" so the renderer keys its preloaded texture by it.
-        const sourceKey = (wall.sprite ?? "carrotWall.png").replace(/\.png$/i, "");
-        wallTemplate = {
-          id: "wall",
-          sourceKey,
-          team: "enemy",
-          name: "Wall",
-          str: 0,
-          dex: 1,
-          con: Math.round(hp / 10),
-          focus: 0,
-          hp, // the sim's toSim() uses maxHp directly, so set it to the wall's HP
-          maxHp: hp,
-          attackCooldownMs: 3500,
-          attacks: [{ name: "", frequency: 1, mult: 0 }],
-          isBoss: false,
-          alive: true,
-          isGarden: false,
-          isHeadless: false,
-          abilities: [],
-        };
-      }
-    }
-    return { summonTemplate, wallTemplate };
+  ): SummonConfig | null {
+    if (!stage.bossKey || stage.throwingDisabled) return null;
+    const actions = this.assets.enemyStats[stage.bossKey]?.bossActions ?? [];
+    if (!actions.some((a) => a.name === "summonBoss")) return null;
+    return summonConfigFor(raid.id, this.assets.enemyStats, this.assets.raidAttacks, {
+      raidId: raid.id,
+      playerLevel: this.state.level,
+      elite,
+    });
+  }
+
+  /** The blocker `wall` drops: a high-HP body sized from the action's own `hp`. Null
+   *  unless the stage's BOSS carries the action. */
+  private wallTemplateOf(
+    stage: RaidStage,
+    elite: EliteProfile | null = null
+  ): CombatUnit | null {
+    if (!stage.bossKey || stage.throwingDisabled) return null;
+    const wall = (this.assets.enemyStats[stage.bossKey]?.bossActions ?? [])
+      .find((a) => a.name === "wall");
+    if (!wall) return null;
+    const hp = Math.max(1, Math.round(eliteWallHp(wall.hp ?? 1500, elite)));
+    // Use the action's own wall art (Ninja carrotWall.png / Robot junkWall.png); the
+    // sourceKey strips ".png" so the renderer keys its preloaded texture by it.
+    return {
+      id: "wall",
+      sourceKey: (wall.sprite ?? "carrotWall.png").replace(/\.png$/i, ""),
+      team: "enemy",
+      name: "Wall",
+      str: 0,
+      dex: 1,
+      con: Math.round(hp / 10),
+      focus: 0,
+      hp, // the sim's toSim() uses maxHp directly, so set it to the wall's HP
+      maxHp: hp,
+      attackCooldownMs: 3500,
+      attacks: [{ name: "", frequency: 1, mult: 0 }],
+      isBoss: false,
+      alive: true,
+      isGarden: false,
+      isHeadless: false,
+      abilities: [],
+    };
   }
 
   /** Build the boss's SPECIAL (non-throw) actions for the selected stage — lasers,

@@ -403,19 +403,30 @@ const SNOWY: SurroundingsTheme = {
     ...rep(3, { file: "evergreenTree.png", scale: 0.95 }),
     ...rep(2, { file: "evergreenTree.png", scale: 0.65 }),
   ],
+  // Weighted toward what the WEATHER made rather than what somebody built. The
+  // first pass ran the other way — two thirds of the list was hedging, forts,
+  // igloos and carved ice — and a clearing where every third object is a snow
+  // fort reads as a play park rather than as a frozen wood. The built pieces are
+  // all still here, each roughly halved, so coming across one is an event.
   props: [
-    ...rep(3, { file: "snowHedge_01.png", scale: 1 }),
-    ...rep(2, { file: "snowBalls.png", scale: 1.2 }),
-    ...rep(2, { file: "snowFort.png", scale: 1 }),
+    // Drifts and snowed-under rock: the natural floor of the clearing.
+    ...rep(4, { file: "snowBalls.png", scale: 1.2 }),
+    ...rep(3, { file: "rocks.png", scale: 0.9 }),
+    ...rep(2, { file: "boulder.png", scale: 0.7 }),
+    // Young firs seeded out of the treeline. The near band is props only, so
+    // without these the only greenery in the clearing is the far band's.
+    ...rep(2, { file: "evergreenTree.png", scale: 0.45 }),
+    ...rep(2, { file: "snowHedge_01.png", scale: 1 }),
     { file: "snowMan.png", scale: 0.75 },
+    { file: "snowFort.png", scale: 0.85 },
     { file: "igloo.png", scale: 1 },
     { file: "iceSculpture.png", scale: 1 },
-    { file: "rocks.png", scale: 0.9 },
-    { file: "boulder.png", scale: 0.7 },
   ],
   background: "farm_background_snow.png",
-  filler: 0xe7f1fa,
-  sky: 0x96d0ec,
+  filler: 0xe6f1f9,
+  // The no-tree base's own sky, a shade off the original's — this theme has no
+  // SKY_RAMPS entry, so the backdrop carries the base's blue through verbatim.
+  sky: 0x93cbe8,
   treeShare: 0.75,
 };
 
@@ -423,34 +434,66 @@ const SNOWY: SurroundingsTheme = {
 // emptiest theme alongside LUNAR — see `density`.
 const URBAN: SurroundingsTheme = {
   key: "stone",
-  // Most of this theme's big pieces have left the scatter for a structure that suits
-  // them: street lights onto the road, barrels into the tipped clumps beside it, the
-  // telephone line onto the skyline. Each is something the scatter cannot place
-  // honestly — a street light exists to light a road, and a pole carrying no line is
-  // just a post.
+  // NOTHING that belongs to infrastructure is scattered here any more. Every upright
+  // this theme owns has moved to a structure that explains it — street lights onto the
+  // road, barrels into the tipped clumps beside it, the telephone line onto the
+  // skyline — because the scatter cannot place any of them honestly: a street light
+  // exists to light a road, and a pole carrying no line is just a post. The loose
+  // City Lamps went first, then the stray poles, and the lot is better for it: the
+  // line of poles under the hills reads as a line only while it is the ONLY line.
   //
-  // The odd pole is left in the mix anyway, because a list of ONE piece is its own
-  // problem: with the lamp alone, every tall thing on the lot was the same lamp
-  // twenty times over. See `treeShare` for the other half of that fix.
+  // What is left is a dumping ground, so both lists are junk. `trees` is only "the
+  // bigger junk" — the far band still gets the pieces that stand up, so the depth
+  // cue survives without a single tree in a theme that should not have one.
   trees: [
-    ...rep(3, { file: "cityLamp.png", scale: 1 }),
-    { file: "telephonePole.png", scale: 0.9 },
-  ],
-  props: [
-    ...rep(2, { file: "crate.png", scale: 1 }),
-    ...rep(2, { file: "hazardFence.png", scale: 0.8 }),
-    { file: "hotdogCart.png", scale: 0.85 },
+    // A lump of broken concrete, at the size that stands up. Rubble is the theme of
+    // both lists — this is just the rubble big enough to read from the back band.
+    ...rep(3, { file: "boulder.png", scale: 0.75 }),
+    ...rep(2, { file: "barbWireFence_01.png", scale: 0.9 }),
+    { file: "hazardFence.png", scale: 0.85 },
     { file: "bike.png", scale: 0.9 },
-    { file: "rocks.png", scale: 0.9 },
+    { file: "hotdogCart.png", scale: 0.85 },
+    { file: "zombieXingSign.png", scale: 0.9 },
+  ],
+  // Rubble, then crates, then a thin tail of everything else. Two rules hold this
+  // list together, and both were learnt the wrong way round first:
+  //
+  // - It is RUBBLE. Broken stone and dumped crates are what a derelict lot is covered
+  //   in; a bench or a postbox is somebody's deliberate street furniture, and a lot
+  //   with a scattering of those reads as a park nobody mows. Both are out of the
+  //   list altogether — one slot in twenty-four sounds rare and is not, because the
+  //   lot draws about a hundred pieces at the zoom it is usually seen at, and a warm
+  //   brown bench on grey ground is picked out by the eye every single time.
+  // - The loud pieces get one slot each. The Hazard Fence is the most obviously urban
+  //   thing in the library and easily the most saturated, so at any generous weight
+  //   the lot becomes a field of yellow chevrons. Grey carries the count instead and
+  //   reads as nothing in particular, which is what most litter looks like.
+  //
+  // Both rubble pieces appear at two sizes, as LUNAR's craters do: one stamp repeated
+  // at one size is a pattern however many of it there are. The Toxic Drum is scaled to
+  // the plain Barrel rather than to its own 128x128 art, the correction the road's
+  // clumps make too.
+  props: [
+    ...rep(5, { file: "rocks.png", scale: 0.9 }),
+    ...rep(4, { file: "rocks.png", scale: 0.6 }),
+    ...rep(3, { file: "boulder.png", scale: 0.45 }),
+    ...rep(3, { file: "crate.png", scale: 1 }),
+    ...rep(2, { file: "boulder.png", scale: 0.3 }),
+    ...rep(2, { file: "crate.png", scale: 0.7 }),
+    { file: "barrelNormal.png", scale: 1 },
+    { file: "toxicDrum.png", scale: 0.5 },
+    { file: "barbWireFence_01.png", scale: 0.85 },
+    { file: "hazardFence.png", scale: 0.8 },
   ],
   background: "farm_background_stone.png",
   filler: 0x9ea2a6,
   sky: 0x93cbe8,
   density: SPARSE_THEME_DENSITY,
-  // Well under the 0.5 default: now that the street carries the lights and the
-  // skyline carries the poles, a tall piece standing loose on the lot is the
-  // exception rather than the rule. At the default the lot read as a lamp farm.
-  treeShare: 0.25,
+  // Well under the 0.5 default. The far band is junk rather than trees, so there is
+  // no treeline to establish and no reason to favour the bigger pieces — the split
+  // survives only as a depth cue, putting the odd thing that stands up out at the
+  // back. At the default the lot read as a lamp farm, and later as a pole farm.
+  treeShare: 0.2,
   road: {
     key: "roadStraight",
     crossingKey: "roadIntersection",
@@ -473,8 +516,11 @@ const URBAN: SurroundingsTheme = {
       { file: "crate.png", scale: 1 },
       { file: "hazardFence.png", scale: 0.7 },
     ],
-    litterClumps: 8,
-    litterPerClump: 4,
+    // Five heaps of three. Eight-of-four laid 32 drums down one verge, which at this
+    // spacing is not fly-tipping any more, it is a row — and the clumps stopped
+    // reading as clumps once they touched.
+    litterClumps: 5,
+    litterPerClump: 3,
   },
   // A telephone line running the width of the land under the hills. Wide apart: the
   // spacing is what reads as a line stretching away rather than as a fence.
@@ -511,6 +557,12 @@ const DEAD: SurroundingsTheme = {
   background: "farm_background_sand.png",
   filler: 0xbca453,
   sky: 0x93cbe8,
+  // Under the natural themes' default 1. This one is a WASTELAND, and a wasteland
+  // at the same fill as a temperate wood is just a wood with dead trees in it —
+  // the empty ground between the pieces is the theme. Still comfortably a natural
+  // density (the floor is a contract at roughly 0.7; see the density test) — and
+  // 0.75, matching Sakura, keeps a clear margin on both of that test's bounds.
+  density: 0.75,
   treeShare: 0.65,
 };
 

@@ -16,6 +16,8 @@ import { ZombieField } from "./zombie/ZombieField";
 import { makeOwned, type OwnedZombie } from "./zombie/types";
 import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
 import { almanacEntries, isEpicZombie, obtainHint } from "./zombie/almanac";
+import { almanacGuide } from "./zombie/almanacGuide";
+import { RAID_ZOMBIE_DROPS } from "./raid/zombieDrops";
 import { fallenToInfo, snapshotFallen } from "./zombie/memorial";
 import { POT_DURATION_MS } from "./zombie/ZombiePot";
 import { isCombinePromotion } from "./zombie/combineSpecies";
@@ -51,7 +53,7 @@ import {
 } from "./raid/sessionExpiry";
 import { gridToScreen, screenToGrid, tileCenter, TILE_H, TILE_W, HW, HH } from "./iso";
 import { setFootprint } from "./depthSort";
-import { NightLayer, makeLight } from "./lighting";
+import { NightLayer, makeLight, OBJECT_GLOWS } from "./lighting";
 import { buyXp, sellBack, zombieSellValue } from "./economy";
 import { awardedSellValue } from "./awardSellValue";
 import { farmerHeadXp } from "./farmer";
@@ -94,8 +96,9 @@ import {
   epicBossUnlockLevel,
 } from "./epicBoss/catalog";
 import { EpicBossManager } from "./epicBoss/EpicBossManager";
-import { buildEpicBossSetup, rollEpicBossLoot } from "./epicBoss/combat";
-import { epicBossCurrencyReward } from "./epicBoss/rewards";
+import { buildEpicBossSetup, rollEpicBossDrops } from "./epicBoss/combat";
+import { epicBossCurrencyReward, epicBrainTicketChance } from "./epicBoss/rewards";
+import { BRAIN_TICKET_KEY } from "./raid/eliteInvasion";
 import { epicZombieRewardNotes, visibleEpicBosses } from "./epicBoss/market";
 import { dropsEpicBossToken, EPIC_BOSS_FIGHT_BRAIN_COST } from "./epicBoss/tokens";
 import { epicAsset, epicLootImage, epicLootImageByName } from "./epicBoss/lootImage";
@@ -444,6 +447,11 @@ async function main() {
   // grass keeps the temperate trees/shrubs, the sandy skin gets palms and a
   // shipwrecked pirate's cargo, and so on.
   let foliage: Sprite[] = [];
+  /** Night lights cast by the surroundings' own lamps. A sibling of the placed
+   *  objects' `field.objectLights` under the night layer, and world-positioned the
+   *  same way — separate only because these belong to the ring and have to be torn
+   *  down with it, whereas an object's light lives and dies with the object. */
+  const sceneryLights = new Container();
   /** Where the road sits this build. Shared so the scatter can keep off it. */
   interface RoadGeometry {
     row: number; colMin: number; colMax: number;
@@ -547,6 +555,26 @@ async function main() {
       setFootprint(sp, col, row, col, row);
       field.entityLayer.addChild(sp);
       foliage.push(sp);
+      return sp;
+    };
+    /** Light a lamp after dark. A street light exists to light a street, so one that
+     *  goes dark at night is the same mistake as one standing in an empty lot.
+     *
+     *  Same glow table, radius and reveal strength as a PLACED object of that art
+     *  (Field.attachObjectLight), so a Street Light bought from the Market and one
+     *  standing on this kerb cast identical light. The vertical rule is that method's
+     *  too — 0.35 of the light's own diameter above the ground point. The horizontal
+     *  nudge is the one thing extra: the art hangs its lamp on an arm about a third of
+     *  its width off the pole, and `flip` says which way that arm is pointing, so the
+     *  pool lands under the head instead of under the post. */
+    const lightLamp = (piece: SceneryPiece, sp: Sprite, tex: Texture) => {
+      const glow = OBJECT_GLOWS[piece.file.replace(/\.png$/, "")];
+      if (!glow) return;
+      const l = makeLight(glow.radius, glow.color, 0.7);
+      const scale = objScale * (piece.scale ?? 1);
+      l.position.set(sp.x + (piece.flip ? -1 : 1) * tex.width * scale * 0.35,
+        sp.y - l.height * 0.35);
+      sceneryLights.addChild(l);
     };
     // Lamps march: an even stride down one kerb, skipping the junction so none
     // stands in the mouth of the side road.
@@ -554,7 +582,10 @@ async function main() {
       let i = 0;
       for (let col = colMin; col <= colMax; col += road.lampSpacing, i++) {
         if (Math.abs(col - crossCol) <= 2) continue;
-        place(road.lamps[i % road.lamps.length], col, geom.nearVerge);
+        const piece = road.lamps[i % road.lamps.length];
+        const sp = place(piece, col, geom.nearVerge);
+        const tex = pieceTexture(piece);
+        if (sp && tex) lightLamp(piece, sp, tex);
       }
     }
     // Litter does not march. Clumps are dropped at random along the far side and a
@@ -719,6 +750,7 @@ async function main() {
     const generation = ++foliageGeneration;
     for (const s of foliage) { s.parent?.removeChild(s); s.destroy(); }
     foliage = [];
+    for (const l of sceneryLights.removeChildren()) l.destroy();
     // Theme pieces are ordinary object art, which loads lazily. Draw with whatever
     // is already resident, and rebuild once the rest of this theme's art arrives.
     // The road SURFACE is named by catalog key rather than filename (the layout
@@ -957,6 +989,7 @@ async function main() {
   // Developer menu for now (a real day/night cycle comes later).
   const night = new NightLayer();
   night.lights.addChild(field.objectLights); // glowing objects' lights
+  night.lights.addChild(sceneryLights); // and the surroundings' own street lamps
   // Farmer lantern: two point lights (ZF2 addPlayerLight: radius 200 & 350, white).
   // Alpha here = how strongly the light carves the darkness away (reveals daytime).
   const lanternInner = makeLight(200, 0xfff0c8, 1.0);
@@ -2487,6 +2520,22 @@ async function main() {
         );
         saveManager.flushCritical();
       }
+      // A refused purchase has to take the object back off the farm. tryPlaceObject
+      // places optimistically and the object reconcile only ever ADDS what the server
+      // owns, so a rejected buy used to leave a phantom behind: paid for by nobody,
+      // granted no XP, and still sellable — which is how "I couldn't afford a second
+      // one but it let me keep placing them" turned into free decor. Reverse it here,
+      // the same way sellObject does, and let the reconcile recompute capacities.
+      if (command?.type === "object.buy" && command.clientInstanceId) {
+        const id = command.clientInstanceId;
+        const def = field.objectDefOf(id);
+        if (def) {
+          field.removeObject(id);
+          if (def.armyMax) state.addZombieMax(-def.armyMax);
+          objectPurchases.delete(id);
+          saveManager.flushCritical();
+        }
+      }
       const subject = command?.type.startsWith("roster.") ? "Zombie action"
         : command?.type.startsWith("object.") ? "Object action"
         : command?.type.startsWith("storage.") ? "Reward action"
@@ -3176,6 +3225,37 @@ async function main() {
         ...(epic ? { epic } : {}),
       };
     });
+  // The Almanac's field notes. Everything the guide cannot import for itself is
+  // resolved from the loaded catalogs here — the Brain Ticket's Market listing, the
+  // Epic Boss lineup, which invasions have a rare zombie, and the species names the
+  // Pot's tier-5 promotions produce. Built per call so a catalog swapped at runtime
+  // (a live-balance fetch) is reflected the next time the tab is opened.
+  hud.getAlmanacGuide = () => {
+    const ticket = assets.boosts.find((boost) => boost.key === BRAIN_TICKET_KEY);
+    const unlockLevels = EPIC_BOSSES.map((boss) => epicBossUnlockLevel(boss));
+    const brainCosts = EPIC_BOSSES.map((boss) => boss.costBrains);
+    const zombieName = new Map(assets.zombies.map((def) => [def.key, def.name]));
+    return almanacGuide({
+      brainTicket: ticket ? { cost: ticket.cost, level: ticket.level } : null,
+      epic: EPIC_BOSSES.length
+        ? {
+            count: EPIC_BOSSES.length,
+            firstLevel: Math.min(...unlockLevels),
+            lastLevel: Math.max(...unlockLevels),
+            minBrains: Math.min(...brainCosts),
+            maxBrains: Math.max(...brainCosts),
+            // Every authored event is the same length and the same ladder height; the
+            // max keeps the sentence honest if a future one is longer.
+            rungs: Math.max(...EPIC_BOSSES.map((boss) => boss.maxLevel)),
+            days: Math.round(Math.max(...EPIC_BOSSES.map((boss) => boss.durationMs)) / 86_400_000),
+          }
+        : null,
+      rareZombieRaids: Object.keys(RAID_ZOMBIE_DROPS)
+        .map((raidId) => almanacSources.raidNameById(Number(raidId)))
+        .filter((name): name is string => !!name),
+      speciesName: (key) => zombieName.get(key),
+    });
+  };
   hud.zombiePortraitOf = (key) => zombiePortrait(key);
   hud.getMausoleumCap = () => zombies.mausoleumCap;
   // The Mausoleum upgrade ladder: each tier is an ordinary catalog placeable that
@@ -4065,6 +4145,14 @@ async function main() {
         else if (code === "insufficient_brains") hud.showToast(`You need ${EPIC_BOSS_FIGHT_BRAIN_COST} brains.`);
         else if (code === "battle_in_progress") hud.showToast("Another battle is already in progress.");
         else if (code === "bad_roster") hud.showToast("One of those zombies is unavailable. Please choose your army again.");
+        else if (code === "stale_ruleset") {
+          // Same refusal, same remedy as an invasion (see the raid launch path): this tab
+          // predates the deployed Worker, so it would simulate the fight under different
+          // rules than the replay. Nothing was charged — no token, no brain, no session —
+          // and only a reload fixes it, so say so instead of "please reconnect".
+          hud.showToast("The game has updated. Reload to keep fighting.", 6000);
+          promptReload("The game has updated. Reload to keep fighting.");
+        }
         else hud.showToast("The Epic Boss fight could not be started. Please reconnect and try again.");
         return false;
       }
@@ -4117,11 +4205,19 @@ async function main() {
         "Retreat from battle?", `This attempt will end and ${def.name} will escape.`, "Retreat"
       ),
       onFinish: (outcome, finalTick, inputs) => {
-        const presentResult = (result: ReturnType<EpicBossManager["finish"]>, drops: LootDrop[]) => {
+        // `granted` is supplied ONLINE, where the server has already rolled the brain and
+        // moved the balance by it. Rolling again here would print a number the account
+        // never received — the gold half agrees either way, but the brain is an 8% chance
+        // (EPIC_BRAIN_DROP_CHANCE) and would disagree most of the time.
+        const presentResult = (
+          result: ReturnType<EpicBossManager["finish"]>,
+          drops: LootDrop[],
+          granted?: { brains: number; gold: number }
+        ) => {
         state.setEpicBossRun(result.run);
-        const currency = result.defeatedLevel === null
+        const currency = granted ?? (result.defeatedLevel === null
           ? { brains: 0, gold: 0 }
-          : epicBossCurrencyReward(result.defeatedLevel, def.maxLevel);
+          : epicBossCurrencyReward(result.defeatedLevel, def.maxLevel));
         if (result.defeatedLevel !== null && !onlineFarm) {
           state.addBrains(currency.brains, "epic_boss_victory");
           state.addGold(currency.gold, "epic_boss_victory");
@@ -4136,12 +4232,16 @@ async function main() {
             ...state.ownedPets.map((key) =>
               def.loot.find((loot) => loot.stageActor === key)?.name ?? key),
           ]);
-          const loot = rollEpicBossLoot(def, result.defeatedLevel, collected);
-          if (loot) {
+          for (const loot of rollEpicBossDrops(def, result.defeatedLevel, collected)) {
             if (loot.stageActor) state.unlockPet(loot.stageActor);
             else state.receiveItem(loot.name);
             questBus.post(QuestEvent.EpicBossEpicItemWon, loot.name, 1);
             drops.push({ name: loot.name, icon: epicLootImage(epicLootArt, def, loot) });
+          }
+          // Gold-side bonus on top of the decor rolls, scaled by how deep the rung was.
+          if (Math.random() < epicBrainTicketChance(result.defeatedLevel, def.maxLevel)) {
+            state.addBoost(BRAIN_TICKET_KEY, 1);
+            drops.push({ name: "Brain Ticket", icon: `${BASE}assets/boosts/brain_ticket.png` });
           }
         }
         saveManager.flush();
@@ -4191,12 +4291,18 @@ async function main() {
               completed: !!server.event.completedAt,
               escaped: server.escaped,
             };
+            // `drops` is the authoritative list; `loot` is its first entry and the only
+            // field a pre-multi-drop stored result carries, so fall back to it.
+            const serverDrops = server.drops ?? (server.loot ? [server.loot] : []);
             presentResult(result, [
-              ...(server.loot
-                ? [{ name: server.loot.name, icon: epicLootImageByName(epicLootArt, def, server.loot.name) }]
+              ...serverDrops.map((entry) => ({
+                name: entry.name, icon: epicLootImageByName(epicLootArt, def, entry.name),
+              })),
+              ...(server.brainTicket
+                ? [{ name: "Brain Ticket", icon: `${BASE}assets/boosts/brain_ticket.png` }]
                 : []),
               ...rewardDrops,
-            ]);
+            ], server.currency ?? { brains: 0, gold: 0 });
           }).catch(() => {
             hud.showToast("The fight result could not be verified. Reconnecting will recover it.");
             abandonBattle();
@@ -4409,7 +4515,8 @@ async function main() {
       bossSpecials: setup.bossSpecials,
       grabber: setup.grabber,
       crab: setup.crab,
-      summonTemplate: setup.summonTemplate,
+      summon: setup.summon,
+      waveCadence: setup.waveCadence,
       wallTemplate: setup.wallTemplate,
       brainDrop: setup.brainDrop,
       concentration: setup.concentration,

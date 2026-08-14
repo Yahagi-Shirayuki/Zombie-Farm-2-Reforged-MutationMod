@@ -26,6 +26,7 @@ import { buildEnemyUnits, buildPlayerUnits } from "./CombatEngine";
 import { bossThrowIntervalSecs, fightStage, resolveStageWave, seededRandom } from "./RaidCatalog";
 import { eliteBossSpecials, eliteBossThrow, eliteProfile, eliteWallHp, ELITE_PROFILES } from "./eliteInvasion";
 import { RAID_MAX_TICKS, RAID_TICK_MS } from "./replay";
+import { summonConfigFor, waveCadenceFor } from "./alienStage";
 import { makeOwned } from "../zombie/types";
 import type { AttackDef, BossSpecial, BossThrowConfig, CombatUnit, EnemyStat, RaidDef, RaidStage } from "./types";
 
@@ -94,7 +95,7 @@ function fight(raid: RaidDef, elite: boolean, size: number, power: number, seed 
     raidId: raid.id, playerLevel: 45, elite: profile,
   });
   const summon = (enemyStats[stage.bossKey ?? ""]?.bossActions ?? []).some((a) => a.name === "summonBoss")
-    ? enemyUnits.find((u) => !u.isBoss) ?? null
+    ? summonConfigFor(raid.id, enemyStats, attacks, { raidId: raid.id, playerLevel: 45, elite: profile })
     : null;
   const sim = new BattleSim(
     stickArmy(size, power),
@@ -103,9 +104,10 @@ function fight(raid: RaidDef, elite: boolean, size: number, power: number, seed 
     true,
     eliteBossSpecials(specialsOf(stage), profile),
     undefined,
-    summon && { ...summon },
+    summon,
     wallOf(stage, elite, raid.id),
-    false, false, false, undefined, null, null
+    false, false, false, undefined, null, null,
+    waveCadenceFor(raid.id)
   );
   let ticks = 0;
   while (!sim.finished && ticks < RAID_MAX_TICKS) {

@@ -181,28 +181,66 @@ def load_plist(path):
 # Dr. Groundhog's 1xxx quests are excluded — its ladder was authored at 20 rungs and its
 # thresholds already sit on it. (Note 10000/10011 are Mystical Mamba, NOT Groundhog: the
 # range test below is deliberate, a `startswith("1")` check silently skips them.)
-EPIC_LADDER_SCALE = (20, 40)  # new rungs, old rungs
+EPIC_LADDER_SCALE = (10, 40)  # new rungs, old rungs
+# Dr. Groundhog's 1xxx quests were authored against the 20-rung curve, not the 40-rung
+# advertisement, so they rescale from their own origin. (Note 10000/10011 are Mystical
+# Mamba, NOT Groundhog: the numeric range test below is deliberate, and a
+# `startswith("1")` check would silently sweep them up.)
+GROUNDHOG_LADDER_SCALE = (10, 20)
 EPIC_DEFEAT_NOTIFICATION = "kEpicStageEnemyDefeatedNotification"
+
+# Where the two headline prizes sit, PINNED rather than derived — the normal event zombie
+# on rung 5, the omega on rung 10. Keyed by quest-id suffix, which is the convention every
+# event follows (X000 is the ordinary prize, X011 the omega).
+#
+# Pinned because the arithmetic does not land where the design wants it. Rescaling from 40
+# rungs to 10 puts most ordinary prizes on rung 2, which hands a player the event's own
+# zombie almost before the event starts. Half-way and the top are the rungs that mean
+# something on a 10-rung ladder, so those are stated outright.
+EPIC_PRIZE_RUNGS = {"000": 5, "011": 10}
+
+
+def _retarget(quest, r, new):
+    """Move one defeat requirement to rung `new`, carrying its prose with it."""
+    old = int(r["notificationObject"])
+    if new == old:
+        return
+    r["notificationObject"] = str(new)
+    r["text"] = re.sub(rf"\b{old}\b", str(new), r["text"])
+    for field in ("title", "messageComplete", "tip"):
+        if field in quest:
+            quest[field] = re.sub(rf"(?i)(level\s+){old}\b", rf"\g<1>{new}", quest[field])
 
 
 def rescale_epic_ladder(out):
-    """Halve every Epic Boss level threshold that was authored for a 40-rung ladder."""
-    new_max, old_max = EPIC_LADDER_SCALE
+    """Rescale every Epic Boss level threshold onto the current rung count."""
     for qid, quest in out.items():
-        if 1000 <= int(qid) < 2000:  # Dr. Groundhog: already a 20-rung ladder
-            continue
+        new_max, old_max = (GROUNDHOG_LADDER_SCALE if 1000 <= int(qid) < 2000
+                            else EPIC_LADDER_SCALE)
         for r in quest.get("requirements", []):
             if r.get("notificationID") != EPIC_DEFEAT_NOTIFICATION:
                 continue
-            old = int(r["notificationObject"])
-            new = -(-old * new_max // old_max)
-            if new == old:
-                continue
-            r["notificationObject"] = str(new)
-            r["text"] = re.sub(rf"\b{old}\b", str(new), r["text"])
-            for field in ("title", "messageComplete", "tip"):
-                if field in quest:
-                    quest[field] = re.sub(rf"(?i)(level\s+){old}\b", rf"\g<1>{new}", quest[field])
+            # Floored at 1: quartering a low threshold can otherwise reach rung 0, which
+            # no clear ever satisfies and which would strand the prize behind it.
+            _retarget(quest, r, max(1, -(-int(r["notificationObject"]) * new_max // old_max)))
+
+
+def pin_epic_prize_rungs(out):
+    """Put each event's ordinary prize on rung 5 and its omega on rung 10.
+
+    Runs AFTER rescale_epic_ladder, and moves only the LAST defeat requirement — a prize
+    gated behind a collection chain (Skunkarella's Diva) keeps its earlier steps spread
+    below the pinned one rather than collapsing them all onto the same rung.
+    """
+    for qid, quest in out.items():
+        target = EPIC_PRIZE_RUNGS.get(str(qid)[-3:])
+        if target is None:
+            continue
+        defeats = [r for r in quest.get("requirements", [])
+                   if r.get("notificationID") == EPIC_DEFEAT_NOTIFICATION]
+        if not defeats:
+            continue
+        _retarget(quest, max(defeats, key=lambda r: int(r["notificationObject"])), target)
 
 
 def main():
@@ -299,20 +337,23 @@ def main():
     # (see their comment). Running it afterwards halved them a SECOND time — 20 -> 10,
     # 5 -> 3 — silently demoting six prize quests on any regeneration.
     rescale_epic_ladder(out)
+    pin_epic_prize_rungs(out)
 
     # Bosses 8-10 shipped after the last complete quest table. Their art catalogs
     # and named prize rigs survived, so restore the unambiguous milestone rewards.
     # Skunkarella likewise names Madame Zombie as its epic prize even though only
     # the earlier Diva collection quest survived in Quests.plist.
-    # Levels are the 20-rung ladder's (see EPIC_LADDER_SCALE) — the shipped 40-rung
-    # thresholds these came from were 40, 10, 5, 40, 5, 40.
+    # Levels are the CURRENT ladder's, and follow the same pinning as every other event
+    # (EPIC_PRIZE_RUNGS): the ordinary prize on rung 5, the omega on rung 10. These are
+    # added after rescale_epic_ladder and pin_epic_prize_rungs have run, so they are
+    # written at their final values rather than passed through either.
     recovered_epic_rewards = [
-        (5011, 20, "Madame Zombie", "ZombieActorMadame", "questicon_skunkarella.png"),
+        (5011, 10, "Madame Zombie", "ZombieActorMadame", "questicon_skunkarella.png"),
         (8000, 5, "Brock Coley", "ZombieActorBrockColey", "questicon_rockyrhino.png"),
-        (9000, 3, "Proto Zombie", "ZombieActorProto", "questicon_generallarvaelus.png"),
-        (9011, 20, "Zombug", "ZombieActorZombug", "questicon_generallarvaelus.png"),
-        (10000, 3, "Zomdini", "ZombieActorZomdini", "questicon_mysticalmamba.png"),
-        (10011, 20, "Zomtar", "ZombieActorZomtar", "questicon_mysticalmamba.png"),
+        (9000, 5, "Proto Zombie", "ZombieActorProto", "questicon_generallarvaelus.png"),
+        (9011, 10, "Zombug", "ZombieActorZombug", "questicon_generallarvaelus.png"),
+        (10000, 5, "Zomdini", "ZombieActorZomdini", "questicon_mysticalmamba.png"),
+        (10011, 10, "Zomtar", "ZombieActorZomtar", "questicon_mysticalmamba.png"),
     ]
     for qid, level, name, key, sprite in recovered_epic_rewards:
         add_quest(str(qid), {

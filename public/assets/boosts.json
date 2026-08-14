@@ -94,7 +94,7 @@
   "name": "Brain Ticket",
   "cost": 10000,
   "brainsNeeded": false,
-  "level": 0,
+  "level": 20,
   "effect": "other",
   "amount": 0,
   "perPurchase": 1,

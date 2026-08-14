@@ -7,22 +7,21 @@ wall-clock run; only one boss event can be active at a time. A run can be purcha
 after its final level is completed or the event expires, and purchasing never extends an
 active run.
 
-Costs and unlocks (post-"brainflation revert"; server-enforced in `v3/epicBoss.ts`):
-Dr. Groundhog costs **5 brains**, the other seven cost **10 brains**. Each event has its
-own unlock level, ordered by how strong its prize zombies are, because the eight are not
-interchangeable — Loco Locust pays the strongest zombie in the game and Dr. Groundhog one
-that deals a quarter of its damage:
+Costs and unlocks (server-enforced in `v3/epicBoss.ts`): activation **ramps 3-5 brains**
+with the unlock ladder. Each event has its own unlock level, ordered by how strong its
+prize zombies are, because the eight are not interchangeable — Loco Locust pays the
+strongest zombie in the game and Dr. Groundhog one that deals a quarter of its damage:
 
-| Level | Boss | Best prize | DPS | HP |
-|---|---|---|---:|---:|
-| 24 | Dr. Groundhog | Omega Dr. Zombie | 307 | 4,043 |
-| 28 | Bully Frog | Admiral Zombie | 336 | 4,253 |
-| 30 | Rocky Rhino | Brock Coley | 662 | 735 |
-| 32 | General Larvaelus | Zombug | 579 | 1,575 |
-| 34 | Mystical Mamba | Zomtar | 662 | 1,575 |
-| 38 | Foul Owl | Scrooge Zombie | 573 | 4,410 |
-| 40 | Skunkarella | Madame Zombie | 991 | 2,200 |
-| 42 | Loco Locust | Vagabond Zombie | 1,102 | 2,835 |
+| Level | Boss | Brains | Best prize | DPS | HP |
+|---|---|---:|---|---:|---:|
+| 24 | Dr. Groundhog | 3 | Omega Dr. Zombie | 307 | 4,043 |
+| 28 | Bully Frog | 3 | Admiral Zombie | 336 | 4,253 |
+| 30 | Rocky Rhino | 4 | Brock Coley | 662 | 735 |
+| 32 | General Larvaelus | 4 | Zombug | 579 | 1,575 |
+| 34 | Mystical Mamba | 4 | Zomtar | 662 | 1,575 |
+| 38 | Foul Owl | 4 | Scrooge Zombie | 573 | 4,410 |
+| 40 | Skunkarella | 5 | Madame Zombie | 991 | 2,200 |
+| 42 | Loco Locust | 5 | Vagabond Zombie | 1,102 | 2,835 |
 
 (HP as the fight sees it: `con x 100` with the unit's own ability buffs, unmutated.)
 
@@ -31,19 +30,53 @@ is a 40-str/735-HP glass cannon, while Scrooge is the highest-HP zombie in the g
 worth holding back. A locked activation returns `403 locked` with the required level, and
 the Market card renders "Available at player level N".
 
-**Every boss runs 20 levels.** That is exactly as many HP multipliers as ZF2 authored
-(`EpicBossHP.json` LevelMultiplier). Seven bosses used to advertise 40, but levels 21-40
-were the level-20 multiplier repeated — 20 more fights at an unchanging 107x, grind rather
-than difficulty. Truncating to 20 leaves levels 1-20 untouched, so the top of every ladder
-is the same 214,000-HP fight it always was. Loot and quest thresholds were halved (rounded
-up: 5->3, 10->5, 15->8, 20->10, 25->13, 30->15, 35->18, 40->20) so each prize sits at the
-same fraction of its ladder. Maximum HP is `round(2000 * LevelMultiplier[level - 1])`.
-Runs that were mid-flight above level 20 across the change are clamped down to it —
-migration `0046`, plus read-time clamps in `v3/epicBoss.ts` and `EpicBossManager.normalize`
-— so their next win registers as the level-20 win that grants the top prize. Each fight has a hard
-30-second escape deadline. Zombies use manual brain-bubble release without butterfly
-distractions or consuming Concentration. The normal army cap and permanent invasion
-casualty rules apply, and Epic Boss attack order is stored separately.
+**Every boss runs 10 rungs.** ZF2 authored 20 HP multipliers (`EpicBossHP.json`
+LevelMultiplier) and seven bosses used to advertise 40, of which 21-40 were the level-20
+multiplier repeated — grind rather than difficulty. That padding went first (20 rungs,
+migration `0046`); the ladder is now **10 rungs, each one two of the authored multipliers
+added together**, so it carries exactly the HP it always did in half as many fights:
+`[2.4, 5.8, 14.2, 17.5, 37, 52.4, 71.7, 111, 138, 195]`, summing to the same 645x.
+
+The point of the second cut is the floor. A rung costs at least one attempt however far you
+overkill it, and the bottom half of the 20-rung curve was a formality for any real army.
+Merging pairs deletes those without touching the rungs where HP genuinely gates progress.
+Every prize moved with it: the first prize zombie sits at rung 5 and every top prize at
+rung 10, with the intermediate reward quests on 3/4/5/7/8/9.
+
+**`baseHp` ramps with the unlock ladder** rather than being ZF2's flat 2000 for all eight.
+Flat baseHp made the ENTRY event the grindiest, because the ladder was flat while the
+player was not: a level-24 roster deals about a third less damage than a level-30 one, so
+Dr. Groundhog cost a moderate army 91 attempts against 63-64 everywhere above him. baseHp
+now runs ±25% end to end, symmetric about General Larvaelus and Mystical Mamba, which keep
+the source's 2000 and are the fixed point the rest is stated against
+(`tools/prep_all_epic_bosses.py EPIC_BOSS_BASE_HP` is the source of truth):
+
+| Boss | `baseHp` | Rung 1 HP | Rung 10 HP | Whole ladder |
+|---|---:|---:|---:|---:|
+| Dr. Groundhog | 1,500 | 3,600 | 292,500 | 967,500 |
+| Bully Frog | 1,650 | 3,960 | 321,750 | 1,064,250 |
+| Rocky Rhino | 1,850 | 4,440 | 360,750 | 1,193,250 |
+| General Larvaelus | 2,000 | 4,800 | 390,000 | 1,290,000 |
+| Mystical Mamba | 2,000 | 4,800 | 390,000 | 1,290,000 |
+| Foul Owl | 2,150 | 5,160 | 419,250 | 1,386,750 |
+| Skunkarella | 2,350 | 5,640 | 458,250 | 1,515,750 |
+| Loco Locust | 2,500 | 6,000 | 487,500 | 1,612,500 |
+
+Rung HP is `round(baseHp * LevelMultiplier[level - 1])`. Runs mid-flight across either cut
+are repaired by migration: `0051` pulls a run parked above the new top down to rung 10 and
+**rewrites its HP columns**, because unlike the 20-rung truncation this cut reshaped the
+curve; `0052` re-fits in-flight runs onto the per-boss `baseHp`. Both cap `current_hp`
+rather than resetting it, so damage already dealt is kept, and neither touches a completed
+run. `clampRun` in `v3/epicBoss.ts` and `EpicBossManager.normalize` carry the level
+correction at read time for rows written between the deploy and the migration — but *not*
+the per-boss HP, which is why `0052` has to exist rather than being optional cleanup.
+
+Each fight has a hard **60-second** escape deadline. Zombies use manual brain-bubble
+release without butterfly distractions or consuming Concentration. The normal army cap and
+permanent invasion casualty rules apply, and Epic Boss attack order is stored separately.
+Casualties are written to the authoritative graveyard (`fallen_v3`) on the same terms as an
+invasion's, so a Memorial Statue can carve one; migration `0053` recovers those lost before
+that write existed, from the party the server itself pinned into the finished session.
 
 ### Boss damage ramps by event
 
@@ -52,45 +85,67 @@ Every boss originally dealt exactly **40 DPS** — `str 2 / dex 2`, or Skunkarel
 Only HP scaled. That made all eight events identical in threat and different only in how
 many attempts they took.
 
-HP is the wrong difficulty knob here. A fight is capped at 30 s and damage carries over
+HP is the wrong difficulty knob here. A fight is capped at 60 s and damage carries over
 between attempts, so **more HP buys only more attempts**, and every attempt costs a Boss
-Token or a brain. That is grind. Incoming damage is the one lever that raises the bar
-without adding an attempt, so attack power now ramps with the event's unlock level:
+Token or a brain. That is grind — and worse, it is grind a bad army can walk, given
+patience. Incoming damage is the one lever that raises the bar without adding an attempt,
+and it is deliberately **regressive**: it costs a weak roster far more than a developed one.
+That is the gate. Attack power ramps with the event's unlock level:
 
-| Boss | Unlock | Dmg × | `str` | `dex` | Boss DPS | Dmg per full 30 s fight | Front-liners that survive |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Dr. Groundhog | 24 | 1.00 | 2.00 | 2 | 40 | 1,200 | 28 / 30 |
-| Bully Frog | 28 | 1.20 | 2.40 | 2 | 48 | 1,440 | 26 / 30 |
-| Rocky Rhino | 30 | 1.40 | 2.80 | 2 | 56 | 1,680 | 26 / 30 |
-| General Larvaelus | 32 | 1.60 | 3.20 | 2 | 64 | 1,920 | 23 / 30 |
-| Mystical Mamba | 34 | 1.80 | 3.60 | 2 | 72 | 2,160 | 21 / 30 |
-| Foul Owl | 38 | 2.00 | 4.00 | 2 | 80 | 2,400 | 21 / 30 |
-| Skunkarella | 40 | 2.25 | 2.25 | 4 | 90 | 2,700 | 18 / 30 |
-| Loco Locust | 42 | 2.50 | 5.00 | 2 | 100 | 3,000 | 15 / 30 |
+| Boss | Unlock | `str` | `dex` | Rung-1 DPS | Rung-10 DPS | Dmg per full 60 s fight (rung 1) | Unaided front-liner |
+|---|---:|---:|---:|---:|---:|---:|---|
+| Dr. Groundhog | 24 | 2.400 | 2 | 48 | 74 | 2,880 | alive, 48% |
+| Bully Frog | 28 | 3.000 | 2 | 60 | 93 | 3,600 | alive, 36% |
+| Rocky Rhino | 30 | 3.600 | 2 | 72 | 112 | 4,320 | alive, 23% |
+| General Larvaelus | 32 | 4.200 | 2 | 84 | 130 | 5,040 | alive, 17% |
+| Mystical Mamba | 34 | 4.800 | 2 | 96 | 149 | 5,760 | DEAD |
+| Foul Owl | 38 | 5.500 | 2 | 110 | 171 | 6,600 | DEAD |
+| Skunkarella | 40 | 3.125 | 4 | 125 | 194 | 7,500 | DEAD |
+| Loco Locust | 42 | 7.000 | 2 | 140 | 217 | 8,400 | DEAD |
 
-`dex` is never touched — it is each boss's hit rhythm, and Skunkarella's fast small hits
-are its signature. Note its ramp scales from a `str 1` base, not 2; scaling it like the
-others would silently double its damage.
+`dex` is never touched — it is each boss's hit rhythm, and Skunkarella's fast small hits are
+its signature. That is also why its `str` reads low out of order: at `dex 4` it lands 125
+DPS from 3.125, so the ramp is monotonic in **DPS**, which is the quantity that matters, and
+not in `str`. Anything comparing these bosses by `str` alone will place Skunkarella second
+from the bottom of the ladder instead of second from the top.
+
+**Damage compounds 5% per rung climbed** (`epicBossDamage`, raid ruleset v29). Rung 1 keeps
+the authored value above, so the entry fight of every event is exactly what it was; the top
+of a ten-rung ladder hits `1.05^9` = **1.55x** it. Only the deep rungs moved. The "unaided
+front-liner" column is the rung-1 read: a level-appropriate best-mutated headless with no
+support, where the first four events leave it standing on a visibly narrowing margin and
+Mystical Mamba upward kill it every attempt. **Backed by two level-appropriate healers,
+every one of the eight leaves it at 100% HP** — and that crossing is the design. It is the
+ramp's job to make bringing support a real decision rather than a nicety.
+
+Compounding is computed by repeated multiplication, not `Math.pow`, which the spec leaves
+implementation-approximated. The client sim and the Worker's replay must agree bit for bit
+or a won fight fails verification, and only exactly-rounded IEEE-754 operations guarantee
+that.
 
 **The ramp was measured in BattleSim with the fight played correctly** (brain bubbles
 released), not modelled — `epicBoss/combat.test.ts` pins the calibration. Two properties of
 the epic fight break any closed-form estimate:
 
-- **Only a fraction of the army is engaged at once** (about 6 of 20), however deep the
-  line. A 20-strong army does not bring 20 zombies' worth of damage, and incoming damage
-  concentrates on the front slot instead of spreading across the line.
-- **A level takes many full-length attempts.** With damage carrying over, most attempts
-  run the whole 30 s, so a boss that can kill the front unit kills one **per attempt** —
-  and casualties are permanent. A full clear is 40+ attempts, so there is no such thing as
-  a small per-fight casualty rate.
+- **Only a fraction of the army is engaged at once**, however deep the line — zombies enter
+  one at a time every `CHARGE_MS`, so the attempt window decides how many ever reach the
+  boss at all: **6 of 20 at 30 s, 13 at 60 s**. Damage per attempt is therefore
+  super-linear in the window, which is precisely why 30 s -> 60 s was worth more than any HP
+  edit (ruleset v28, taken together with scaling the whole damage ramp by 0.8 so the
+  now-legible per-boss difference did not overshoot). A 20-strong army still does not bring
+  20 zombies' worth of damage, and incoming damage concentrates on the front slot instead of
+  spreading across the line.
+- **A level takes many full-length attempts.** With damage carrying over, most attempts run
+  the whole window, so a boss that can kill the front unit kills one **per attempt** — and
+  casualties are permanent. There is no such thing as a small per-fight casualty rate here.
 
-The ramp is therefore read as *which zombies can hold the front slot*, and the cap is
-**×2.5** on purpose: at ×3 the top boss's own top prize (Vagabond Zombie, 2835 HP) can no
-longer tank its own event, which is perverse. At ×2.5 every event's signature prize stays a
-legal front-liner, the Market-bought Headless wall (Bombie, 3267 HP) answers the whole
-ladder, and the thin damage-dealers (Zomtar and Zombug 1575, Zomdini 1260) stop being able
-to hold the line from General Larvaelus onward. A test asserts ×3 *would* kill Vagabond, so
-raising the ramp fails loudly rather than silently.
+The ramp is therefore read as *what army can hold the front slot*, and the bounding rule
+lives in `epicBoss/combat.test.ts` stated on the **army**, not on one zombie: Silver-grade
+for events unlocking through 30, specials from 30-35, epic prizes and specials above that.
+The older rule measured a single unit's HP, which is not what a player fields. The real
+ceiling is around **200 DPS**: past that even the *supported* headless wall comes under
+threat (measured: it holds to 240 and dies at 800), so the top of the ladder sits just under
+it by design. Raising the ramp reddens that test rather than failing silently.
 
 Two consequences worth knowing. The ramp gives the Headless family a job for the first
 time: Bombie/Skull Head/Diver are near-worthless on damage (55 DPS) but hold the front slot
@@ -98,9 +153,32 @@ against every boss on the ladder, and Protect (−20% per carrier) stacks on top
 ORDER becomes a real decision rather than cosmetic — leading with your best damage dealer
 now costs you that zombie.
 
-Deploying a ramp change mid-event is safe: each fight pins its boss stats into the
+Deploying a **stat** change mid-event is safe: each fight pins its boss stats into the
 session's `config_json` at start and the finish handler replays from that pinned config, so
 an in-flight fight keeps the numbers it began with.
+
+A change that moves the FIGHT is a different matter, and both v28 and v29 are that. The
+window and the damage curve are read by the sim itself, so a transcript recorded under the
+old rules does not replay under the new ones — which is why they bump
+`RAID_RULESET_VERSION`. The pinned config carries the version it was written under and the
+finish handler refuses a mismatch (`409 stale_ruleset`, roster unlocked, attempt lost), so an
+epic attempt in flight at deploy time settles as an escape. That is the accepted cost of every
+bump.
+
+**`/epic-boss/start` therefore performs the same handshake `/raid/start` does**: the client
+sends its `RAID_RULESET_VERSION` and a mismatch is refused with `426 stale_ruleset` before
+anything is charged — no token, no brain, no session — and the client answers it with a
+reload prompt. This has to be checked at START, because the version pinned into the session
+config is the WORKER's, so the finish handler's comparison detects a stale *session* and
+never a stale *client*. Without it a tab holding pre-v28 JS would pay for an attempt, fight
+to a win under the 30-second rules, and have the replay under the 60-second rules answer
+"escaped" — or fail verification outright, with the payment gone either way. It is also
+checked before the resume branch: letting a stale client re-enter a session it cannot
+simulate correctly just moves the same failure to the finish.
+
+The boot-time skew check (`raidRulesetVersion` on bootstrap) still exists and still prompts a
+reload, but it is a dismissible toast and only fires at bootstrap, so it is a courtesy rather
+than the gate.
 
 Every attempt costs either one Boss Token or 1 brain (`EPIC_BOSS_FIGHT_BRAIN_COST`, reduced
 from 10 by the brainflation revert); there is no retry timer. While
@@ -115,12 +193,24 @@ is ever a dead roll — the bare curve left a 15-minute crop near 0.4%, which re
 ceiling, and the 24-hour band is pinned to it, so harvest value stops separating those
 crops.
 
+The whole curve is then **scaled to a quarter** (`SUPPLY_SCALE`), which moves its height and
+nothing else — so the effective ceiling is **8.75%**, and the flat floor 0.75%. Read that
+against demand, because both halves of it moved underneath the old rate: the attempt window
+doubled and the ladder halved, so a full clear now asks roughly half the attempts it used to
+(10-47 in total). Left alone, supply of 1.15-3.3 tokens per plot-day against that would have
+made attempts free. Quartered rather than halved on purpose — the attempt count halved, so
+this leaves tokens about twice as scarce again relative to demand, which is what makes an
+attempt worth a moment's thought instead of something you spam until it works. The scale is
+applied **after** the ceiling clamp, not inside it: scaling inside would lift every crop off
+the ceiling and quietly restore harvest-value separation to the long crops the pin exists to
+flatten.
+
 Read supply in tokens per **plot-day**, not per harvest, because a plot is recycled: a
 15-minute crop harvests 96 times a day and a 24-hour crop once. That makes the flat
-bonus very unevenly levered — three points is worth +2.88 tokens per plot-day on a
-15-minute crop and +0.18 on a 4-hour one. **Short crops are therefore the most
-efficient token farm**, roughly: 15m 3.3, 30m 2.1, 1h 1.5, 2h 1.2, 4h 1.15, 6h 1.07,
-12h 0.70, 24h 0.35 per plot-day. This is a deliberate trade — the flat bonus buys
+bonus very unevenly levered — three points is worth +0.72 tokens per plot-day on a
+15-minute crop and +0.045 on a 4-hour one. **Short crops are therefore the most
+efficient token farm**, roughly: 15m 0.83, 30m 0.52, 1h 0.38, 2h 0.31, 4h 0.29, 6h 0.27,
+12h 0.18, 24h 0.09 per plot-day. This is a deliberate trade — the flat bonus buys
 per-harvest feel at the cost of the grow-time ladder, and shrinking `FLAT_BONUS` in
 `src/epicBoss/tokens.ts` restores a 2-4 hour peak.
 
@@ -147,29 +237,53 @@ and encounter timers, token stockpile, level/HP, rewards, activation, and Fight 
 
 ## Rewards
 
-Gold follows `max(1, round(level / 4)) * 100` per cleared level, scaling from 100 gold at the
-early levels to 500 gold at level 20. This curve is deliberately **unchanged** by the
-brainflation revert, and unchanged by the 20-rung cut — the per-fight rate is the same, there
-are simply no padding rungs above 20 left to farm.
+Gold is `max(2, rung) * 100` per cleared rung — 200 gold at the bottom to 1,000 at the top,
+**5,600 for a full ladder**. That total is deliberately identical to what the 20-rung curve
+paid: each rung merges two of the authored ones, so its payout is the two it replaced added
+together, and the gold economy is untouched by either cut.
 
-Brains are on a separate, sparse schedule (a single brain is now ~10x more valuable, so runs
-hand them out at milestones instead of every level):
+Brains are a **roll**, not a schedule. An epic event is not a brain faucet: activating one
+costs 3-5 brains and every attempt past your harvested tokens costs another, so the old
+guaranteed 5 per full clear meant a player came out ahead simply by finishing, and the event
+quietly became one of the better brain sources in the game. Brains are meant to stay scarce
+(income moves from ~1.6/day at level 4 to ~2.9/day at 44 by design), and an event's real
+payment is its prizes: the zombies, the decor and the pet.
 
-- +1 brain on every 5th level cleared (5, 10, 15, 20).
-- +1 **bonus** brain on the boss's final level, so a full clear pays 5 brains — the same for
-  every event now that every ladder is 20 rungs. (`maxLevel` still parameterises the bonus,
-  so a future longer event would pay it at its own top.)
-- Non-milestone levels award **no** brains at all.
+- **8%** per cleared rung (`EPIC_BRAIN_DROP_CHANCE`), worth 0.72 brains across the first nine.
+- **Guaranteed** on the final rung, so the clear that ENDS a ladder always pays something
+  certain rather than being the one fight that can hand back nothing. (`maxLevel`
+  parameterises this, so an event of a different length puts the guarantee on its own last
+  fight.)
+- Expected haul for a full clear: **1.72 brains** against a 3-5 brain entry, so the event
+  stays reliably brain-negative.
 
-So a cleared level yields 0, 1, or at most 2 brains — not the old `round(level / 4)` ramp to 10.
-Both are in addition to the existing loot roll and quest rewards.
+A cleared rung also rolls for a **Brain Ticket** at 1.5% per rung — 1.5% on rung 1, 13.5% on
+rung 9, guaranteed on the last, 1.675 over a full clear. A Brain Ticket is a 10,000-gold
+Market item (level 20) that turns an invasion elite, so this is deliberately a *gold*-side
+reward: the event is priced in brains and pays out in prizes, and this gives the deep rungs
+something a player feels without touching that separation.
 
-Each boss uses its own recovered quest milestones, decor pool, and tame pet. Groundhog's
-chain grants Dr. Zombie (5), an Invasion Voucher (10), one brain (15), and Golden Dice
-plus Omega Dr. Zombie (20); the other events run their recovered chains on the halved
-thresholds. Loco Locust grants Bandido Zombie (3) and Vagabond Zombie (20), Bully Frog
-grants Captain Zombie (3) and Admiral Zombie (20), Foul Owl grants Christmas Ghost Zombie
-(3) and Scrooge Zombie (20), and Skunkarella's four-card quest grants Diva Zombie.
+The brain roll is the **server's** wherever the server owns the balance. The finish response
+carries what the clear actually paid (`currency`), and an online client must print that
+rather than re-deriving it — its own roll would disagree with the one the balance moved by,
+most of the time. Offline there is only one roller. All of this is in addition to the loot
+rolls and quest rewards.
+
+Each boss uses its own recovered quest milestones, decor pool, and tame pet, re-cut onto the
+10-rung ladder: **the first prize zombie sits at rung 5 and every top prize at rung 10**, so
+each one keeps the fraction of its ladder it always had. Groundhog's chain grants Dr. Zombie
+and an Invasion Voucher (rung 5), one brain (8), then Golden Dice and Omega Dr. Zombie (10),
+plus five brains for its eight-piece decor set. Loco Locust grants Bandido Zombie (5) and
+Vagabond Zombie (10), Bully Frog grants Captain Zombie (5) and Admiral Zombie (10), Foul Owl
+grants Christmas Ghost Zombie (5) and Scrooge Zombie (10), Rocky Rhino grants Brock Coley
+(5), General Larvaelus grants Proto Zombie (5) and Zombug (10), Mystical Mamba grants
+Zomdini (5) and Zomtar (10), and Skunkarella's four-card quest (rungs 2-5) grants Diva
+Zombie with Madame Zombie at the top. Loco Locust and Foul Owl run the long recovered chains,
+paying brains and Golden Dice on rungs 3, 4, 5, 7, 8 and 9.
+
+A top-prize quest pinned to rung 10 is why migration `0051` has to clamp a run parked above
+it: left alone, such a run would display as "Level 15/10", never satisfy that quest, and be
+marked complete on its next win with the omega zombie unclaimable.
 
 Admiral Zombie is a **rebalance, not recovered data** (`tools/reforge_economy.py`
 SPECIAL_STAT_REBALANCE): it shipped as a strictly worse Captain Zombie — same 21 str and
@@ -182,12 +296,23 @@ the farm when an army slot is open; otherwise it is filed in **Received**, where
 waits until the player claims it into a free Mausoleum slot. A full farm can never
 destroy an earned unit — but it no longer overflows the Mausoleum either, so claiming
 one may mean selling or deploying something first.
-Until exact binary loot selection is recovered, each victory makes one 35% roll,
-preferring unlocked uncollected drops. Within that pool the pick is **weighted by the
-rung that unlocks each prize** (`epicLootWeight` = `1/level`, fed to the binary's
-cumulative frequency pick), so the ladder is a rarity ladder: the first prize lands far more
-often than the top-rung signature item. It was a uniform
-pick, which made the last prize exactly as likely as the first — climbing bought
+Until exact binary loot selection is recovered, each victory makes **two independent 35%
+rolls** (`EPIC_LOOT_ROLLS`), preferring unlocked uncollected drops. The 35% rate is the
+authored one and stays put — it was calibrated when a ladder was 40 rungs long, so it is the
+number of ROLLS that moves as the ladder shortens, not the odds of each. One roll per rung
+on a 10-rung ladder would hand over a quarter of the decor for the same event; two restores
+the haul to ~7 items over a full clear.
+
+Two rolls at 35% rather than one at 70%, even though the expectation is identical: a single
+roll can only ever pay ONE prize, so a shorter ladder means fewer chances to see a *new*
+item and a collection that fills more slowly. Two rolls can drop two different prizes from
+one clear — the second re-picks with the first already excluded — which is what keeps a
+10-rung event able to finish a collection at all.
+
+Within the pool the pick is **weighted by the rung that unlocks each prize**
+(`epicLootWeight` = `1/level`, fed to the binary's cumulative frequency pick), so the ladder
+is a rarity ladder: the first prize lands far more often than the top-rung signature item. It
+was a uniform pick, which made the last prize exactly as likely as the first — climbing bought
 no better odds on what climbing unlocks. Monotone-in-level is all this claims; the curve
 itself is a reimplementation choice, not recovered data.
 
@@ -206,12 +331,18 @@ retain combat, loot, pet, and completion progression.
 
 Offline state is optional in the versioned save, so older saves default to no event.
 Online play stores the current run and one-use fight sessions in D1. Activation spends
-brains atomically. Start pins level, HP, roster, combat configuration, and server time;
-finish deterministically replays the input transcript and applies casualties, damage,
-loot, quests, roster rewards, inventory, pet ownership, and balance once. An unfinished
-session can be reopened with its pinned attack order until its short expiry; expiration
-resolves it as an escape and unlocks the roster. Raid and Epic Boss sessions exclude
-each other.
+brains atomically. Start pins level, HP, roster, combat configuration, ruleset version and
+server time; finish deterministically replays the input transcript and applies casualties,
+damage, loot, quests, roster rewards, inventory, pet ownership, the graveyard row and
+balance once. An unfinished session can be reopened with its pinned attack order until its
+short expiry; expiration resolves it as an escape and unlocks the roster. Raid and Epic Boss
+sessions exclude each other.
+
+Everything the server ROLLS rides back in the finish response, because the client cannot
+re-roll it and agree: `currency` (the brain), `drops` (every decor prize, plural) and
+`brainTicket`. `loot` is still sent as the first entry of `drops` so a `result_json` written
+before multi-drop replays correctly on a duplicate finish, and the client falls back to it
+when `drops` is absent.
 
 ## Asset provenance and future work
 

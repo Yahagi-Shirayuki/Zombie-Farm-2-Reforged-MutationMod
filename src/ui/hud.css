@@ -987,6 +987,11 @@
   box-sizing: border-box; overflow-wrap: anywhere; }
 #hud .rd-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px;
   flex-wrap: wrap; margin-top: auto; border-top: 1px solid rgba(255,255,255,.15); padding-top: 8px; }
+/* The footer's action group: the Invade button, plus any alternate route offered
+   beside it (the Brain Ticket screen also offers the plain 2,000g voucher). Grouping
+   them keeps the pair together on the right when the row wraps on a narrow phone. */
+#hud .rd-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  justify-content: flex-end; margin-left: auto; }
 #hud .rd-army { font-size: 12px; font-weight: 700; color: #b6f36a; min-width: 0; overflow-wrap: anywhere; }
 #hud .rd-army.short { color: #ffb0a0; }
 #hud .raid-go { border: 2px solid #1e1207; border-radius: 9px; padding: 8px 18px; cursor: pointer;
@@ -2108,3 +2113,17 @@
 #hud .alm-detail h2 { margin: 2px 0 0; font-size: 20px; }
 #hud .alm-detail-por { width: 96px; height: 96px; }
 #hud .alm-detail-por .zr-por-img { max-width: 72px; max-height: 72px; }
+/* Field notes: the three system explainers above the collection grid. */
+#hud .alm-notes { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
+#hud .alm-notes-label { font-size: 14px; font-weight: 800; letter-spacing: .06em;
+  text-transform: uppercase; color: #b6f36a; opacity: .95; }
+#hud .alm-note { display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  width: 100%; text-align: left; cursor: pointer; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid #6b5a33; background: rgba(0,0,0,.28); color: inherit; font: inherit; }
+#hud .alm-note:hover { background: rgba(0,0,0,.42); border-color: #b6f36a; }
+#hud .alm-note b { font-size: 14px; color: #ffd76a; }
+#hud .alm-note span { font-size: 12px; opacity: .88; }
+/* A field-note page is prose, not a card: cap the measure and let it scroll. */
+#hud .alm-guide { max-width: 520px; max-height: 78vh; overflow-y: auto; text-align: left; }
+#hud .alm-guide h2 { margin: 0 0 8px; font-size: 20px; color: #ffd76a; }
+#hud .alm-guide p { margin: 0 0 10px; font-size: 13px; line-height: 1.5; opacity: .92; }

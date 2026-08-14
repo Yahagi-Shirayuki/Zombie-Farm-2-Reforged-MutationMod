@@ -35,6 +35,7 @@ import { BRAIN_TICKET_KEY } from "./raid/eliteInvasion";
 import { marketPageSize } from "./marketPageSize";
 import { veterancy } from "./zombie/traits";
 import { COMBINE_SPECIAL_LEVEL } from "./zombie/combineSpecies";
+import type { AlmanacGuideTopic } from "./zombie/almanacGuide";
 import { BASE } from "./base";
 import { compareCropMarketOrder, compareItemMarketOrder } from "./marketOrder";
 import { decorAvailable, themeLabel, themeOf } from "./decorThemes";
@@ -1431,6 +1432,10 @@ export class Hud {
   getRoster: (() => RosterEntry[]) | null = null;
   /** The Zombie Almanac's entry list (every obtainable species + discovery counts). */
   getAlmanac: (() => AlmanacEntryView[]) | null = null;
+  /** The Almanac's field notes: the systems a one-line obtain hint cannot explain
+   *  (the Zombie Pot, Brain Tickets, the Epic Boss events). Catalog prices and the
+   *  event lineup are folded in by main, so the panel just renders what it gets. */
+  getAlmanacGuide: (() => AlmanacGuideTopic[]) | null = null;
   /** Portrait image URL for a zombie type key (per-type composite). */
   zombiePortraitOf: ((key: string) => string) | null = null;
   /** Render one owned zombie with its complete individual mutation mask. `wanted`
@@ -5366,9 +5371,21 @@ export class Hud {
     // Default selection: first unlocked raid, else the first card.
     let selId = (cards.find((c) => c.unlocked) ?? cards[0])?.id ?? -1;
 
+    /** Redraw ONLY the cooldown-dependent footer of the mounted detail pane.
+     *
+     *  The 1s ticker used to call renderDetail, which wipes and rebuilds the whole pane.
+     *  Everything above the footer is static for a given raid, so that was a full
+     *  relayout once a second: the drop-rate lines (`.rd-drop`, flex-wrap) re-wrapped,
+     *  which changed the pane's height, which toggled its own overflow-y scrollbar,
+     *  which changed the available width and re-wrapped them again — text visibly
+     *  pulsing while an invasion cooled down. It also reset the scroll position every
+     *  second, so a long drop list could not be read at all. Set by renderDetail. */
+    let refreshFoot: (() => void) | null = null;
+
     const renderDetail = () => {
       const c = cards.find((r) => r.id === selId);
       detail.innerHTML = "";
+      refreshFoot = null;
       if (!c) {
         detail.innerHTML = `<p class="rd-intro">No invasions available.</p>`;
         return;
@@ -5439,61 +5456,74 @@ export class Hud {
         }
       }
 
-      const st = this.getRaidStatus
-        ? this.getRaidStatus()
-        : { cooldownMs: 0, voucherCount: 0, brainTicketCount: 0 };
-      const cd = st.cooldownMs;
-      if (cd <= 0) stop(); // ready again — no need to keep ticking
-
       const foot = document.createElement("div");
       foot.className = "rd-foot";
-      const army = document.createElement("span");
-      army.className = "rd-army" + (haveN < minN ? " short" : "");
-      army.textContent = `Zombies ready: ${haveN} (need ${minN})`;
-      const go = document.createElement("button");
-      go.className = "raid-go";
 
-      // Button state: lock reason > cooldown (with optional voucher bypass) > ready.
-      let useVoucher = false;
-      let buyVoucher = false;
-      // A Brain Ticket skips the wait too, so owning one has to open the same door a
-      // voucher does. Without this branch a player holding tickets but no voucher was
-      // pushed into buying a voucher to reach the Army screen — the only screen the
-      // ticket can be spent from.
-      let armElite = false;
-      if (!c.unlocked) {
-        go.textContent = c.lockReason || "Locked";
-        go.disabled = true;
-      } else if (cd > 0) {
-        if (st.brainTicketCount > 0 && st.voucherCount <= 0) {
-          go.textContent = "Use Brain Ticket & Invade";
-          go.disabled = !canFight;
-          armElite = true;
-          army.textContent =
-            `${st.brainTicketCount} Brain Ticket${st.brainTicketCount > 1 ? "s" : ""}` +
-            ` · skips the ${fmtCooldown(cd)} wait, but the invasion turns ELITE`;
-        } else if (st.voucherCount > 0) {
-          go.textContent = "Use Voucher & Invade";
-          go.disabled = !canFight;
-          useVoucher = true;
-          army.textContent = `${st.voucherCount} voucher${st.voucherCount > 1 ? "s" : ""} · skips the ${fmtCooldown(cd)} wait`;
+      // Everything below is cooldown-dependent, so it — and only it — is what the 1s
+      // ticker redraws. See `refreshFoot`.
+      const renderFoot = () => {
+        foot.innerHTML = "";
+        const st = this.getRaidStatus
+          ? this.getRaidStatus()
+          : { cooldownMs: 0, voucherCount: 0, brainTicketCount: 0 };
+        const cd = st.cooldownMs;
+        if (cd <= 0) stop(); // ready again — no need to keep ticking
+
+        const army = document.createElement("span");
+        army.className = "rd-army" + (haveN < minN ? " short" : "");
+        army.textContent = `Zombies ready: ${haveN} (need ${minN})`;
+        const go = document.createElement("button");
+        go.className = "raid-go";
+
+        // Button state: lock reason > cooldown (with optional voucher bypass) > ready.
+        let useVoucher = false;
+        let buyVoucher = false;
+        // A Brain Ticket skips the wait too, so owning one has to open the same door a
+        // voucher does. Without this branch a player holding tickets but no voucher was
+        // pushed into buying a voucher to reach the Army screen — the only screen the
+        // ticket can be spent from.
+        let armElite = false;
+        // ...but the ticket must not become the ONLY door either: holding one used to
+        // hide the 2,000g voucher entirely, so a player who bought a ticket and backed
+        // out of the elite confirm could never again skip a wait without fighting ELITE.
+        // When the ticket branch owns the main button, the voucher stays offered beside it.
+        let offerVoucherBuy = false;
+        const voucherCost = this.boosts.find((b) => b.key === VOUCHER_KEY)?.cost ?? 2000;
+        if (!c.unlocked) {
+          go.textContent = c.lockReason || "Locked";
+          go.disabled = true;
+        } else if (cd > 0) {
+          if (st.brainTicketCount > 0 && st.voucherCount <= 0) {
+            go.textContent = "Use Brain Ticket & Invade";
+            go.disabled = !canFight;
+            armElite = true;
+            offerVoucherBuy = true;
+            army.textContent =
+              `${st.brainTicketCount} Brain Ticket${st.brainTicketCount > 1 ? "s" : ""}` +
+              ` · skips the ${fmtCooldown(cd)} wait, but the invasion turns ELITE`;
+          } else if (st.voucherCount > 0) {
+            go.textContent = "Use Voucher & Invade";
+            go.disabled = !canFight;
+            useVoucher = true;
+            army.textContent = `${st.voucherCount} voucher${st.voucherCount > 1 ? "s" : ""} · skips the ${fmtCooldown(cd)} wait`;
+          } else {
+            // Buying a voucher is available from every unlocked invasion. Do not gate
+            // the purchase on army size: McDonnell's eased minimum (1/4 zombies) made
+            // this look tutorial-only while every other invasion normally needs 8.
+            // The Army screen still enforces the selected raid's real launch minimum.
+            go.textContent = "Buy Ticket & Invade";
+            go.disabled = false;
+            buyVoucher = true;
+            army.className = "rd-army short";
+            army.textContent =
+              `Ready in ${fmtCooldown(cd)} · raid ticket: ${voucherCost.toLocaleString()} gold`;
+          }
         } else {
-          // Buying a voucher is available from every unlocked invasion. Do not gate
-          // the purchase on army size: McDonnell's eased minimum (1/4 zombies) made
-          // this look tutorial-only while every other invasion normally needs 8.
-          // The Army screen still enforces the selected raid's real launch minimum.
-          go.textContent = "Buy Ticket & Invade";
-          go.disabled = false;
-          buyVoucher = true;
-          army.className = "rd-army short";
-          army.textContent = `Ready in ${fmtCooldown(cd)} · raid ticket: 2,000 gold`;
+          go.textContent = "Invade";
+          go.disabled = !canFight;
         }
-      } else {
-        go.textContent = "Invade";
-        go.disabled = !canFight;
-      }
-      go.onclick = () => {
-        if (buyVoucher) {
+        // Buy an Invasion Voucher, then straight on to the Army screen with it armed.
+        const beginVoucherBuy = () => {
           const voucher = this.boosts.find((boost) => boost.key === VOUCHER_KEY);
           if (!voucher) {
             this.showToast("Invasion Vouchers are unavailable right now.");
@@ -5503,12 +5533,30 @@ export class Hud {
             close();
             this.openRaidArmy(c, true);
           });
-          return;
+        };
+        go.onclick = () => {
+          if (buyVoucher) {
+            beginVoucherBuy();
+            return;
+          }
+          close();
+          this.openRaidArmy(c, useVoucher, armElite);
+        };
+        const acts = document.createElement("div");
+        acts.className = "rd-acts";
+        if (offerVoucherBuy) {
+          const alt = document.createElement("button");
+          alt.className = "raid-quick";
+          alt.textContent = `Buy Voucher · ${voucherCost.toLocaleString()}g`;
+          alt.title = "Skip the wait the normal way — no elite wave.";
+          alt.onclick = beginVoucherBuy;
+          acts.appendChild(alt);
         }
-        close();
-        this.openRaidArmy(c, useVoucher, armElite);
+        acts.appendChild(go);
+        foot.append(army, acts);
       };
-      foot.append(army, go);
+      refreshFoot = renderFoot;
+      renderFoot();
 
       detail.append(hero, intro, rewards, foot);
     };
@@ -5551,9 +5599,11 @@ export class Hud {
       }
     }
     renderDetail();
-    // Live-update the countdown only if a cooldown is currently active.
+    // Live-update the countdown only if a cooldown is currently active. The ticker
+    // touches the FOOTER only — rebuilding the whole pane once a second is what made
+    // the drop-rate text pulse (see refreshFoot).
     if ((this.getRaidStatus?.().cooldownMs ?? 0) > 0) {
-      tick = window.setInterval(renderDetail, 1000);
+      tick = window.setInterval(() => refreshFoot?.(), 1000);
     }
   }
 
@@ -5718,6 +5768,13 @@ export class Hud {
     // the whole feature undiscoverable from the screen it is used on. Buying happens
     // through the same confirm prompt as the raid ticket, so the 10,000 gold is never
     // spent on a stray tap.
+    // …but only once the Brain Ticket is unlocked. Below its catalog level the server
+    // refuses the buy outright ("locked"), so an ungated button here is a dead end: the
+    // prompt opens, the player agrees to spend 10,000 gold, and nothing happens. The
+    // elite ladder's bottom rung is well above what a fresh farm can field, which is why
+    // the gate exists at all — see the catalog level in boosts.json.
+    const ticketDef = this.boosts.find((b) => b.key === BRAIN_TICKET_KEY);
+    const ticketUnlocked = this.state.level >= (ticketDef?.level ?? 0);
     let ticketsHeld = boosts.brainTickets;
     const eliteBtn = document.createElement("button");
     eliteBtn.className = "raid-boost-btn raid-elite-btn";
@@ -5745,7 +5802,10 @@ export class Hud {
       });
     };
     drawElite();
-    boostRow.append(eliteBtn, eliteNote);
+    // A held ticket still works below the gate (it may have been bought before a
+    // rollback, or gifted): hide the button only when there is nothing to spend and
+    // nothing that could be bought.
+    if (ticketUnlocked || ticketsHeld > 0) boostRow.append(eliteBtn, eliteNote);
     if (boostRow.childElementCount) wrap.insertBefore(boostRow, foot);
 
     // "Pick for me": KEEP whatever the player has already selected (in the order they

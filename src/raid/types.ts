@@ -232,6 +232,35 @@ export interface BossSpecial {
   damage: number; // effect damage (data value, or a sensible default)
 }
 
+/** How a stage feeds its wave onto the field.
+ *
+ *  GROUND TRUTH (`-[ZFFightMan spawnEnemyIn:]` 0x58100): the fight holds ONE "current"
+ *  enemy plus a five-slot `enemySlots` array — six enemies at once. Two schedulers arm
+ *  `spawnEnemyIn:` at a 1 s delay, both gated on `enemyPopulation - alive >= 1`:
+ *  `update:` when the current enemy has died, and `updateTimer:` when `spawnTimer`
+ *  expires. `spawnTimer` is seeded in `initialSpawn` (0x575fe) to **10 s for stage 6
+ *  (Zombies vs Aliens) and 3600 s for every other stage** — so on every other raid the
+ *  slots are never filled and the wave really is one-at-a-time. The alien raid is the
+ *  only swarm in the game. */
+export interface WaveCadence {
+  /** Enemies on the field at once: 1 + the five `enemySlots`, or 1 with no drip. */
+  maxActive: number;
+  /** Reinforcement clock in ms (0 = none) — the alien stage's `spawnTimer`. */
+  dripMs: number;
+}
+
+/** The alien boss's `summonBoss` queue. GROUND TRUTH: `bossSummonList` is seeded in
+ *  `initialSpawn` (0x57618) with four ABDUCTED HUMANS, and `summonBoss:` (0x5ee2c) pops
+ *  index 0 then pushes one of five randomly-rolled replacements, so it never runs dry.
+ *  `allowedToSummonBoss` (0x5eda4) is what actually limits it: the summoned actor is held
+ *  in the `bossWall` ivar, so only ONE can be alive at a time. See BattleSim.runSpecial. */
+export interface SummonConfig {
+  /** FIFO queue, in the authored seed order. */
+  queue: CombatUnit[];
+  /** The five candidates a completed summon pushes back on (uniform roll). */
+  pool: CombatUnit[];
+}
+
 /** One entry in a boss's merged action budget. GROUND TRUTH: the source keeps throws and
  *  specials in a SINGLE `bossActions` array and makes one weighted roll over all of them
  *  per action cycle, so a debris toss and a special compete for the same slot. Each

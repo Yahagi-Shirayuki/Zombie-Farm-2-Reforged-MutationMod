@@ -65,3 +65,31 @@ export function epicBossHp(def: EpicBossDef, level: number): number {
   const index = Math.max(0, Math.min(def.maxLevel - 1, Math.floor(level) - 1));
   return Math.round(def.baseHp * (def.multipliers[index] ?? 1));
 }
+
+/** Compounding damage growth per rung climbed. Rung 1 is the catalog's authored value
+ *  (tools/prep_all_epic_bosses.py EPIC_BOSS_DAMAGE); every rung above it hits 5% harder
+ *  than the one below, so the top of a ten-rung ladder lands at 1.05^9 = 1.55x.
+ *
+ *  WHY IT COMPOUNDS RATHER THAN GATING ON HP. HP only ever buys attempts — the fight is
+ *  capped at 60 s and damage carries over, so a rung too tough to burn in one go is a rung
+ *  you burn in two. Damage is the only lever that can say "not with this army": it is
+ *  deliberately REGRESSIVE, costing a weak roster far more than a developed one, and that
+ *  is the point — the deep rungs of an endgame event should not be walkable by a bad army
+ *  with enough patience. The bounding rule (src/epicBoss/combat.test.ts) is what keeps
+ *  that from becoming "own the one right tank": a level-appropriate best-mutated headless
+ *  must still survive the TOP rung backed by two level-appropriate healers. */
+export const EPIC_BOSS_DAMAGE_RUNG_STEP = 0.05;
+
+/** This boss's attack power on `level`.
+ *
+ *  Computed by repeated multiplication rather than `Math.pow`, which the spec leaves
+ *  implementation-approximated: the client's sim and the Worker's replay verifier must
+ *  agree BIT for bit or a won fight fails verification, and only exactly-rounded IEEE-754
+ *  operations guarantee that. Rounded to 4 dp for the same reason it is rounded at all —
+ *  so the number that lands in a stored session config is one a human can read back. */
+export function epicBossDamage(def: EpicBossDef, level: number): number {
+  const rung = Math.max(1, Math.min(def.maxLevel, Math.floor(level)));
+  let scale = 1;
+  for (let step = 1; step < rung; step++) scale *= 1 + EPIC_BOSS_DAMAGE_RUNG_STEP;
+  return Math.round(def.unitStats.str * scale * 10_000) / 10_000;
+}

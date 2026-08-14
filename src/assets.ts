@@ -90,6 +90,10 @@ export interface EnemyPart {
   px: number; py: number; ax: number; ay: number; z: number; rot: number;
   group: "head" | "leg" | "arm" | "wing" | "wheel" | "body";
   back: boolean;
+  /** This part does NOT take the actor's runtime colour — the source's
+   *  `setInheritColor: NO`. Only the alien minion sets it (its face and body detail stay
+   *  grey while the rest of the body takes a random hue); see EnemyActor.applyTint. */
+  noTint?: boolean;
 }
 export interface EnemyModel {
   parts: EnemyPart[];

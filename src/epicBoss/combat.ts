@@ -4,8 +4,9 @@ import { buildPlayerUnits } from "../raid/CombatEngine";
 import type { CombatUnit, RaidDef } from "../raid/types";
 import type { GameState } from "../GameState";
 import type { OwnedZombie } from "../zombie/types";
+import { epicBossDamage } from "./catalog";
 import type { EpicBossDef, EpicBossLoot, EpicBossRun } from "./types";
-import { epicLootWeight } from "./rewards";
+import { EPIC_LOOT_DROP_CHANCE, EPIC_LOOT_ROLLS, epicLootWeight } from "./rewards";
 
 export interface EpicBossSetup {
   raid: RaidDef;
@@ -33,7 +34,8 @@ export function buildEpicBossSetup(
     sourceKey: `EpicBoss:${def.id}`,
     team: "enemy",
     name: def.name,
-    str: def.unitStats.str,
+    // Damage compounds 5% per rung (epicBossDamage) — MUST match server/src/v3/epicBoss.ts.
+    str: epicBossDamage(def, run.level),
     dex: def.unitStats.dex,
     con: def.unitStats.con,
     focus: 0,
@@ -84,16 +86,16 @@ export function buildEpicBossSetup(
 
 /** Documented fallback when the exact binary loot selector is unavailable.
  *
- *  One 35% roll per cleared level, preferring prizes not yet collected, then weighted by
- *  the rung that unlocks each one (`epicLootWeight`) so the top-of-ladder signature item
- *  stays rare instead of being as likely as the level-5 starter. */
+ *  One roll per cleared level at EPIC_LOOT_DROP_CHANCE, preferring prizes not yet
+ *  collected, then weighted by the rung that unlocks each one (`epicLootWeight`) so the
+ *  top-of-ladder signature item stays rare instead of being as likely as the first. */
 export function rollEpicBossLoot(
   def: EpicBossDef,
   defeatedLevel: number,
   collected: ReadonlySet<string>,
   random: () => number = Math.random
 ): EpicBossLoot | null {
-  if (random() >= 0.35) return null;
+  if (random() >= EPIC_LOOT_DROP_CHANCE) return null;
   const eligible = def.loot.filter((loot) => loot.level <= defeatedLevel);
   if (!eligible.length) return null;
   const fresh = eligible.filter((loot) => !collected.has(loot.name));
@@ -103,4 +105,26 @@ export function rollEpicBossLoot(
     pool.map((loot) => ({ loot, frequency: epicLootWeight(loot.level) })), random
   );
   return picked?.loot ?? null;
+}
+
+/** Every decor drop from one cleared rung: EPIC_LOOT_ROLLS independent rolls.
+ *
+ *  Anything already picked in THIS clear joins `collected` for the next roll, so two
+ *  rolls cannot hand over the same prize twice — which for a `unique` item would be a
+ *  wasted drop, and is the whole reason two rolls beat one at double the rate. */
+export function rollEpicBossDrops(
+  def: EpicBossDef,
+  defeatedLevel: number,
+  collected: ReadonlySet<string>,
+  random: () => number = Math.random
+): EpicBossLoot[] {
+  const drops: EpicBossLoot[] = [];
+  const seen = new Set(collected);
+  for (let roll = 0; roll < EPIC_LOOT_ROLLS; roll++) {
+    const loot = rollEpicBossLoot(def, defeatedLevel, seen, random);
+    if (!loot || drops.some((d) => d.name === loot.name)) continue;
+    drops.push(loot);
+    seen.add(loot.name);
+  }
+  return drops;
 }

@@ -286,6 +286,15 @@ PART_POS_OVERRIDES = {
 }
 
 
+# Parts that do NOT take the actor's runtime colour. GROUND TRUTH:
+# `-[AlienStageActorMinion initSprite]` (0xc70e0) calls `setInheritColor: NO` on
+# attachment slots 1 and 11 — minionFace and minionBodyDetail. Every alien in the wave is
+# tinted a RANDOM colour at spawn (`-[ZFFightMan spawnEnemy]` 0x57f3a, alien stage only),
+# which is why the minion art in AlienStage.png is greyscale; these two parts are the
+# exceptions that stay grey. See docs/mechanics/ALIEN_RAID_RECOVERED.md §7.4.
+NO_INHERIT_COLOR = {"minionFace.png", "minionBodyDetail.png"}
+
+
 # --- runtime rig (animation) --------------------------------------------------
 # Classify a part into an animation group by its name. `back` marks the rear of a
 # limb pair (rear leg/arm) so the walk cycle can swing them in anti-phase.
@@ -384,11 +393,14 @@ def emit_rig(key, placed):
             px, py = p["tlx"], p["tly"]
             grp = p["group"]
             rrad = 0.0
-        parts_json.append({
+        part = {
             "rx": rx, "ry": ry, "rw": rw, "rh": rh,
             "px": round(px, 1), "py": round(py, 1), "ax": ax, "ay": ay,
             "z": p["z"], "rot": rrad, "group": grp, "back": bool(p["back"]),
-        })
+        }
+        if os.path.basename(p.get("name", "")) in NO_INHERIT_COLOR:
+            part["noTint"] = True
+        parts_json.append(part)
     # Shoulder pivot for the attack swing. EnemyActor otherwise guesses it as the
     # top-most front-arm part — which breaks when a held weapon (a raised sword) is the
     # top-most part, making the whole arm orbit the blade TIP. When the rig has a

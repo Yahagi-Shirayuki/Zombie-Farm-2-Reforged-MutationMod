@@ -24,7 +24,10 @@ import type {
   RaidDef,
   RaidStage,
   GrabberConfig,
+  SummonConfig,
+  WaveCadence,
 } from "../../src/raid/types";
+import { summonConfigFor, waveCadenceFor } from "../../src/raid/alienStage";
 import {
   eliteBossSpecials,
   eliteBossThrow,
@@ -53,7 +56,11 @@ export interface PinnedRaidConfig {
   enemyUnits: CombatUnit[];
   bossThrow: BossThrowConfig | null;
   bossSpecials: BossSpecial[];
-  summonTemplate: CombatUnit | null;
+  /** The alien boss's abductee queue (raid 6 only) — see src/raid/alienStage.ts. */
+  summon: SummonConfig | null;
+  /** How the stage feeds its wave in. Pinned rather than re-derived from raidId so a
+   *  settled session still replays under the cadence it was actually fought at. */
+  waveCadence: WaveCadence;
   wallTemplate: CombatUnit | null;
   grabber: GrabberConfig | null;
   concentration: boolean;
@@ -124,17 +131,24 @@ function bossSpecialsOf(stage: RaidStage, elite: EliteProfile | null): BossSpeci
   );
 }
 
-function summonWallTemplates(stage: RaidStage, units: CombatUnit[], elite: EliteProfile | null): {
-  summonTemplate: CombatUnit | null;
+// Mirrors RaidManager.summonConfigOf + wallTemplateOf. Both sides must build the same
+// abductee roster off the same elite/level context or the replay diverges the first time
+// the alien boss casts. `raidId`/`playerLevel` are the pair buildEnemyUnits also needs.
+function summonWallTemplates(
+  stage: RaidStage,
+  raidId: number,
+  playerLevel: number,
+  elite: EliteProfile | null
+): {
+  summon: SummonConfig | null;
   wallTemplate: CombatUnit | null;
 } {
-  let summonTemplate: CombatUnit | null = null;
+  let summon: SummonConfig | null = null;
   let wallTemplate: CombatUnit | null = null;
-  if (!stage.bossKey || stage.throwingDisabled) return { summonTemplate, wallTemplate };
+  if (!stage.bossKey || stage.throwingDisabled) return { summon, wallTemplate };
   const actions = enemyStats[stage.bossKey]?.bossActions ?? [];
   if (actions.some((a) => a.name === "summonBoss")) {
-    const minion = units.find((u) => !u.isBoss);
-    if (minion) summonTemplate = { ...minion };
+    summon = summonConfigFor(raidId, enemyStats, attacks, { raidId, playerLevel, elite });
   }
   const wall = actions.find((a) => a.name === "wall");
   if (wall) {
@@ -159,7 +173,7 @@ function summonWallTemplates(stage: RaidStage, units: CombatUnit[], elite: Elite
       abilities: [],
     };
   }
-  return { summonTemplate, wallTemplate };
+  return { summon, wallTemplate };
 }
 
 export type BuildPinnedResult =
@@ -251,7 +265,8 @@ export async function buildPinnedRaid(
       enemyUnits,
       bossThrow: bossThrowOf(raid, stage, wins.get(raidId) ?? 0, profile),
       bossSpecials: bossSpecialsOf(stage, profile),
-      ...summonWallTemplates(stage, enemyUnits, profile),
+      ...summonWallTemplates(stage, raidId, level, profile),
+      waveCadence: waveCadenceFor(raidId),
       grabber: grabberOf(raid),
       concentration,
       elite,
@@ -267,13 +282,15 @@ export function createPinnedSim(config: PinnedRaidConfig): BattleSim {
     config.concentration,
     config.bossSpecials,
     undefined,
-    config.summonTemplate,
+    config.summon ?? null,
     config.wallTemplate,
     false,
     false,
     false,
     undefined,
-    config.grabber ?? null
+    config.grabber ?? null,
+    null,
+    config.waveCadence ?? waveCadenceFor(config.raidId)
   );
 }
 
@@ -369,7 +386,8 @@ export async function buildPinnedV3Raid(
       enemyUnits,
       bossThrow: bossThrowOf(raid, stage, winsObject[String(raidId)] ?? 0, profile),
       bossSpecials: bossSpecialsOf(stage, profile),
-      ...summonWallTemplates(stage, enemyUnits, profile),
+      ...summonWallTemplates(stage, raidId, level, profile),
+      waveCadence: waveCadenceFor(raidId),
       grabber: grabberOf(raid),
       concentration,
       elite,

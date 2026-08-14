@@ -1,13 +1,15 @@
 // What a prize you can never buy is worth when sold.
 //
-// Both families here are AWARDED, never purchased, so every one of them carries
+// All three families here are AWARDED, never purchased, so every one of them carries
 // `cost: 0` in the catalog (a free item must not refund a price nobody paid — see
 // objectRefund). The side effect was that a signature trophy off the rarest tier of
 // the hardest invasion, or an Epic Boss's forty-brain showpiece, sold for the game's
 // one-gold minimum. These tables give them a real number.
 //
-// AUTHORED, not derived. The two families use different rules because they are
-// earned differently — see each table.
+// AUTHORED, not derived. The three families use different rules because they are
+// earned differently — see each table. Between them they must cover EVERY award-only
+// placeable: `cost: 0` plus no entry here is the one-gold floor, which is the bug
+// each table exists to close. Guarded by server/test/awardSellValue.test.ts.
 //
 // A prize that is ALSO a Market item is deliberately absent from both: it already has
 // a price, and its sell-back is the ordinary SELL_BACK_RATIO of that price.
@@ -145,11 +147,46 @@ export const EPIC_PRIZE_SELL: Readonly<Record<string, number>> = {
   mysticalMambasWishMachineLeft: 1_000, // 4b · Mystical Mamba's Wish Machine
 };
 
+/** Quest and seasonal-event prizes: the third award-only family, and the one that
+ *  fell through both tables above. These are not on any invasion's tier ladder and
+ *  are not Epic Boss loot, so neither rule reached them and all sixteen sold for the
+ *  one-gold floor — a Circus Popcorn earned by beating the Circus three times paid
+ *  the same as a weed.
+ *
+ *  Priced at the owner's request in a flat 500-1,000 band, by footprint, because
+ *  there is no rarity ladder here to shape them against: a 1x1 trinket pays 500, a
+ *  2x2 pays 750, and a 3x3-or-larger showpiece pays 1,000. Deliberately below the
+ *  rare invasion drops (1,200-4,500) — a quest prize is a one-off, not a grind. */
+export const QUEST_REWARD_SELL: Readonly<Record<string, number>> = {
+  // 1x1 trinkets ------------------------------------------------------------
+  circusPopcorn: 500, // quest 45 "Big Top Bash"
+  teddyBear: 500,
+  witchsCauldron: 500,
+  greenGift: 500,
+  redGift: 500,
+  yellowGift: 500,
+  iceCreamConeChocolate: 500,
+  iceCreamConeStrawberry: 500,
+  iceCreamConeVanilla: 500,
+  coffin1: 500,
+  coffin2: 500,
+  coffin3: 500,
+
+  // 2x2 -------------------------------------------------------------------
+  rockBunny: 750,
+
+  // 3x3 and larger showpieces ----------------------------------------------
+  hauntedClocktower: 1_000, // 2x2 footprint, but a full-height tower
+  treeSpooky: 1_000, // quest 48 "Down for the Count"
+  iceCreamTruck: 1_000,
+};
+
 /** The authored sell price of an award-only prize, or undefined for anything that
  *  isn't one (every purchasable item, and every reward with no authored value — both
  *  keep the ordinary cost-derived refund). */
 export function awardedSellValue(key: string): number | undefined {
   if (Object.prototype.hasOwnProperty.call(RAID_DROP_SELL, key)) return RAID_DROP_SELL[key];
   if (Object.prototype.hasOwnProperty.call(EPIC_PRIZE_SELL, key)) return EPIC_PRIZE_SELL[key];
+  if (Object.prototype.hasOwnProperty.call(QUEST_REWARD_SELL, key)) return QUEST_REWARD_SELL[key];
   return undefined;
 }

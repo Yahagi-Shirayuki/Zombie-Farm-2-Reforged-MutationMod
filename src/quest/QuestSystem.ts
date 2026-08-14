@@ -162,6 +162,41 @@ export class QuestSystem {
     this.tryActivate(); // a completed prerequisite may unlock the next quest(s)
   }
 
+  /** Close out any active quest whose requirements are ALREADY satisfied.
+   *
+   *  Completion used to be tested ONLY inside an event that advanced a counter, so a
+   *  quest that arrived on the rail already finished stayed there forever, unrewarded:
+   *  a capped requirement bails out of onEvent before `advanced` is set, so no later
+   *  event can re-run the check. That is not hypothetical — lowering a requirement's
+   *  countTotal (Master Combiner went from 50 collections to 15) turns every save
+   *  holding a count at or above the new target into exactly this state: "Collect 15
+   *  zombies from the Zombie Pot (15/15) ✓", stuck in the quest log.
+   *
+   *  Online the server owns completion (it re-checks every eligible quest on each
+   *  command batch, so it heals itself), and self-completing here would grant a reward
+   *  the server never agreed to — hence the authoritative bail-out.
+   *
+   *  Completing can unlock a successor, so this repeats until it finds nothing new.
+   *  It terminates: every pass moves at least one id into `completed`, which
+   *  `eligible` then permanently excludes. */
+  private sweepSatisfied(): boolean {
+    if (this.hooks.authoritative) return false;
+    let closedAny = false;
+    for (;;) {
+      const finished: string[] = [];
+      for (const [id, counts] of this.active) {
+        const def = this.defs.get(id);
+        if (!def) continue;
+        if (def.epicEvent && (!this.epicBossActive || !this.epicBossQuestIds.has(id))) continue;
+        if (def.requirements.every((r, i) => (counts[i] ?? 0) >= r.countTotal)) finished.push(id);
+      }
+      if (!finished.length) return closedAny;
+      closedAny = true;
+      // Complete after the loop so we don't mutate `active` mid-iteration.
+      for (const id of finished) this.complete(id);
+    }
+  }
+
   private dispatchReward(def: QuestDef) {
     // Online, the server grants EVERY reward authoritatively (currency and any level-up
     // it triggers, items into the authoritative inventory/Received, and epic zombie
@@ -292,7 +327,12 @@ export class QuestSystem {
         [...nextIds].every((id) => this.epicBossQuestIds.has(id))) return;
     this.epicBossActive = active;
     this.epicBossQuestIds = nextIds;
-    if (active) this.tryActivate();
+    if (active) {
+      this.tryActivate();
+      // An epic quest carries lifetime progress across events, so the one that comes
+      // back into view can already be at target (see sweepSatisfied).
+      this.sweepSatisfied();
+    }
     this.hooks.render(this.views());
   }
 
@@ -355,6 +395,8 @@ export class QuestSystem {
       }
     }
     this.tryActivate();
+    // A restored count can already satisfy its requirement (see sweepSatisfied).
+    this.sweepSatisfied();
     this.hooks.render(this.views());
   }
 
@@ -392,6 +434,10 @@ export class QuestSystem {
       );
     }
     this.tryActivate();
+    // Offline path only (importing an online export into Local Farm): the merged
+    // counts can already be at target with the quest still open. Online this is a
+    // no-op — `state.completed` is the server's answer and it stays the authority.
+    this.sweepSatisfied();
     this.hooks.render(this.views());
   }
 

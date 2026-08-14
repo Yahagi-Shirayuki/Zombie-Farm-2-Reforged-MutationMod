@@ -88,7 +88,11 @@ is exactly the saucer's 140×128 art box, with a 96.8 px pilot sitting inside th
 `-[AlienStageActorBoss movementUpdate:]` (0xc6e20) keeps both halves at
 `actor.position + rigScale * body.position`, and `bossUpdate:` (0xc6bb8) attaches the front
 half at `zOrder + 1` and the back half at `zOrder - 1` on state 19, then removes **both** on
-state 9 (death) — the saucer does not outlive its pilot.
+state 9.
+
+> **CORRECTED 2026-08-13.** This section originally called state 9 "death". It is not — state
+> 9 is the LANDED, fighting-on-the-ground state (see §7.1). The saucer is dropped the moment
+> the boss touches down, not when it dies. Actual death is state 100 → 101.
 
 Authored anchors (cocos, y from the bottom): `bossShip` `(0.53, 0.25)`, `bossShipBack`
 `(0.56, −0.75)`. `bossBody`'s rig offset is `(0, 3)`, so the ship anchor sits 1.7 px above
@@ -139,10 +143,286 @@ No `throw` entry — the alien boss never lobs debris, so its whole ranged game 
 Every stage boss (not just this one) gets exactly one `ZFActorFightEffect initWithTag: 11`
 in `initActorSpecificAbilities`, so tag 11 is a generic boss effect, not an alien trait.
 
-## 6. Not changed
+## 6. Not changed (in the 2026-08-09 pass)
 
 * `SUMMON_CAP = 3` in `BattleSim` is still a reimpl invention. The source draws from a
   `bossSummonList` populated at load and pops one entry per `summonBoss:`; the cap was not
-  pinned in this pass.
+  pinned in this pass. **Pinned in §7.3 below.**
 * `AlienStageActorMinion colorFromSubType:` (0xc70c4) is a 3-byte `memcpy` out of a table —
   minions carry a per-subtype tint that the reimpl does not apply. Not pinned.
+  **This reading was WRONG — see §7.4. The method just returns `savedColor`; the real
+  colour comes from a random roll in `spawnEnemy`.**
+
+---
+
+# 7. Round 2 (2026-08-13) — a tester's six alien-raid complaints, run to ground
+
+Six symptoms were reported against the reimplementation. Five are real deviations; one is
+not. Everything below is transcribed from the same ARMv7 binary.
+
+Two prerequisites that unlock most of it:
+
+**`ZFFightMan` ivar map** (dumped from `class_ro_t.ivars`; the disassembler prints these as
+bare GOT offsets, e.g. `[0x4a2ce0]=0x10c`):
+
+| off | name | off | name |
+| --- | --- | --- | --- |
+| 0xe0 | `boss` | 0x134 | `currentEnemyMaxHp` |
+| 0xe4 | `enemy` (the CURRENT one) | 0x140 | `enemyCasualty` |
+| 0x108 | `enemyList` | **0x150** | **`spawnTimer`** (f) |
+| **0x10c** | **`enemySlots`** (NSMutableArray) | 0x158 | `enemyPopulation` (i) |
+| 0x110 | `bossSummonList` | 0x16c | `bossPosition` |
+| 0x114 | `bossWall` | 0x174 | `enemyPosition` |
+| 0x128/0x12c | `bossActionCastTimer` / `…CooldownTimer` (f, **in FRAMES** — `update:` decrements them by `dt*60`) | 0x1f0 | `bossKey` |
+
+`Actor`: 0x108 `state`, 0x110 `type`, 0x114 `subType`, 0x118 `color`, **0x11b `savedColor`**,
+0x100 `destinationPoint`, 0x160 `widthScale`. `AlienStageActorBoss`: 0x180/0x184
+`bossShipFront` / `bossShipBack`.
+
+**Stage-position defaults** (`-[ZFFightMan loadDataWithDictionary:]` 0x55b94). The alien
+entry in `Enemies.json` sets neither, so both defaults apply:
+`enemyPosition` = **(435, 20)**, `bossPosition` = **(450, 200)** — the sky perch.
+
+## 7.1 The actor state machine (the piece everything else hangs off)
+
+`-[CivilianActorFight bossUpdate:]` (0x67b40) opens with
+
+```
+r0 = self->state; r0 -= 15; if (r0 > 12) goto civilianUpdate;   // states 15..27 only
+tbh [pc, r0, lsl #1]
+```
+
+so **boss behaviour exists only in states 15–27**, and the jump table (decoded at 0x67c0e) is
+
+| state | 15 | 16/17/18/26 | **19** | 20 | 21 | 22 | 23 | 24 | 25 | 27 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| | stop actions | plain `civilianUpdate` | **roll a boss action** | throw wind-up | | | wall/summon cast | begin exit | exiting | fire bullet → 19 |
+
+Everything else is a plain ground actor. The states that matter here:
+
+* **9 — LANDED / actively fighting.** `spawnEnemy` (0x57b74) stamps `setState: 9` on every
+  minion it creates; `update:` promotes a queued slot enemy with
+  `setState: (state == 13) ? 34 : 9`; and the boss's own landing sets it (below). It is
+  **not** death.
+* **100 → 101 — dying → removed.** `civilianUpdate` (0x686a4) at state 100 does
+  `enemyPopulation--`, `enemyCasualty++`, `setState: 101`.
+* **19 — perched.** The alien boss spawns straight into it (`initialSpawn` 0x56cdc:
+  `setSubType:1`, `setAnchorPoint:(1,0)`, `setState: 0x13`).
+
+**The generic boss descent** (states 24 → 25, 0x67da0 / 0x67dda / 0x68024) — this is every
+raid, not just the alien one:
+
+```
+state 24:  [self moveToPoint: (600 * self.widthScale, fightMan.bossPosition.y)]
+           [self setState: 25]                       // fly/walk OFF the right edge (stage is 480 wide)
+state 25:  if (self.position == self.destinationPoint) {
+               [self setPosition: fightMan.enemyPosition];   // (435, 20) — the ground doorway
+               [self setState: 9];                           // <<< LANDED
+               [self.spriteMan.parent reorderChild: self.spriteMan z: 3];
+           }
+```
+
+`ZFFightMan update:` (0x5d2ee) starts it: once `enemyPopulation <= 0` and `boss.state == 19`,
+it sets the boss to 24 and makes it `self.enemy`.
+
+> The reimpl's `"descending"` route (out the right edge at perch height, then re-enter on the
+> ground — `BattleSim.ts` ~2201) already matches this. Good.
+
+## 7.2 → symptom 1: "the UFO is displayed with the boss after the boss descends" — REAL BUG
+
+`-[AlienStageActorBoss bossUpdate:]` is exactly:
+
+```
+if (self.state == 19)      { attach bossShipFront at zOrder+1 and bossShipBack at zOrder-1
+                             (each only if its .parent is nil), both at self.position }
+else if (self.state == 9)  { removeChild both halves (cleanup:YES); setBossShipFront:nil;
+                             setBossShipBack:nil }
+[super bossUpdate:dt]
+```
+
+Chained with §7.1: the saucer is attached while perched, **rides along through the exit
+(24/25) — and is destroyed and nilled the instant the boss lands at state 9.** The alien boss
+fights the last phase on foot, no UFO. The reimpl welds the two ship sprites into the boss
+token for the whole fight (`RaidScene.ts` ~1126), so the saucer never leaves.
+
+**Fix:** drop the two UFO sprites when the boss's sim state leaves `"descending"`. There is
+no re-attach — `setBossShipFront:nil` is permanent.
+
+## 7.3 → symptom 2: "new aliens only come after the previous one is killed" — REAL BUG
+
+`-[ZFFightMan spawnEnemyIn:]` (0x58100), in full:
+
+```
+[self unschedule:@selector(spawnEnemyIn:)];
+if (self.enemy == nil) { self.enemy = [self spawnEnemy];
+                         self.currentEnemyMaxHp = self.enemy.fightData.hitPoints; }
+else                   { for (i = 0; i <= 4; i++)                       // FIVE slots
+                             if ([self.enemySlots[i] isKindOfClass:[NSNull class]]) {
+                                 self.enemySlots[i] = [self spawnEnemy]; break; } }
+```
+
+`enemySlots` is built in `initialSpawn` (0x576f4) as `movs r5, #5` NSNulls. So the field
+holds **one "current" enemy plus five more — six enemies at once.**
+
+Two schedulers feed it, both arming `spawnEnemyIn:` at a **1.0 s** interval and both gated on
+`enemyPopulation - liveCount >= 1`:
+
+* `update:` (0x5d60c) — fires when the current enemy has just died (the classic
+  "replace the one you killed").
+* `updateTimer:` (0x61250) — `spawnTimer -= dt; if (spawnTimer <= 0) { …schedule…;
+  spawnTimer = 10.0f; }`. **A reinforcement every 10 seconds regardless of kills.**
+
+And `spawnTimer`'s seed is the alien raid's one big divergence (`initialSpawn` 0x575fe):
+
+```
+if ([[[GameState gameState] zfGameData] currentEnemy] == 6)   // 6 == Zombies vs Aliens
+     self->spawnTimer = 10.0f;
+else self->spawnTimer = 3600.0f;                              // i.e. never
+```
+
+So **Zombies vs Aliens is the only raid in the game with a timed drip** — every other stage
+only ever refills on a death. Combined with `population: 20`, the alien raid is designed as a
+*swarm*: up to six aliens on the field, a fresh one every 10 s, 20 to kill.
+
+`BattleSim.MAX_ACTIVE_ENEMIES = 1` (line 99) is the bug. The faithful model is 6 concurrent
+(1 + 5 slots) with a 10 s alien-only reinforcement clock on top of the on-death refill.
+
+`enemyPopulation` decrements only in `civilianUpdate` at state 100, and **only when the dying
+actor is not `fightMan.bossWall`** — so summoned abductees (§7.5) are free and do not eat the
+wave budget.
+
+## 7.4 → symptom 3: "aliens are colourless" — REAL BUG
+
+The atlas is the tell. Measured over `AlienStage.png` (opaque pixels only):
+
+| part | avg RGB | saturation |
+| --- | --- | --- |
+| `minionBody` / `minionArmF` / `minionArmB` | ~(197,197,197) | **1** |
+| `minionHead` / `minionFace` | ~(153,153,153) | **0** |
+| `bossArmF` / `bossFootF` | (173,93,205) / (140,15,192) | 112 / 177 |
+
+The **minion art is pure greyscale** (the boss's is already purple). It is meant to be tinted
+at runtime — and the tint is *random per alien*. `-[ZFFightMan spawnEnemy]` (0x57f3a):
+
+```
+if ([[[GameState gameState] zfGameData] currentEnemy] == 6) {            // aliens only
+    r = (int)((arc4random() % 100) / 100.0f * 255.0f);
+    g = (int)((arc4random() % 100) / 100.0f * 255.0f);                   // three separate rolls
+    b = (int)((arc4random() % 100) / 100.0f * 255.0f);
+    [enemy setSavedColor: ccc3(r, g, b)];
+    [enemy resetColor];
+}
+```
+
+Each channel lands on a multiple of 2.55 in 0…252. `-[Actor resetColor]` (0x38bac) then walks
+the attachments, calls `colorFromSubType:` and applies the result to every part whose
+`inheritColor` is YES.
+
+`-[AlienStageActorMinion initSprite]` (0xc70e0) sets **`setInheritColor: NO` on attachment
+slots 1 and 11** (`minionFace` and `minionBodyDetail`) — those two stay grey; the body, head,
+arms and feet take the random hue. So a wave of aliens is a wave of *differently coloured*
+aliens with matching grey faces.
+
+Correcting §6: `-[AlienStageActorMinion colorFromSubType:]` (0xc70c4) is
+`memcpy(ret, (char*)self + 0x11b, 3)` — it simply returns `savedColor`, ignoring its argument.
+It differs from `-[StageActor colorFromSubType:]` (0xd121c) only in *not* re-applying
+`setColor:`. There is no subtype→colour table. Every stage minion class has the identical
+override.
+
+## 7.5 → symptom 4: "no summoned enemies" — REAL BUG (the reimpl summons the wrong thing)
+
+The alien boss's `summonBoss` does not summon aliens. It **abducts humans.**
+
+`initialSpawn` (0x57618), inside the same `currentEnemy == 6` branch that sets `spawnTimer`:
+
+```
+self.bossSummonList = [NSMutableArray array];
+[… addObject:@"FarmStageActorLumberjack"];      // twice
+[… addObject:@"CityStageActorCrazedWorker"];
+[… addObject:@"NinjaStageActorBoy"];
+```
+
+Every other stage gets an empty list (and `allowedToSummonBoss` needs a non-empty one, so no
+other boss can summon at all).
+
+`-[ZFFightMan summonBoss:]` (0x5ee2c) pops **index 0**, `NSClassFromString`s it, spawns it at
+`enemyPosition` with zOrder 3 — then **refills the queue** with a fresh random name:
+
+```
+i = (int)((arc4random() % 100) / 100.0f * 5.0f);     // 0..4, 20% each
+switch (i) { 0: FarmStageActorFarmhand   1: FarmStageActorLumberjack
+             2: CityStageActorCrazedWorker  3: PirateStageActorSwashbuckler
+             4: NinjaStageActorGirl }
+```
+
+so the list never empties — **the alien boss can summon indefinitely.** What actually limits
+it is `-[ZFFightMan allowedToSummonBoss]` (0x5eda4):
+
+```
+return self.bossWall == nil                 // <<< only ONE abductee alive at a time
+    && self.bossSummonList.count > 0
+    && self.bossActionCooldownTimer <= 0
+    && self.bossActionCastTimer <= 0;
+```
+
+The spawned human is stored in `self.bossWall` (0x5f190) and `update:` (0x5d6a8) clears that
+ivar when its state hits 100/101, re-arming the summon.
+
+The rest of the cast, for presentation:
+
+* `[spawned setSubType: 2]`, `setAnchorPoint:(1,0)`, `[spawned setState: 29]`, then a
+  `CCSequence` of `CCDelayTime(1.0)` + `CCCallFuncND(callSetState:, 18)` — it stands frozen
+  for one second, then joins the fight.
+* A `CCColorLayer` beam (scaled/faded via `CCSpawn` of `CCScaleTo` + `CCFadeTo`, offsets −50 /
+  75) plus a `mindControl.plist` particle attached to the actor, and **`resurrect.wav`**.
+* Boss side (`bossUpdate:` 0x68310): `bossActionCastTimer = castTime*60` (2 s),
+  `bossActionCooldownTimer = castTimer * 1.25` (2.5 s), `schedule:@selector(summonBoss:)
+  interval: castTimer/60`, `[self setState: 23]` (the casting pose).
+* `UnitStats.json` frequencies: `summonBoss` 50, `alienLaser` 30 — so ~5 casts in 8 rolls are
+  summons.
+
+`RaidManager.summonWallTemplatesOf` currently clones the wave's own minion, and
+`BattleSim.SUMMON_CAP = 3` caps it. Both are wrong: it should be the human queue above,
+uncapped, one alive at a time, off-budget.
+
+## 7.6 → symptom 6: "lasers are still fired after the boss descends" — REAL BUG
+
+From §7.1: the action ROLL lives only in the state-19 arm of `bossUpdate:`. Once the boss
+lands it is in state 9, which is below the 15–27 window, so `bossUpdate:` falls straight
+through to `civilianUpdate` — **a landed boss has no specials at all.** It just swings.
+
+For completeness, `-[ZFFightMan allowedToShootBullet]` (0x5e918) itself has *no* boss-state
+gate — it only checks the two action timers and that at least one zombie is engaged. The
+state gate is upstream, in the dispatcher.
+
+`BattleSim.canPerform` gates only `throw` and `wall` on `boss.state === "structure"`. It must
+gate **every** boss action that way — `alienLaser`, `summonBoss`, `pixelFire`, `turnZombie`,
+`telekinesis`. (The reimpl comment at line 2380 already worked out *why* for throws; the rule
+is simply universal.)
+
+## 7.7 → symptom 5: "boss health bar is displayed before the boss descends" — NOT a deviation
+
+`-[ZFActorManager spawnFightActor:atPoint:fromObject:withZOrder:andDataKey:]` (0x2f3e8) ends
+with an **unconditional** `[[FightHUD fightHUD] addHealthBarToActor: actor]` for every fight
+actor it creates, boss included, plus the actor's own `lifeBG`/`lifeBar`/`lifeBarTemp`
+children at z 200/202/201. `-[FightHealthBar update]` (0x1a57f4) only bails on
+`[self isHidden]`; there is no state or perch condition anywhere.
+
+And the alien boss *is* on screen from the first frame: `initialSpawn` spawns it at
+`bossPosition` (450, 200) in state 19 — it has to be, since hovering there firing lasers and
+beaming down abductees is its entire mid-fight role.
+
+So a health bar over the perched saucer is faithful. Nothing to change.
+
+## 7.8 Summary of the alien stage's five hard-coded `currentEnemy == 6` divergences
+
+Grepping the fight code for the stage-ID compare turns up exactly these:
+
+1. `initialSpawn` 0x575fe — `spawnTimer = 10` instead of 3600 (the reinforcement drip).
+2. `initialSpawn` 0x57618 — seed `bossSummonList` with the four abductees.
+3. `spawnEnemy` 0x57f5c — random RGB `savedColor` per minion.
+4. `update:` 0x5d4d2 — an alternate live-enemy count when the current slot is empty and
+   `enemyPopulation <= 14` (counts live `CivilianActorFight`s down from the remaining
+   population instead of up from zero; behaviourally equivalent, listed for completeness).
+
+Everything else about the raid is the generic stage machinery.

@@ -1021,7 +1021,19 @@ export interface EpicBossFinishResult {
   escaped: boolean;
   /** Present when an XP quest reward leveled the player and reset raid cooldown. */
   lastRaidAt?: number;
+  /** The FIRST decor drop, kept so a result_json written before multi-drop still reads
+   *  correctly when a duplicate finish replays it. New code should read `drops`. */
   loot: { name: string; tile?: string; stageActor?: string; sprite: string } | null;
+  /** Every decor drop from this clear (EPIC_LOOT_ROLLS rolls). Absent on results stored
+   *  before the field existed — fall back to `loot`. */
+  drops?: { name: string; tile?: string; stageActor?: string; sprite: string }[];
+  /** 1 when the rung also dropped a Brain Ticket (1.5% per rung). */
+  brainTicket?: number;
+  /** What this clear actually paid. The brain half is an 8% ROLL the server owns, so the
+   *  result panel has to print this rather than re-deriving it — a second roll on the
+   *  client would disagree with the balance most of the time. Optional so a response
+   *  from a Worker predating the field still parses. */
+  currency?: { brains: number; gold: number };
   balance: Balance;
   inventory: Record<string, number>;
   storage: { received: Record<string, number>; stored: Record<string, number> };
@@ -1047,6 +1059,10 @@ export const epicBossEnd = (runId: string) => req<{
   serverTime?: number;
 }>("POST", "/epic-boss/end", { runId });
 
+/** `rulesetVersion` is the same handshake `startRaid` sends: an epic fight is replayed by
+ *  the Worker, and v28/v29 put the attempt window and the damage curve inside the rules, so
+ *  a bundle that disagrees with the deployed Worker must be refused BEFORE it pays for an
+ *  attempt it would then lose at verification. */
 export const epicBossStart = (orderedUnitIds: string[], payment: import("../epicBoss/tokens").EpicBossPayment) => req<{
   ok: true;
   sessionId: string;
@@ -1054,7 +1070,7 @@ export const epicBossStart = (orderedUnitIds: string[], payment: import("../epic
   balance: Balance;
   expiresAt: number;
   serverTime?: number;
-}>("POST", "/epic-boss/start", { orderedUnitIds, payment });
+}>("POST", "/epic-boss/start", { orderedUnitIds, payment, rulesetVersion: RAID_RULESET_VERSION });
 
 export const epicBossFinish = (
   sessionId: string,

@@ -41,7 +41,7 @@ OUT_DIR = ROOT / "public" / "assets"
 # trunks, and a trunk is not green — `is_green` cannot see it, so no ramp can
 # recolour one. Every skin derived from the original therefore inherits five summer
 # trees, which is fine on a temperate or autumn horizon and wrong on a moon, a
-# desert, a paved lot, or a valley in blossom.
+# desert, a paved lot, a valley in blossom or a snowfield.
 #
 # It is a build INPUT, not an asset: nothing loads it at runtime, so it lives in
 # tools/art/ with the rest of the hand-drawn source rather than shipping to players.
@@ -49,8 +49,8 @@ OUT_DIR = ROOT / "public" / "assets"
 # a white margin — kept so the fit below can be redone if it is ever wrong.
 NO_TREE_SRC = ROOT / "tools" / "art" / "farm_background_no_trees.png"
 # Terrains built from it. The rest keep the original — a wood belongs on the
-# temperate, autumn and snowy horizons, and the beach's distant palms are the point.
-NO_TREE_TERRAINS = {"water", "sand", "stone", "sakura"}
+# temperate and autumn horizons, and the beach's distant palms are the point.
+NO_TREE_TERRAINS = {"water", "sand", "stone", "sakura", "snow"}
 # Both bases must be this exact frame — see load_base.
 BASE_SIZE = (2800, 560)
 

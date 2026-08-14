@@ -50,24 +50,49 @@ const VALUE_EXP = 0.2;
 // doubles. The hump still controls the per-HARVEST curve and the shape of the
 // mid/long bands; it no longer decides which crop is the most efficient farm.
 // Anything that shrinks this bonus restores the 2-4 hour peak.
-const FLAT_BONUS = 0.03;
+export const FLAT_BONUS = 0.03;
 
 const humpRaw = (hours: number) => (hours / (hours + RISE)) * (FALL / (hours + FALL));
 const HUMP_PEAK = humpRaw(PEAK_HOURS);
 
+/** Supply scale on the whole curve — shape untouched, yield quartered.
+ *
+ *  A token buys ONE attempt, so the right way to read this is tokens against attempts.
+ *  Two changes moved the demand side underneath the old rate: the attempt window went
+ *  30 s -> 60 s (EPIC_BOSS_FIGHT_MS) and the ladder went 20 rungs -> 10, so a full clear
+ *  now costs roughly half the attempts it used to while each one takes twice as long.
+ *  Left alone, the old supply would have made tokens free — a player was already earning
+ *  1.15-3.3 per plot-day against a ladder that now asks 10-47 attempts in total.
+ *
+ *  Quartered rather than halved on purpose: the attempt count halved, and this leaves
+ *  tokens roughly twice as scarce again relative to demand, which is what makes an
+ *  attempt worth spending thought on rather than something you spam until it works.
+ *  Applied AFTER the ceiling clamp, not inside it, so the curve's shape is preserved
+ *  exactly and only its height moves: the 2-4 hour peak, the ranking between crops, the
+ *  flat-bonus floor, and the pin that flattens the 24-hour band all survive at a quarter
+ *  scale. Scaling inside the clamp would instead have lifted every crop off the ceiling
+ *  and quietly restored harvest-value separation to the long crops the pin exists to
+ *  flatten. */
+export const SUPPLY_SCALE = 0.25;
+
+/** The ceiling a crop can actually reach, after the supply scale. MAX_TOKEN_CHANCE is
+ *  the recovered per-harvest ceiling and stays as the shape's own cap; this is what a
+ *  player sees. */
+export const EFFECTIVE_MAX_TOKEN_CHANCE = MAX_TOKEN_CHANCE * SUPPLY_SCALE;
+
 /**
  * Chance that a ripe vegetable crop yields an active-event fight token.
  *
- * Rises with grow time and (weakly) with harvest value, plus a flat 3-point bonus so
- * no crop is ever a dead roll, all clamped to the recovered 35% ceiling. Everything
- * from 8 hours up sits at or near that ceiling; the 24-hour band is pinned to it, so
- * harvest value stops separating those crops.
+ * Rises with grow time and (weakly) with harvest value, plus the flat floor so no crop is
+ * ever a dead roll, clamped to the recovered ceiling — then scaled by SUPPLY_SCALE.
+ * Everything from 8 hours up sits at or near the effective ceiling; the 24-hour band is
+ * pinned to it, so harvest value stops separating those crops.
  */
 export function epicBossTokenChance(growMs: number, harvestValue: number): number {
   if (!Number.isFinite(growMs) || !Number.isFinite(harvestValue) || growMs <= 0 || harvestValue <= 0) return 0;
   const hours = growMs / 3_600_000;
   const ratePerDay = PEAK_RATE * Math.pow(harvestValue / 200, VALUE_EXP) * (humpRaw(hours) / HUMP_PEAK);
-  return Math.min(MAX_TOKEN_CHANCE, (ratePerDay * hours) / 24 + FLAT_BONUS);
+  return SUPPLY_SCALE * Math.min(MAX_TOKEN_CHANCE, (ratePerDay * hours) / 24 + FLAT_BONUS);
 }
 
 /** Expected tokens per plot-day if the crop is replanted the instant it is harvested.

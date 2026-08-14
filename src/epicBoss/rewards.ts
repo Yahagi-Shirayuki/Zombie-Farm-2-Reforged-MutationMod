@@ -1,3 +1,39 @@
+/** Chance that ONE decor roll pays out. This is the authored rate and stays put — it was
+ *  calibrated when a ladder was 40 rungs long, so it is the number of ROLLS that has to
+ *  move as the ladder shortens, not the odds of each one. */
+export const EPIC_LOOT_DROP_CHANCE = 0.35;
+
+/** Decor rolls per cleared rung.
+ *
+ *  Two, because the ladder is now 10 rungs where the rate was authored against 40. One
+ *  roll per rung would hand a player a quarter of the decor for the same event and the
+ *  same fighting; two restores the haul to ~7 items over a full clear.
+ *
+ *  Two rolls at 0.35 rather than one at 0.70 on purpose, even though the expectation is
+ *  identical. A single roll can only ever pay one prize, so a shorter ladder means fewer
+ *  chances to see a NEW item and a collection that fills more slowly. Two independent
+ *  rolls can drop two different prizes from one clear — the second roll re-picks from the
+ *  pool with the first already excluded — which is what keeps a 10-rung event able to
+ *  finish a collection at all. */
+export const EPIC_LOOT_ROLLS = 2;
+
+/** Chance that clearing rung `level` also drops a Brain Ticket, at 1.5% PER RUNG.
+ *
+ *  Scaled by the rung rather than flat so the reward tracks the fight: rung 1 is one
+ *  attempt and pays 1.5%, rung 9 pays 13.5%. The FINAL rung is a guarantee rather than a
+ *  chance, for the same reason the brain is — the clear that ends a ladder should pay.
+ *  Over a full clear that is 1.5% x (1+2+...+9) + 1 = 1.675 tickets.
+ *
+ *  A Brain Ticket is a 10,000-gold Market item that turns an invasion elite. Dropping it
+ *  here is deliberately a GOLD-side reward, not a brain-side one: the event is priced in
+ *  brains and pays out in prizes, and this keeps that separation while still giving the
+ *  deep rungs something a player feels. */
+export const EPIC_BRAIN_TICKET_CHANCE_PER_LEVEL = 0.015;
+export const epicBrainTicketChance = (level: number, maxLevel = 10): number =>
+  Math.floor(level) === Math.floor(maxLevel)
+    ? 1
+    : Math.max(0, Math.min(1, EPIC_BRAIN_TICKET_CHANCE_PER_LEVEL * Math.max(0, Math.floor(level))));
+
 /** Epic-event quest rewards use dedicated catalog keys even though the recovered
  * source data points several of them at generic Regular/Girl actor classes. Keeping
  * this mapping shared prevents the client quest flow and authoritative Worker grant
@@ -72,28 +108,51 @@ export interface EpicBossCurrencyReward {
   gold: number;
 }
 
-/** Every cleared level grants currency in addition to its existing loot roll.
+/** Chance that clearing any one rung drops a brain.
  *
- * Post-brainflation-revert brain schedule (a single brain is now ~10x more valuable, so
- * epic runs hand them out sparingly instead of every level):
- *   - +1 brain on every 5th level cleared (5, 10, 15, 20).
- *   - +1 BONUS brain on the boss's FINAL level, so finishing a ladder pays 2.
- *   - Non-milestone levels award no brains.
+ *  An epic event is not a brain faucet. Activating one costs 3-5 brains and every attempt
+ *  past your harvested tokens costs another, so at the old schedule — a guaranteed 5 per
+ *  full clear — a player came out ahead simply by finishing, and the event quietly became
+ *  one of the better brain sources in the game. Brains are meant to stay scarce (income
+ *  moves from ~1.6/day at level 4 to ~2.9/day at 44 by design), and the event's payment is
+ *  its prizes: the zombies, the decor and the pet.
  *
- * Every ladder is 20 rungs now (see EpicBossDef.maxLevel), so a full clear pays 5 brains
- * whichever event it is. The old 40-rung bosses paid 11, but 6 of those brains sat on
- * levels 21-40 — rungs that reused level 20's HP multiplier, so they were 20 extra fights
- * at an unchanging difficulty. The per-fight rate is untouched; there are simply no
- * padding rungs left to farm. `maxLevel` still parameterises the bonus rather than being
- * hardcoded to 20, so a future longer event pays its bonus at its own top.
+ *  At 8% across the first nine rungs the expected haul is 0.72 brains, plus one GUARANTEED
+ *  on the final rung — see epicBossCurrencyReward. Against a 3-5 brain entry that is still
+ *  reliably brain-NEGATIVE (1.72 expected out), so the event never becomes a faucet; the
+ *  guarantee exists so the fight that ENDS a ladder pays something certain, rather than the
+ *  capstone being the one clear that can hand back nothing. */
+export const EPIC_BRAIN_DROP_CHANCE = 0.08;
+
+/** Currency for one cleared rung.
  *
- * Gold is deliberately UNCHANGED from the pre-revert curve (`round(level/4) * 100` per
- * cleared level) — gold is not being rescaled, so the epic run's gold economy is
- * untouched by the brain change.
+ * Gold is deterministic; the brain is a roll, so `random` is injectable and the SERVER's
+ * roll is authoritative. An online client must display what came back in the finish
+ * response rather than calling this itself — its own roll would disagree with the one the
+ * balance actually moved by. Offline there is only one roller, so it calls this directly.
+ *
+ * Gold: `max(2, rung) x 100`. Each rung is two of the authored ones merged (see
+ * tools/prep_all_epic_bosses.py multipliers), so its payout is the two it replaced added
+ * together — which works out to exactly this, and leaves a full ladder paying the same
+ * 5,600 gold it always did.
+ *
+ * `maxLevel` decides where the ladder ENDS, and the final rung guarantees its brain rather
+ * than rolling for it. It is a parameter rather than a constant so an event of a different
+ * length puts the guarantee on its own last fight.
  */
-export const epicBossCurrencyReward = (level: number, maxLevel = 20): EpicBossCurrencyReward => {
-  const gold = Math.max(1, Math.round(level / 4)) * 100;
-  let brains = level % 5 === 0 ? 1 : 0;
-  if (brains > 0 && level === maxLevel) brains += 1;
-  return { brains, gold };
+export const epicBossCurrencyReward = (
+  level: number,
+  maxLevel = 10,
+  random: () => number = Math.random
+): EpicBossCurrencyReward => {
+  // Drawn UNCONDITIONALLY, then overridden on the final rung. The guarantee must not
+  // change how many numbers this pulls from `random`: the server hands the same generator
+  // on to the decor and ticket rolls below it, so a branch that skipped the draw would
+  // shift every later roll on exactly the clears that finish a ladder.
+  const rolled = random() < EPIC_BRAIN_DROP_CHANCE;
+  const finalRung = Math.floor(level) === Math.floor(maxLevel);
+  return {
+    brains: finalRung || rolled ? 1 : 0,
+    gold: Math.max(2, Math.floor(level)) * 100,
+  };
 };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BattleSim, type SimUnit } from "./BattleSim";
-import type { CombatUnit } from "./types";
+import type { CombatUnit, SummonConfig } from "./types";
 
 function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | "team">): CombatUnit {
   return {
@@ -19,6 +19,15 @@ function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | 
     isHeadless: false,
     abilities: [],
     ...over,
+  };
+}
+
+/** A stand-in for the alien boss's `bossSummonList`: abducted humans, not aliens. */
+function abducteeQueue(): SummonConfig {
+  const human = (key: string) => unit({ id: key, sourceKey: key, team: "enemy", con: 5 });
+  return {
+    queue: [human("FarmStageActorLumberjack"), human("CityStageActorCrazedWorker")],
+    pool: [human("FarmStageActorFarmhand"), human("NinjaStageActorGirl")],
   };
 }
 
@@ -739,13 +748,12 @@ describe("Garden healing and formation depth", () => {
     const player = unit({ id: "player", sourceKey: "ZombieActorRegularTier1", team: "player" });
     const wall = unit({ id: "wall", sourceKey: "AlienStageActorMinion", team: "enemy", con: 300 });
     const boss = unit({ id: "boss", sourceKey: "AlienStageActorBoss", team: "enemy", isBoss: true, con: 300 });
-    // A summon template is required for `summonBoss` to be performable at all — the
-    // source gates it on `allowedToSummonMinion`, and an ungated roll is re-rolled.
-    const minion = unit({ id: "spawn", sourceKey: "AlienStageActorMinion", team: "enemy", con: 30 });
+    // An abductee queue is required for `summonBoss` to be performable at all — the
+    // source gates it on `allowedToSummonBoss`, and an ungated roll is re-rolled.
     const sim = new BattleSim([player], [wall, boss], null, true, [
       { name: "summonBoss", weight: 50, castMs: 50, cooldownMs: 300, damage: 0 },
       { name: "alienLaser", weight: 30, castMs: 50, cooldownMs: 300, damage: 0 },
-    ], undefined, minion);
+    ], undefined, abducteeQueue());
     sim.units.find((u) => u.id === "player")!.state = "advance";
     const seen = new Set<string>();
     for (let i = 0; i < 200 && seen.size < 2; i++) {
@@ -1096,15 +1104,31 @@ describe("enemy cadence and boss hazard damage (ground truth)", () => {
     unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", ...over });
   /** Put the boss on its holding spot and the zombies out fighting, so the special
    *  scheduler is live from the first step (it only runs while the boss is engaged). */
+  // A boss casts from its PERCH and nowhere else — `bossUpdate:` only rolls an action in
+  // state 19, and a boss that has finished its descent drops through to `civilianUpdate`
+  // with no action budget at all. So these helpers leave a boss up top, and the specials
+  // sims below field a live minion so the descent never legitimately triggers.
   const onTheLine = (sim: BattleSim) => {
-    for (const u of sim.units) u.state = u.team === "enemy" ? "hold" : "advance";
+    for (const u of sim.units) {
+      u.state = u.team === "enemy" ? (u.isBoss ? "structure" : "hold") : "advance";
+    }
   };
 
   /** Zombies toe-to-toe with the wave — what `isInMeleeRange` reports, and the only
    *  state the alien laser will fire at. */
   const inMelee = (sim: BattleSim) => {
-    for (const u of sim.units) u.state = u.team === "enemy" ? "hold" : "fight";
+    for (const u of sim.units) {
+      u.state = u.team === "enemy" ? (u.isBoss ? "structure" : "hold") : "fight";
+    }
   };
+
+  /** A punching-bag minion: keeps the boss legitimately perched (the wave is not clear)
+   *  without ever taking part in what the test is measuring. */
+  const bagMinion = () =>
+    unit({
+      id: "bag", sourceKey: "AlienStageActorMinion", team: "enemy",
+      str: 0, hp: 1e7, maxHp: 1e7,
+    });
 
   it("an enemy strikes on its raw 1/dex clock — twice per equal-dex zombie swing", () => {
     // dex 2: zombie cycle 1000 ms, enemy cycle 500 ms (CombatEngine derives these; here
@@ -1124,7 +1148,7 @@ describe("enemy cadence and boss hazard damage (ground truth)", () => {
     const a = player({ id: "a", hp: 1e6, maxHp: 1e6 });
     const b = unit({ id: "b", sourceKey: "ZombieActorRegularTier1", team: "player", hp: 1e6, maxHp: 1e6 });
     const boss = enemy({ id: "boss", isBoss: true, str: 0, hp: 1e7, maxHp: 1e7 });
-    const sim = new BattleSim([a, b], [boss], null, true, [
+    const sim = new BattleSim([a, b], [bagMinion(), boss], null, true, [
       { name: "pixelFire", weight: 1, castMs: 0, cooldownMs: 1e6, damage: 0 },
     ]);
     onTheLine(sim);
@@ -1142,7 +1166,7 @@ describe("enemy cadence and boss hazard damage (ground truth)", () => {
   it("telekinesis knocks back and stuns but deals NO damage", () => {
     const p = player({ hp: 1e6, maxHp: 1e6 });
     const boss = enemy({ id: "boss", isBoss: true, str: 0, hp: 1e7, maxHp: 1e7 });
-    const sim = new BattleSim([p], [boss], null, true, [
+    const sim = new BattleSim([p], [bagMinion(), boss], null, true, [
       { name: "telekinesis", weight: 1, castMs: 0, cooldownMs: 1e6, damage: 12 },
     ]);
     onTheLine(sim);
@@ -1155,7 +1179,7 @@ describe("enemy cadence and boss hazard damage (ground truth)", () => {
   it("the alien laser bolt carries the flat 200 from the binary", () => {
     const p = player({ hp: 1e6, maxHp: 1e6 });
     const boss = enemy({ id: "boss", isBoss: true, str: 0, hp: 1e7, maxHp: 1e7 });
-    const sim = new BattleSim([p], [boss], null, true, [
+    const sim = new BattleSim([p], [bagMinion(), boss], null, true, [
       { name: "alienLaser", weight: 1, castMs: 0, cooldownMs: 1e6, damage: 0 },
     ]);
     for (let i = 0; i < 5 && !sim.projectiles.length; i++) {
@@ -1179,13 +1203,15 @@ describe("enemy cadence and boss hazard damage (ground truth)", () => {
       hp: 1e6, maxHp: 1e6, isGarden: true,
     });
     const boss = enemy({ id: "boss", isBoss: true, str: 0, hp: 1e7, maxHp: 1e7 });
-    const sim = new BattleSim([front, healer], [boss], null, true, [
+    const sim = new BattleSim([front, healer], [bagMinion(), boss], null, true, [
       { name: "alienLaser", weight: 1, castMs: 0, cooldownMs: 1e6, damage: 0 },
     ]);
     const f = sim.units.find((u) => u.id === "front")!;
     const h = sim.units.find((u) => u.id === "healer")!;
     for (let i = 0; i < 5 && !sim.projectiles.length; i++) {
-      for (const u of sim.units) u.state = u.team === "enemy" ? "hold" : "advance";
+      for (const u of sim.units) {
+        u.state = u.team === "enemy" ? (u.isBoss ? "structure" : "hold") : "advance";
+      }
       f.moveSpeed = 0;
       h.moveSpeed = 0;
       f.x = 820; // toe-to-toe with the wave

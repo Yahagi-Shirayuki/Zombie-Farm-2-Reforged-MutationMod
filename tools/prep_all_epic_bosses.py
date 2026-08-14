@@ -40,12 +40,23 @@ QUEST_ICONS = {
     4: "Icon_Quest_FoulOwl.png",
     5: "questIcon_EP_Boss7.png",
 }
-# Every event runs 20 levels, which is exactly as many HP multipliers as ZF2 authored
-# (EpicBossHP.json LevelMultiplier). The bosses that used to advertise 40 were getting
-# levels 21-40 padded with a copy of level 20's multiplier by multipliers() below, so the
-# back half of those ladders was 20 more fights that never got any harder. Loot and quest
-# thresholds are halved to match (see prep_quests.py EPIC_LADDER_SCALE).
-MAX_LEVEL = 20
+# Every event runs 10 rungs, PAIR-COMPRESSED from the 20 HP multipliers ZF2 authored
+# (EpicBossHP.json LevelMultiplier) — see multipliers() for why, and for the measurements.
+# Total ladder HP is unchanged; there are simply half as many fights to divide it into.
+#
+# Two earlier cuts led here. The bosses that advertised 40 rungs were getting levels 21-40
+# padded with a copy of level 20's multiplier, so the back half of those ladders was 20
+# more fights that never got any harder — that padding went first. What remained was 20
+# real rungs whose bottom half any competent army one-shots, and a rung costs an attempt
+# however far you overkill it; merging pairs is what removes that floor.
+#
+# Everything keyed to a rung follows: loot thresholds (scale_loot_levels), quest
+# thresholds and the two pinned prize rungs (prep_quests.py), and the brain/gold schedule
+# (src/epicBoss/rewards.ts).
+MAX_LEVEL = 10
+# The authored curve's own length. Dr. Groundhog placed its loot against this; the other
+# bosses used SOURCE_MAX_LEVEL. Both are rescaled onto MAX_LEVEL.
+AUTHORED_MAX_LEVEL = 20
 # What the 40-rung bosses used to advertise. Only used to rescale the loot/quest
 # thresholds that were authored against it.
 SOURCE_MAX_LEVEL = 40
@@ -174,13 +185,28 @@ def copy(out: Path, source: str, target: str | None = None) -> str | None:
 
 
 def multipliers(raw: list[float], max_level: int) -> list[float]:
-    """The HP curve for a `max_level`-rung ladder.
+    """The HP curve for a `max_level`-rung ladder, PAIR-COMPRESSED from the authored one.
 
-    The padding branch is kept for a hypothetical ladder longer than the authored
-    curve, but no boss uses it any more: MAX_LEVEL is the authored length, so every
-    ladder is now a straight truncation and the flat 107x tail is gone.
+    ZF2 authored 20 multipliers. Each rung here is two of them added together, so ten
+    rungs carry exactly the HP the twenty did (645x baseHp either way) — the ladder is
+    re-cut, not shortened.
+
+    WHY. A rung costs at least one attempt however far you overkill it, and the bottom
+    half of the authored curve is tiny next to any real army's damage: nine of the first
+    twenty rungs were one-attempt formalities for a starter party and all twenty were for
+    a maxed one. Merging pairs deletes that floor without touching the part of the ladder
+    where HP genuinely gates progress, because the merged rung costs the sum of what its
+    two halves cost. Measured, a full clear goes 52 -> 47 attempts for a starter party,
+    29 -> 21 for a solid one, and 20 -> 10 for a maxed one: all of the saving lands where
+    the fights were formalities and none of it where they were not.
+
+    The odd tail case (an authored curve of odd length) keeps its last rung uncompressed
+    rather than pairing it with nothing; no shipped boss hits it, since all eight use the
+    same 20-value curve.
     """
-    return raw[:max_level] + [raw[-1]] * max(0, max_level - len(raw))
+    want = max_level * 2
+    src = raw[:want] + [raw[-1]] * max(0, want - len(raw))
+    return [round(sum(src[i:i + 2]), 4) for i in range(0, len(src), 2)]
 
 
 # ---- Per-boss damage ramp -------------------------------------------------
@@ -205,33 +231,48 @@ def multipliers(raw: list[float], max_level: int) -> list[float]:
 #   * a level takes many attempts and damage carries over, so nearly every attempt runs
 #     the full 30 s. Casualties are permanent and a full clear is 40+ attempts, so a boss
 #     that can kill the front unit kills one PER ATTEMPT, not one per level.
-# The ramp is therefore tuned by "how many of the 30 obtainable specials survive 30 s in
-# the front slot", which narrows smoothly:
+# THE RAMP IS FITTED TO ONE QUESTION: does a level-appropriate best-mutated HEADLESS wall
+# survive the event with two level-appropriate healers behind it, and does it struggle
+# without them? Measured, the unaided wall's death line sits at 100 DPS, so the ladder is
+# built to CROSS that line partway up:
 #
-#   Dr. Groundhog      x1.00  str 2.00  dex 2   40 DPS   28/30 front-liners safe
-#   Bully Frog         x1.20  str 2.40  dex 2   48 DPS   26/30
-#   Rocky Rhino        x1.40  str 2.80  dex 2   56 DPS   26/30
-#   General Larvaelus  x1.60  str 3.20  dex 2   64 DPS   23/30
-#   Mystical Mamba     x1.80  str 3.60  dex 2   72 DPS   21/30
-#   Foul Owl           x2.00  str 4.00  dex 2   80 DPS   21/30
-#   Skunkarella        x2.25  str 2.25  dex 4   90 DPS   18/30  (from its str 1 base, NOT 2)
-#   Loco Locust        x2.50  str 5.00  dex 2  100 DPS   15/30
+#                       str   dex   DPS   with 2 healers   unaided
+#   Dr. Groundhog      2.400   2     48      100% HP       alive, 48%
+#   Bully Frog         3.000   2     60      100% HP       alive, 36%
+#   Rocky Rhino        3.600   2     72      100% HP       alive, 23%
+#   General Larvaelus  4.200   2     84      100% HP       alive, 17%
+#   Mystical Mamba     4.800   2     96      100% HP       DEAD
+#   Foul Owl           5.500   2    110      100% HP       DEAD
+#   Skunkarella        3.125   4    125      100% HP       DEAD   (dex carries its rung)
+#   Loco Locust        7.000   2    140      100% HP       DEAD
 #
-# The cap is x2.5 on purpose. At x3 the top boss's own top prize (Vagabond Zombie, 2835 HP)
-# can no longer tank its own event, which is perverse; at x2.5 every event's signature prize
-# stays a legal front-liner, the Market-bought Headless wall (Bombie, 3267 HP) answers the
-# whole ladder, and the thin damage-dealers (Zomtar/Zombug 1575, Zomdini 1260) cannot hold
-# the line from General Larvaelus onward. src/epicBoss/combat.test.ts pins all of that and
-# asserts x3 WOULD kill Vagabond, so raising the ramp fails loudly instead of silently.
+# That crossing is the design. The first four events can be brute-forced by a wall alone,
+# on a margin that visibly narrows; from Mystical Mamba (level 34) up, an army that brings
+# nothing but damage loses its front-liner every attempt, and casualties are permanent. It
+# is the ramp's job to make bringing support a real decision rather than a nicety, and a
+# ladder that sat entirely below the death line — as the previous fit did — could not.
+#
+# What it is NOT fitted to: how many of the 46 obtainable specials can hold the front slot.
+# That was the old metric and it measured one zombie's HP, not what a player can field.
+# The current rule lives in src/epicBoss/combat.test.ts and is stated on the ARMY: Silver-
+# grade for events unlocking through 30, specials from 30-35, epic prizes and specials
+# above that. Raising the ramp past ~200 DPS starts to threaten even the SUPPORTED wall
+# (measured: it holds to 240 and dies at 800), which is the real ceiling here.
+#
+# THESE ARE RUNG-1 VALUES, NOT THE WHOLE LADDER. Damage compounds 5% for every rung
+# climbed (epicBossDamage in src/epicBoss/catalog.ts, raid ruleset v29), so the DPS noted
+# against each boss is what its FIRST fight deals and the tenth deals 1.55x that. The
+# entry fight of every event is therefore exactly what it was; only the deep rungs moved.
+# Rung-10 DPS runs 74 (Dr. Groundhog) to 217 (Loco Locust).
 EPIC_BOSS_DAMAGE = {
-    1: 2.0,    # Dr. Groundhog     x1.00 (unchanged)
-    2: 5.0,    # Loco Locust       x2.50
-    3: 2.4,    # Bully Frog        x1.20
-    4: 4.0,    # Foul Owl          x2.00
-    5: 2.25,   # Skunkarella       x2.25 of its str 1 base
-    8: 2.8,    # Rocky Rhino       x1.40
-    9: 3.2,    # General Larvaelus x1.60
-    10: 3.6,   # Mystical Mamba    x1.80
+    1: 2.4,     # Dr. Groundhog       48 DPS at rung 1 ->  74 at rung 10
+    2: 7.0,     # Loco Locust        140 DPS at rung 1 -> 217 at rung 10
+    3: 3.0,     # Bully Frog          60 DPS at rung 1 ->  93 at rung 10
+    4: 5.5,     # Foul Owl           110 DPS at rung 1 -> 171 at rung 10
+    5: 3.125,   # Skunkarella        125 DPS at rung 1 -> 194 at rung 10 (dex 4)
+    8: 3.6,     # Rocky Rhino         72 DPS at rung 1 -> 112 at rung 10
+    9: 4.2,     # General Larvaelus   84 DPS at rung 1 -> 130 at rung 10
+    10: 4.8,    # Mystical Mamba      96 DPS at rung 1 -> 149 at rung 10
 }
 
 
@@ -247,29 +288,146 @@ def ramp_damage(unit_stats: dict, source_id: int) -> dict:
     return {**unit_stats, "str": EPIC_BOSS_DAMAGE[source_id]}
 
 
-def scale_loot_levels(loot: list[dict], source_id: int) -> list[dict]:
-    """Move a boss's loot thresholds onto the 20-rung ladder.
+def scale_loot_levels(loot: list[dict], origin: int) -> list[dict]:
+    """Move loot thresholds authored against an `origin`-rung ladder onto MAX_LEVEL.
 
-    Dr. Groundhog (source 1) was authored at 20 and is returned untouched. Every other
-    shipped boss placed its loot across 40 rungs, so each threshold is halved (rounded
-    up) — the same transform prep_quests.py applies to that boss's quest levels, which
-    keeps a prize and the quest that announces it on the same rung.
+    THREE source scales are in play and all of them need this: Dr. Groundhog's source loot
+    sits on the authored 20 rungs, the other shipped bosses' on 40, and the hand-restored
+    tables in this file (SKUNK_LOOT, LATE_BOSSES) were written against 20. Rescaling from
+    the right origin keeps each prize at the same FRACTION of its ladder it always had, and
+    on the same rung as the quest that announces it (prep_quests.py applies the matching
+    transform, including the same pinning of the two headline prizes).
+
+    Rounded UP, and floored at rung 1: quartering a 40-rung threshold can otherwise produce
+    a rung 0 that no clear ever satisfies, which would strand the prize behind it.
     """
-    if source_id == 1:
-        return loot
-    return [{**item, "level": -(-int(item["level"]) * MAX_LEVEL // SOURCE_MAX_LEVEL)}
+    return [{**item, "level": max(1, -(-int(item["level"]) * MAX_LEVEL // origin))}
             for item in loot]
+
+
+# The attempt window, overriding the source's 30 s (`epicBossFightTimeBeforeFleeing`).
+#
+# WHY THIS IS NOT THE SOURCE VALUE. Zombies enter the fight strictly one at a time, one
+# every CHARGE_MS (3.6 s), so the window decides how much of the army ever reaches the
+# boss at all: 6 zombies get there in 30 s, 10 in 45 s, 13 in 60 s, all 20 by 90 s. That
+# makes damage per attempt STRONGLY super-linear in the window — measured, 30 s -> 60 s is
+# about 4x, not 2x — and it is why a 20-rung ladder took 304 attempts at 30 s for an
+# ordinary army. The event read as a grind rather than a fight.
+#
+# 60 s, and it should be read together with the pair-compressed ladder and the per-boss
+# damage ramp — the three landed as one change:
+#   * GRIND. Attempts fall to between a quarter and a third at every army tier: a moderate
+#     army goes 304 -> 64 and a best army 52 -> 14, against a hard floor of 10 (one attempt
+#     per rung, however far you overkill it).
+#   * CASUALTIES. The extra time is spent on the front slot, which is what finally makes
+#     the damage ramp visible at all. Before this, a full clear killed NOTHING at any tier;
+#     a moderate army now loses 0.9-1.8 zombies per attempt up the ladder.
+#   * WHY DAMAGE IS NOT THE GRIND DIAL. Boss damage is regressive — doubling it costs a
+#     best army 3 extra attempts on a full ladder and DOUBLES a moderate army's. Past about
+#     x4 the boss kills the queue faster than the queue deals damage and a moderate army is
+#     worse off than the 30 s window left it. Hence a ramp at x1 with per-boss variation
+#     rather than a global multiplier (EPIC_BOSS_DAMAGE), and hence HP — not damage — as the
+#     per-event grind dial (EPIC_BOSS_BASE_HP).
+#
+# The bounding rule lives in src/epicBoss/combat.test.ts — a level-appropriate best-mutated
+# headless survives its event with two level-appropriate healers. It passes here with real
+# margin (the tank survives every boss even unsupported), so the window is not pressed
+# against its limit.
+EPIC_BOSS_FIGHT_MS = 60_000
+
+# What activating an event costs, in brains. The source charged 100; post-brainflation-
+# revert a brain is worth ~10x what it was, so these are revert-scaled prices and NOT the
+# source's. (The catalogs on disk had already drifted from this generator — 5 and 10
+# against the 100 that used to be here — so the numbers now live in the tool.)
+#
+# Banded by position on the unlock ladder rather than set flat: the two entry events cost
+# 3, the four middle ones 4, the two hardest 5. Brain income barely moves across the game
+# by design (~1.6/day at level 4 to ~2.9/day at 44), so a flat price would mean the entry
+# event and the endgame event cost the same share of a very slowly growing budget. The
+# band is keyed by SOURCE ID here and annotated with the unlock level it corresponds to —
+# the two orders are not the same, so read the comments rather than the keys.
+EPIC_BOSS_COST_BRAINS = {
+    1: 3,     # Dr. Groundhog      unlock 24
+    3: 3,     # Bully Frog         unlock 28
+    8: 4,     # Rocky Rhino        unlock 30
+    9: 4,     # General Larvaelus  unlock 32
+    10: 4,    # Mystical Mamba     unlock 34
+    4: 4,     # Foul Owl           unlock 38
+    5: 5,     # Skunkarella        unlock 40
+    2: 5,     # Loco Locust        unlock 42
+}
+
+
+def cost_brains(source_id: int) -> int:
+    """This event's activation price. Raises on an unknown boss so a newly added event
+    has to make a deliberate pricing choice rather than inherit one silently."""
+    if source_id not in EPIC_BOSS_COST_BRAINS:
+        raise SystemExit(f"epic boss {source_id} has no EPIC_BOSS_COST_BRAINS entry")
+    return EPIC_BOSS_COST_BRAINS[source_id]
+
+
+# ---- Per-boss HP ---------------------------------------------------------
+# Every event used to share one HP ladder — the source's BaseHP 2000 against the same
+# multipliers — so all eight cost the same total damage to walk. Measured, that made the
+# ENTRY event the grindiest: a moderate army needs 91 attempts on Dr. Groundhog against
+# 63-64 on every boss above him. Nothing about the boss causes that. Total ladder HP is
+# identical, so the only variable is the army of the day, and a level-24 roster deals about
+# a third less damage than a level-30 one. The ladder was flat while the player was not.
+#
+# So baseHp now ramps with the unlock ladder, +/-25% end to end, symmetric about the two
+# middle events (General Larvaelus and Mystical Mamba), which keep the source's 2000 and
+# are therefore the fixed point everything else is stated against. The bottom comes down to
+# meet the weak roster that fights it; the top goes up because a level-42 army has three
+# more zombie tiers, mutations and veterancy behind it than a level-24 one does.
+#
+# WHY baseHp AND NOT THE MULTIPLIERS. The multiplier curve is ZF2's authored SHAPE and is
+# shared ground truth (see multipliers()); scaling it per boss would fork eight copies of
+# recovered data to express one number. baseHp is the per-event dial the source already
+# had. Rung HP stays baseHp x multiplier everywhere — src/epicBoss/catalog.ts epicBossHp,
+# the Worker's clampRun, and migration 0052 all read it that way.
+#
+# Keyed by SOURCE ID, annotated with unlock level — the two orders differ, so read the
+# comments. Values are round-50 so a rung's HP stays a legible number.
+EPIC_BOSS_BASE_HP = {
+    1: 1500,   # Dr. Groundhog      unlock 24   0.75x
+    3: 1650,   # Bully Frog         unlock 28   0.825x
+    8: 1850,   # Rocky Rhino        unlock 30   0.925x
+    9: 2000,   # General Larvaelus  unlock 32   1.0x  <- source value
+    10: 2000,  # Mystical Mamba     unlock 34   1.0x  <- source value
+    4: 2150,   # Foul Owl           unlock 38   1.075x
+    5: 2350,   # Skunkarella        unlock 40   1.175x
+    2: 2500,   # Loco Locust        unlock 42   1.25x
+}
+
+
+def base_hp(source_id: int, source_value: int) -> int:
+    """This event's baseHp. Raises on an unknown boss for the same reason the damage and
+    brain-cost tables do: a new event must place itself on the ladder deliberately.
+
+    `source_value` is ZF2's own BaseHP, passed in only to assert the fixed point — if the
+    recovered data ever changes, the two middle events must move with it or this ramp is
+    silently stated against a number that no longer exists."""
+    if source_id not in EPIC_BOSS_BASE_HP:
+        raise SystemExit(f"epic boss {source_id} has no EPIC_BOSS_BASE_HP entry")
+    middle = [key for key, value in EPIC_BOSS_BASE_HP.items() if value == source_value]
+    if sorted(middle) != [9, 10]:
+        raise SystemExit(
+            f"EPIC_BOSS_BASE_HP is anchored on the source BaseHP ({source_value}); expected "
+            f"exactly bosses 9 and 10 to carry it, got {sorted(middle)}"
+        )
+    return EPIC_BOSS_BASE_HP[source_id]
 
 
 def common_catalog(source_id: int, slug: str, name: str, max_level: int,
                    hp: dict, params: dict) -> dict:
     return {
         "id": slug, "sourceId": source_id, "name": name,
-        "costBrains": 100, "durationMs": 14 * 24 * 60 * 60 * 1000,
-        "fightMs": int(params["epicBossFightTimeBeforeFleeing"]) * 1000,
+        "costBrains": cost_brains(source_id),
+        "durationMs": 14 * 24 * 60 * 60 * 1000,
+        "fightMs": EPIC_BOSS_FIGHT_MS,
         "retryMs": int(params["epicBossEscapeTime"]) * 60 * 1000,
         "encounterMs": int(params["epicBossAvailabilityTime"]) * 60 * 1000,
-        "baseHp": int(hp["BaseHP"]),
+        "baseHp": base_hp(source_id, int(hp["BaseHP"])),
         "multipliers": multipliers(hp["LevelMultiplier"], max_level),
         "maxLevel": max_level,
         "music": "music.wav", "punchSfx": "punch.wav",
@@ -302,9 +460,12 @@ def prepare_authored(boss: dict, hp: dict, params: dict) -> None:
         (boss["bossSpriteSheeetData"], "source-sheet.plist"),
     ]
     copied = [x for source, target in mappings if (x := copy(out, source, target))]
-    # SKUNK_LOOT is already authored on the 20-rung scale; the source loot of the other
-    # 40-rung bosses is not, so scale it the same way the quest thresholds are scaled.
-    loot = SKUNK_LOOT if source_id == 5 else scale_loot_levels(boss.get("loot", []), source_id)
+    # Each table is rescaled from the rung count it was WRITTEN against: SKUNK_LOOT by
+    # hand on the authored 20, Dr. Groundhog's source loot likewise, every other shipped
+    # boss on the advertised 40.
+    loot = (scale_loot_levels(SKUNK_LOOT, AUTHORED_MAX_LEVEL) if source_id == 5
+            else scale_loot_levels(boss.get("loot", []),
+                                   AUTHORED_MAX_LEVEL if source_id == 1 else SOURCE_MAX_LEVEL))
     for item in loot:
         if item.get("sprite"):
             copied_name = copy(out, item["sprite"])
@@ -362,9 +523,13 @@ def prepare_late(boss: dict, hp: dict, params: dict) -> None:
         copy(out, f"bg_{index:02d}.png", target)
         layers.append({"anchor": "{0,0}", "position": "{0,0}",
                        "sprite": target, "z": index - 13})
-    loot = [{"level": level, "name": name, "sprite": sprite,
-             **({"tile": tile} if tile else {}), **({"stageActor": actor} if actor else {})}
-            for level, name, tile, sprite, actor in boss["loot"]]
+    # LATE_BOSSES levels are hand-authored against the 20-rung ladder, so they rescale
+    # exactly like every other table rather than being written straight through.
+    loot = scale_loot_levels(
+        [{"level": level, "name": name, "sprite": sprite,
+          **({"tile": tile} if tile else {}), **({"stageActor": actor} if actor else {})}
+         for level, name, tile, sprite, actor in boss["loot"]],
+        AUTHORED_MAX_LEVEL)
     catalog = common_catalog(boss["sourceId"], boss["id"], boss["name"], MAX_LEVEL, hp, params)
     catalog.update({
         "introText": f"{boss['name']} is here",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RAID_DROP_SELL, EPIC_PRIZE_SELL } from "../../src/awardSellValue";
+import { RAID_DROP_SELL, EPIC_PRIZE_SELL, QUEST_REWARD_SELL } from "../../src/awardSellValue";
 import { RAID_LOOT, DROPS } from "../src/raidLootCatalog";
 import { objectEcon, objectSellGold } from "../src/objectCatalog";
 import { EPIC_BOSSES } from "../../src/epicBoss/catalog";
@@ -29,7 +29,7 @@ const sellOf = (tile: string): number => {
 
 describe("award-only prize sell values", () => {
   it("names only real placeables, and only ones that cannot be bought", () => {
-    for (const [key, value] of Object.entries({ ...RAID_DROP_SELL, ...EPIC_PRIZE_SELL })) {
+    for (const [key, value] of Object.entries({ ...RAID_DROP_SELL, ...EPIC_PRIZE_SELL, ...QUEST_REWARD_SELL })) {
       expect(byKey.has(key), `${key} is not in placeables.json`).toBe(true);
       // A purchasable item already has a price, and its sell-back is a fraction of
       // that price. Overriding one here would quietly change Market economics.
@@ -94,6 +94,29 @@ describe("award-only prize sell values", () => {
 
   it("prices Epic Boss prizes and nothing else in that table", () => {
     expect(Object.keys(EPIC_PRIZE_SELL).sort()).toEqual([...EPIC_LOOT_TILES].sort());
+  });
+
+  // The three tables' shared contract, and the one the first two did not state: an
+  // award-only placeable is exactly a `reward` row with no price, so "cost 0" and "no
+  // authored value" together ARE the one-gold-floor bug. The raid and Epic tests above
+  // each check their own family, which is why sixteen quest/seasonal prizes — the
+  // reported Circus Popcorn among them — sat at 1 gold with every test green.
+  it("leaves no award-only reward selling for the one-gold minimum", () => {
+    const rewards = (placeables as { key: string; name: string; category: string; cost: number }[])
+      .filter((row) => row.category === "reward" && row.cost === 0);
+    expect(rewards.length).toBeGreaterThan(0);
+    const cheap = rewards
+      .filter((row) => sellOf(row.key) <= 1)
+      .map((row) => `${row.key} (${row.name})`);
+    expect(cheap).toEqual([]);
+  });
+
+  it("prices quest and seasonal prizes in the authored 500-1,000 band", () => {
+    for (const [key, value] of Object.entries(QUEST_REWARD_SELL)) {
+      expect(value, `${key} sells for ${value}, outside the 500-1,000 band`)
+        .toBeGreaterThanOrEqual(500);
+      expect(value).toBeLessThanOrEqual(1_000);
+    }
   });
 
   it("still refunds an ordinary purchase as a fraction of its price", () => {

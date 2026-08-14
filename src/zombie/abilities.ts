@@ -13,7 +13,7 @@
 // enough times to reach it). So combat power tracks what the player sees on the
 // card — no hidden bonuses.
 
-import { MAX_ABILITY_TIER, unitAbilityAt, abilityTierOf } from "./traits";
+import { MAX_ABILITY_TIER, unitAbilityAt } from "./traits";
 import { classTierRank } from "./taxonomy";
 import type { OwnedZombie } from "./types";
 
@@ -192,39 +192,36 @@ export function combatEffect(keys: string[]): Required<AbilityCombatEffect> {
   return acc;
 }
 
-/** The single ACTIVATED move a zombie performs — the highest-tier activated
- *  ability in its set (a Silver Large's Smash outranks its Bash/Mini), or null if
- *  it has none. One activated move per zombie keeps the battle strip uncluttered. */
-export function activatedKeyFor(keys: string[]): string | null {
-  let best: string | null = null;
-  let bestTier = 0;
-  for (const k of keys) {
-    if (ABILITY_KIND[k] !== "activated") continue;
-    const t = abilityTierOf(k);
-    if (t >= bestTier) {
-      bestTier = t;
-      best = k;
-    }
-  }
-  return best;
-}
-
 /** Activated moves that SHARE one button in the battle strip, each stack listed
  *  highest tier first.
  *
- *  Bash/Smash and Explode/Explode Ver.2 are the same move twice — the Ver.2 row is
- *  the tier-4 upgrade of the tier-3 one — and an army that has unlocked everything
- *  put five buttons in the column. At ABILITY_ACTIVE_STEP apart that runs off the
- *  bottom of a phone held in landscape, where the whole viewport is ~390 px tall.
- *  Stacking the two families brings the worst case to three buttons, which fits.
+ *  Stacking exists for LAYOUT: an army that has unlocked everything owns five
+ *  activated moves, and five buttons at ABILITY_ACTIVE_STEP apart ran off the bottom
+ *  of a phone held in landscape, where the whole viewport is ~375 px tall. It costs
+ *  the player a choice, so it is spent only where the choice is not worth having.
  *
- *  The cost is a real one and worth stating: the player no longer chooses between
- *  Bash (2.75x, no stun) and Smash (1.8x + 1 s stun), nor between Explode and the
- *  boss-hitting Explode Ver.2. The stack picks — see BattleSim.nextInGroup, which
- *  resolves highest tier first, so the upgrade is what a tap spends whenever any
- *  carrier is ready for it. */
+ *  Explode / Explode Ver.2 IS such a pair: they are the same 10x suicide blast, and
+ *  Ver.2 differs only by also hitting the boss. There is no fight in which you would
+ *  rather spend the base one, so nothing is lost by letting `nextInGroup` resolve
+ *  tier-first — and quite a lot would be lost by leaving the boss-hitting version
+ *  unreachable behind a plain Explode.
+ *
+ *  Bash / Smash is NOT such a pair and is deliberately no longer stacked. Smash is
+ *  not an upgrade of Bash, it is a different trade — 1.8x + a 1 s area stun against
+ *  Bash's 2.75x — and which one wins depends on the fight in front of you:
+ *
+ *    - per second of committed time Smash is ~9% ahead (1.8 over a 1.46-cycle
+ *      wind-up, against 2.75 over 2.44) and it stuns on top;
+ *    - per 10 s recharge — the actual throughput gate, since `abilityCdMs` is set at
+ *      commit — Bash wins from two enemies on the field upward, because its extra
+ *      0.95x lands on every one of them while Smash's shorter wind-up buys back only
+ *      single-target swings;
+ *    - Bash's longer wind-up is more super armour (`cantInterrupt`) but also a longer
+ *      window for the grabs and pixelFire that DO cancel a charge.
+ *
+ *  Stacking them handed that judgement to the tier ladder. Four buttons is the new
+ *  worst case, and the column's pitch tightens to fit it (see abilityColumnStep). */
 export const ACTIVATED_STACKS: readonly (readonly string[])[] = [
-  ["bashV2", "bash"],
   ["explodeV2", "explode"],
 ];
 

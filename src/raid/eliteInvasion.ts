@@ -180,7 +180,28 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
   // it: Pirates-elite has to sit near an ordinary Video Games, and Robots/Aliens-elite have
   // to share a band with Video Games-elite. Nothing about their character changed; they
   // moved because the thing they are pinned to did.
-  6: { str: 4.51, con: 1.59, dex: 1.78, throwDamage: 3.28, throwRate: 1.65, wallHp: 1, specialDamage: 4.9 },
+  //
+  // v27 RE-FIT, and CON is where it went — which reverses the paragraph above, on
+  // purpose. The recovered SWARM (six aliens on the field instead of one, see
+  // raid/alienStage.ts) made this raid markedly EASIER against a big army: sixteen
+  // zombies chewing through six targets at once clear twenty minions in a fraction of the
+  // wall-clock the one-at-a-time queue took, and the boss gets far fewer laser casts
+  // before its wave is gone. Measured on the balance stick, elite fell 2.24 -> 1.54 and
+  // dropped out of the top-three band entirely; this puts it back at 2.29, between the
+  // Robots and the Video Games.
+  //
+  // Con is now the only lever that buys DANGER rather than grind, which is why it moved
+  // 1.59 -> 2.5. Under the swarm a longer-lived alien is not a longer fight — it is one
+  // more of the six hitting you the whole time it stays up. The other two stats were
+  // capped by the table's own guards: str cannot pass the Pirates' 6.59 (theirs must stay
+  // the biggest strength step) and dex cannot pass the Lawyers' 1.85 (speed is THEIR
+  // mechanic), so both sit just under those ceilings.
+  //
+  // The remaining four multipliers are INERT on this raid and are left alone rather than
+  // scaled for the look of the table: the alien boss has no `throw` and no `wall`, and
+  // its `alienLaser` action carries no authored `damage`, so `specialDamage` multiplies a
+  // zero and BattleSim falls through to the flat 200 the binary hard-codes.
+  6: { str: 6.5, con: 2.5, dex: 1.78, throwDamage: 3.28, throwRate: 1.65, wallHp: 1, specialDamage: 4.9 },
 
   // 7 — Summer Break. No signature boss mechanic (the crab is a client-side hazard and
   // is deliberately left alone — see below), so it scales broadly, with heavier beach
@@ -197,7 +218,15 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
   // 9 — Zombies vs Video Games. Already the hardest invasion in the game by a wide
   // margin, so it needs the smallest push to reach the shared top tier — and it spends
   // what it has on turnZombie and pixelFire, the specials that make the fight what it is.
-  9: { str: 1.2, con: 1.15, dex: 1.1, throwDamage: 1.25, throwRate: 1.1, wallHp: 1, specialDamage: 1.35 },
+  //
+  // v27 RE-FIT (x1.25 on every multiplier's distance from 1.0, shape untouched). Zedzox
+  // used to keep casting turnZombie and pixelFire after he came down off his perch;
+  // recovering the state gate (`bossUpdate:` only rolls an action in state 19) took both
+  // away for the whole ground phase, which is most of the fight. That made the ORDINARY
+  // invasion easier — measured 2.42 -> 2.10 on the balance stick — and the elite step
+  // shrank with it. Restoring the step is what moved, not the raid's character; it is
+  // still by far the smallest profile in the table, as the paragraph above intends.
+  9: { str: 1.25, con: 1.19, dex: 1.125, throwDamage: 1.31, throwRate: 1.125, wallHp: 1, specialDamage: 1.44 },
 
   // 10 / 11 — Tree World and Valentine's Day. Seasonal, no signature mechanic, and the
   // two weakest waves after McDonnell's, so they take the same broad treatment as

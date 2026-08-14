@@ -1,9 +1,9 @@
 import type { EpicBossProjection, QuestProjection } from "../../../src/net/protocol";
-import { epicBossById, epicBossHp, epicBossUnlockLevel } from "../../../src/epicBoss/catalog";
+import { epicBossById, epicBossDamage, epicBossHp, epicBossUnlockLevel } from "../../../src/epicBoss/catalog";
 import type { EpicBossDef } from "../../../src/epicBoss/types";
 import { ownedLootCounter } from "../loot";
 import { pickByFrequency } from "../../../src/raid/combatStats";
-import { applyQuestEvents } from "./engine";
+import { applyQuestEvents, MEMORIAL_GRAVEYARD_CAP } from "./engine";
 import zombieRows from "../../../public/assets/zombies.json";
 import { buildPlayerUnits } from "../../../src/raid/CombatEngine";
 import { deriveAttackIntervalMs } from "../../../src/raid/combatStats";
@@ -14,10 +14,11 @@ import { makeOwned } from "../../../src/zombie/types";
 import { ABILITY_TIER, abilityTierOf } from "../../../src/zombie/traits";
 import { activeBonusHeadId, farmerMultiplier } from "../../../src/farmer";
 import { levelForXp } from "../levels";
-import { epicBossCurrencyReward, epicLootWeight, epicQuestZombieReward, reopenEpicQuests, shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
+import { EPIC_LOOT_DROP_CHANCE, EPIC_LOOT_ROLLS, epicBrainTicketChance, epicBossCurrencyReward, epicLootWeight, epicQuestZombieReward, reopenEpicQuests, shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
 import objectRows from "../../../public/assets/placeables.json";
 import { EPIC_BOSS_FIGHT_BRAIN_COST } from "../../../src/epicBoss/tokens";
 import { ARMY_CAP } from "../../../src/raid/RaidCatalog";
+import { BRAIN_TICKET_KEY } from "../../../src/raid/eliteInvasion";
 import { RAID_RULESET_VERSION } from "../../../src/raid/replay";
 import { encodeReceivedZombie } from "../../../src/zombie/receivedReward";
 
@@ -188,13 +189,32 @@ export async function expireLiveEpicBoss(db: D1Database, accountId: string, now:
 }
 
 export async function start(
-  db: D1Database, accountId: string, orderedUnitIds: unknown, payment: unknown, now: number
+  db: D1Database, accountId: string, orderedUnitIds: unknown, payment: unknown, now: number,
+  rulesetVersion?: unknown
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   await expireLiveEpicBoss(db, accountId, now);
   const ids = Array.isArray(orderedUnitIds)
     ? orderedUnitIds.filter((id): id is string => typeof id === "string" && !!id) : [];
   if (!ids.length || ids.length > ARMY_CAP || ids.length !== (orderedUnitIds as unknown[]).length ||
       new Set(ids).size !== ids.length) return { status: 400, body: { error: "bad_roster" } };
+  // The same handshake `/raid/start` performs, and for a reason that took a live incident
+  // to become visible here. The config this handler pins carries the WORKER's ruleset, and
+  // the finish handler compares that pinned value — which detects a stale SESSION but can
+  // never detect a stale CLIENT. So a tab holding pre-deploy JS used to pay for an attempt,
+  // fight it under its own rules, and have the replay disagree: the player watched a win
+  // and was told the boss escaped, or the transcript failed verification outright, with the
+  // token or brain already spent either way.
+  //
+  // It was harmless until the epic fight itself became versioned (v28 moved the attempt
+  // window, v29 made damage compound). Refusing here costs nothing — nothing has been
+  // charged and no session exists yet — and 426 is the status the client already knows how
+  // to answer with a reload prompt.
+  //
+  // Checked BEFORE the resume branch below on purpose: letting a stale client re-enter a
+  // session it cannot simulate correctly just moves the same failure to the finish.
+  if (rulesetVersion !== RAID_RULESET_VERSION) {
+    return { status: 426, body: { error: "stale_ruleset", rulesetVersion: RAID_RULESET_VERSION } };
+  }
   const [row, raid, epic, roster, balance, coreRow, raidState] = await Promise.all([
     db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id=?").bind(accountId).first<RunRow>().then(clampRun),
     db.prepare("SELECT id FROM raid_sessions_v3 WHERE account_id=? AND finished_at IS NULL").bind(accountId).first<{ id: string }>(),
@@ -253,7 +273,8 @@ export async function start(
   });
   const boss: CombatUnit = {
     id:`epic:${row.run_id}:${row.level}`,sourceKey:`EpicBoss:${def.id}`,team:"enemy",name:def.name,
-    str:def.unitStats.str,dex:def.unitStats.dex,con:def.unitStats.con,focus:0,hp:row.current_hp,maxHp:row.max_hp,
+    // Damage compounds 5% per rung (epicBossDamage) — MUST match src/epicBoss/combat.ts.
+    str:epicBossDamage(def,row.level),dex:def.unitStats.dex,con:def.unitStats.con,focus:0,hp:row.current_hp,maxHp:row.max_hp,
     // Raw enemy clock (1/dex); mirrors src/epicBoss/combat.ts — keep the two in step.
     attackCooldownMs:deriveAttackIntervalMs(def.unitStats.dex,"enemy"),
     attacks:def.unitStats.attacks.map((attack) => ({...attack,mult:attack.mult ?? 1})),isBoss:true,alive:true,isGarden:false,isHeadless:false,
@@ -342,7 +363,8 @@ export async function finish(
   // omits them from survivors. Keep them separate so their server locks still clear.
   const escapedRoster = verified.retreated
     ? locked.filter((id) => !losses.includes(id) && !survivors.includes(id)) : [];
-  const [run, balance, coreRow, questRow, objectRow, rosterCounts, raidState] = await Promise.all([
+  const [run, balance, coreRow, questRow, objectRow, rosterCounts, raidState,
+    casualtyRows, presentationRow] = await Promise.all([
     db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id=? AND run_id=?").bind(accountId, session.run_id).first<RunRow>().then(clampRun),
     db.prepare("SELECT gold,brains,xp,claimed_level FROM balances WHERE account_id=?").bind(accountId).first<{gold:number;brains:number;xp:number;claimed_level:number}>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id=?").bind(accountId).first<{current_json:string}>(),
@@ -352,14 +374,34 @@ export async function finish(
       .bind(accountId).all<{stored:number;count:number}>(),
     db.prepare("SELECT last_started_at FROM raid_state_v3 WHERE account_id=?")
       .bind(accountId).first<{last_started_at:number}>(),
+    // The casualties, read while their roster rows still exist — the batch below is
+    // what deletes them. Same query the invasion settlement runs (v3/raid.ts), and it
+    // is here for the same reason: this is the one moment a zombie stops existing, so
+    // it is the only moment a Memorial Statue can be given something to carve.
+    losses.length
+      ? db.prepare(`SELECT unit_id,zombie_key,mutation,invasions,color FROM roster_v3
+          WHERE account_id=? AND locked_by_raid=? AND unit_id IN (${losses.map(() => "?").join(",")})`)
+        .bind(accountId, session.id, ...losses)
+        .all<{unit_id:string;zombie_key:string;mutation:number;invasions:number;color:string|null}>()
+      : Promise.resolve({ results: [] }),
+    // Names live only in the client's presentation blob, keyed by unit id — the key
+    // that is about to be deleted. Read only when someone actually died; a missing
+    // name is harmless (the plaque falls back to the deterministic default).
+    losses.length
+      ? db.prepare("SELECT current_json FROM presentations_v3 WHERE account_id=?")
+        .bind(accountId).first<{current_json:string}>()
+      : Promise.resolve(null),
   ]);
   if (!run || !balance || !coreRow || !questRow || !objectRow || !raidState || run.level !== session.level) return { status: 409, body: { error: "stale_session" } };
   const xpBefore = balance.xp;
   const damage = Math.max(0, Math.min(session.starting_hp, Math.round(verified.outcome.playerDamage)));
   const defeated = verified.outcome.win && damage >= session.starting_hp;
   const defeatedLevel = defeated ? run.level : null;
+  // The brain is a roll and this is where it is decided — the client cannot re-roll it
+  // and agree, so the granted amounts ride back in the response as `currency`.
+  let currency = { brains: 0, gold: 0 };
   if (defeatedLevel !== null) {
-    const currency = epicBossCurrencyReward(defeatedLevel, def.maxLevel);
+    currency = epicBossCurrencyReward(defeatedLevel, def.maxLevel, random);
     balance.brains += currency.brains;
     balance.gold += currency.gold;
   }
@@ -376,30 +418,51 @@ export async function finish(
   const quests: QuestProjection = { version: questRow.version, ...questData };
   const beforeCompleted = new Set(quests.completed);
   const objects = parse<Array<{catalogKey:string;status:string}>>(objectRow.current_json, []);
-  let loot: { name: string; tile?: string; stageActor?: string; sprite: string } | null = null;
-  if (defeatedLevel !== null && random() < 0.35) {
+  type Drop = { name: string; tile?: string; stageActor?: string; sprite: string };
+  const drops: Drop[] = [];
+  // EPIC_LOOT_ROLLS independent rolls, each at EPIC_LOOT_DROP_CHANCE — both shared with
+  // the client's rollEpicBossDrops, so a rate or roll-count change can't land on one side
+  // only. Anything already dropped in THIS clear is excluded from the next roll, which is
+  // the point of rolling twice rather than once at double the odds.
+  if (defeatedLevel !== null) {
     // Collected spans Received + the shed + the placed object (ownedLootCounter): reading
     // Received alone reset the uncollected preference the moment a prize was claimed, so
     // already-owned decor kept crowding out prizes the player had never seen.
     const owned = ownedLootCounter(core.storage, objects);
-    const unlocked = def.loot.filter((entry) =>
-      entry.level <= defeatedLevel && !(entry.stageActor && core.ownedPets.includes(entry.stageActor)));
-    const uncollected = unlocked.filter((entry) => entry.stageActor || owned(entry.name, entry.tile) === 0);
-    const pool = uncollected.length ? uncollected : unlocked;
-    // RARITY ORDERING via the shared epicLootWeight curve (one definition, so the offline
-    // roll in epicBoss/combat.ts and this one can't drift): weight each prize by the
-    // inverse of the rung that unlocks it. A uniform pick made the top-rung signature
-    // item exactly as likely as the level-5 starter.
-    const picked = pickByFrequency(
-      pool.map((entry) => ({ entry, frequency: epicLootWeight(entry.level) })), random
-    );
-    loot = picked?.entry ?? null;
-    if (loot?.stageActor) core.ownedPets = [...new Set([...core.ownedPets, loot.stageActor])];
-    else if (loot) core.storage.received[loot.name] = (core.storage.received[loot.name] ?? 0) + 1;
+    for (let roll = 0; roll < EPIC_LOOT_ROLLS; roll++) {
+      if (random() >= EPIC_LOOT_DROP_CHANCE) continue;
+      const unlocked = def.loot.filter((entry) =>
+        entry.level <= defeatedLevel
+        && !(entry.stageActor && core.ownedPets.includes(entry.stageActor))
+        && !drops.some((d) => d.name === entry.name));
+      if (!unlocked.length) continue;
+      const uncollected = unlocked.filter((entry) => entry.stageActor || owned(entry.name, entry.tile) === 0);
+      const pool = uncollected.length ? uncollected : unlocked;
+      // RARITY ORDERING via the shared epicLootWeight curve (one definition, so the offline
+      // roll in epicBoss/combat.ts and this one can't drift): weight each prize by the
+      // inverse of the rung that unlocks it. A uniform pick made the top-rung signature
+      // item exactly as likely as the level-5 starter.
+      const picked = pickByFrequency(
+        pool.map((entry) => ({ entry, frequency: epicLootWeight(entry.level) })), random
+      );
+      if (!picked) continue;
+      drops.push(picked.entry);
+      if (picked.entry.stageActor) core.ownedPets = [...new Set([...core.ownedPets, picked.entry.stageActor])];
+      else core.storage.received[picked.entry.name] = (core.storage.received[picked.entry.name] ?? 0) + 1;
+    }
   }
+  // Gold-side bonus scaled by how deep the rung was (1.5% per rung).
+  let brainTicket = 0;
+  if (defeatedLevel !== null && random() < epicBrainTicketChance(defeatedLevel, def.maxLevel)) {
+    brainTicket = 1;
+    core.inventory[BRAIN_TICKET_KEY] = (core.inventory[BRAIN_TICKET_KEY] ?? 0) + 1;
+  }
+  // `loot` stays the FIRST drop so a result_json written before this change still reads
+  // correctly when a duplicate finish replays it; new clients read `drops`.
+  const loot: Drop | null = drops[0] ?? null;
   const events = defeatedLevel === null ? [] : [
     { type: "kEpicStageEnemyDefeatedNotification", subject: String(defeatedLevel) },
-    ...(loot ? [{ type: "kEpicBossEpicItemWonNotification", subject: loot.name }] : []),
+    ...drops.map((d) => ({ type: "kEpicBossEpicItemWonNotification", subject: d.name })),
   ];
   const questChanges = applyQuestEvents(balance, quests, events, {
     includeEpic: true,
@@ -436,7 +499,7 @@ export async function finish(
   const result = { serverTime: now, event: {
     ...projectRun(run)!, level: run.level, maxHp: run.max_hp, currentHp: run.current_hp,
     encounterStartedAt: run.encounter_started_at, retryReadyAt: run.retry_ready_at, completedAt: run.completed_at,
-  }, defeatedLevel, escaped: !defeated, loot, balance, inventory: core.inventory,
+  }, defeatedLevel, escaped: !defeated, currency, loot, drops, brainTicket, balance, inventory: core.inventory,
     storage: core.storage, ownedPets: core.ownedPets, survivors, losses, quests, questChanges, newZombies };
   if (leveledUp) Object.assign(result, { lastRaidAt: 0 });
   const resultJson = JSON.stringify(result);
@@ -456,6 +519,35 @@ export async function finish(
   ];
   if (leveledUp) statements.push(db.prepare(`UPDATE raid_state_v3 SET last_started_at=0
     WHERE account_id=? AND ${guard}`).bind(accountId,accountId,session.id,resultJson));
+  // The graveyard. An epic boss kills exactly as permanently as an invasion does, so
+  // its dead are written to fallen_v3 on the same terms — otherwise the Memorial
+  // Statue, which reads the authoritative graveyard and nothing else, tells a player
+  // who has just lost a zombie here that they have never lost one. There is no
+  // revival offer on this path, so the row is final the moment it is written.
+  const casualtyNames = new Map<string, string>();
+  if (presentationRow) {
+    const layout = parse<{rosterLayout?:{id?:unknown;name?:unknown}[]}>(presentationRow.current_json, {}).rosterLayout;
+    for (const entry of Array.isArray(layout) ? layout : []) {
+      if (typeof entry?.id === "string" && typeof entry.name === "string" && entry.name) {
+        casualtyNames.set(entry.id, entry.name.slice(0, 24));
+      }
+    }
+  }
+  (casualtyRows.results ?? []).forEach((row) => statements.push(db.prepare(`INSERT INTO fallen_v3
+    (account_id,unit_id,zombie_key,name,mutation,invasions,color,died_at)
+    SELECT ?,?,?,?,?,?,?,? WHERE ${guard}
+    ON CONFLICT(account_id,unit_id) DO NOTHING`)
+    .bind(accountId,row.unit_id,row.zombie_key,casualtyNames.get(row.unit_id) ?? null,
+      row.mutation,row.invasions,row.color,now,session.id,resultJson)));
+  // Same bound the invasion settlement keeps, and for the same reasons: unenshrined
+  // rows only (a statue is permanent), and run after the inserts so a settlement that
+  // overflows the cap drops the oldest rather than refusing the newest.
+  if (losses.length) statements.push(db.prepare(`DELETE FROM fallen_v3
+    WHERE account_id=? AND memorial_object_id IS NULL AND unit_id NOT IN (
+      SELECT unit_id FROM fallen_v3 WHERE account_id=? AND memorial_object_id IS NULL
+      ORDER BY COALESCE(released_at,died_at) DESC, unit_id LIMIT ?
+    ) AND ${guard}`)
+    .bind(accountId,accountId,MEMORIAL_GRAVEYARD_CAP,session.id,resultJson));
   losses.forEach((id) => statements.push(db.prepare(`DELETE FROM roster_v3 WHERE account_id=? AND unit_id=? AND locked_by_raid=? AND ${guard}`)
     .bind(accountId,id,session.id,session.id,resultJson)));
   survivors.forEach((id) => statements.push(db.prepare(`UPDATE roster_v3 SET invasions=invasions+1,locked_by_raid=NULL

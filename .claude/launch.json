@@ -9,6 +9,13 @@
       "autoPort": true
     },
     {
+      "name": "zombiefarm-offline",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--mode", "offline"],
+      "port": 5173,
+      "autoPort": true
+    },
+    {
       "name": "zombiefarm-worker",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "server", "run", "dev", "--", "--port", "8787"],

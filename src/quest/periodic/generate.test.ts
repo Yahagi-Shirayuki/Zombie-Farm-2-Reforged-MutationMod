@@ -6,7 +6,9 @@ import {
   claimPeriodicQuest, claimablePeriodicCount, dailyUnitXp, generatePeriodicSet,
   refreshPeriodicState, xpToNextLevel,
 } from "./generate";
-import { DAILY_MAX_GROW_MS, WEEKLY_COUNT_MULTIPLIER } from "./templates";
+import {
+  DAILY_FIELD_MAX, DAILY_MAX_GROW_MS, WEEKLY_COUNT_MULTIPLIER, WEEKLY_FIELD_MAX,
+} from "./templates";
 import { dayIndex } from "./periods";
 import { emptyPeriodicState, type PeriodicQuestState } from "./types";
 
@@ -98,14 +100,18 @@ describe("periodic quest generation", () => {
   });
 
   // The weekly counts are DERIVED from the daily ones, so this is the property that
-  // keeps "a weekly is five dailies" true after either is tuned.
-  it("asks a weekly for exactly five times its daily counterpart", () => {
-    const pairs: [string, string][] = [
-      ["daily_harvest_any", "weekly_harvest_any"],
-      ["daily_harvest_crop", "weekly_harvest_crop"],
-      ["daily_harvest_zombies", "weekly_harvest_zombies"],
-      ["daily_invade", "weekly_invade"],
+  // keeps a weekly a fixed multiple of its daily after either is tuned. Most objectives
+  // use WEEKLY_COUNT_MULTIPLIER; harvestAny carries an override so its ramp can stay
+  // under a 200 ceiling (see WEEKLY_MULTIPLIER_OVERRIDE).
+  it("asks a weekly for a fixed multiple of its daily counterpart", () => {
+    const pairs: [string, string, keyof typeof CEILING | "invade" | "harvestAny" | "other"][] = [
+      ["daily_harvest_any", "weekly_harvest_any", "harvestAny"],
+      ["daily_harvest_crop", "weekly_harvest_crop", "other"],
+      ["daily_harvest_zombies", "weekly_harvest_zombies", "other"],
+      ["daily_invade", "weekly_invade", "invade"],
     ];
+    const CEILING = { invade: 8, harvestAny: WEEKLY_FIELD_MAX, other: Infinity } as const;
+    const MULT = { invade: WEEKLY_COUNT_MULTIPLIER, harvestAny: 3.3, other: WEEKLY_COUNT_MULTIPLIER };
     for (let level = 20; level <= 45; level += 5) {
       const dailies = new Map<string, number>();
       const weeklies = new Map<string, number>();
@@ -114,16 +120,51 @@ describe("periodic quest generation", () => {
         for (const q of daily(level, 20670 + period).quests) dailies.set(q.template, q.countTotal);
         for (const q of weekly(level, 2953 + period).quests) weeklies.set(q.template, q.countTotal);
       }
-      for (const [dailyKey, weeklyKey] of pairs) {
+      for (const [dailyKey, weeklyKey, kind] of pairs) {
         const one = dailies.get(dailyKey);
-        const five = weeklies.get(weeklyKey);
-        if (one === undefined || five === undefined) continue;
-        // Invasions carry a ceiling (see WEEKLY_MAX) because five times the daily
-        // target would exceed what a week is meant to ask for.
-        const expected = Math.min(one * WEEKLY_COUNT_MULTIPLIER, weeklyKey === "weekly_invade" ? 8 : Infinity);
-        expect(five, `${weeklyKey} at level ${level}`).toBe(expected);
+        const many = weeklies.get(weeklyKey);
+        if (one === undefined || many === undefined) continue;
+        const k = kind as keyof typeof CEILING;
+        expect(many, `${weeklyKey} at level ${level}`)
+          .toBe(Math.min(Math.round(one * MULT[k]), CEILING[k]));
       }
     }
+  });
+
+  // The two ceilings the board is tuned against: a daily field chore must fit inside what
+  // an hour of play produces (measured at ~176 harvests a day for a full level-44 field),
+  // and a week may ask a multiple of that but not an open-ended one. These are design
+  // constraints, not preferences — a band edited past them fails here.
+  //
+  // BOTH field objectives are covered. Harvesting and plowing track each other one-for-one
+  // (every spent plot is re-tilled before it is replanted), so capping one and leaving the
+  // other simply moves the day's workload to the uncapped slot — which is exactly what
+  // happened when harvestAny was capped on its own.
+  it("keeps every field objective under its daily and weekly ceiling", () => {
+    // Plowing has no weekly template — the weekly board's field slot is the harvest one.
+    const DAILY_FIELD = ["daily_harvest_any", "daily_plow"];
+    const WEEKLY_FIELD = ["weekly_harvest_any"];
+    const seen = new Set<string>();
+    for (let level = DAILY_UNLOCK_LEVEL; level <= 45; level++) {
+      for (let period = 0; period < 12; period++) {
+        for (const q of daily(level, 20670 + period).quests) {
+          if (!DAILY_FIELD.includes(q.template)) continue;
+          seen.add(q.template);
+          expect(q.countTotal, `${q.template} at level ${level}`)
+            .toBeLessThanOrEqual(DAILY_FIELD_MAX);
+        }
+        if (level < 15) continue;
+        for (const q of weekly(level, 2953 + period).quests) {
+          if (!WEEKLY_FIELD.includes(q.template)) continue;
+          seen.add(q.template);
+          expect(q.countTotal, `${q.template} at level ${level}`)
+            .toBeLessThanOrEqual(WEEKLY_FIELD_MAX);
+        }
+      }
+    }
+    // Guard against the assertions above silently covering nothing if a template is
+    // renamed — every field objective must actually have been rolled and checked.
+    expect([...seen].sort()).toEqual([...DAILY_FIELD, ...WEEKLY_FIELD].sort());
   });
 
   // Invasions are the one objective bounded by a real-time cooldown rather than by the

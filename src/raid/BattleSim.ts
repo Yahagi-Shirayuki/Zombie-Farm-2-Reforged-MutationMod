@@ -30,9 +30,9 @@
 // the binary): maxHp = con*100 and cadence = attackCooldownMs (2s zombie / 1s enemy ÷ dex)
 // arrive on the CombatUnit; per-swing damage = finalPower(str*10) * mult, then the player
 // lineup-depth band (1.0/0.85/0.7/0.55; enemies ×1.0). See combatStats.lineupDamageBand.
-import type { BossActionChoice, BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidFeats, RaidOutcome } from "./types";
+import type { BossActionChoice, BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidFeats, RaidOutcome, SummonConfig, WaveCadence } from "./types";
 import { emptyRaidFeats } from "./types";
-import { ACTIVATED_ABILITY, activatedGroupsOf, activatedKeyFor, teamAbilitiesIn } from "../zombie/abilities";
+import { ACTIVATED_ABILITY, activatedGroupsOf, teamAbilitiesIn } from "../zombie/abilities";
 import {
   ALIEN_LASER_DAMAGE,
   applyDamage,
@@ -96,7 +96,11 @@ const EMERGE_SPEED = 210; // enemy walking in from the right (px/s)
 const CIRCUS_BOSS_KEY = "CircusStageActorBoss";
 const BOSS_JUMP_MS = 650; // Circus Ringmaster drops directly from the car to the lane
 const ENEMY_EMERGE_GAP_MS = 450; // beat before the next enemy emerges
-const MAX_ACTIVE_ENEMIES = 1; // enemies fight one at a time (raise for a line)
+/** Default wave cadence: strictly one enemy at a time. GROUND TRUTH — every stage owns a
+ *  five-slot `enemySlots` array, but the only scheduler that ever FILLS a slot is the
+ *  `spawnTimer` drip, and `spawnTimer` is seeded to an hour everywhere except the alien
+ *  stage. So one-at-a-time is right for ten of the eleven raids. See types.WaveCadence. */
+const SOLO_WAVE: WaveCadence = { maxActive: 1, dripMs: 0 };
 const MAX_SIM_MS = 4 * 60 * 1000; // hard safety cap (min-damage 1 avoids stalls)
 
 // ---- Front formation (GROUND TRUTH: `-[ZombieActor calculateDestinationPoint]` 0x4c9d4)
@@ -321,7 +325,10 @@ const CRAB_WANDER_MIN_X = 300;
 const CRAB_WANDER_MAX_X = 760;
 
 // ---- Boss summon / wall specials ----
-const SUMMON_CAP = 3; // most extra minions a boss can summon in one fight
+// There is deliberately NO summon cap. GROUND TRUTH (`summonBoss:` 0x5ee2c): every cast
+// pops `bossSummonList[0]` and pushes a freshly rolled replacement, so the list never
+// empties. `allowedToSummonBoss` (0x5eda4) is the real limit — the summoned actor is
+// parked in the `bossWall` ivar, so a second one is refused until the first is dead.
 // Per-tap chip on a boss wall (ground truth ZFFightWall ccTouchEnded → damage: = const/20,
 // const ≈ the wall's HP 1500 → 75). Zombies do the bulk; tapping is an assist.
 const WALL_TAP_DAMAGE = 75;
@@ -439,7 +446,6 @@ export interface SimUnit {
   slotY: number;
   // ---- abilities ----
   abilities: string[]; // this unit's unlocked ability keys (players only)
-  activatedKey: string | null; // the ONE activated move it performs (or null)
   windupKey: string | null; // the activated move currently charging (null = none)
   windupMs: number; // ms left in the current wind-up
   windupTotal: number; // full wind-up duration (for the charge bar)
@@ -469,6 +475,12 @@ export interface SimUnit {
   stunInflictMs: number; // stun this enemy applies to a zombie on hit (ms)
   attackDamageTiming: number; // 0..1 fraction of the swing when it connects (enemy anim)
   isWall: boolean; // boss-summoned blocker (carrotWall / junkWall) — tappable, no attacks
+  /** Abducted human beamed in by the alien boss's `summonBoss`. It fights like any other
+   *  enemy but is OFF-BUDGET: the source only decrements `enemyPopulation` for a dying
+   *  actor that is NOT `fightMan.bossWall` (`civilianUpdate` 0x687c0), so a summon neither
+   *  counts toward the wave nor holds the boss on its perch. Without that exclusion an
+   *  uncapped summon would deadlock the descent. */
+  isSummon: boolean;
   passedWall: boolean; // latched when already beyond a newly summoned wall
   /** Carried off the field by a Beach crab: still ALIVE (it comes home after the raid —
    *  source state 38 is not the death path) but out of this fight, so it counts as a
@@ -565,7 +577,13 @@ export interface BattleSimSnapshot {
   enraged: boolean;
   specialCast: number;
   pendingSpecial: BossSpecial | null;
-  summonsLeft: number;
+  /** `bossSummonList` as source keys, in queue order. Replaces the old `summonsLeft`
+   *  counter (there is no cap — see the SUMMON notes above). */
+  summonQueue?: string[];
+  /** The alien reinforcement clock (`spawnTimer`), ms until the next drip. */
+  dripLeft?: number;
+  /** How many of the wave are allowed on the field right now — grows one per drip. */
+  activeTarget?: number;
   spawnSeq: number;
   activatedKeys: string[];
   grabbers: SimGrabber[];
@@ -660,7 +678,6 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     slotX: home.x,
     slotY: home.y,
     abilities,
-    activatedKey: isPlayer ? activatedKeyFor(abilities) : null,
     windupKey: null,
     windupMs: 0,
     windupTotal: 0,
@@ -686,6 +703,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     stunInflictMs: isPlayer ? 0 : u.stunMs ?? 0,
     attackDamageTiming: u.attackDamageTiming ?? 0.5,
     isWall: false,
+    isSummon: false,
     passedWall: false,
     taken: false,
     mirrorsOpponentSpeed: !isPlayer && !!u.mirrorsOpponentSpeed,
@@ -746,19 +764,28 @@ export class BattleSim {
   private crabTimer: number; // ms until the next crab scuttles in
   private crabSeq = 0;
   // ---- summon / wall specials ----
-  private summonTemplate: CombatUnit | null;
+  private summonCfg: SummonConfig | null;
+  /** `bossSummonList`, by source key. Popped from the front, pushed on the back. */
+  private summonQueue: string[] = [];
   private wallTemplate: CombatUnit | null;
-  private summonsLeft: number;
   private spawnSeq = 0;
+  // ---- wave cadence (see types.WaveCadence) ----
+  private cadence: WaveCadence;
+  private dripLeft: number;
+  /** Enemies allowed on the field right now. Starts at 1 and climbs by one per drip up
+   *  to `cadence.maxActive`, which is how the source's swarm actually builds: the drip
+   *  can only ever fill ONE free `enemySlots` entry per tick. */
+  private activeTarget = 1;
   private engageDistance: number;
   private rowXFit = 1; // fraction of the recovered in-row depth that fits inside contact
   private frontX: number;
   private supportX: number;
   /** Distinct ACTIVATED moves present in the army (fixed) — the tappable strip. */
   readonly activatedKeys: string[];
-  /** The same moves grouped into the BUTTONS that show them (fixed): Bash/Smash share
-   *  one, Explode/Explode Ver.2 share one, everything else stands alone. Derived from
-   *  `activatedKeys`, so it needs no snapshot slot. See ACTIVATED_STACKS. */
+  /** The same moves grouped into the BUTTONS that show them (fixed): Explode and
+   *  Explode Ver.2 share one, everything else — Bash and Smash included — stands
+   *  alone. Derived from `activatedKeys`, so it needs no snapshot slot. See
+   *  ACTIVATED_STACKS for why that pair is the only one worth collapsing. */
   readonly activatedGroups: string[][];
   /** Distinct TEAM-passive abilities present (fixed) — the strip's info icons. */
   readonly teamKeys: string[];
@@ -774,8 +801,8 @@ export class BattleSim {
     bossSpecials: BossSpecial[] = [],
     /** Round length before the boss enrages (ms). */
     roundMs: number = DEFAULT_ROUND_MS,
-    /** Unit the boss's `summonBoss` action spawns (null = don't summon). */
-    summonTemplate: CombatUnit | null = null,
+    /** The alien boss's abductee queue (null = this boss can't summon). */
+    summonCfg: SummonConfig | null = null,
     /** Blocker the boss's `wall` action spawns (null = don't). */
     wallTemplate: CombatUnit | null = null,
     /** Epic Boss: no butterflies, but the full brain bubble still gates release. */
@@ -792,7 +819,10 @@ export class BattleSim {
     /** Beach crab hazard (null = none). CLIENT-ONLY by design: the server verifier
      *  omits it, so the authoritative replay is the un-harassed run and a crab can only
      *  ever make the player's own result WORSE. See RaidManager.crabOf. */
-    crab: CrabConfig | null = null
+    crab: CrabConfig | null = null,
+    /** How this stage feeds its wave in. Only Zombies vs Aliens departs from the
+     *  one-at-a-time default; see types.WaveCadence. */
+    cadence: WaveCadence = SOLO_WAVE
   ) {
     this.engageDistance = Math.max(ENGAGE, Math.min(300, engageDistance));
     this.grabberCfg = grabber;
@@ -839,9 +869,14 @@ export class BattleSim {
     // ObjC's zero — the boss's first action resolves as soon as it becomes active.
     this.actionCd = 0;
     this.roundLeft = roundMs;
-    this.summonTemplate = this.boss ? summonTemplate : null;
+    this.summonCfg = this.boss ? summonCfg : null;
+    this.summonQueue = this.summonCfg ? this.summonCfg.queue.map((u) => u.sourceKey) : [];
     this.wallTemplate = this.boss ? wallTemplate : null;
-    this.summonsLeft = SUMMON_CAP;
+    this.cadence = {
+      maxActive: Math.max(1, Math.round(cadence.maxActive)),
+      dripMs: Math.max(0, Math.round(cadence.dripMs)),
+    };
+    this.dripLeft = this.cadence.dripMs;
     // Keep every activated move represented. In particular, Mini Buddy remains
     // available on a veteran Large zombie even when it also owns Bash/Smash.
     this.activatedKeys = [
@@ -880,7 +915,9 @@ export class BattleSim {
       enraged: this._enraged,
       specialCast: this.specialCast,
       pendingSpecial: this.pendingSpecial ? { ...this.pendingSpecial } : null,
-      summonsLeft: this.summonsLeft,
+      summonQueue: [...this.summonQueue],
+      dripLeft: this.dripLeft,
+      activeTarget: this.activeTarget,
       spawnSeq: this.spawnSeq,
       activatedKeys: [...this.activatedKeys],
       grabbers: this.grabbers.map((g) => ({ ...g })),
@@ -916,6 +953,7 @@ export class BattleSim {
       knockBackToX: u.knockBackToX ?? 0,
       knockBackSpeed: u.knockBackSpeed ?? 0,
       passedWall: u.passedWall ?? false,
+      isSummon: u.isSummon ?? false,
       mirrorsOpponentSpeed: u.mirrorsOpponentSpeed ?? false,
     })));
     this.players = this.units.filter((u) => u.team === "player");
@@ -946,7 +984,14 @@ export class BattleSim {
     this._enraged = snapshot.enraged;
     this.specialCast = snapshot.specialCast;
     this.pendingSpecial = snapshot.pendingSpecial ? { ...snapshot.pendingSpecial } : null;
-    this.summonsLeft = snapshot.summonsLeft;
+    // A checkpoint that predates the abductee queue restores the ctor's seed order, which
+    // is the same thing a fresh sim would hold — such a snapshot can only exist on a
+    // ruleset the session handshake already rejects, so it never reaches a live fight.
+    this.summonQueue = snapshot.summonQueue
+      ? [...snapshot.summonQueue]
+      : this.summonCfg?.queue.map((u) => u.sourceKey) ?? [];
+    this.dripLeft = snapshot.dripLeft ?? this.cadence.dripMs;
+    this.activeTarget = snapshot.activeTarget ?? 1;
     this.spawnSeq = snapshot.spawnSeq;
     this.activatedKeys.splice(0, this.activatedKeys.length, ...snapshot.activatedKeys);
     // Purely derived, so it is not in the snapshot — re-derive it from the keys that are.
@@ -1078,7 +1123,9 @@ export class BattleSim {
    *  the first one with a ready carrier anywhere in the army. That deliberately makes
    *  the upgrade the move a tap spends — Explode Ver.2 is the only one of the pair that
    *  can touch a boss, so a rule that could leave it unreachable would cost the player
-   *  a capability rather than a preference.
+   *  a capability rather than a preference. The explode pair is now the ONLY stack, and
+   *  that is exactly the reason: where the two tiers are a genuine trade rather than an
+   *  upgrade (Bash/Smash), the choice belongs to the player and they get a button each.
    *
    *  Nothing about `activate` changes: this only decides WHICH key the tap sends, and
    *  the key it sends is one `activate` will accept, so the recorded transcript still
@@ -1877,7 +1924,15 @@ export class BattleSim {
     return p ? { id: p.id, kind: p.awaitRelease ? "brain" : "butterfly" } : null;
   }
 
-  /** Promote the zombie charge queue + the enemy emerge queue (one at a time). */
+  /** Promote the zombie charge queue + the enemy emerge queue.
+   *
+   *  GROUND TRUTH for the enemy half — see types.WaveCadence. Two things release a
+   *  queued enemy in the source, and both boil down to "fill a free `enemySlots` entry":
+   *  a death (`update:` 0x5d60c) and the `spawnTimer` drip (`updateTimer:` 0x613ee).
+   *  The death path only ever REPLACES what died, so the field can grow past one enemy
+   *  only via the drip — which is why `activeTarget` climbs one per drip rather than the
+   *  whole wave pouring out at t=0. Ten of the eleven raids have no drip at all and so
+   *  stay at `activeTarget` 1 for the whole fight. */
   private promote(dtMs: number) {
     this.emergeCooldown -= dtMs;
 
@@ -1887,15 +1942,27 @@ export class BattleSim {
       if (next) next.state = "charging";
     }
 
+    // The reinforcement clock runs on its own regardless of the emerge beat below.
+    const queuedLeft = this.enemies.some((e) => e.alive && !e.isBoss && e.state === "queued");
+    if (this.cadence.dripMs > 0 && this.activeTarget < this.cadence.maxActive && queuedLeft) {
+      this.dripLeft -= dtMs;
+      if (this.dripLeft <= 0) {
+        this.dripLeft = this.cadence.dripMs;
+        this.activeTarget++;
+      }
+    }
+
     if (this.emergeCooldown > 0) return;
 
+    // A summoned abductee is off-budget on BOTH counts: it does not occupy one of the
+    // wave's slots, and it does not hold the boss on its perch. See SimUnit.isSummon.
     const activeMelee = this.enemies.filter(
-      (e) => e.alive && !e.isBoss && !e.isWall && e.state !== "queued"
+      (e) => e.alive && !e.isBoss && !e.isWall && !e.isSummon && e.state !== "queued"
     ).length;
-    const normalsLeft = this.enemies.some((e) => !e.isBoss && !e.isWall && e.alive);
+    const normalsLeft = this.enemies.some((e) => !e.isBoss && !e.isWall && !e.isSummon && e.alive);
     const blockersLeft = this.enemies.some((e) => e.isWall && e.alive);
 
-    if (activeMelee < MAX_ACTIVE_ENEMIES) {
+    if (activeMelee < this.activeTarget) {
       const next = this.enemies.find((e) => e.alive && !e.isBoss && e.state === "queued");
       if (next) next.state = "emerging";
     }
@@ -2346,6 +2413,11 @@ export class BattleSim {
     }
     const next = this.nextAction;
     if (!next) return;
+    // Once the boss is off its perch it has no action budget at all (see bossCanAct), so
+    // let the slot rest instead of re-rolling it every tick for the rest of the fight.
+    // A cast ALREADY in flight is deliberately left to land above: the source arms those
+    // through `schedule:interval:`, which fires whatever state the boss has moved on to.
+    if (!this.bossCanAct()) return;
     this.actionCd -= dtMs;
     if (this.actionCd > 0) return;
     // The source checks each action's `allowedTo…` gate AFTER the roll but BEFORE arming
@@ -2373,26 +2445,45 @@ export class BattleSim {
     this.specialCast = Math.max(0, next.special.castMs);
   }
 
+  /** Is the boss in its action posture at all?
+   *
+   *  GROUND TRUTH: `-[CivilianActorFight bossUpdate:]` (0x67b40) opens with
+   *  `if (state - 15 > 12) goto civilianUpdate`, and inside that 15..27 window the action
+   *  ROLL lives only in the state-19 arm. A boss that has finished its descent is in
+   *  state 9 — below the window — so it drops straight through to `civilianUpdate` and
+   *  has NO specials at all: no laser, no summon, no wall, no throw. It just swings.
+   *
+   *  An Epic Boss is the one exception, and only because it has no perch to be gated on:
+   *  it falls onto the lane instead of occupying a state-19 phase, so it keeps its
+   *  actions once it has landed. */
+  private bossCanAct(): boolean {
+    if (!this.boss || !this.boss.alive) return false;
+    if (this.bossFallsFromSky) return this.boss.state !== "falling";
+    return this.boss.state === "structure";
+  }
+
   /** The source's per-action `allowedTo…` gates: a wall while one already stands and a
-   *  summon past the cap are refused, and the boss picks again rather than casting a
-   *  no-op. Everything else is always performable. */
+   *  summon while the last abductee still lives are refused, and the boss picks again
+   *  rather than casting a no-op. Everything else is performable while it is up top. */
   private canPerform(action: BossActionChoice): boolean {
-    // Only a perched boss throws. Treating a grounded boss's throw as un-performable
-    // (rather than simply waiting) matters: otherwise a pre-rolled throw would sit in
-    // the slot forever once the boss descends and silently strangle its specials too.
-    if (action.kind === "throw") return !!this.bossThrow && this.boss?.state === "structure";
+    // EVERY action is gated on the boss still being on its perch, not just throws. Doing
+    // this as "un-performable" rather than "wait" matters: otherwise a pre-rolled action
+    // would sit in the slot forever once the boss descends.
+    if (!this.bossCanAct()) return false;
+    if (action.kind === "throw") return !!this.bossThrow;
     if (action.kind !== "special") return true;
     if (action.special.name === "wall") {
-      // Only a perched boss walls, for the same reason it only throws from up top: the
-      // wall materializes at the Garden support line, so a boss that has already climbed
-      // down would keep summoning blockers BEHIND itself, mid-lane. Once it descends its
-      // whole action budget is melee.
-      if (this.boss?.state !== "structure") return false;
       const wt = this.wallTemplate;
       return !!wt && !this.enemies.some((e) => e.alive && e.sourceKey === wt.sourceKey);
     }
     if (action.special.name === "summonBoss") {
-      return !!this.summonTemplate && this.summonsLeft > 0;
+      // `allowedToSummonBoss` (0x5eda4): a non-empty list, and `bossWall` empty — the
+      // summoned actor is parked there, so only one abductee lives at a time.
+      return (
+        !!this.summonCfg &&
+        this.summonQueue.length > 0 &&
+        !this.enemies.some((e) => e.alive && e.isSummon)
+      );
     }
     if (action.special.name === "alienLaser") {
       // `ZFFightMan allowedToShootBullet` walks `zombies` and refuses the shot unless at
@@ -2494,11 +2585,40 @@ export class BattleSim {
         break;
       }
       case "summonBoss": {
-        // Reinforce with a fresh minion (capped so the fight still resolves). It
-        // emerges through the normal queue, keeping the boss perched behind it.
-        if (this.summonTemplate && this.summonsLeft > 0) {
-          this.summonsLeft--;
-          this.spawnEnemy(this.summonTemplate);
+        // GROUND TRUTH (`-[ZFFightMan summonBoss:]` 0x5ee2c): the alien boss abducts a
+        // HUMAN. It pops `bossSummonList[0]`, spawns it at `enemyPosition`, and then
+        // pushes ONE freshly rolled name back on — five candidates, 20 % each — so the
+        // queue never empties. The only limit is one abductee alive at a time, enforced
+        // in canPerform. The victim is off-budget (see SimUnit.isSummon).
+        const cfg = this.summonCfg;
+        const key = this.summonQueue.shift();
+        if (!cfg || !key) break;
+        const template = cfg.queue.find((u) => u.sourceKey === key)
+          ?? cfg.pool.find((u) => u.sourceKey === key);
+        if (template) {
+          const victim = this.spawnEnemy(template);
+          victim.isSummon = true;
+          // Beamed straight onto the field, not queued behind the wave: the source
+          // spawns it at `enemyPosition` there and then. Leaving it "queued" would also
+          // deadlock it, since the wave's release gate deliberately ignores summons.
+          victim.state = "emerging";
+        }
+        // The refill roll: `(int)((arc4random() % 100) / 100.0f * 5.0f)`, hashed here for
+        // replay. Rolled even when the spawn itself failed, exactly as the source does.
+        //
+        // Its own salt. Every draw in this sim is `hash(actionCount * a + b)`, so two
+        // draws sharing (a, b) are not merely both deterministic — they are the SAME
+        // number. This one shared (13,7) with `laserTarget`, and both belong to the
+        // ALIEN boss, so which human it abducted was locked to which zombie its laser
+        // would have picked on that same cycle. The pairs in use are (13,7) laser
+        // target, (11,3) laser muzzle, (7,5) pixelFire victim, and (17,11) here; no two
+        // of them agree for any actionCount.
+        if (cfg.pool.length) {
+          const i = Math.min(
+            cfg.pool.length - 1,
+            Math.floor(hash(this.actionCount * 17 + 11) * cfg.pool.length)
+          );
+          this.summonQueue.push(cfg.pool[i].sourceKey);
         }
         break;
       }
@@ -2530,9 +2650,9 @@ export class BattleSim {
     }
   }
 
-  /** Spawn a new enemy from a template mid-fight (summoned minion / wall). It joins
-   *  the enemy roster + the shared units array (so the renderer picks it up) and
-   *  emerges through the normal one-at-a-time queue. */
+  /** Spawn a new enemy from a template mid-fight (abductee / wall). It joins the enemy
+   *  roster + the shared units array (so the renderer picks it up) and emerges through
+   *  the normal queue. */
   private spawnEnemy(template: CombatUnit): SimUnit {
     const su = toSim({ ...template, id: `spawn${this.spawnSeq++}` }, this.enemies.length);
     su.state = "queued";

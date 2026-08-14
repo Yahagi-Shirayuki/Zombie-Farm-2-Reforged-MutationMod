@@ -420,7 +420,64 @@ def pair(s):
     return n[0], n[1]
 
 
-def flat_tile_fields(tp, sprite_img):
+# ---- Flat tiles whose art is authored CENTRED on its own footprint -------------
+# The seven pond pieces are one interchangeable set: six rims plus a fill, all 3x3,
+# all drawn on the same 150x75 canvas, made to be laid edge to edge into a single
+# body of water. Each one's water diamond IS that canvas, i.e. the footprint diamond
+# (144x72) with 3px of bleed on every side so neighbours overlap instead of leaving a
+# gap. That means the anchor is not a free parameter — it is fixed by the geometry,
+# and every piece must use the SAME one or the rim steps where two pieces meet.
+#
+# The source pivots are hand-rounded to 2dp and disagree: pond5 0.36, pond2/pond7
+# 0.35, the rest 0.34, and pond7 alone is 0.02 vertically where the rest are 0.03. In
+# the original that slop was survivable because ponds are never turned there; here
+# Rotate mirrors about the front tile's centre line (`1 - pivotx - 48/width`), which
+# turns a 0.02 error into a 6px jump — the Pond 5 misalignment. So these pieces take
+# the computed centred anchor instead of the authored one; see
+# centered_flat_tile_fields. Roads are NOT in this set: a road bend's art is
+# deliberately off-centre on its footprint (up to 5px vertically), so the same
+# reasoning does not apply and their authored pivots stand.
+CENTERED_FLAT_TILES = {"pond1", "pond2", "pond3", "pond4", "pond5", "pond6", "pond7"}
+# The anchor may only be nudged by rounding-scale slop. A bigger correction means the
+# tile does not belong in the set above and the art would teleport, so fail loudly.
+CENTERED_ANCHOR_TOLERANCE_PX = 4.0
+
+
+def centered_flat_tile_fields(tp, sprite_img):
+    """Flat-tile anchor fields for art centred on its footprint diamond.
+
+    The anchor is the point of the art that lands on the FRONT tile's own position —
+    the bottom-left corner of that tile's 48x24 box (see flat_tile_fields). For a
+    tileW x tileH block the footprint diamond is (tileW+tileH)*24 wide by
+    (tileW+tileH)*12 tall, and that corner sits (tileW-1)*24 right of the diamond's
+    west corner and exactly on its south corner. Centring art of size w x h on the
+    diamond therefore puts the anchor at
+
+        x = (tileW-1)*24 + (w - diamondW)/2      measured from the art's left edge
+        y = (h - diamondH)/2                     measured UP from the art's bottom
+
+    which for a pond piece is (51/150, 1.5/75) = (0.34, 0.02). 0.34 is also the fixed
+    point of the mirror `1 - anchorX - 48/w`, so a turned piece lands exactly where an
+    unturned one does — which is the whole point.
+    """
+    w, h = sprite_img.width, sprite_img.height
+    tw = max(1, int(tp.get("tileWidth", 1)))
+    th = max(1, int(tp.get("tileHeight", 1)))
+    diamond_w, diamond_h = (tw + th) * 24, (tw + th) * 12
+    ax = ((tw - 1) * 24 + (w - diamond_w) / 2) / w
+    ay = (h - diamond_h) / (2 * h)
+    authored = flat_tile_fields(None, tp, sprite_img)
+    dx = abs(ax - authored["anchorX"]) * w
+    dy = abs(ay - authored["anchorY"]) * h
+    if max(dx, dy) > CENTERED_ANCHOR_TOLERANCE_PX:
+        raise SystemExit(
+            f"{tp.get('spriteSheet')}: centred anchor moves the art "
+            f"{dx:.1f}x{dy:.1f}px, past the {CENTERED_ANCHOR_TOLERANCE_PX}px "
+            "tolerance — its art is not centred on its footprint")
+    return {"flatTile": True, "anchorX": round(ax, 6), "anchorY": round(ay, 6)}
+
+
+def flat_tile_fields(tile, tp, sprite_img):
     """`{}`, or the flat-tile anchor fields — the cocos anchor of a flatTile's art,
     EXPRESSED AGAINST THE PNG WE SHIP.
 
@@ -436,6 +493,8 @@ def flat_tile_fields(tp, sprite_img):
     """
     if not tp.get("flatTile"):
         return {}
+    if tile in CENTERED_FLAT_TILES:
+        return centered_flat_tile_fields(tp, sprite_img)
     ax = float(tp.get("pivotx", 0.38))
     ay = float(tp.get("pivoty", 0.0))
     w, h = sprite_img.width, sprite_img.height
@@ -482,6 +541,34 @@ def neutralize_petals(img):
             if a and r > g:
                 value = max(r, g, b)
                 pixels[x, y] = (value, value, value, a)
+    return out
+
+
+def unpremultiply(img):
+    """Divide out the alpha the source atlases baked into their colour channels.
+
+    The ZF2R atlases are stored PREMULTIPLIED: a half-covered edge pixel of the pond
+    water is (4,109,163,a=180), which is the opaque water (6,155,231) already scaled
+    by 180/255. PixiJS defaults its image textures to `premultiply-alpha-on-upload`
+    (TextureSource.defaultOptions), so it multiplies by alpha a SECOND time and every
+    antialiased edge composites `rgb*a^2 + dst*(1-a)` where the renderer meant
+    `rgb*a + dst*(1-a)`.
+
+    On art that stands alone that only costs a faint dark halo. On flat art it is
+    visible damage: pond pieces overlap by design, so each piece lays its darkened
+    fringe over the neighbour's opaque water and the pond comes out with a dark grid
+    of seams tracing the pieces. Undoing the bake makes the PNG straight-alpha, which
+    is what Pixi already assumes, and abutting pieces blend water into water.
+    """
+    out = img.copy()
+    pixels = out.load()
+    for y in range(out.height):
+        for x in range(out.width):
+            r, g, b, a = pixels[x, y]
+            if 0 < a < 255:
+                pixels[x, y] = (min(255, round(r * 255 / a)),
+                                min(255, round(g * 255 / a)),
+                                min(255, round(b * 255 / a)), a)
     return out
 
 
@@ -846,6 +933,10 @@ def main():
             skipped += 1
             skipped_keys.append(key)
             continue
+        # Flat art is laid edge to edge and its pieces overlap, so a doubled
+        # premultiply paints a dark seam along every join. See unpremultiply.
+        if tp.get("flatTile"):
+            sprite_img = unpremultiply(sprite_img)
         out_name = emit_sprite(key, sprite_img)
         # A tile's childNodes ship as a SECOND image drawn behind it (Pet Pen far wall).
         back_img = extract_child_layer(tp)
@@ -898,7 +989,7 @@ def main():
             # Ground-hugging art (roads, ponds, the zombie patch) that has to line
             # up seam-to-seam with its neighbours, so it is anchored by its authored
             # pivot rather than bottom-centered. See flat_tile_fields.
-            **flat_tile_fields(tp, sprite_img),
+            **flat_tile_fields(tile, tp, sprite_img),
             # simple functional effects the game can apply on placement
             "armyMax": e.get("increaseArmyMaxBy", 0),
             "storageSlots": slots,  # >0 for storage sheds (item capacity)
@@ -963,6 +1054,10 @@ def main():
             reward_skipped.append(name)
             continue
 
+        # Flat art is laid edge to edge and its pieces overlap, so a doubled
+        # premultiply paints a dark seam along every join. See unpremultiply.
+        if tp.get("flatTile"):
+            sprite_img = unpremultiply(sprite_img)
         out_name = emit_sprite(tile, sprite_img)
         seen.add(tile)
         reward_count += 1
@@ -990,7 +1085,7 @@ def main():
             # Ground-hugging art (roads, ponds, the zombie patch) that has to line
             # up seam-to-seam with its neighbours, so it is anchored by its authored
             # pivot rather than bottom-centered. See flat_tile_fields.
-            **flat_tile_fields(tp, sprite_img),
+            **flat_tile_fields(tile, tp, sprite_img),
             "armyMax": 0,
             "storageSlots": 0,
             "zombieSlots": 0,

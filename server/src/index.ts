@@ -1371,13 +1371,18 @@ app.post("/epic-boss/end", async (c) => {
 
 app.post("/epic-boss/start", async (c) => {
   if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
-  const body: { orderedUnitIds?: unknown; payment?: unknown } =
-    await c.req.json<{ orderedUnitIds?: unknown; payment?: unknown }>().catch(() => ({}));
+  const body: { orderedUnitIds?: unknown; payment?: unknown; rulesetVersion?: unknown } =
+    await c.req.json<{ orderedUnitIds?: unknown; payment?: unknown; rulesetVersion?: unknown }>().catch(() => ({}));
   const now = Date.now();
   await v3Raid.expireLiveRaid(c.env.DB, c.get("accountId"), now);
-  const result = await v3EpicBoss.start(c.env.DB, c.get("accountId"), body.orderedUnitIds, body.payment, now);
+  const result = await v3EpicBoss.start(
+    c.env.DB, c.get("accountId"), body.orderedUnitIds, body.payment, now, body.rulesetVersion
+  );
   if (result.status === 200) return c.json({ ...result.body, serverTime: now });
   if (result.status === 400) return c.json(result.body, 400);
+  // Not folded into the 409 default: the client's reload prompt is keyed on the status as
+  // well as the code, and a 409 reads as "try again", which a stale bundle never can.
+  if (result.status === 426) return c.json(result.body, 426);
   if (result.status === 429) return c.json(result.body, 429);
   return c.json(result.body, 409);
 });
