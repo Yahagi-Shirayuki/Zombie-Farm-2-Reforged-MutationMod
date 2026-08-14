@@ -49,6 +49,7 @@ export const CROP_MUTATIONS: CropMutationTable = {
   malakale: "kale_arm",
   blueberyl: "berry_eye",
   spinalch: "spinach_hair",
+  oatnyx: ["oat_hat", "oat_arm"],
   Bloodberry: "bloodberry_hair",
   skellyberry: "skellyberry_body",
   reddelicious: "apple_head",

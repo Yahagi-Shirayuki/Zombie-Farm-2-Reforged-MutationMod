@@ -109,7 +109,7 @@
   "oy": 13,
   "ax": 0.63,
   "ay": 0.6599999999999999,
-  "z": 3,
+  "z": 1,
   "replaces": "body"
  },
  "flytrap": {
@@ -161,7 +161,7 @@
   "oy": 15,
   "ax": 0.73,
   "ay": 0.75,
-  "z": 3,
+  "z": 1,
   "replaces": "body"
  },
  "corn_head": {
@@ -322,5 +322,26 @@
   "ax": 0.73,
   "ay": 0.7,
   "z": 7
+ },
+ "oat_hat": {
+  "file": "oat_hat.png",
+  "group": "head",
+  "headRel": true,
+  "ox": -41,
+  "oy": 12,
+  "ax": 0,
+  "ay": 1,
+  "z": 8
+ },
+ "oat_arm": {
+  "file": "oat_arm.png",
+  "group": "root",
+  "headRel": false,
+  "ox": 12,
+  "oy": 35,
+  "ax": 1,
+  "ay": 0.4,
+  "z": 8,
+  "replaces": "armF"
  }
 }
