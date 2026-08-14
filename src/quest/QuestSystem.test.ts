@@ -182,8 +182,18 @@ describe("QuestSystem client-paced progress", () => {
     const bus = new QuestBus();
     const state = new GameState();
     const completed = vi.fn();
+    // Mirrors main's startup ordering: Local Farm hydration happens before the
+    // optional online economy client is constructed. The binding must already be a
+    // readable null when restore synchronously pays this newly-satisfied quest.
+    const submitQuest = vi.fn();
+    const economy: { current: { submitQuest: (id: string) => void } | null } = { current: null };
     const system = new QuestSystem(new Map([["1", quest()]]), state, bus, {
       authoritative: false,
+      grantReward: (def) => {
+        if (!economy.current) return false;
+        economy.current.submitQuest(def.id);
+        return true;
+      },
       grantItem: vi.fn(), grantZombie: vi.fn(), completed, render: vi.fn(),
     });
 
@@ -193,6 +203,7 @@ describe("QuestSystem client-paced progress", () => {
     expect(system.views()).toEqual([]);
     expect(system.completedCount).toBe(1);
     expect(completed).toHaveBeenCalledTimes(1);
+    expect(submitQuest).not.toHaveBeenCalled();
     expect(state.xp).toBe(10); // the reward it was owed, paid once
   });
 

@@ -159,6 +159,12 @@ async function main() {
   const service = getPreferredPlayMode() === "local" ? OPEN_STATUS : await fetchServiceStatus();
   const playMode: PlayMode = await choosePlayMode(auth.isOnlineAvailable(), service);
   const onlineFarm = usesOnlineGameplay(playMode);
+  // Quest restoration can synchronously pay an already-satisfied Local Farm quest.
+  // Its reward hook reads this binding while SaveManager is still hydrating, so the
+  // binding must exist before QuestSystem is constructed (and long before the online
+  // client itself can be created after hydration). Keeping the declaration beside the
+  // mode decision also makes the Local Farm value unambiguously null during restore.
+  let economy: EconomyClient | null = null;
   // Online Farm chosen while the service is read-only: sign in and load the farm, then
   // hand it over instead of entering the game (see the export handoff below).
   const exportOnlyFarm = onlineFarm && isExportOnly(service);
@@ -2086,7 +2092,6 @@ async function main() {
   // every gold/brains/xp change mirrors to the server ledger, then start() adopts
   // the authoritative balance (server wins over the just-loaded blob). Offline or
   // while visiting, `economy` stays null and currency is purely local as before.
-  let economy: EconomyClient | null = null;
 
   /** Put a gameplay pause into the diagnostics buffer Settings can copy.
    *
