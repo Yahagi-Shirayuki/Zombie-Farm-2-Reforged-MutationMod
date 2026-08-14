@@ -1,4 +1,5 @@
 import type { PowderColor } from "./powderMachine";
+import type { RosterEntry } from "./zombie/types";
 
 export const ZOMBIE_COLOR_MIXER_BUCKET_KEY = "zombieColorMixerBucket";
 export const ZOMBIE_COLOR_MIXER_BUCKET_LIMIT = 3;
@@ -30,6 +31,7 @@ export interface ZombieColorDyeJob {
   unitId: string;
   zombieKey: string;
   zombieName?: string;
+  reservedZombie?: RosterEntry;
   powderColor: PowderColor;
   amount: number;
   inputColor: [number, number, number];
@@ -220,6 +222,7 @@ export function createZombieColorDyeJob(args: {
   unitId: string;
   zombieKey: string;
   zombieName?: string;
+  reservedZombie?: RosterEntry;
   baseColor: readonly [number, number, number];
   powderColor: PowderColor;
   amount: number;
@@ -235,12 +238,71 @@ export function createZombieColorDyeJob(args: {
     unitId: args.unitId,
     zombieKey: args.zombieKey,
     ...(args.zombieName ? { zombieName: args.zombieName } : {}),
+    ...(args.reservedZombie ? { reservedZombie: cloneReservedZombie(args.reservedZombie) } : {}),
     powderColor: args.powderColor,
     amount,
     inputColor,
     outputColor: result.color,
     startedAt: now,
     finishAt: now + ZOMBIE_COLOR_MIXER_DURATION_MS,
+  };
+}
+
+function cleanString(value: unknown, fallback = ""): string {
+  const text = typeof value === "string" ? value : fallback;
+  return text || fallback;
+}
+
+function cleanNumber(value: unknown, fallback = 0): number {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : fallback;
+}
+
+function cleanOptionalColor(value: unknown): [number, number, number] | undefined {
+  return cleanColor(value) ?? undefined;
+}
+
+function cloneReservedZombie(value: RosterEntry): RosterEntry {
+  return {
+    ...value,
+    ...(value.color ? { color: [...value.color] as [number, number, number] } : {}),
+    ...(value.mutationIds ? { mutationIds: [...value.mutationIds] } : {}),
+    ...(value.powderStats ? { powderStats: { ...value.powderStats } } : {}),
+    ...(value.powderStatProgress ? { powderStatProgress: { ...value.powderStatProgress } } : {}),
+  };
+}
+
+function sanitizeReservedZombie(value: unknown): RosterEntry | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const data = value as Partial<RosterEntry>;
+  if (!data.id || !data.key) return undefined;
+  const color = cleanOptionalColor(data.color);
+  const mutationIds = Array.isArray(data.mutationIds)
+    ? data.mutationIds.filter((id): id is string => typeof id === "string")
+    : undefined;
+  const powderStats = sanitizeZombiePowderStats(data.powderStats);
+  const powderStatProgress = sanitizeZombiePowderStatProgress(data.powderStatProgress);
+  return {
+    id: String(data.id),
+    key: String(data.key),
+    name: cleanString(data.name, String(data.key)),
+    typeName: cleanString(data.typeName, String(data.key)),
+    group: cleanString(data.group, "Regular"),
+    className: cleanString(data.className, "Green"),
+    classColor: cleanString(data.classColor, "#60a83a"),
+    ...(color ? { color } : {}),
+    ...(Object.keys(powderStats).length ? { powderStats } : {}),
+    ...(Object.keys(powderStatProgress).length ? { powderStatProgress } : {}),
+    mutation: Math.max(0, Math.trunc(cleanNumber(data.mutation))),
+    ...(mutationIds?.length ? { mutationIds } : {}),
+    str: cleanNumber(data.str, 1),
+    dex: cleanNumber(data.dex, 1),
+    con: cleanNumber(data.con, 1),
+    focus: cleanNumber(data.focus, 0),
+    invasions: Math.max(0, Math.trunc(cleanNumber(data.invasions))),
+    col: Math.trunc(cleanNumber(data.col)),
+    row: Math.trunc(cleanNumber(data.row)),
+    stored: !!data.stored,
   };
 }
 
@@ -255,10 +317,12 @@ export function sanitizeZombieColorDyeJob(value: unknown): ZombieColorDyeJob | n
   const amount = sanitizeDyePowderAmount(job.amount);
   const startedAt = Math.max(0, Math.trunc(Number(job.startedAt) || 0));
   const finishAt = Math.max(startedAt, Math.trunc(Number(job.finishAt) || startedAt + ZOMBIE_COLOR_MIXER_DURATION_MS));
+  const reservedZombie = sanitizeReservedZombie(job.reservedZombie);
   return {
     unitId: String(job.unitId),
     zombieKey: String(job.zombieKey),
     ...(job.zombieName ? { zombieName: String(job.zombieName) } : {}),
+    ...(reservedZombie ? { reservedZombie } : {}),
     powderColor: job.powderColor as PowderColor,
     amount,
     inputColor,

@@ -56,6 +56,7 @@ import { harvestXp, plowXp } from "./farmRewards";
 import {
   isPowderMachineKey,
   powderMachinePrice,
+  POWDER_STORAGE_DISPLAY,
   rollCropCrystalHarvest,
   type PowderColor,
 } from "./powderMachine";
@@ -216,6 +217,15 @@ function installLocalFarmHotkeys(playMode: PlayMode, state: GameState, saves: Sa
         saves.flush();
         skipLocalFarmTime(playMode, saves, 24 * 60);
         break;
+
+      case "KeyN": {
+        const powders = Object.fromEntries(
+          POWDER_STORAGE_DISPLAY.map((color) => [color, 100])
+        ) as Partial<Record<PowderColor, number>>;
+        state.addPowderStorageDelta({ powders });
+        console.log("Local Farm grant: +100 of each powder");
+        break;
+      }
 
       case "KeyL":
         state.addXp(200, "local-cheat-hotkey");
@@ -2838,15 +2848,19 @@ async function main() {
     const zombie = zombies.roster().find((entry) => entry.id === localUnitId);
     if (!zombie) return { ok: false, message: "That zombie is no longer available." };
     const baseColor = zombie.color ?? assets.zombieModels[zombie.key]?.color ?? [255, 255, 255];
+    const reservedZombie = zombies.reserveForDye(localUnitId);
+    if (!reservedZombie) return { ok: false, message: "That zombie is no longer available." };
     const job = state.startZombieColorDye(bucketId, {
       unitId: localUnitId,
       zombieKey: zombie.key,
       zombieName: zombie.name,
+      reservedZombie,
       baseColor,
       powderColor,
       amount,
     });
     if (!job) {
+      zombies.restoreDyeReservation(reservedZombie);
       return { ok: false, message: `Could not start dyeing with that ${powderColor} powder.` };
     }
     economy?.submitZombieColorDyeStart(bucketId, commandUnitId, powderColor, job.amount, job);
@@ -2857,11 +2871,18 @@ async function main() {
     if (onlineGameplayBlocked()) return { ok: false, message: "Gameplay is paused." };
     const job = state.collectZombieColorDye(bucketId);
     if (!job) return { ok: false, message: "That dye job is not ready yet." };
-    if (!zombies.recolor(job.unitId, job.outputColor)) {
-      state.syncZombieColorDyes({ ...state.zombieColorDyes, [bucketId]: job });
-      return { ok: false, message: "That zombie is no longer available." };
+    if (job.reservedZombie) {
+      if (!zombies.collectDye(job)) {
+        state.syncZombieColorDyes({ ...state.zombieColorDyes, [bucketId]: job });
+        return { ok: false, message: "There is no room to collect that dyed zombie." };
+      }
+    } else {
+      if (!zombies.recolor(job.unitId, job.outputColor)) {
+        state.syncZombieColorDyes({ ...state.zombieColorDyes, [bucketId]: job });
+        return { ok: false, message: "That zombie is no longer available." };
+      }
+      zombies.applyPowderStatBonus(job.unitId, job.powderColor, job.amount);
     }
-    zombies.applyPowderStatBonus(job.unitId, job.powderColor, job.amount);
     economy?.submitZombieColorDyeCollect(bucketId);
     saveManager.flushCritical();
     return { ok: true };

@@ -17,6 +17,7 @@ import {
   sanitizeZombiePowderStatProgress,
   sanitizeZombiePowderStats,
   type PowderStatColor,
+  type ZombieColorDyeJob,
 } from "../zombieColorMixerBucket";
 
 /** Mausoleum storage-slot capacity of the BASE building. Every tier above it is
@@ -341,6 +342,64 @@ export class ZombieField {
   // army slot when a deployed unit is sold.
   sell(id: string): OwnedZombie | null {
     return this.takeOwned(id);
+  }
+
+  /** Temporarily remove a zombie while the Zombie Dyer works on it. This is a
+   *  reservation, not a death/sale/grant, so no roster-live hooks fire here. */
+  reserveForDye(id: string): RosterEntry | null {
+    const snapshot = this.roster().find((unit) => unit.id === id);
+    if (!snapshot) return null;
+    const data = this.takeOwned(id);
+    if (!data) return null;
+    return {
+      ...data,
+      stored: snapshot.stored,
+      ...(data.color ? { color: [...data.color] as [number, number, number] } : {}),
+      ...(data.mutationIds ? { mutationIds: [...data.mutationIds] } : {}),
+      ...(data.powderStats ? { powderStats: { ...data.powderStats } } : {}),
+      ...(data.powderStatProgress ? { powderStatProgress: { ...data.powderStatProgress } } : {}),
+    };
+  }
+
+  restoreDyeReservation(snapshot: RosterEntry): boolean {
+    const { stored, ...data } = snapshot;
+    if (stored) {
+      this.stored.push({ ...data });
+      return true;
+    }
+    if (!this.canAdd()) return false;
+    this.addUnit({ ...data });
+    this.syncCount();
+    return true;
+  }
+
+  collectDye(job: ZombieColorDyeJob): boolean {
+    if (!job.reservedZombie) return false;
+    const { stored, ...base } = job.reservedZombie;
+    const data: OwnedZombie = {
+      ...base,
+      color: [...job.outputColor] as [number, number, number],
+      ...(base.mutationIds ? { mutationIds: [...base.mutationIds] } : {}),
+      ...(base.powderStats ? { powderStats: { ...base.powderStats } } : {}),
+      ...(base.powderStatProgress ? { powderStatProgress: { ...base.powderStatProgress } } : {}),
+    };
+    const next = applyZombiePowderStatBonus(data.powderStats, data.powderStatProgress, job.powderColor, job.amount);
+    data.powderStats = next.stats;
+    data.powderStatProgress = next.progress;
+    if (stored) {
+      this.stored.push(data);
+      return true;
+    }
+    if (this.canAdd()) {
+      this.addUnit(data);
+      this.syncCount();
+      return true;
+    }
+    if (this.field.mausoleumId() && !this.mausoleumFull) {
+      this.stored.push(data);
+      return true;
+    }
+    return false;
   }
 
   /** Rename an owned deployed or stored zombie. Returns the normalized saved name. */

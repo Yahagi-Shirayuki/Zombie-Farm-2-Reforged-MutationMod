@@ -281,7 +281,7 @@ export function openZombieColorMixerBucket(hud: Hud, bucketId: string): void {
     slots.innerHTML = "";
     list.innerHTML = "";
     if (!job) return;
-    const zombie = roster().find((entry) => entry.id === job.unitId) ?? null;
+    const zombie = job.reservedZombie ?? roster().find((entry) => entry.id === job.unitId) ?? null;
     const zombieSlot = document.createElement("div");
     zombieSlot.className = "cmb-slot zcm-slot filled";
     if (zombie) {

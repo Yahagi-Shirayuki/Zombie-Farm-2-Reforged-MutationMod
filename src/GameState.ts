@@ -294,6 +294,7 @@ export class GameState {
       unitId: string;
       zombieKey: string;
       zombieName?: string;
+      reservedZombie?: ZombieColorDyeJob["reservedZombie"];
       baseColor: readonly [number, number, number];
       powderColor: PowderColor;
       amount: number;
