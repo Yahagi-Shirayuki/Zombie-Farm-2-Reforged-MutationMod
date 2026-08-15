@@ -337,7 +337,7 @@ export interface PlaceableDef {
   storageSlots?: number; // functional: storage shed item capacity (8..64)
   petPen?: boolean; // Pet Pen: manages up to four displayed pets
   zombieStorage?: boolean; // functional: the Mausoleum — stores owned zombies
-  zombieSlots?: number; // functional: Mausoleum zombie capacity (15..35 by tier)
+  zombieSlots?: number; // functional: Mausoleum zombie capacity (15..60 by tier)
   graveColor?: "Blue" | "Red" | "Silver"; // colored grave: unlocks planting that zombie class
   zombiePatch?: boolean; // functional: the Zombie Patch — gathers zombies to nap on it
   plowFree?: boolean; // functional: Plowing Monolith — plowing costs no gold

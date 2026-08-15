@@ -94,6 +94,21 @@ UNIT_OVERRIDES = {
     "AlienStageActorMinion": {"str": 5},
 }
 
+# Units a raid SPAWNS but never lists in a stage. `used_units` is walked out of the
+# stage tables, so a unit that only ever arrives through a boss action is dropped and
+# the runtime has no stats to build it from.
+#   VideoGameStageZombieActor — what Zedzox's `turnZombie` makes out of one of YOUR
+#   zombies (raid 9). It is authored in UnitStats.json like any other actor (con 10000,
+#   dex 6, str 8, VideoGameZombieBite) and ships its own idle/attack frames in
+#   spritesheets/zombies/VideoGameZombie, but it appears in no `stageSettings` entry
+#   because nothing spawns it as wave population. The con is the tell: 10000 is roughly
+#   sixty times a wave minion's, far past what melee can chew through inside a round —
+#   this is a hazard you TAP down, not an enemy you out-fight. See BattleSim's
+#   `turnZombie` case.
+EXTRA_UNITS = {
+    "VideoGameStageZombieActor",
+}
+
 
 # Each invasion's stage actors live in UnitStats.json under a family prefix. We use
 # this to resolve every raid's minions + boss so the ladder builder can extrapolate
@@ -354,7 +369,7 @@ def main():
 
     missing = set()
     raids = []
-    used_units = set()
+    used_units = set(EXTRA_UNITS)  # boss-action spawns, which no stage table lists
 
     for e in enemies:
         rid = as_int(e.get("ID"))

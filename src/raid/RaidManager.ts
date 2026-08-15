@@ -34,6 +34,7 @@ import { ABILITY_TIER, ABILITY_POOL } from "../zombie/traits";
 import { displayTotals } from "../zombie/statDisplay";
 import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidOutcome, RaidStage, SummonConfig, WaveCadence } from "./types";
 import { summonConfigFor, waveCadenceFor } from "./alienStage";
+import { turnedUnitFor } from "./videoGameStage";
 import { rollLootTier } from "./LootTable";
 import { rollBrainDropWithPity, nextBrainDryStreak, brainDropChance, brainDropTable } from "./brainDrops";
 import { orderPartyRoster } from "./partySelection";
@@ -236,6 +237,9 @@ export interface RaidSetup {
   waveCadence: WaveCadence;
   /** Blocker the boss's wall action spawns (null if it has no wall). */
   wallTemplate: CombatUnit | null;
+  /** The pixel zombie the boss's turnZombie action converts a zombie into (null if it
+   *  has no such action — only the Video Games boss does). */
+  turnedTemplate: CombatUnit | null;
   /** Carried-grab hazard (Circus Trapeze Artist) for the live scene (null if none). */
   grabber: GrabberConfig | null;
   /** Beach crab hazard (client-only — see crabOf). */
@@ -532,6 +536,9 @@ export class RaidManager {
       waveCadence: waveCadenceFor(raid.id),
       summon: this.summonConfigOf(raid, stage, profile),
       wallTemplate: this.wallTemplateOf(stage, profile),
+      // Video Games divergence (raid 9 only) — see raid/videoGameStage.ts. Same shape as
+      // the alien summon: the verifier derives it from the same helper and context.
+      turnedTemplate: this.turnedTemplateOf(raid, stage, profile),
       dice,
       concentration,
       brainDrop,
@@ -584,6 +591,23 @@ export class RaidManager {
     const actions = this.assets.enemyStats[stage.bossKey]?.bossActions ?? [];
     if (!actions.some((a) => a.name === "summonBoss")) return null;
     return summonConfigFor(raid.id, this.assets.enemyStats, this.assets.raidAttacks, {
+      raidId: raid.id,
+      playerLevel: this.state.level,
+      elite,
+    });
+  }
+
+  /** The pixel zombie `turnZombie` converts a zombie into. `turnZombie` is the Video Games
+   *  boss's action and no other's — see raid/videoGameStage.ts. */
+  private turnedTemplateOf(
+    raid: RaidDef,
+    stage: RaidStage,
+    elite: EliteProfile | null = null
+  ): CombatUnit | null {
+    if (!stage.bossKey || stage.throwingDisabled) return null;
+    const actions = this.assets.enemyStats[stage.bossKey]?.bossActions ?? [];
+    if (!actions.some((a) => a.name === "turnZombie")) return null;
+    return turnedUnitFor(raid.id, this.assets.enemyStats, this.assets.raidAttacks, {
       raidId: raid.id,
       playerLevel: this.state.level,
       elite,

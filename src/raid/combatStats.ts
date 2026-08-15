@@ -199,21 +199,21 @@ export function farmRaidEnemyPace(raidId: number | undefined, playerLevel: numbe
 /** Burn damage per second while a zombie is on fire (boss `pixelFire` → `setOnFire`).
  *  Binary (`ZombieActor fightUpdate:` state 0x31 at 0x4dedc): `damage: hitPointsTotal/20 × dt`
  *  per frame = 5 % of MAX HP per second, through the normal `damage:` path (armor / DR /
- *  one-shot floor all apply).
+ *  one-shot floor all apply). This RATE is ground truth and is used as recovered.
  *
- *  CAUTION — this rate never accumulates in the shipped game, and the reimpl must not make
- *  it. `setOnFire` sets the zombie's destination to `[self position]` — its OWN current
- *  position — and the state-0x31 block burns once, then immediately fails its
- *  `position == destinationPoint` test and leaves for state 0x28. So the burn lasts exactly
- *  ONE FRAME: 5 % ÷ 60 ≈ 0.083 % of max HP, ~2 damage on a 3000 HP zombie. Near-certainly a
- *  source bug (the surrounding code fetches the enemy; moving to your own position is a
- *  no-op), but it is what ships, so `pixelFire` is an attack INTERRUPT with a cosmetic
- *  flourish, not a damage-over-time. Do not "restore" it to a lasting burn. */
+ *  What the shipped game does NOT do is let it accumulate. `setOnFire` sets the zombie's
+ *  destination to `[self position]` — its OWN current position — so the state-0x31 block
+ *  burns once, immediately fails its `position == destinationPoint` test, and leaves for
+ *  state 0x28. The burn lasts exactly ONE FRAME: 5 % ÷ 60 ≈ 0.083 % of max HP, about 2
+ *  damage on a 3000 HP zombie. That is near-certainly a source bug (the surrounding code
+ *  fetches the enemy, and moving to your own position is a no-op), and it left the Video
+ *  Games boss's headline special worth nothing at all.
+ *
+ *  DELIBERATE DIVERGENCE: the reimpl burns for PIXEL_FIRE_BURN_MS at this rate instead, and
+ *  hands the player a way to answer it (tap the fire out). The rate here is unchanged; only
+ *  the duration is ours. See raid/videoGameStage.ts for the reasoning and
+ *  docs/mechanics/ENEMY_DAMAGE_RECOVERED.md for the recovered reading this replaces. */
 export const BURN_MAX_HP_FRACTION_PER_SEC = 0.05;
-
-/** The source's fixed frame step (60 fps), used only to size the single-frame `pixelFire`
- *  burn tick above — the sim's own step is variable and must not change that damage. */
-export const SOURCE_FRAME_SEC = 1 / 60;
 
 /** Flat damage of the Alien boss's laser bolt (`AlienStageBullet collidedWith:`,
  *  immediate 0x43480000 = 200.0f). Not a stat-derived value — a hard constant. */

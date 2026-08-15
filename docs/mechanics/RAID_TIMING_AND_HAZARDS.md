@@ -78,9 +78,10 @@ throws proportionally less often — for most bosses every entry is a `throw`, a
 degenerates to a plain `throwSpeed` interval. The specials:
 
 - **Aliens** — `alienLaser` (cooldown **2 s**) + `summonBoss` (cast **2 s**), rapid throws (0.2 s).
-- **Video Games (Zedzox)** — `turnZombie` (cast **3 s**, *converts your zombie to an enemy*),
-  `pixelFire` (cast **2 s**; the source data labels it AoE, but the recovered behaviour is a
-  single-target one-frame interrupt — see the implementation note below), + 100-dmg throws.
+- **Video Games (Zedzox)** — `turnZombie` (cast **3 s**, *converts your zombie to an enemy* — the
+  reimpl now does exactly that; see below), `pixelFire` (cast **2 s**; the source data labels it
+  AoE, but the recovered behaviour is a single-target one-frame interrupt, which the reimpl
+  deliberately replaces with a real burn — see the implementation note below), + 100-dmg throws.
 - **Ninjas** — `wall` (cast **3 s**, hp **1500**, collision 70) — a carrotWall blocking the lane.
 - **Robots (BrainBot)** — `telekinesis` (cast **3 s**) + 5 debris types.
 - Farm/Pirate/City — pure escalating throws (McDonnell 6/12/18; Pirate 12.5/25/50; City 12/24/36).
@@ -232,9 +233,17 @@ configs and threads them to the scene.
   source's single `rollAgainstFrequencyInArray:` over `bossActions`. An action the boss cannot
   currently perform (a second wall, a summon past the cap) is re-rolled at no cost. The specials:
   - `alienLaser` → a fast straight bolt at a forward zombie (`ALIEN_LASER_DAMAGE = 200`).
-  - `pixelFire` → a **one-frame interrupt on a single random zombie** (~0.083% of max HP), NOT
-    an AoE burn. Corrected at ruleset v9 — see `ENEMY_DAMAGE_RECOVERED.md`.
-  - `turnZombie` → removes your front zombie (turned against you).
+  - `pixelFire` → recovered as a **one-frame interrupt on a single random zombie** (~0.083% of max
+    HP), NOT an AoE burn (corrected at ruleset v9). **Ruleset v31 deliberately diverges**: the
+    recovered 5 %/s rate now runs for `PIXEL_FIRE_BURN_MS`, the burning zombie panics on the spot
+    with its arms up, and the player taps the fire out (`fireTap`). See
+    `ENEMY_DAMAGE_RECOVERED.md`.
+  - `turnZombie` → **converts** your front zombie into a pixel zombie (ruleset v31). It used to
+    deal the victim its own remaining HP, which is what players saw as zombies dying suddenly and
+    for no reason. The victim is now `taken` (alive, a survivor, not a loss) and the pixel zombie
+    stands mid-lane until tapped apart, which hands the zombie back (`turnedTap`). It blocks
+    nothing, is not a melee target, and does not gate the win — its authored body is a million hit
+    points. See `ENEMY_DAMAGE_RECOVERED.md`.
   - `telekinesis` → **zero damage**: knockback + stun only. It is not a heavy hit.
 - **Beach crab** — `initialSpawnClass` identifies the `BeachStageActorCrab`, and
   `obstacleSpawnTimer` / `obstacleLimit` set its cadence and concurrent cap. It grabs and carries

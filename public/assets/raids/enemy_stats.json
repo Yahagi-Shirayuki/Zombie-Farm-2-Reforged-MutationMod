@@ -813,5 +813,16 @@
   "dex": 2,
   "standardGoldLoot": true,
   "str": 20
+ },
+ "VideoGameStageZombieActor": {
+  "attacks": [
+   {
+    "frequency": 100,
+    "name": "VideoGameZombieBite"
+   }
+  ],
+  "con": 10000,
+  "dex": 6,
+  "str": 8
  }
 }

@@ -177,6 +177,12 @@
   "sfxID": "flail.wav",
   "sfxTiming": 0.55
  },
+ "VideoGameZombieBite": {
+  "animID": 8,
+  "damageTiming": 0.25,
+  "sfxID": "bite.wav",
+  "sfxTiming": 0.25
+ },
  "ZombieBite": {
   "animID": 8,
   "damageMultiplier": 1,

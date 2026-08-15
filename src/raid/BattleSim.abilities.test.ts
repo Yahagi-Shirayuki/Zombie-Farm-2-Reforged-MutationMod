@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { BattleSim, CHARGE_X, type SimUnit } from "./BattleSim";
+import {
+  PIXEL_FIRE_BURN_MS,
+  PIXEL_FIRE_PACE_REACH,
+  PIXEL_ZOMBIE_KEY,
+  PIXEL_ZOMBIE_TAPS,
+} from "./videoGameStage";
 import type { CombatUnit, SummonConfig } from "./types";
 
 function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | "team">): CombatUnit {
@@ -1225,7 +1231,9 @@ describe("enemy cadence and boss hazard damage (ground truth)", () => {
     expect(zombieHits).toBeGreaterThan(enemyHits * 1.8); // ~2× as many enemy swings
   });
 
-  it("pixelFire interrupts ONE zombie for a single frame of burn, not an AoE chip", () => {
+  /** One zombie set alight, stepped only as far as the tick the fire catches on, with a
+   *  boss whose cooldown guarantees it never casts a second time. */
+  const litFire = () => {
     const a = player({ id: "a", hp: 1e6, maxHp: 1e6 });
     const b = unit({ id: "b", sourceKey: "ZombieActorRegularTier1", team: "player", hp: 1e6, maxHp: 1e6 });
     const boss = enemy({ id: "boss", isBoss: true, str: 0, hp: 1e7, maxHp: 1e7 });
@@ -1233,15 +1241,220 @@ describe("enemy cadence and boss hazard damage (ground truth)", () => {
       { name: "pixelFire", weight: 1, castMs: 0, cooldownMs: 1e6, damage: 0 },
     ]);
     onTheLine(sim);
-    for (let i = 0; i < 20; i++) sim.step(50); // 1 s — far longer than the effect lasts
-    const hit = sim.units.filter((u) => u.team === "player" && u.hp < u.maxHp);
-    expect(hit).toHaveLength(1); // single target, never an AoE
-    // Ground truth: `setOnFire` parks the zombie at its OWN position, so the burning state
-    // ticks once and exits — 5 %/s for one 60 fps frame ≈ 0.083 % of max HP. It must NOT
-    // keep burning: a second of exposure costs the same as the first frame.
-    const lost = hit[0].maxHp - hit[0].hp;
-    expect(lost).toBeCloseTo(hit[0].maxHp * 0.05 / 60, 0);
-    expect(lost).toBeLessThan(hit[0].maxHp * 0.001);
+    for (let i = 0; i < 40 && !sim.burningPlayers().length; i++) sim.step(50);
+    return sim;
+  };
+
+  it("pixelFire lights ONE zombie, never the whole line", () => {
+    const sim = litFire();
+    // The single-target pick is ground truth (`ZFFightMan pixelFire` chooses one eligible
+    // zombie); only the burn's DURATION is ours. The source data labels the action AoE and
+    // it has never behaved that way — guard against it drifting back.
+    expect(sim.burningPlayers()).toHaveLength(1);
+    for (let i = 0; i < 40; i++) sim.step(50);
+    const hurt = sim.units.filter((u) => u.team === "player" && u.hp < u.maxHp);
+    expect(hurt).toHaveLength(1);
+  });
+
+  it("pixelFire burns at 5 % of max HP per second for its whole duration", () => {
+    const sim = litFire();
+    const victim = sim.burningPlayers()[0];
+    // The rate is ground truth (`damage: hitPointsTotal/20 × dt`) and is charged against
+    // ELAPSED TIME, not per tick — a 50 ms step and a 16 ms one remove the same HP per
+    // second. So a second of burning costs 5 % of max HP, and the second second costs the
+    // same again: the burn does not ramp, taper, or stop after one frame.
+    const start = victim.hp;
+    for (let i = 0; i < 20; i++) sim.step(50);
+    const firstSecond = start - victim.hp;
+    const mid = victim.hp;
+    for (let i = 0; i < 20; i++) sim.step(50);
+    const secondSecond = mid - victim.hp;
+    expect(firstSecond / victim.maxHp).toBeCloseTo(0.05, 3);
+    expect(secondSecond / firstSecond).toBeCloseTo(1, 2);
+  });
+
+  it("a burning zombie paces on the spot instead of fighting", () => {
+    const sim = litFire();
+    const victim = sim.burningPlayers()[0];
+    const anchor = victim.burnAnchorX;
+    let minX = victim.x;
+    let maxX = victim.x;
+    for (let i = 0; i < 40; i++) {
+      sim.step(50);
+      minX = Math.min(minX, victim.x);
+      maxX = Math.max(maxX, victim.x);
+    }
+    // It goes both ways and stays within reach of where the fire caught it — a panic, not
+    // a retreat and not an advance.
+    expect(minX).toBeLessThan(anchor - 1); // it panics AWAY from the enemy first…
+    expect(maxX).toBeGreaterThan(anchor + 1); // …then swings back past where it started
+    expect(anchor - minX).toBeLessThanOrEqual(PIXEL_FIRE_PACE_REACH + 1);
+    expect(maxX - anchor).toBeLessThanOrEqual(PIXEL_FIRE_PACE_REACH + 1);
+  });
+
+  it("the fire goes out on its own, and a tap puts it out early", () => {
+    const burnTicks = Math.ceil(PIXEL_FIRE_BURN_MS / 50);
+    const alone = litFire();
+    for (let i = 0; i < burnTicks + 2; i++) alone.step(50);
+    expect(alone.burningPlayers()).toHaveLength(0); // ran its course
+
+    const tapped = litFire();
+    const victim = tapped.burningPlayers()[0];
+    for (let i = 0; i < 4; i++) tapped.step(50);
+    const lostBeforeTap = victim.maxHp - victim.hp;
+    expect(tapped.tapFire(victim.id)).toBe(true);
+    expect(tapped.tapFire(victim.id)).toBe(false); // nothing left to put out
+    for (let i = 0; i < burnTicks + 2; i++) tapped.step(50);
+    // Smothered: it stops paying the instant the fire is out, and what it did pay is a
+    // small fraction of the full burn it was on course for.
+    expect(victim.maxHp - victim.hp).toBe(lostBeforeTap);
+    expect(lostBeforeTap).toBeLessThan(
+      victim.maxHp * 0.05 * (PIXEL_FIRE_BURN_MS / 1000) * 0.25
+    );
+  });
+
+  /** A pixel zombie template shaped like the one videoGameStage builds out of
+   *  `VideoGameStageZombieActor`: enormous body, ordinary swing. */
+  const pixelZombie = () =>
+    unit({
+      id: "pixel", sourceKey: PIXEL_ZOMBIE_KEY, team: "enemy",
+      str: 8, dex: 6, con: 10000, hp: 1e6, maxHp: 1e6,
+    });
+
+  /** A fight in which the boss will convert the front zombie on the first tick. */
+  const turnedFight = () => {
+    const a = player({ id: "a", hp: 1e6, maxHp: 1e6 });
+    const b = unit({ id: "b", sourceKey: "ZombieActorRegularTier1", team: "player", hp: 1e6, maxHp: 1e6 });
+    const boss = enemy({ id: "boss", isBoss: true, str: 0, hp: 1e7, maxHp: 1e7 });
+    const sim = new BattleSim(
+      [a, b], [bagMinion(), boss], null, true,
+      [{ name: "turnZombie", weight: 1, castMs: 0, cooldownMs: 1e6, damage: 0 }],
+      undefined, null, null, false, false, false, undefined, null, null, undefined,
+      pixelZombie()
+    );
+    onTheLine(sim);
+    for (let i = 0; i < 40 && !sim.turnedEnemies().length; i++) sim.step(50);
+    return sim;
+  };
+
+  it("turnZombie CONVERTS the front zombie — it does not silently kill it", () => {
+    // The reported bug: this action used to deal the victim its own remaining HP, so a
+    // zombie died on the spot with nothing on screen to explain it, and went home a
+    // permanent casualty. It must never be a death again.
+    const sim = turnedFight();
+    const converted = sim.units.filter((u) => u.team === "player" && u.taken);
+    expect(converted).toHaveLength(1);
+    expect(converted[0].alive).toBe(true); // taken out of the fight, NOT killed
+    expect(sim.units.filter((u) => u.team === "player" && !u.alive)).toHaveLength(0);
+    // …and it counts as a survivor, so the raid does not bill the player for it.
+    expect(sim.outcome().losses).toHaveLength(0);
+    expect(sim.outcome().survivors).toContain(converted[0].id);
+  });
+
+  it("the converted zombie stands up mid-field as a tappable pixel zombie", () => {
+    const sim = turnedFight();
+    const turned = sim.turnedEnemies();
+    expect(turned).toHaveLength(1);
+    expect(turned[0].sourceKey).toBe(PIXEL_ZOMBIE_KEY);
+    expect(turned[0].isSummon).toBe(true); // off the wave budget, like an abductee
+    expect(turned[0].turnedFromId).toBe(
+      sim.units.find((u) => u.team === "player" && u.taken)!.id
+    );
+    // Beamed into the middle of the lane, not queued at the wave's doorway.
+    expect(turned[0].state).toBe("hold");
+    expect(turned[0].x).toBeLessThan(sim.units.find((u) => u.id === "bag")!.x);
+  });
+
+  it("only one pixel zombie stands at a time", () => {
+    const sim = turnedFight();
+    for (let i = 0; i < 400; i++) sim.step(50);
+    expect(sim.turnedEnemies()).toHaveLength(1);
+  });
+
+  it("tapping a pixel zombie apart hands the zombie back", () => {
+    const sim = turnedFight();
+    const turned = sim.turnedEnemies()[0];
+    const captiveId = turned.turnedFromId!;
+    for (let i = 0; i < PIXEL_ZOMBIE_TAPS - 1; i++) {
+      expect(sim.tapTurned(turned.id)).toBe(true);
+      expect(turned.alive).toBe(true); // still standing — the rescue costs the full count
+    }
+    expect(sim.tapTurned(turned.id)).toBe(true);
+    expect(turned.alive).toBe(false);
+    const captive = sim.units.find((u) => u.id === captiveId)!;
+    expect(captive.taken).toBe(false);
+    expect(captive.alive).toBe(true);
+    expect(captive.state).toBe("advance"); // re-enters at the back and walks up again
+    expect(sim.tapTurned(turned.id)).toBe(false); // and it takes no more taps
+  });
+
+  it("a converted zombie is off the lane for every purpose, not just the renderer", () => {
+    // `taken` used to imply the `grabbed` state, because a Beach crab was the only way to
+    // get it — so the lane helpers tested the STATE and that was enough. A converted
+    // zombie keeps whatever state it was in, so each of these would happily have gone on
+    // aiming at a unit that is no longer on the field.
+    const sim = turnedFight();
+    const gone = sim.units.find((u) => u.team === "player" && u.taken)!;
+    const bag = sim.units.find((u) => u.id === "bag")!;
+    // Give the wave a real swing — the punching bag deals nothing by default, so without
+    // this the assertion below cannot fail however wrong the targeting is.
+    bag.damage = 400;
+    bag.cooldownMs = 200;
+    bag.timerMs = 0;
+    // Park the converted zombie right on top of the enemy, where EVERY "front-most" rule
+    // picks it ahead of the rest of the army.
+    gone.x = bag.x;
+    gone.y = bag.y;
+    for (let i = 0; i < 200; i++) {
+      sim.step(50);
+      gone.x = bag.x; // it is off the field; nothing should be moving it back
+      gone.y = bag.y;
+    }
+    expect(gone.hp).toBe(gone.maxHp); // never struck, never thrown at, never shoved
+    expect(gone.stunMs).toBe(0);
+    expect(gone.burnMs).toBe(0);
+    // Control, so this cannot pass vacuously: the converted zombie really is parked where
+    // every front-most rule in the sim would pick it — furthest down the lane, and level
+    // with the enemy that is swinging. It is skipped because it is off the field, not
+    // because it was out of the way. (Removing the `taken` guard from frontMostPlayer
+    // fails the assertion above with this setup.)
+    const rest = sim.units.filter((u) => u.team === "player" && !u.taken && u.alive);
+    expect(rest.length).toBeGreaterThan(0);
+    for (const other of rest) expect(gone.x).toBeGreaterThan(other.x);
+    // …and the boss does not spend its budget converting a zombie it already took.
+    expect(sim.turnedEnemies()).toHaveLength(1);
+  });
+
+  it("hands the captive back however the pixel zombie dies, not just by tapping", () => {
+    // The release lives on the one choke point every death goes through. A captive
+    // stranded by some other damage path would sit `taken` with nothing left able to
+    // free it.
+    const sim = turnedFight();
+    const turned = sim.turnedEnemies()[0];
+    const captiveId = turned.turnedFromId!;
+    // Kill it without going anywhere near tapTurned.
+    turned.hp = 1;
+    sim.tapTurned(turned.id);
+    const captive = sim.units.find((u) => u.id === captiveId)!;
+    expect(turned.alive).toBe(false);
+    expect(captive.taken).toBe(false);
+    expect(captive.state).toBe("advance");
+  });
+
+  it("a pixel zombie left standing never blocks the win", () => {
+    // Its authored body is a million hit points. If clearing it were required, every fight
+    // Zedzox landed a conversion in would run to the four-minute cap.
+    const sim = turnedFight();
+    expect(sim.turnedEnemies()).toHaveLength(1);
+    for (const e of sim.units) {
+      if (e.team === "enemy" && !e.isTurned) { e.alive = false; e.hp = 0; e.state = "dead"; }
+    }
+    sim.step(50);
+    expect(sim.finished).toBe(true);
+    expect(sim.playerWon).toBe(true);
+    // The captive comes home with the rest of the army rather than marching out short.
+    sim.prepareArmyExit();
+    expect(sim.units.filter((u) => u.team === "player" && u.taken)).toHaveLength(0);
   });
 
   it("telekinesis knocks back and stuns but deals NO damage", () => {

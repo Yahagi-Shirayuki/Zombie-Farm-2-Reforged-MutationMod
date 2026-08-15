@@ -208,13 +208,25 @@ NO_MIRROR_TILES = {
 # upgradeable in place, exactly like the storage sheds: each tier costs brains and
 # adds five zombie storage slots. Every tier reuses the base row (same art, same
 # 4x4 footprint) and differs only in key/name/cost/zombieSlots.
+#
+# Prices are per STEP (see object.upgrade in server/src/v3/engine.ts). Every rung
+# costs the SAME 4 brains — the ladder used to ramp 4/6/8/10 and stop, which both
+# priced the late rungs out and left nothing above Mausoleum V. Only the base
+# building is bought (8 brains, from the source row); the rest is a flat climb.
+# KEEP IN SYNC with server/src/objectCatalog.ts (OBJECTS).
 MAUSOLEUM_BASE_SLOTS = 15
+MAUSOLEUM_STEP_COST = 4  # flat brain price of every upgrade rung
 MAUSOLEUM_TIERS = [
-    # key, market name, brain cost, zombie storage slots
-    ("mausoleum4", "Mausoleum II", 4, MAUSOLEUM_BASE_SLOTS + 5),
-    ("mausoleum5", "Mausoleum III", 6, MAUSOLEUM_BASE_SLOTS + 10),
-    ("mausoleum6", "Mausoleum IV", 8, MAUSOLEUM_BASE_SLOTS + 15),
-    ("mausoleum7", "Mausoleum V", 10, MAUSOLEUM_BASE_SLOTS + 20),
+    # key, market name, zombie storage slots (every rung costs MAUSOLEUM_STEP_COST)
+    ("mausoleum4", "Mausoleum II", MAUSOLEUM_BASE_SLOTS + 5),
+    ("mausoleum5", "Mausoleum III", MAUSOLEUM_BASE_SLOTS + 10),
+    ("mausoleum6", "Mausoleum IV", MAUSOLEUM_BASE_SLOTS + 15),
+    ("mausoleum7", "Mausoleum V", MAUSOLEUM_BASE_SLOTS + 20),
+    ("mausoleum8", "Mausoleum VI", MAUSOLEUM_BASE_SLOTS + 25),
+    ("mausoleum9", "Mausoleum VII", MAUSOLEUM_BASE_SLOTS + 30),
+    ("mausoleum10", "Mausoleum VIII", MAUSOLEUM_BASE_SLOTS + 35),
+    ("mausoleum11", "Mausoleum IX", MAUSOLEUM_BASE_SLOTS + 40),
+    ("mausoleum12", "Mausoleum X", MAUSOLEUM_BASE_SLOTS + 45),
 ]
 
 # ---- Extra storage-shed rungs (design override, NOT source data) -------------
@@ -1118,9 +1130,10 @@ def main():
     # the Market offers one at a time above the placed building's capacity.
     base_mausoleum = next((c for c in catalog if c["key"] == "mausoleum3"), None)
     if base_mausoleum:
-        for key, name, cost, slots in MAUSOLEUM_TIERS:
+        for key, name, slots in MAUSOLEUM_TIERS:
             tier = dict(base_mausoleum)
-            tier.update({"key": key, "name": name, "cost": cost, "zombieSlots": slots})
+            tier.update({"key": key, "name": name,
+                         "cost": MAUSOLEUM_STEP_COST, "zombieSlots": slots})
             catalog.append(tier)
 
     # Storage sheds above the source's top rung: clones of the biggest source shed

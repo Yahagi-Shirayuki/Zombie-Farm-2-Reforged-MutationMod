@@ -83,6 +83,41 @@ function wallGatedSim(): BattleSim {
   );
 }
 
+/** A Video-Games-shaped fight: the perched boss immediately converts the front zombie into
+ *  a pixel zombie, and sets another alight. The minion keeps it perched. */
+function zedzoxSim(): BattleSim {
+  const players = Array.from({ length: 3 }, (_, n) => unit(`p${n}`, "player", n));
+  const minion = { ...unit("e0", "enemy", 0), con: 3000, hp: 9000, maxHp: 9000 };
+  const boss = { ...unit("e1", "enemy", 1), isBoss: true, con: 3000, hp: 9000, maxHp: 9000 };
+  const turnedTemplate = {
+    ...unit("pixel", "enemy", 2),
+    sourceKey: "VideoGameStageZombieActor", str: 8, con: 10_000, hp: 1e6, maxHp: 1e6,
+  };
+  return new BattleSim(
+    [...players], [minion, boss], null, true,
+    // A short recovery so BOTH specials get a turn: they share one action budget, so a
+    // boss that casts once and then sits on a long cooldown would only ever show one.
+    [
+      { name: "turnZombie", weight: 100, castMs: 0, cooldownMs: 200, damage: 0 },
+      { name: "pixelFire", weight: 100, castMs: 0, cooldownMs: 200, damage: 0 },
+    ],
+    10 * 60 * 1000, null, null, false, false, false, undefined, null, null, undefined,
+    turnedTemplate
+  );
+}
+
+/** Step on from `from` until the named condition holds, returning the ABSOLUTE tick it was
+ *  first seen on — the same bookkeeping RaidScene does (`simTick` counts completed steps,
+ *  and a transcript's ticks are coordinates in that one timeline, so a caller looking for
+ *  two things in sequence must not restart the count for the second). */
+function stepUntil(sim: BattleSim, from: number, ready: () => boolean, what: string): number {
+  for (let tick = from; tick < from + 400; tick++) {
+    if (ready()) return tick;
+    sim.step(RAID_TICK_MS);
+  }
+  throw new Error(`never saw ${what}`);
+}
+
 /** Step until the boss's wall stands, returning its id and the tick it was tapped on —
  *  the same bookkeeping RaidScene does (`simTick` counts completed steps). */
 function tapWallOnFirstSight(sim: BattleSim): { unitId: string; tick: number } {
@@ -150,6 +185,57 @@ describe("deterministic raid replay", () => {
     expect(untranscribed.units.find((u) => u.id === tap.unitId)!.hp).toBe(1500);
   });
 
+
+  it("carries a smothered fire and a chipped pixel zombie to the verifier", () => {
+    // Both taps move the SERVER's fight too, so both have to survive the transcript. An
+    // untranscribed one is the ruleset-14 wall desync all over again: the two simulations
+    // disagree about a zombie's HP (or a hazard's) for the rest of the fight.
+    const client = zedzoxSim();
+    const inputs: RaidReplayInput[] = [];
+    let seq = 0;
+
+    const fireTick = stepUntil(client, 0, () => client.burningPlayers().length > 0, "a fire");
+    const burning = client.burningPlayers()[0];
+    expect(client.tapFire(burning.id)).toBe(true);
+    inputs.push({ seq: ++seq, tick: fireTick, type: "fireTap", unitId: burning.id });
+
+    const turnTick = stepUntil(client, fireTick, () => client.turnedEnemies().length > 0, "a conversion");
+    const pixel = client.turnedEnemies()[0];
+    expect(client.tapTurned(pixel.id)).toBe(true);
+    inputs.push({ seq: ++seq, tick: turnTick, type: "turnedTap", unitId: pixel.id });
+
+    const clientBurnHp = burning.hp;
+    const clientPixelHp = pixel.hp;
+    expect(clientPixelHp).toBeLessThan(pixel.maxHp); // the tap actually chipped it
+
+    const server = zedzoxSim();
+    const replayed = advanceRaidSegment(server, 0, turnTick + 1, 0, inputs, false);
+    expect(replayed.ok).toBe(true);
+    expect(server.units.find((u) => u.id === burning.id)!.hp).toBe(clientBurnHp);
+    expect(server.units.find((u) => u.id === pixel.id)!.hp).toBe(clientPixelHp);
+
+    // Without the transcript the server burns the zombie it should have stopped burning
+    // and leaves the pixel zombie untouched.
+    const untranscribed = zedzoxSim();
+    expect(advanceRaidSegment(untranscribed, 0, turnTick + 1, 0, [], false).ok).toBe(true);
+    expect(untranscribed.units.find((u) => u.id === burning.id)!.hp).toBeLessThan(clientBurnHp);
+    expect(untranscribed.units.find((u) => u.id === pixel.id)!.hp).toBe(pixel.maxHp);
+  });
+
+  it("refuses a fire or pixel-zombie tap aimed at the wrong unit", () => {
+    expect(replayRaid(worstCaseSim(), 1, [{ seq: 1, tick: 0, type: "fireTap" } as never]))
+      .toMatchObject({ error: "illegal_fire_tap" });
+    expect(replayRaid(worstCaseSim(), 1, [{ seq: 1, tick: 0, type: "turnedTap" } as never]))
+      .toMatchObject({ error: "illegal_turned_tap" });
+    // A well-formed id that names no burning zombie / no pixel zombie is REFUSED, not
+    // obeyed: neither tap can be pointed at an ordinary unit to damage it.
+    const refused = replayRaid(worstCaseSim(), 1, [
+      { seq: 1, tick: 0, type: "fireTap", unitId: "p0" },
+      { seq: 2, tick: 0, type: "turnedTap", unitId: "e0" },
+    ]);
+    expect(refused).toMatchObject({ ok: true });
+    if (refused.ok) expect(refused.divergence.refusedInputs).toBe(2);
+  });
 
   it("verifies a WON fight whose wall the player tapped down", () => {
     // Play it the way a real player does: mash the blocker every frame it stands.

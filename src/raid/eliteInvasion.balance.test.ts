@@ -27,6 +27,7 @@ import { bossThrowIntervalSecs, fightStage, resolveStageWave, seededRandom } fro
 import { eliteBossSpecials, eliteBossThrow, eliteProfile, eliteWallHp, ELITE_PROFILES } from "./eliteInvasion";
 import { RAID_MAX_TICKS, RAID_TICK_MS } from "./replay";
 import { summonConfigFor, waveCadenceFor } from "./alienStage";
+import { turnedUnitFor } from "./videoGameStage";
 import { makeOwned } from "../zombie/types";
 import type { AttackDef, BossSpecial, BossThrowConfig, CombatUnit, EnemyStat, RaidDef, RaidStage } from "./types";
 
@@ -86,6 +87,18 @@ function wallOf(stage: RaidStage, elite: boolean, raidId: number): CombatUnit | 
   };
 }
 
+/** The pixel zombie Zedzox's `turnZombie` converts a zombie into. Without this the stick
+ *  would measure the Video Games invasion with its signature special disabled — the action
+ *  is a no-op when the sim has nothing to stand up — and quietly report the wrong number
+ *  for the raid three elite profiles are pinned to. */
+function turnedOf(stage: RaidStage, elite: boolean, raidId: number): CombatUnit | null {
+  if (!stage.bossKey || stage.throwingDisabled) return null;
+  if (!(enemyStats[stage.bossKey]?.bossActions ?? []).some((a) => a.name === "turnZombie")) return null;
+  return turnedUnitFor(raidId, enemyStats, attacks, {
+    raidId, playerLevel: 45, elite: eliteProfile(raidId, elite),
+  });
+}
+
 interface Result { win: boolean; losses: number; secs: number; timedOut: boolean }
 
 function fight(raid: RaidDef, elite: boolean, size: number, power: number, seed = 0): Result {
@@ -107,7 +120,8 @@ function fight(raid: RaidDef, elite: boolean, size: number, power: number, seed 
     summon,
     wallOf(stage, elite, raid.id),
     false, false, false, undefined, null, null,
-    waveCadenceFor(raid.id)
+    waveCadenceFor(raid.id),
+    turnedOf(stage, elite, raid.id)
   );
   let ticks = 0;
   while (!sim.finished && ticks < RAID_MAX_TICKS) {
@@ -171,14 +185,16 @@ describe("elite invasion balance", () => {
       // A Brain Ticket is never a rounding error.
       expect(p[id].elite / p[id].normal, byId(id).name).toBeGreaterThan(1.15);
     }
-    // Every invasion except the Video Games gets at least half again as much army
-    // demanded of it. The Video Games are the exception BY CONSTRUCTION: they are
-    // already the hardest fight in the game by a distance, they share the top tier with
-    // the Robots and the Aliens, and the ceiling above them is thin — a measuring-stick
-    // army stops winning not far past where their elite profile already puts them. Their
-    // step is about 1.2x and there is nowhere else for it to go; what a Brain Ticket buys
-    // on this raid is the brains, not a different fight.
-    for (const id of ALL.filter((raidId) => raidId !== 9)) {
+    // EVERY invasion gets at least half again as much army demanded of it — the Video
+    // Games included, which they were not until ruleset 31. They used to be exempted
+    // here, because their ORDINARY fight measured 2.11-2.72 and there was no headroom
+    // left to put an elite step into; what a Brain Ticket bought on that raid was the
+    // brains, not a different fight. That difficulty turned out to be `turnZombie`
+    // deleting a front zombie outright (see BattleSim), and with the conversion in place
+    // the raid has room for a real step again. The exemption is gone deliberately: if
+    // this line starts failing on raid 9, the question to ask is whether something has
+    // put the ordinary fight back up near the ceiling.
+    for (const id of ALL) {
       expect(p[id].elite / p[id].normal, byId(id).name).toBeGreaterThan(1.5);
     }
   });
@@ -202,13 +218,31 @@ describe("elite invasion balance", () => {
     }
   });
 
-  it("lands the three hardest invasions in one band, above the Video Games", () => {
-    const top = [5, 6, 9].map((id) => p[id].elite);
-    // A band, not a point: the Video Games sit at the top of it because their own
-    // baseline is the highest on the ladder and nothing can be pushed past them.
-    expect(Math.max(...top) / Math.min(...top)).toBeLessThan(1.4);
-    // …and all three are a real step past the hardest ordinary invasion.
-    for (const value of top) expect(value).toBeGreaterThan(p[9].normal * 0.85);
+  it("climbs the late elite invasions as a ramp, topping out on the Video Games", () => {
+    // The five late invasions are a RAMP, not a band (see eliteInvasion.ts): each one's
+    // elite fight is a step harder than the one unlocked before it, so a player working
+    // up the ladder meets a Brain Ticket fight that keeps getting harder, and the last
+    // invasion they unlock is the hardest elite fight in the game.
+    //
+    // This replaces a "three hardest share one band" assertion. That band existed only
+    // because the Video Games' ordinary fight was a cliff (the `turnZombie` instant kill)
+    // with no headroom above it to ramp into; there is headroom now.
+    const RAMP = [3, 4, 5, 6, 9]; // Pirates → Ninjas → Robots → Aliens → Video Games
+    const rungs = RAMP.map((id) => p[id].elite);
+    for (let i = 1; i < rungs.length; i++) {
+      expect(rungs[i], `${byId(RAMP[i]).name} above ${byId(RAMP[i - 1]).name}`)
+        .toBeGreaterThan(rungs[i - 1]);
+    }
+    // …and a SMOOTH climb, not a flat run with one cliff in it: no single step may be
+    // more than half the whole ramp's rise. This is the assertion that would have caught
+    // the old shape, where four raids sat together and the fifth was miles above.
+    const rise = rungs[rungs.length - 1] - rungs[0];
+    for (let i = 1; i < rungs.length; i++) {
+      expect(rungs[i] - rungs[i - 1], `step ${RAMP[i - 1]}→${RAMP[i]}`).toBeLessThan(rise * 0.5);
+    }
+    // The top of the ramp is a real step past the hardest ORDINARY invasion, which is the
+    // same raid: a Brain Ticket there has to change the fight, not just the drops.
+    expect(rungs[rungs.length - 1]).toBeGreaterThan(p[9].normal * 1.3);
   });
 
   it("gives Old McDonnell's elite wave the bulk of an ordinary Pirates invasion", () => {

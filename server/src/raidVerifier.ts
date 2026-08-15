@@ -28,6 +28,7 @@ import type {
   WaveCadence,
 } from "../../src/raid/types";
 import { summonConfigFor, waveCadenceFor } from "../../src/raid/alienStage";
+import { turnedUnitFor } from "../../src/raid/videoGameStage";
 import {
   eliteBossSpecials,
   eliteBossThrow,
@@ -62,6 +63,10 @@ export interface PinnedRaidConfig {
    *  settled session still replays under the cadence it was actually fought at. */
   waveCadence: WaveCadence;
   wallTemplate: CombatUnit | null;
+  /** The pixel zombie `turnZombie` converts a zombie into (raid 9 only) — see
+   *  src/raid/videoGameStage.ts. Optional so a session pinned before the conversion
+   *  existed still parses; such a session is rejected at the ruleset handshake anyway. */
+  turnedTemplate?: CombatUnit | null;
   grabber: GrabberConfig | null;
   concentration: boolean;
   /** A Brain Ticket was charged at /raid/start: every combat value above is already
@@ -131,9 +136,10 @@ function bossSpecialsOf(stage: RaidStage, elite: EliteProfile | null): BossSpeci
   );
 }
 
-// Mirrors RaidManager.summonConfigOf + wallTemplateOf. Both sides must build the same
-// abductee roster off the same elite/level context or the replay diverges the first time
-// the alien boss casts. `raidId`/`playerLevel` are the pair buildEnemyUnits also needs.
+// Mirrors RaidManager.summonConfigOf + wallTemplateOf + turnedTemplateOf. Both sides must
+// build the same abductee roster, wall and pixel zombie off the same elite/level context,
+// or the replay diverges the first time the boss casts. `raidId`/`playerLevel` are the
+// pair buildEnemyUnits also needs.
 function summonWallTemplates(
   stage: RaidStage,
   raidId: number,
@@ -142,10 +148,12 @@ function summonWallTemplates(
 ): {
   summon: SummonConfig | null;
   wallTemplate: CombatUnit | null;
+  turnedTemplate: CombatUnit | null;
 } {
   let summon: SummonConfig | null = null;
   let wallTemplate: CombatUnit | null = null;
-  if (!stage.bossKey || stage.throwingDisabled) return { summon, wallTemplate };
+  let turnedTemplate: CombatUnit | null = null;
+  if (!stage.bossKey || stage.throwingDisabled) return { summon, wallTemplate, turnedTemplate };
   const actions = enemyStats[stage.bossKey]?.bossActions ?? [];
   if (actions.some((a) => a.name === "summonBoss")) {
     summon = summonConfigFor(raidId, enemyStats, attacks, { raidId, playerLevel, elite });
@@ -173,7 +181,10 @@ function summonWallTemplates(
       abilities: [],
     };
   }
-  return { summon, wallTemplate };
+  if (actions.some((a) => a.name === "turnZombie")) {
+    turnedTemplate = turnedUnitFor(raidId, enemyStats, attacks, { raidId, playerLevel, elite });
+  }
+  return { summon, wallTemplate, turnedTemplate };
 }
 
 export type BuildPinnedResult =
@@ -290,7 +301,8 @@ export function createPinnedSim(config: PinnedRaidConfig): BattleSim {
     undefined,
     config.grabber ?? null,
     null,
-    config.waveCadence ?? waveCadenceFor(config.raidId)
+    config.waveCadence ?? waveCadenceFor(config.raidId),
+    config.turnedTemplate ?? null
   );
 }
 

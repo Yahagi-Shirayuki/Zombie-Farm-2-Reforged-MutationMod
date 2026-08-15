@@ -26,7 +26,7 @@ Please give a reasonable window before disclosing publicly.
 ## Scope and status
 
 This document describes the current source tree at gameplay protocol v3 (client integrity
-version 5, raid ruleset version 30). It covers authentication, sessions, the exclusive writer
+version 5, raid ruleset version 31). It covers authentication, sessions, the exclusive writer
 lease, social features, gameplay commands, persistence, economy, farms, quests, raids, Epic
 Boss runs, the Black Market, rate limiting, and operational controls.
 
@@ -157,9 +157,9 @@ the README in the same change.
   (`buildPinnedV3Raid`): player/enemy units, boss throw/specials, summon and wall templates,
   and concentration. The pinned config and `ruleset_version` are stored on the session
   (migrations `0016`, `0017`, `0027`). The config still carries a `grabber` field, but since
-  ruleset 6 (current version 30) `raidVerifier.grabberOf` returns `null` unconditionally — hazards are client-only
+  ruleset 6 (current version 31) `raidVerifier.grabberOf` returns `null` unconditionally — hazards are client-only
   and are not simulated server-side at all.
-- `/raid/finish` requires a matching `rulesetVersion` (`RAID_RULESET_VERSION = 30`; a mismatch
+- `/raid/finish` requires a matching `rulesetVersion` (`RAID_RULESET_VERSION = 31`; a mismatch
   returns `409 stale_ruleset` and closes the session), rejects a `finalTick` beyond the paced
   elapsed real time (`future_finish`), then **replays** the pinned sim with the submitted input
   transcript and derives `win`/`survivors`/`losses`/`retreated`, subject to the one-way
@@ -344,9 +344,12 @@ a client-claimed win plus the `stale_ruleset` gate (`server/test/integration/v3.
 `raidGates.spec.ts`), the `/raid/finish` elapsed-time gate refusing a finish paced past real
 time, a body-asserted win paying nothing and moving no balance, and a duplicate finish replaying
 the stored result rather than settling twice (all `raidGates.spec.ts`), a server-only roster-cull
-rejection (`roster.spec.ts`), and writer-lease takeover/replacement (`v3.spec.ts`). Client and
-server boost economics are held together by `server/test/boostCatalogSync.test.ts`, so a level
-gate cannot again be enforced on the client alone. Passing tests do not by themselves certify the
+rejection (`roster.spec.ts`), and writer-lease takeover/replacement (`v3.spec.ts`). Every server catalog that
+mirrors a client asset is now held to it by a test — `boostCatalogSync`, `raidCatalogSync`
+(rewards, unlock gates and loot tables), `shopCatalogSync`, `objectCatalogSync` and
+`farm.test.ts`, with `rosterCatalog` / `zombieCropCatalog` / `questCatalog` derived from their
+asset at load and so unable to drift. A price or level gate can no longer be enforced on the
+client alone, which is how the Brain Ticket's level-20 gate came to be advisory. Passing tests do not by themselves certify the
 production deployment; confirm the live commit and remote D1 schema per the rollout doc.
 
 **What the integration run does not cover.** `vitest.integration.config.ts` runs every

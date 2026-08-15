@@ -4548,13 +4548,24 @@ async function main() {
     // resolved setup rather than the raid's data flags — raids 2/10/11 declare a grab
     // or an obstacle they have no implementation for, and the wall is per-STAGE, so
     // only this tells us a hazard will really show up.
-    if (!hasSeenHazardTip() && (setup.grabber || setup.crab || setup.wallTemplate)) {
+    // Zedzox's fire and his pixel zombies are the same kind of thing — something on the
+    // field you answer with your finger rather than with the army — so they belong to the
+    // same tip. They read differently enough to be worth their own words, though: nothing
+    // gets grabbed and nothing blocks the lane, and a player told to expect that would be
+    // waiting for the wrong thing. `turnedTemplate` is the tell (only raid 9 has one).
+    const tapHazard = setup.grabber || setup.crab || setup.wallTemplate || setup.turnedTemplate;
+    if (!hasSeenHazardTip() && tapHazard) {
       markHazardTipSeen();
       const verb = isTouch() ? "Tap" : "Click";
       await hud.timSays(
-        "Careful now — this invasion's got HAZARDS. They'll grab your zombies\n" +
-        `right off the field, or block the way forward.\n${verb} one to damage it — ` +
-        "keep at it and it'll go away!"
+        setup.turnedTemplate
+          ? "Careful now — this one FIGHTS DIRTY. He'll set your zombies alight,\n" +
+            "and he'll turn one right around against you.\n" +
+            `${verb} the fire to beat it out, and ${verb.toLowerCase()} the pixel one\n` +
+            "till it breaks — that's how you get your zombie back!"
+          : "Careful now — this invasion's got HAZARDS. They'll grab your zombies\n" +
+            `right off the field, or block the way forward.\n${verb} one to damage it — ` +
+            "keep at it and it'll go away!"
       );
     }
     // Some invasions run on a rule nothing on the battlefield states — the Pirates'
@@ -4583,6 +4594,7 @@ async function main() {
       summon: setup.summon,
       waveCadence: setup.waveCadence,
       wallTemplate: setup.wallTemplate,
+      turnedTemplate: setup.turnedTemplate,
       brainDrop: setup.brainDrop,
       concentration: setup.concentration,
       onStrike: (strike) => audio.fightStrike(strike),

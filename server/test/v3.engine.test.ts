@@ -1620,7 +1620,7 @@ describe("protocol v3 command engine", () => {
       .toMatchObject({ status: "rejected", error: "storage_full" });
   });
 
-  // ---- Mausoleum upgrade ladder (mausoleum3 -> 4 -> 5 -> 6 -> 7, +5 slots each) ----
+  // ---- Mausoleum upgrade ladder (mausoleum3 -> 4 -> ... -> 12, +5 slots each) ----
   const withMausoleum = (catalogKey: string): MutableGameplayState => {
     const state = freshGameplayState();
     state.balance.brains = 100;
@@ -1640,14 +1640,28 @@ describe("protocol v3 command engine", () => {
     );
     expect(result.state.balance.brains).toBe(96);
 
-    // ...and the rungs above cost 6, 8, then 10 brains.
+    // ...and every rung above costs the same 4: 96 - 12 = 84.
     const rest = applyCommandBatch(result.state, commands(
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum5" },
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum6" },
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum7" },
     ), { now: 2 });
     expect(rest.results.map((r) => r.status)).toEqual(["applied", "applied", "applied"]);
-    expect(rest.state.balance.brains).toBe(72);
+    expect(rest.state.balance.brains).toBe(84);
+
+    // The ladder runs five rungs further, at the same price, to Mausoleum X.
+    const top = applyCommandBatch(rest.state, commands(
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum8" },
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum9" },
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum10" },
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum11" },
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum12" },
+    ), { now: 3 });
+    expect(top.results.map((r) => r.status)).toEqual(Array(5).fill("applied"));
+    expect(top.state.balance.brains).toBe(64); // 84 - 5 rungs x 4
+    expect(top.state.objects.objects).toContainEqual(
+      expect.objectContaining({ instanceId: "tomb", catalogKey: "mausoleum12" })
+    );
   });
 
   it("refuses to skip a rung, to climb from a non-Mausoleum, or to buy a tier outright", () => {
@@ -1657,8 +1671,9 @@ describe("protocol v3 command engine", () => {
     expect(skipped.results[0]).toMatchObject({ status: "rejected", error: "bad_tier" });
     expect(skipped.state.balance.brains).toBe(100);
 
-    const topped = applyCommandBatch(withMausoleum("mausoleum7"), commands(
-      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum7" },
+    // Nothing sits above Mausoleum X, so the top rung has no upgrade of its own.
+    const topped = applyCommandBatch(withMausoleum("mausoleum12"), commands(
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum12" },
     ), { now: 1 });
     expect(topped.results[0]).toMatchObject({ status: "rejected", error: "bad_tier" });
 

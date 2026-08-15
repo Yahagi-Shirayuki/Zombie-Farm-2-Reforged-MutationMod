@@ -28,13 +28,20 @@ const withMausoleum = (tier?: PlaceableDef, stored = 0) => {
 };
 
 describe("Mausoleum upgrade ladder", () => {
-  it("ships five tiers, each adding five slots for brains", () => {
+  it("ships ten tiers, each adding five slots for brains", () => {
+    // Only the base building is bought (8 brains); every rung above it costs the
+    // same flat 4, so the ladder never prices itself out of reach.
     expect(tombs.map((tier) => [tier.key, tier.cost, tier.zombieSlots])).toEqual([
       ["mausoleum3", 8, 15],
       ["mausoleum4", 4, 20],
-      ["mausoleum5", 6, 25],
-      ["mausoleum6", 8, 30],
-      ["mausoleum7", 10, 35],
+      ["mausoleum5", 4, 25],
+      ["mausoleum6", 4, 30],
+      ["mausoleum7", 4, 35],
+      ["mausoleum8", 4, 40],
+      ["mausoleum9", 4, 45],
+      ["mausoleum10", 4, 50],
+      ["mausoleum11", 4, 55],
+      ["mausoleum12", 4, 60],
     ]);
     // Every tier is a brain-priced functional building sharing the base art, so an
     // upgrade swaps capacity in place without changing how the farm looks.
@@ -51,6 +58,7 @@ describe("Mausoleum upgrade ladder", () => {
     expect(withMausoleum(tombs[0]).mausoleumCap).toBe(15);
     expect(withMausoleum(tombs[1]).mausoleumCap).toBe(20);
     expect(withMausoleum(tombs[4]).mausoleumCap).toBe(35);
+    expect(withMausoleum(tombs[tombs.length - 1]).mausoleumCap).toBe(60);
   });
 
   it("frees five more slots as soon as the building is upgraded", () => {

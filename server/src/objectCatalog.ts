@@ -272,11 +272,19 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "loveShack": { cost: 0, brains: false, xp: 0, level: -1 },
   "luckPlant": { cost: 1000, brains: false, xp: 10, level: 1 },
   "mailboxNormal": { cost: 950, brains: false, xp: 9, level: 8 },
+  // Only mausoleum3 is BOUGHT; every tier above it is an object.upgrade rung, and
+  // all nine rungs cost the same flat 4 brains. See MAUSOLEUM_TIERS in
+  // tools/prep_placeables.py, which authors the same numbers into the asset.
   "mausoleum3": { cost: 8, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum4": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
-  "mausoleum5": { cost: 6, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
-  "mausoleum6": { cost: 8, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
-  "mausoleum7": { cost: 10, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum5": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum6": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum7": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum8": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum9": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum10": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum11": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum12": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   // Deliberately NO purchaseLimit despite being `functional`: one statue remembers
   // one zombie, so the farm needs as many as the player has lost.
   "memorialStatue": { cost: 3000, brains: false, xp: 30, level: 1 },

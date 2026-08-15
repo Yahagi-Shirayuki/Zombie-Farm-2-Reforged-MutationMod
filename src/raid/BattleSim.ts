@@ -40,12 +40,17 @@ import {
   deriveAttackIntervalMs,
   deriveHitDamage,
   deriveMaxHp,
-  SOURCE_FRAME_SEC,
   lineupDamageBand,
   lineupSpeedBand,
   mirroredAttackIntervalSec,
   POWER_PER_STR,
 } from "./combatStats";
+import {
+  PIXEL_FIRE_BURN_MS,
+  PIXEL_FIRE_PACE_REACH,
+  PIXEL_FIRE_PACE_SPEED,
+  PIXEL_ZOMBIE_TAPS,
+} from "./videoGameStage";
 
 /** Logical field the sim runs in; RaidScene scales this to the viewport. */
 export const FIELD_W = 1000;
@@ -530,6 +535,23 @@ export interface SimUnit {
    *  counts toward the wave nor holds the boss on its perch. Without that exclusion an
    *  uncapped summon would deadlock the descent. */
   isSummon: boolean;
+  /** A pixel zombie Zedzox's `turnZombie` made out of one of YOUR zombies (raid 9). It
+   *  rides the `isSummon` machinery — stationary mid-lane blocker, off the wave budget —
+   *  and additionally does NOT gate the win (see anyAlive): its authored body is a
+   *  million hit points, so a fight that had to kill it could never end. */
+  isTurned: boolean;
+  /** Id of the player zombie this pixel zombie was made from. Tapping it apart hands that
+   *  zombie back (see tapTurned), which is the whole reason the taps are worth spending. */
+  turnedFromId: string | null;
+  /** Ms of `pixelFire` left to burn. While > 0 the zombie panics: no attacks, no advance,
+   *  pacing on the spot, losing BURN_MAX_HP_FRACTION_PER_SEC of max HP a second, until it
+   *  runs out or the player taps the fire out. */
+  burnMs: number;
+  /** Which way the panic pace is currently heading (+1 / −1) and how far it has strayed
+   *  from where the fire caught it. Kept on the unit so the pacing survives a checkpoint
+   *  rather than restarting from the snapshot's position. */
+  burnDir: 1 | -1;
+  burnAnchorX: number;
   passedWall: boolean; // latched when already beyond a newly summoned wall
   /** Carried off the field by a Beach crab: still ALIVE (it comes home after the raid —
    *  source state 38 is not the death path) but out of this fight, so it counts as a
@@ -758,6 +780,11 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     attackDamageTiming: u.attackDamageTiming ?? 0.5,
     isWall: false,
     isSummon: false,
+    isTurned: false,
+    turnedFromId: null,
+    burnMs: 0,
+    burnDir: 1,
+    burnAnchorX: home.x,
     passedWall: false,
     taken: false,
     mirrorsOpponentSpeed: !isPlayer && !!u.mirrorsOpponentSpeed,
@@ -822,6 +849,8 @@ export class BattleSim {
   /** `bossSummonList`, by source key. Popped from the front, pushed on the back. */
   private summonQueue: string[] = [];
   private wallTemplate: CombatUnit | null;
+  /** The pixel zombie `turnZombie` stands up (null = this boss can't turn anyone). */
+  private turnedTemplate: CombatUnit | null;
   private spawnSeq = 0;
   // ---- wave cadence (see types.WaveCadence) ----
   private cadence: WaveCadence;
@@ -876,7 +905,10 @@ export class BattleSim {
     crab: CrabConfig | null = null,
     /** How this stage feeds its wave in. Only Zombies vs Aliens departs from the
      *  one-at-a-time default; see types.WaveCadence. */
-    cadence: WaveCadence = SOLO_WAVE
+    cadence: WaveCadence = SOLO_WAVE,
+    /** The pixel zombie the Video Games boss's `turnZombie` converts a zombie INTO
+     *  (null = this boss can't turn anyone). See raid/videoGameStage.ts. */
+    turnedTemplate: CombatUnit | null = null
   ) {
     this.engageDistance = Math.max(ENGAGE, Math.min(300, engageDistance));
     this.grabberCfg = grabber;
@@ -926,6 +958,7 @@ export class BattleSim {
     this.summonCfg = this.boss ? summonCfg : null;
     this.summonQueue = this.summonCfg ? this.summonCfg.queue.map((u) => u.sourceKey) : [];
     this.wallTemplate = this.boss ? wallTemplate : null;
+    this.turnedTemplate = this.boss ? turnedTemplate : null;
     this.cadence = {
       maxActive: Math.max(1, Math.round(cadence.maxActive)),
       dripMs: Math.max(0, Math.round(cadence.dripMs)),
@@ -1008,6 +1041,15 @@ export class BattleSim {
       knockBackSpeed: u.knockBackSpeed ?? 0,
       passedWall: u.passedWall ?? false,
       isSummon: u.isSummon ?? false,
+      // A checkpoint from before the conversion / burn can only exist on a ruleset the
+      // session handshake already rejects, so these defaults are belt-and-braces: they
+      // restore a fight in which nobody is on fire and nobody has been turned, which is
+      // exactly what such a snapshot described.
+      isTurned: u.isTurned ?? false,
+      turnedFromId: u.turnedFromId ?? null,
+      burnMs: u.burnMs ?? 0,
+      burnDir: u.burnDir ?? 1,
+      burnAnchorX: u.burnAnchorX ?? u.x,
       knockBackChance: u.knockBackChance ?? (u.knockBack ? 1 : 0),
       stunChance: u.stunChance ?? (u.stunInflictMs > 0 ? 1 : 0),
       mirrorsOpponentSpeed: u.mirrorsOpponentSpeed ?? false,
@@ -1386,6 +1428,11 @@ export class BattleSim {
     if (ab.aoe) {
       for (const e of this.enemies) {
         if (!e.alive || e.state === "queued" || e.state === "structure" || e.state === "descending") continue;
+        // A converted pixel zombie is not a target for the army's damage, by blast any
+        // more than by melee (see targetEnemy). It is one of YOUR zombies with a million
+        // hit points, answerable only to taps; letting a blast chip it would put ability
+        // kills and `playerDamage` against a unit the army is not supposed to be fighting.
+        if (e.isTurned) continue;
         if (e.isBoss && !ab.hitBoss && (key === "explode" || key === "explodeV2")) continue;
         this.recordAbilityKill(key, e, () => this.dealDamage(e, dmg, true));
         if (ab.stunMs) e.stunMs = Math.max(e.stunMs, ab.stunMs);
@@ -1554,7 +1601,7 @@ export class BattleSim {
     let bestD = Infinity;
     for (const e of this.enemies) {
       if (!e.alive || e.state === "queued" || e.state === "structure" || e.state === "descending" ||
-          e.state === "falling" || e.state === "landing" || e.isWall) continue;
+          e.state === "falling" || e.state === "landing" || e.isWall || e.isTurned) continue;
       const d = Math.abs(e.x - u.x);
       if (d < bestD) {
         bestD = d;
@@ -1570,10 +1617,22 @@ export class BattleSim {
    *  were already beyond the spawn point from turning around to attack it.
    *
    *  The two can never be on the field together — only the Ninja and Robot bosses build
-   *  walls and only the alien boss summons — so they share the one `passedWall` latch. */
+   *  walls and only the alien boss summons — so they share the one `passedWall` latch.
+   *
+   *  A converted PIXEL ZOMBIE is pointedly NOT one of these, even though it rides the same
+   *  `isSummon` flag for spawning and budget. It is not a blocker and not a melee target
+   *  (see targetEnemy): the army walks straight past it and ignores it. It has to be that
+   *  way round. Its body is a million hit points, so a lane it barred would be barred for
+   *  the whole fight and every conversion would be an automatic loss — measured, exactly
+   *  that: with it blocking, a MAXED roster could not clear the Video Games invasion at
+   *  all. Making it a target instead of a blocker is no better; the army would simply pour
+   *  four minutes of damage into it. So it is a hazard rather than an enemy: it stands
+   *  where it lands, swings at whatever files past, and answers only to taps. */
   private wallInWay(u: SimUnit): SimUnit | null {
     if (u.passedWall) return null;
-    return this.enemies.find((e) => e.alive && (e.isWall || e.isSummon) && u.x <= e.x + 0.5) ?? null;
+    return this.enemies.find(
+      (e) => e.alive && (e.isWall || e.isSummon) && !e.isTurned && u.x <= e.x + 0.5
+    ) ?? null;
   }
 
   /** How close a zombie gets to a blocker before trading blows with it. */
@@ -1632,7 +1691,13 @@ export class BattleSim {
   private frontMostPlayer(pick: (p: SimUnit) => boolean): SimUnit | null {
     let best: SimUnit | null = null;
     for (const p of this.players) {
-      if (!p.alive || p.state === "grabbed") continue; // seized zombies are off the lane
+      // Off the lane: seized by a trapeze, or carried out of the fight entirely (a crab's
+      // passenger, a zombie Zedzox has turned). `taken` used to imply the `grabbed` state
+      // — the crab was the only way to get it — so testing the state alone was enough.
+      // `turnZombie` broke that: a converted zombie keeps whatever state it was in, so it
+      // has to be excluded by the flag or the enemy team keeps aiming at a unit that is
+      // not on the field.
+      if (!p.alive || p.taken || p.state === "grabbed") continue;
       if (!pick(p)) continue;
       if (
         !best ||
@@ -1653,7 +1718,7 @@ export class BattleSim {
    *  lane. The lead (see leadVelocity) is applied at launch. */
   private throwTarget(): SimUnit | null {
     const deployed = this.players.filter(
-      (p) => p.alive && (p.state === "advance" || p.state === "fight")
+      (p) => p.alive && !p.taken && (p.state === "advance" || p.state === "fight")
     );
     if (!deployed.length) return null;
     return deployed.reduce((a, b) => (b.x < a.x ? b : a));
@@ -1697,9 +1762,16 @@ export class BattleSim {
   }
 
   /** Can this side still fight? A zombie carried off by a crab is still ALIVE (it returns
-   *  after the raid) but is out of the battle, so it must not keep a lost fight running. */
+   *  after the raid) but is out of the battle, so it must not keep a lost fight running.
+   *
+   *  A converted PIXEL ZOMBIE is excluded for a different reason: its authored body is a
+   *  million hit points (con 10000), so a win condition that had to kill it could never be
+   *  met — the fight would run to the four-minute cap every time Zedzox landed one. It is
+   *  a hazard standing on the field, not a member of the wave, and it dies to taps rather
+   *  than to the army. Clearing the wave and the boss therefore still wins; a zombie still
+   *  captive at that point comes home the same way a crab's passenger does. */
   private anyAlive(side: SimUnit[]): boolean {
-    return side.some((u) => u.alive && !u.taken);
+    return side.some((u) => u.alive && !u.taken && !u.isTurned);
   }
 
   /** Replay-safe equivalent of `(arc4random() % 100)`. Multiplication by 37
@@ -1900,6 +1972,14 @@ export class BattleSim {
       this.fallen.push(foe.id);
       return;
     }
+    // A pixel zombie broken open hands its captive back. Done HERE rather than in
+    // `tapTurned` so it cannot be bypassed: this is the one choke point every death goes
+    // through, and a captive stranded by some other damage path would sit `taken` with
+    // nothing left on the field able to release it.
+    if (foe.isTurned) {
+      this.releaseTurned(foe);
+      return; // …and it is not wave population, so it does not gate the next emergence.
+    }
     // Only an enemy reaches here. A downed one opens the gate for the next to emerge.
     if (fromPlayer) this.emergeCooldown = ENEMY_EMERGE_GAP_MS;
   }
@@ -1923,6 +2003,7 @@ export class BattleSim {
     defeated.windupKey = null;
     defeated.windupMs = 0;
     defeated.stunMs = 0;
+    defeated.burnMs = 0; // whatever it died of, it does not come back still alight
     defeated.oneShotProtectionUsed = false;
     // GROUND TRUTH (`-[ZombieActorGarden ressurectZombie:]` 0x7d3c2-0x7d436): the revived
     // actor's whole `abilityList` is walked and EVERY ability carrying `consumable` is
@@ -1970,6 +2051,40 @@ export class BattleSim {
       return;
     }
     this.dealDamage(foe, applied, false);
+  }
+
+  /** Burn down one tick of `pixelFire`. The RATE is ground truth — `damage:
+   *  hitPointsTotal/20 × dt`, 5 % of max HP a second, through the normal damage path so
+   *  armour, damage reduction and the one-shot floor all apply. The DURATION is ours (see
+   *  PIXEL_FIRE_BURN_MS): the shipped game's burn lasts a single frame.
+   *
+   *  Costed against the tick actually taken rather than a fixed frame, so a 50 ms sim step
+   *  and a 16 ms one remove the same HP per second of burn. */
+  private stepBurn(p: SimUnit, dtMs: number) {
+    if (p.burnMs <= 0) return;
+    const burnt = Math.min(p.burnMs, dtMs);
+    p.burnMs -= dtMs;
+    if (p.burnMs <= 0) {
+      p.burnMs = 0;
+      p.timerMs = this.cycleMs(p, null); // it comes out of the fire mid-swing, not primed
+    }
+    this.dealEnemyDamage(p, (p.maxHp * BURN_MAX_HP_FRACTION_PER_SEC * burnt) / 1000);
+    p.struckThisTick = true;
+  }
+
+  /** A burning zombie's panic walk: back and forth over PIXEL_FIRE_PACE_REACH either side
+   *  of wherever the fire caught it, turning at each end. It covers no ground and reaches
+   *  no formation slot — that is the point of being on fire. */
+  private pacePanicked(p: SimUnit, dtMs: number) {
+    p.x += (p.burnDir * PIXEL_FIRE_PACE_SPEED * dtMs) / 1000;
+    if (p.burnDir < 0 && p.x <= p.burnAnchorX - PIXEL_FIRE_PACE_REACH) {
+      p.x = p.burnAnchorX - PIXEL_FIRE_PACE_REACH;
+      p.burnDir = 1;
+    } else if (p.burnDir > 0 && p.x >= p.burnAnchorX + PIXEL_FIRE_PACE_REACH) {
+      p.x = p.burnAnchorX + PIXEL_FIRE_PACE_REACH;
+      p.burnDir = -1;
+    }
+    p.y = p.slotY;
   }
 
   /** Advance the charging zombie's focus bar, running the bubble minigame unless
@@ -2243,6 +2358,15 @@ export class BattleSim {
     // Zombies.
     for (const p of this.players) {
       if (!p.alive) continue;
+      // Carried out of the fight — by a crab, or converted into a pixel zombie. Still
+      // alive and still a survivor, but it neither walks nor swings until it is back.
+      if (p.taken) continue;
+      // The fire burns on a WALL CLOCK, so it is ticked ahead of every other gate —
+      // including the trapeze's. The trapeze and crab are client-only, so a burn the
+      // client paused while a zombie dangled would run out earlier on the server; ticking
+      // it here keeps the burn bit-identical on both sides whatever the hazards do.
+      this.stepBurn(p, dtMs);
+      if (!p.alive) continue; // the burn can be the killing blow
       if (p.state === "grabbed") continue; // seized by the trapeze — position driven by stepGrabbers
       if (p.abilityCdMs > 0) p.abilityCdMs -= dtMs; // activated-move recharge
       switch (p.state) {
@@ -2303,6 +2427,15 @@ export class BattleSim {
           // Stunned by an enemy hit — can't move or attack until it wears off.
           if (p.stunMs > 0) {
             p.stunMs -= dtMs;
+            p.timerMs = this.cycleMs(p, null);
+            break;
+          }
+          // On fire: the zombie is beating at itself, not fighting. It holds no formation
+          // slot and lands no swings — it just paces on the spot until the fire goes out
+          // or the player taps it out. Checked after the shove and the stun so neither is
+          // swallowed by the fire (a burning zombie can still be knocked back or held).
+          if (p.burnMs > 0) {
+            this.pacePanicked(p, dtMs);
             p.timerMs = this.cycleMs(p, null);
             break;
           }
@@ -2622,6 +2755,16 @@ export class BattleSim {
         !this.enemies.some((e) => e.alive && e.isSummon)
       );
     }
+    if (action.special.name === "turnZombie") {
+      // Same shape as `allowedToSummonBoss`: one converted zombie stands at a time, and
+      // there has to be a front fighter to convert. Refusing costs the boss nothing — it
+      // re-rolls — so an army with nobody deployed yet is not quietly given a free pass.
+      return (
+        !!this.turnedTemplate &&
+        !this.enemies.some((e) => e.alive && e.isTurned) &&
+        !!this.frontFighter()
+      );
+    }
     if (action.special.name === "alienLaser") {
       // `ZFFightMan allowedToShootBullet` walks `zombies` and refuses the shot unless at
       // least one is ENGAGED (`isInMeleeRange`, or one of the special-attack states). With
@@ -2677,36 +2820,68 @@ export class BattleSim {
       }
       case "pixelFire": {
         // Source (`ZFFightMan pixelFire`): picks ONE random eligible zombie and calls
-        // `setOnFire` — single-target, and an INTERRUPT rather than a damage-over-time.
-        // `setOnFire` cancels the zombie's scheduled swing and puts it in the burning
-        // state, but with its destination set to its own position, so the state burns for
-        // exactly one frame and leaves. That is the whole effect: a cancelled attack, the
-        // stun sfx + pixel-explosion particles, and ~0.08 % of max HP. See
-        // combatStats.BURN_MAX_HP_FRACTION_PER_SEC — do NOT turn this back into a DoT.
+        // `setOnFire`. The target selection is ground truth and unchanged; what the fire
+        // then DOES is a deliberate divergence.
+        //
+        // Recovered, the burn lasts exactly one frame — `setOnFire` sets the zombie's
+        // destination to its own current position, so the burning state ticks once, finds
+        // it has already arrived, and leaves. ~0.08 % of max HP: Zedzox's headline special
+        // was worth about two damage. We ship the burn it is plainly reaching for instead
+        // (PIXEL_FIRE_BURN_MS at the recovered 5 %/s), and give the player the answer the
+        // one-frame version never needed: tap it out. See raid/videoGameStage.ts.
         const eligible = this.players.filter(
-          (p) => p.alive && !p.taken && (p.state === "advance" || p.state === "fight")
+          (p) => p.alive && !p.taken && !p.burnMs && (p.state === "advance" || p.state === "fight")
         );
         const victim = eligible.length
           ? eligible[Math.floor(hash(this.actionCount * 7 + 5) * eligible.length) % eligible.length]
           : null;
         if (victim) {
-          victim.windupKey = null; // the cancelled swing
+          victim.windupKey = null; // the cancelled swing (this half IS ground truth)
           victim.windupMs = 0;
           victim.timerMs = this.cycleMs(victim, null);
-          this.dealEnemyDamage(
-            victim,
-            victim.maxHp * BURN_MAX_HP_FRACTION_PER_SEC * SOURCE_FRAME_SEC
-          );
+          victim.burnMs = PIXEL_FIRE_BURN_MS;
+          victim.burnAnchorX = victim.x;
+          // Panic AWAY from the enemy first, so the fire visibly breaks the front line
+          // rather than shoving the zombie further into it.
+          victim.burnDir = -1;
           victim.struckThisTick = true;
         }
         break;
       }
       case "turnZombie": {
-        // Zedzox turns a zombie against you — model as losing your front unit.
-        const victim = this.frontFighter();
-        if (victim) {
-          this.dealDamage(victim, victim.hp, false);
+        // Zedzox turns a zombie against you. This USED to be modelled as
+        // `dealDamage(victim, victim.hp)` — the front zombie simply evaporated, with no
+        // projectile, no animation and no attacker anywhere near it, and went down as a
+        // permanent casualty. That is the "zombies die suddenly for no reason" players
+        // reported on this invasion, and it was never what the action does: the source
+        // name, the wiki text and an authored-but-unspawnable `VideoGameStageZombieActor`
+        // all say CONVERT.
+        //
+        // So it converts. The zombie is carried out of the fight — `taken`, exactly like a
+        // Beach crab's passenger: still alive, still a survivor, NOT a loss — and a pixel
+        // zombie stands up in the middle of the lane wearing its identity. Tap that apart
+        // and you get the zombie back (tapTurned).
+        const template = this.turnedTemplate;
+        const victim = template ? this.frontFighter() : null;
+        if (victim && template) {
+          victim.taken = true;
+          victim.windupKey = null;
+          victim.windupMs = 0;
+          victim.burnMs = 0; // a zombie that is dragged off stops being on fire
           victim.struckThisTick = true;
+          const turned = this.spawnEnemy(template);
+          turned.isSummon = true; // off the wave budget, so it can't hold the descent
+          turned.isTurned = true;
+          turned.turnedFromId = victim.id;
+          // Beamed in mid-field on the scorch mark, standing, exactly as an abductee is —
+          // same landing point, same "already past it" latch. See SUMMON_SPAWN_X.
+          turned.state = "hold";
+          turned.x = SUMMON_SPAWN_X;
+          turned.y = CENTER_Y;
+          turned.prevX = turned.x;
+          turned.prevY = turned.y;
+          // No `passedWall` latch here, unlike an abductee or a wall: this one blocks
+          // nobody (see wallInWay), so there is nothing to have got past.
         }
         break;
       }
@@ -2813,7 +2988,9 @@ export class BattleSim {
   private frontFighter(): SimUnit | null {
     let best: SimUnit | null = null;
     for (const p of this.players) {
-      if (!p.alive || (p.state !== "fight" && p.state !== "advance")) continue;
+      // `!p.taken` for the reason spelled out in frontMostPlayer: a zombie already turned
+      // into a pixel zombie is not standing there to be turned (or shoved) again.
+      if (!p.alive || p.taken || (p.state !== "fight" && p.state !== "advance")) continue;
       if (!best || p.x > best.x + 0.5 || (Math.abs(p.x - best.x) <= 0.5 && p.y > best.y)) best = p;
     }
     return best;
@@ -2822,7 +2999,7 @@ export class BattleSim {
   /** Deployed zombies (released from the focus bar and out on the lane). */
   private deployed(): SimUnit[] {
     return this.players.filter(
-      (p) => p.alive && (p.state === "advance" || p.state === "fight")
+      (p) => p.alive && !p.taken && (p.state === "advance" || p.state === "fight")
     );
   }
 
@@ -3042,9 +3219,17 @@ export class BattleSim {
     this.grabbers.length = 0;
     this.crabs.length = 0;
     this.projectiles.length = 0;
+    // Combat is over, so anything still holding a zombie lets go: a pixel zombie left
+    // standing when the boss fell hands its captive back for the victory march. It costs
+    // the player nothing either way (a captive is `taken`, so it was already coming home),
+    // but marching out one short of the army that won looks like a bug.
+    for (const turned of this.enemies) {
+      if (turned.isTurned) this.releaseTurned(turned);
+    }
 
     for (const zombie of this.players) {
       if (!zombie.alive || zombie.taken) continue;
+      zombie.burnMs = 0; // nobody marches out of a won fight still on fire
       if (heldIds.has(zombie.id)) zombie.y = CENTER_Y;
       if (!zombie.buddyCarrierId) zombie.state = "advance";
       zombie.prevX = zombie.x;
@@ -3126,6 +3311,70 @@ export class BattleSim {
   /** The live Trapeze Artist currently carrying a zombie (renderer taps it), or null. */
   activeGrabber(): SimGrabber | null {
     return this.grabbers.find((g) => g.state === "carry") ?? null;
+  }
+
+  /** Player tapped a converted PIXEL ZOMBIE: beat one tap's worth out of it. Sized off its
+   *  own max HP so PIXEL_ZOMBIE_TAPS taps break it open whatever the elite profile did to
+   *  its body. Breaking it hands the zombie inside back to the lane — the same release the
+   *  crab and the trapeze already do for a passenger, and the reason the taps are worth
+   *  spending on a body the army cannot chew through.
+   *
+   *  Returns true if a pixel zombie took the tap (drives the tap feedback + the
+   *  transcript). */
+  tapTurned(id: string): boolean {
+    const z = this.enemies.find((e) => e.id === id && e.isTurned && e.alive);
+    if (!z) return false;
+    this.dealDamage(z, Math.max(1, z.maxHp / PIXEL_ZOMBIE_TAPS), true);
+    z.struckThisTick = true; // the release itself is dealDamage's job, not this one's
+    return true;
+  }
+
+  /** Hand a broken-open pixel zombie's captive back. It re-enters at the BACK of the
+   *  formation and re-advances, exactly as a dropped trapeze / crab passenger does. */
+  private releaseTurned(turned: SimUnit): void {
+    const z = turned.turnedFromId
+      ? this.players.find((p) => p.id === turned.turnedFromId)
+      : null;
+    turned.turnedFromId = null;
+    if (!z || !z.alive || !z.taken) return;
+    z.taken = false;
+    z.state = "advance";
+    z.x = CHARGE_X;
+    z.y = CENTER_Y;
+    z.prevX = z.x;
+    z.prevY = z.y;
+    z.vx = 0;
+    z.vy = 0;
+    z.stunMs = 0;
+    z.burnMs = 0;
+    z.timerMs = this.cycleMs(z, null);
+    z.formOrder = this.releaseSeq++;
+    z.frontPriority = false;
+  }
+
+  /** Player tapped a burning zombie: smother the fire. One tap does it — the burn is on a
+   *  clock, not a health bar, and making the player land several taps on a panicking rig
+   *  that is pacing across the lane would mean the fire usually wins by default.
+   *
+   *  Returns true if a fire was actually put out, so a tap on a zombie that is not burning
+   *  (or whose fire has already run out) is refused rather than transcribed. */
+  tapFire(id: string): boolean {
+    const z = this.players.find((p) => p.id === id && p.alive && !p.taken && p.burnMs > 0);
+    if (!z) return false;
+    z.burnMs = 0;
+    z.timerMs = this.cycleMs(z, null); // back to a full swing, not a half-charged one
+    return true;
+  }
+
+  /** Every zombie currently on fire — the renderer draws a flame on each and makes it a
+   *  tap target. */
+  burningPlayers(): SimUnit[] {
+    return this.players.filter((p) => p.alive && !p.taken && p.burnMs > 0);
+  }
+
+  /** Live converted pixel zombies (the renderer taps these). */
+  turnedEnemies(): SimUnit[] {
+    return this.enemies.filter((e) => e.isTurned && e.alive);
   }
 
   /** Player tapped a boss-summoned wall: chip it (ground truth ZFFightWall ccTouchEnded →
@@ -3257,7 +3506,9 @@ export class BattleSim {
       rounds: this.attacksLanded,
       survivors: this.players.filter((u) => u.alive).map((u) => u.id),
       losses: this.players.filter((u) => !u.alive).map((u) => u.id),
-      enemiesBeaten: this.enemies.filter((e) => !e.alive).length,
+      // A pixel zombie broken open is a RESCUE, not a kill — it was one of yours. Counting
+      // it would put a rescue in the "Enemies Beaten" line on the results panel.
+      enemiesBeaten: this.enemies.filter((e) => !e.alive && !e.isTurned).length,
       playerDamage: this.playerDamage,
       escaped: this.escaped,
       feats: {

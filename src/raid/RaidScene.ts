@@ -35,6 +35,7 @@ import { zombieFacingDelta } from "./zombieFacing";
 import {
   epicAttackFrameIndex, epicBossAnimationLoops, epicStripFrameIndex, selectEpicBossAnimation,
 } from "./epicBossAnimation";
+import { PixelFire } from "./pixelFireFx";
 import { isMobile } from "../platform";
 import { readSafeAreaInsets } from "../safeArea";
 import { abilityColumnStep, computeRaidHudLayout } from "./raidHudLayout";
@@ -43,6 +44,8 @@ type RaidInputDraft =
   | { type: "bubble"; unitId: string }
   | { type: "ability"; abilityKey: string }
   | { type: "wallTap"; unitId: string }
+  | { type: "fireTap"; unitId: string }
+  | { type: "turnedTap"; unitId: string }
   | { type: "retreat" };
 import { BASE } from "../base";
 
@@ -60,6 +63,9 @@ export interface RaidSceneParams {
   waveCadence?: WaveCadence;
   /** Blocker the boss's wall action spawns (null/omitted = none). */
   wallTemplate?: CombatUnit | null;
+  /** Pixel zombie the boss's turnZombie converts a zombie into (null/omitted = none).
+   *  Only the Video Games boss carries the action — see raid/videoGameStage.ts. */
+  turnedTemplate?: CombatUnit | null;
   /** Carried-grab hazard (Circus Trapeze Artist) for this raid (null/omitted = none). */
   grabber?: GrabberConfig | null;
   /** Beach crab hazard for this raid (null/omitted = none). Client-only — see crabOf. */
@@ -374,6 +380,18 @@ const enemySprite = (key: string) => `${BASE}assets/raids/enemies/${key}.png`;
 const enemyStripUrl = (key: string) => `${BASE}assets/raids/enemies/parts/${key}.png`;
 const enemyFrameUrl = (key: string, state: "idle" | "attack", frame: number) =>
   `${BASE}assets/raids/enemies/animations/${key}/${state}-${frame}.png`;
+// ---- pixelFire flame (see raid/pixelFireFx.ts) ----
+/** One flame square at SIZE_REF_SCALE, in unit px. Coarse on purpose: the fire has to read
+ *  as built out of blocks at a glance, and a finer grid just looks like a smooth flame. */
+const FIRE_CELL_PX = 7;
+/** How far the flame's base sinks below the rig's top edge, so it burns ON the zombie
+ *  rather than floating above its head. Sized against a rendered zombie: at 10 the flame
+ *  balanced on the crown and read as a party hat. It wants to start around the eyes and
+ *  wrap the head — the zombie is alight, it is not carrying a candle. */
+const FIRE_HEAD_OVERLAP = 26;
+/** The flame fades out over this much of the burn's tail. */
+const FIRE_FADE_MS = 900;
+
 const ENEMY_FRAME_COUNTS: Record<string, { idle: number; attack: number }> = {
   VideoGameStageBossActor: { idle: 2, attack: 4 },
   VideoGameStageGhostActor: { idle: 3, attack: 3 },
@@ -502,6 +520,7 @@ export class RaidScene {
   private bossThrow: BossThrowConfig | null;
   private wallTemplate: CombatUnit | null; // preloaded so a spawned wall renders as a sprite
   private summon: SummonConfig | null; // alien abductee queue (drives their art preload)
+  private turnedTemplate: CombatUnit | null; // pixel zombie (drives its art preload)
   private grabberSprite = ""; // Trapeze Artist art (preloaded), "" if this raid has none
   private crabSprite = ""; // Beach crab art (preloaded), "" if this raid has none
   private grabTex: Texture | null = null; // trapeze texture
@@ -517,6 +536,9 @@ export class RaidScene {
   private crabTex: Texture | null = null; // beach crab hazard texture
   private crabLayer = new Container(); // crab sprites (above the field, tappable)
   private crabSprites = new Map<string, { root: Container; body: Sprite; bar: Graphics }>();
+  /** `pixelFire` flames, one per burning zombie (above the field, tappable to smother). */
+  private fireLayer = new Container();
+  private fires = new Map<string, PixelFire>();
   private imageBase: string | null;
   private bossTexture: string;
   private bossPortrait: string;
@@ -579,14 +601,15 @@ export class RaidScene {
     this.replayInputs.push({ ...input, seq: ++this.inputSeq, tick: this.simTick } as RaidReplayInput);
   }
 
-  /** Wall taps are the only input a player can produce without limit — one per tap,
-   *  against however many blockers a boss summons over a four-minute fight. Every one
+  /** Hazard taps — on a boss WALL, on a burning zombie, on a converted pixel zombie — are
+   *  the only input a player can produce without limit: one per tap, against however many
+   *  blockers, fires and conversions a boss produces over a four-minute fight. Every one
    *  of them has to reach the verifier (an untranscribed tap desynchronises the two
-   *  simulations), so once the transcript nears its cap the wall simply stops taking
+   *  simulations), so once the transcript nears its cap the hazards simply stop taking
    *  taps. Refusing the tap keeps both sides in step; recording it past the cap would
    *  fail the whole finish with `too_many_inputs`. The reserve leaves room for the
    *  focus bubbles, ability taps, and the retreat that matter more. */
-  private canRecordWallTap(): boolean {
+  private canRecordHazardTap(): boolean {
     return this.inputSeq < RAID_MAX_INPUTS - 64;
   }
 
@@ -659,6 +682,7 @@ export class RaidScene {
     this.bossThrow = params.bossThrow;
     this.wallTemplate = params.wallTemplate ?? null;
     this.summon = params.summon ?? null;
+    this.turnedTemplate = params.turnedTemplate ?? null;
     this.grabberSprite = params.grabber?.sprite ?? "";
     this.crabSprite = params.crab?.sprite ?? "";
     this.imageBase = params.imageBase ?? null;
@@ -684,7 +708,8 @@ export class RaidScene {
       params.bossEngageDistance,
       params.grabber ?? null,
       params.crab ?? null,
-      params.waveCadence
+      params.waveCadence,
+      params.turnedTemplate ?? null
     );
   }
 
@@ -726,9 +751,14 @@ export class RaidScene {
     // The alien boss's abductees arrive mid-fight, so their art has to be preloaded here
     // with the wave's — a token built at summon time has nothing to load from.
     const summonKeys = this.summon ? ABDUCTEE_KEYS : [];
+    // Same for the pixel zombie `turnZombie` stands up: it too arrives mid-fight, and its
+    // frames (idle-0..3 / attack-0..2, already in ENEMY_FRAME_COUNTS) have to be on hand
+    // before the boss casts or the conversion lands as a blank token.
+    const turnedKeys = this.turnedTemplate ? [this.turnedTemplate.sourceKey] : [];
     const enemyKeys = [...new Set([
       ...this.sim.units.filter((u) => u.team === "enemy").map((u) => u.sourceKey),
       ...summonKeys,
+      ...turnedKeys,
     ])];
     await Promise.all(
       enemyKeys.map(async (k) => {
@@ -851,6 +881,9 @@ export class RaidScene {
       this.crabTex = await loadTex(raidImage(this.crabSprite));
       this.container.addChild(this.crabLayer);
     }
+    // Flames ride above every unit: the fire has to be tappable through whatever rig is
+    // burning, and it reads as sitting ON the zombie rather than behind it.
+    this.container.addChild(this.fireLayer);
     // Added after every battlefield layer so the complete stage rectangle behaves
     // as an aperture. HUD and controls are added later and remain unobscured.
     this.container.addChild(this.stageMatte);
@@ -1276,8 +1309,20 @@ export class RaidScene {
       root.eventMode = "static";
       root.cursor = "pointer";
       root.on("pointertap", () => {
-        if (this.sim.finished || !this.canRecordWallTap()) return;
+        if (this.sim.finished || !this.canRecordHazardTap()) return;
         if (this.sim.tapWall(u.id)) this.recordInput({ type: "wallTap", unitId: u.id });
+      });
+    }
+    // A converted PIXEL ZOMBIE is the other fully-simulated tap target. Its body is a
+    // million hit points — the army cannot chew through it, and it is not meant to; the
+    // taps are how you break it open and get your zombie back. Transcribed for the same
+    // reason the wall's taps are.
+    if (u.isTurned) {
+      root.eventMode = "static";
+      root.cursor = "pointer";
+      root.on("pointertap", () => {
+        if (this.sim.finished || !this.canRecordHazardTap()) return;
+        if (this.sim.tapTurned(u.id)) this.recordInput({ type: "turnedTap", unitId: u.id });
       });
     }
     return {
@@ -1911,14 +1956,25 @@ export class RaidScene {
         tok.actor.container.scale.set(tok.actorBaseScale * grow);
         tok.actor.container.y = tok.actorBaseY * grow;
 
+        // On fire: HANDS UP, and nothing else. The rig's fully-raised arm angle is the
+        // wind-up pose's endpoint, so the pose is expressed by handing poseArms a
+        // saturated wind-up — a burning zombie has no real wind-up (pixelFire cancels the
+        // swing it was charging), so nothing is being overridden. It is also not
+        // "fighting" whatever the sim state says: it paces and flails, it does not swing.
+        const burning = u.alive && u.burnMs > 0;
         // Arms: smash slam > wind-up (activated) > basic attack > walking > waiting.
         // Each zombie alternates Bite/Scratch after a landed hit; distractSeed offsets
         // its starting move so staggered fighters can show both attacks concurrently.
-        const fighting = this.phase === "fight" && u.state === "fight" && !u.windupKey && u.alive;
+        const fighting = !burning &&
+          this.phase === "fight" && u.state === "fight" && !u.windupKey && u.alive;
         const atkProg = Math.max(0, Math.min(1, 1 - visualAttackMs / Math.max(1, u.cooldownMs)));
         const attackName = zombieBasicAttackName(u.distractSeed, tok.atkCount);
         tok.actor.poseArms(
-          windup, fighting, moving, atkProg, tok.atkCount, slamProg, healRaise, attackName
+          burning ? 1 : windup,
+          fighting, moving, atkProg, tok.atkCount,
+          burning ? -1 : slamProg,
+          burning ? 0 : healRaise,
+          attackName
         );
       }
       // Enemy rig: idle bob when holding position, walk cycle while advancing, and a
@@ -2228,6 +2284,50 @@ export class RaidScene {
     this.syncProjectiles();
     this.syncGrabbers();
     this.syncCrabs();
+    this.syncFires(dtSec);
+  }
+
+  /** Mirror the burning zombies into tappable block flames. Runs after the token loop, so
+   *  each token's screen position for THIS frame is already settled and the flame can be
+   *  hung off it without re-deriving the projection.
+   *
+   *  Unlike the crab and the trapeze, this tap is TRANSCRIBED: the burn is fully simulated,
+   *  so a fire the player smothered and the server did not would leave the two simulations
+   *  disagreeing about how much HP that zombie has for the rest of the fight — exactly the
+   *  wall desync of ruleset 14. */
+  private syncFires(dtSec: number) {
+    const live = new Set<string>();
+    const szs = this.sizeScale();
+    for (const u of this.sim.burningPlayers()) {
+      const tok = this.tokens.get(u.id);
+      if (!tok || !tok.root.visible) continue;
+      live.add(u.id);
+      let fire = this.fires.get(u.id);
+      if (!fire) {
+        fire = new PixelFire(() => {
+          if (this.sim.finished || !this.canRecordHazardTap()) return;
+          if (this.sim.tapFire(u.id)) this.recordInput({ type: "fireTap", unitId: u.id });
+        });
+        this.fireLayer.addChild(fire.view);
+        this.fires.set(u.id, fire);
+      }
+      // Sit the flame over the middle of the rig, its base a little inside the head so it
+      // looks like the zombie is alight rather than wearing a hat.
+      fire.view.position.set(
+        tok.root.x + tok.hpCenterX * szs,
+        tok.root.y + tok.topY * szs + FIRE_HEAD_OVERLAP * szs
+      );
+      // Fade over the last stretch of the burn so a fire about to go out reads as one, and
+      // the player can see a tap is no longer worth spending.
+      const fade = Math.min(1, u.burnMs / FIRE_FADE_MS);
+      fire.update(dtSec, Math.max(2, Math.round(FIRE_CELL_PX * szs)), fade);
+    }
+    for (const [id, fire] of this.fires) {
+      if (!live.has(id)) {
+        fire.destroy();
+        this.fires.delete(id);
+      }
+    }
   }
 
   /** Mirror the Beach crab hazards into tappable sprites. Ten taps kills one, which frees

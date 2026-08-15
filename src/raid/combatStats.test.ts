@@ -22,10 +22,10 @@ import {
   farmRaidEnemyPace,
   ALIEN_LASER_DAMAGE,
   BURN_MAX_HP_FRACTION_PER_SEC,
-  SOURCE_FRAME_SEC,
   POWER_PER_STR,
   HP_PER_CON,
 } from "./combatStats";
+import { PIXEL_FIRE_BURN_MS } from "./videoGameStage";
 
 // Ground truth: Actor calculateFinal* / Actor damage: / rollAgainstFrequencyInArray:
 // (docs/mechanics/COMBAT_STATS_RECOVERED.md). Each `final*` folds a passive + a
@@ -270,11 +270,19 @@ describe("farmRaidEnemyPace — Old McDonnell's level ramp (raid 1 only)", () =>
 
 describe("recovered flat hazard values", () => {
   it("the alien laser bolt is a hard 200", () => expect(ALIEN_LASER_DAMAGE).toBe(200));
-  it("burning costs 5% of MAX hp per second — but for ONE frame only", () => {
+  it("burning costs 5% of MAX hp per second", () => {
+    // The RATE is ground truth (`damage: hitPointsTotal/20 × dt`) and is the half of
+    // pixelFire we did not change. What we changed is how long it lasts: the shipped game
+    // exits the burning state after a single frame, and we burn for PIXEL_FIRE_BURN_MS.
+    // The two numbers multiply, so this one moving would quietly re-scale the whole effect.
     expect(BURN_MAX_HP_FRACTION_PER_SEC).toBe(0.05);
-    // `setOnFire` parks the zombie at its own position, so the burning state exits after a
-    // single tick. The whole effect is ~0.083 % of max HP; anything larger means someone
-    // has turned pixelFire back into a damage-over-time it never was.
-    expect(BURN_MAX_HP_FRACTION_PER_SEC * SOURCE_FRAME_SEC).toBeCloseTo(0.00083, 5);
+  });
+  it("a full untapped burn is a real but survivable bite out of a zombie", () => {
+    // The deliberate divergence, pinned as a number rather than left implicit. It has to
+    // stay heavy enough to be worth reacting to and light enough that a healthy zombie
+    // lives through one it never noticed — see raid/videoGameStage.ts.
+    const share = BURN_MAX_HP_FRACTION_PER_SEC * (PIXEL_FIRE_BURN_MS / 1000);
+    expect(share).toBeGreaterThan(0.15);
+    expect(share).toBeLessThan(0.5);
   });
 });

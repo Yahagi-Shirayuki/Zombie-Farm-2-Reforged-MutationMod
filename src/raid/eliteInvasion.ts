@@ -24,24 +24,32 @@
 // fitted:
 //
 //   raid                 normal   elite      the rung it was fitted to
-//   Old McDonnell's        0.10    0.54      not a p* target — see below
-//   Summer Break           0.11    0.54      between Pirates and Robots
-//   Tree World             0.10    0.55      between Pirates and Robots
-//   Valentine's Day        0.10    0.56      between Pirates and Robots
-//   Circus                 0.10    0.65      Robots, normally
-//   Lawyers                0.29    0.69      Robots, normally
-//   Pirates                0.39    1.59      Video Games, normally
-//   Ninjas                 0.76    1.71      Video Games, normally
-//   Robots                 0.75    1.93   \
-//   Aliens                 0.81    1.89    >  one shared top tier
-//   Video Games            2.11    2.48   /
+//   Old McDonnell's        0.10    0.56      not a p* target — see below
+//   Summer Break           0.11    0.52      between Pirates and Robots
+//   Tree World             0.10    0.54      between Pirates and Robots
+//   Valentine's Day        0.10    0.53      between Pirates and Robots
+//   Circus                 0.10    0.62      Robots, normally
+//   Lawyers                0.27    0.65      Robots, normally
+//   Pirates                0.41    1.50   \
+//   Ninjas                 0.77    1.67    |
+//   Robots                 0.74    1.82    >  the elite RAMP (see below)
+//   Aliens                 0.97    2.04    |
+//   Video Games            1.33    2.21   /
 //
-// The top tier is why the three hardest invasions take wildly different multipliers: the
-// Video Games are already almost there (x1.2 on their stats), so the Robots and the
-// Aliens climb to meet them (x2.5 and x3.7). It is a BAND rather than a point: the Video
-// Games sit at the top of it because their own baseline is the highest on the ladder —
-// they field three knockback units, so BattleSim's reach-of-last-resort fix lifted their
-// NORMAL difficulty from 2.11 where it had been 1.59 — and there is no headroom above.
+// THE TOP FIVE ARE A RAMP, not a band. The five late invasions are fitted to a smooth
+// climb in ladder order — 1.50 at the Pirates (rec 21) up to 2.21 at the Video Games
+// (rec 43), in even steps of roughly 0.15-0.2 — so a player working up the ladder meets a
+// Brain Ticket fight a little harder each time, and the hardest elite invasion in the
+// game is the last one they unlock.
+//
+// It used to be a BAND: the Robots, the Aliens and the Video Games shared one tier at the
+// top, because the Video Games' ORDINARY fight measured 2.11-2.72 and there was no
+// headroom above it to ramp into. That number was never the raid's design — it was
+// `turnZombie` silently deleting a zombie every few seconds (see BattleSim's turnZombie
+// case, and docs/mechanics/ENEMY_DAMAGE_RECOVERED.md). With the conversion in place the
+// ordinary fight measures 1.33, still the hardest on the ladder but no longer a cliff,
+// and the headroom the band existed to work around came back. Hence this re-fit: raids
+// 3/4/5/6 come DOWN off the old shared tier and raid 9 goes UP to sit above them all.
 //
 // OLD McDONNELL'S IS NOT FITTED TO A p* TARGET, and that is the one place this metric
 // let the tuning down. It was fitted to the Pirates (p* 0.40) and measured there — but p*
@@ -49,10 +57,10 @@
 // the profile did, so the fitted numbers produced a fight that played like the tutorial
 // with a bigger boss. Playtested and rejected as far too soft. It is now specified in HIT
 // POINTS instead — the ordinary Pirates' bulk, 40,000 across the wave with a 12,000 boss
-// — and p* 0.54 is simply where that lands. See its table entry.
+// — and p* 0.56 is simply where that lands. See its table entry.
 //
-// THE CEILING IS REAL, and it is why the top tier sits where it does rather than higher.
-// A measuring-stick army stops winning the Video Games not far above their elite figure,
+// THE CEILING IS REAL, and it is why the ramp tops out at 2.21 rather than higher. A
+// measuring-stick army stops winning the Video Games not far above their elite figure,
 // and 20 zombies barely beat 16 (only the front of the formation engages), so army SIZE
 // is not the answer either. Elite has to fit under that.
 //
@@ -145,41 +153,35 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
   // budget goes into raw power. An elite pirate one-shots almost anything it reaches;
   // the counterplay is the same as it always was — do not bring a fast army.
   //
-  // v23 RE-FIT (x1.3 on every multiplier's distance from 1.0, shape untouched). Faithful
-  // knockback moved the ladder's TOP rung — the ordinary Video Games invasion — from a
-  // measured 1.99 to 2.38, and these three are the profiles the guardrails measure against
-  // it: Pirates-elite has to sit near an ordinary Video Games, and Robots/Aliens-elite have
-  // to share a band with Video Games-elite. Nothing about their character changed; they
-  // moved because the thing they are pinned to did.
-  3: { str: 6.59, con: 3.41, dex: 1, throwDamage: 5.29, throwRate: 1, wallHp: 1, specialDamage: 4.9 },
+  // v31 RE-FIT (x0.90 on every multiplier's distance from 1.0, shape untouched) — the
+  // bottom rung of the elite RAMP, fitted to p* 1.50. It comes down slightly because the
+  // whole top of the ladder came down off the old shared band; see the header. Its
+  // character is untouched, dex very much included.
+  3: { str: 6.03, con: 3.17, dex: 1, throwDamage: 4.86, throwRate: 1, wallHp: 1, specialDamage: 4.51 },
 
   // 4 — Zombies vs Ninjas. Their mechanic is the carrot WALL, so the wall gets tougher
-  // (more taps, and more of the army's damage spent on it) — but only to 1.5x, see
+  // (more taps, and more of the army's damage spent on it) — but only to ~1.6x, see
   // `wallHp`. The rest is a broad stat lift.
-  4: { str: 2.7, con: 1.7, dex: 1.35, throwDamage: 2.5, throwRate: 1.55, wallHp: 1.5, specialDamage: 2.2 },
+  //
+  // v31 RE-FIT (x1.157 on every multiplier's distance from 1.0, shape untouched) — the
+  // ramp's second rung, fitted to p* 1.66. Alone among the five it goes slightly UP: the
+  // ramp is a straight climb in ladder order, and the Ninjas sit between a Pirates raid
+  // that came down and a Robots raid that came down further.
+  4: { str: 2.97, con: 1.81, dex: 1.41, throwDamage: 2.74, throwRate: 1.64, wallHp: 1.58, specialDamage: 2.39 },
 
   // 5 — Zombies vs Robots. One of each bot, a random one leading, each with its own
   // special (junk wall, telekinesis). Bots are already the tankiest wave in the game, so
   // con is held back and the budget goes into their specials and their punch.
   //
-  // v23 RE-FIT (x1.3 on every multiplier's distance from 1.0, shape untouched). Faithful
-  // knockback moved the ladder's TOP rung — the ordinary Video Games invasion — from a
-  // measured 1.99 to 2.38, and these three are the profiles the guardrails measure against
-  // it: Pirates-elite has to sit near an ordinary Video Games, and Robots/Aliens-elite have
-  // to share a band with Video Games-elite. Nothing about their character changed; they
-  // moved because the thing they are pinned to did.
-  5: { str: 2.95, con: 2.11, dex: 1.52, throwDamage: 2.69, throwRate: 1.52, wallHp: 1.65, specialDamage: 3.47 },
+  // v31 RE-FIT (x0.826 on every multiplier's distance from 1.0, shape untouched) — the
+  // ramp's middle rung, fitted to p* 1.82. It was one of the three sharing the old top
+  // band; with the Video Games' ordinary fight no longer a cliff there is room for a
+  // proper climb above it, so it steps down to make that room.
+  5: { str: 2.61, con: 1.92, dex: 1.43, throwDamage: 2.4, throwRate: 1.43, wallHp: 1.54, specialDamage: 3.04 },
 
   // 6 — Zombies vs Aliens. Twenty minions, a summoning boss and the laser. Their normal
   // fight is already the longest on the ladder (over two minutes), so con barely moves —
   // an elite alien wave is not a longer grind, it is a far more dangerous one.
-  //
-  // v23 RE-FIT (x1.3 on every multiplier's distance from 1.0, shape untouched). Faithful
-  // knockback moved the ladder's TOP rung — the ordinary Video Games invasion — from a
-  // measured 1.99 to 2.38, and these three are the profiles the guardrails measure against
-  // it: Pirates-elite has to sit near an ordinary Video Games, and Robots/Aliens-elite have
-  // to share a band with Video Games-elite. Nothing about their character changed; they
-  // moved because the thing they are pinned to did.
   //
   // v27 RE-FIT, and it goes DOWN — the mechanics now supply the danger the multipliers
   // used to have to fake. Two recovered changes pull in opposite directions and the
@@ -194,15 +196,21 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
   // Measured on the balance stick, the ORDINARY invasion went 0.84 -> 0.93 (it is a real
   // fight now, not a queue) and the elite one blew past the stick entirely at 5.16. This
   // brings it back between the Robots and the Video Games, at multipliers well below
-  // where they started. Currently measures 0.97 / 2.46, after the playtest passes that
-  // settled the minion's str at 5 and moved the wave's hold line right; see
-  // UNIT_OVERRIDES in tools/prep_raids.py and ENEMY_HOLD_X in BattleSim.
+  // where they started, after the playtest passes that settled the minion's str at 5 and
+  // moved the wave's hold line right; see UNIT_OVERRIDES in tools/prep_raids.py and
+  // ENEMY_HOLD_X in BattleSim.
+  //
+  // v31 RE-FIT (x0.78 on every multiplier's distance from 1.0, shape untouched) — the
+  // ramp's fourth rung, fitted to p* 1.98 and landing at 2.04. p* is STEP-LIKE here: the
+  // nearest values either side of 0.78 measure 1.89 and 2.06, with nothing in between, so
+  // 2.04 is chosen as the one that keeps the ramp's steps even rather than as a miss.
+  // Currently measures 0.97 / 2.04.
   //
   // The remaining four are INERT on this raid and are left alone rather than scaled for
   // the look of the table: the alien boss has no `throw` and no `wall`, and its
   // `alienLaser` action carries no authored `damage`, so `specialDamage` multiplies a
   // zero and BattleSim falls through to the flat 200 the binary hard-codes.
-  6: { str: 3, con: 1.4, dex: 1.45, throwDamage: 3.28, throwRate: 1.65, wallHp: 1, specialDamage: 4.9 },
+  6: { str: 2.56, con: 1.31, dex: 1.35, throwDamage: 2.78, throwRate: 1.51, wallHp: 1, specialDamage: 4.04 },
 
   // 7 — Summer Break. No signature boss mechanic (the crab is a client-side hazard and
   // is deliberately left alone — see below), so it scales broadly, with heavier beach
@@ -216,18 +224,23 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
   // than difficulty.
   8: { str: 2.8, con: 3, dex: 1.6, throwDamage: 8, throwRate: 3, wallHp: 1, specialDamage: 3 },
 
-  // 9 — Zombies vs Video Games. Already the hardest invasion in the game by a wide
-  // margin, so it needs the smallest push to reach the shared top tier — and it spends
-  // what it has on turnZombie and pixelFire, the specials that make the fight what it is.
+  // 9 — Zombies vs Video Games. The last invasion unlocked, the hardest ordinary fight on
+  // the ladder, and now the TOP OF THE ELITE RAMP too — it spends what it has on
+  // turnZombie and pixelFire, the specials that make the fight what it is.
   //
-  // v27 RE-FIT (x1.25 on every multiplier's distance from 1.0, shape untouched). Zedzox
-  // used to keep casting turnZombie and pixelFire after he came down off his perch;
-  // recovering the state gate (`bossUpdate:` only rolls an action in state 19) took both
-  // away for the whole ground phase, which is most of the fight. That made the ORDINARY
-  // invasion easier — measured 2.42 -> 2.10 on the balance stick — and the elite step
-  // shrank with it. Restoring the step is what moved, not the raid's character; it is
-  // still by far the smallest profile in the table, as the paragraph above intends.
-  9: { str: 1.25, con: 1.19, dex: 1.125, throwDamage: 1.31, throwRate: 1.125, wallHp: 1, specialDamage: 1.44 },
+  // v31 RE-FIT (x2.33 on every multiplier's distance from 1.0, shape untouched), fitted to
+  // p* 2.20 and measuring 2.21. This is the largest single move any profile in this table
+  // has ever taken, and it is a correction rather than a difficulty pass. The profile was
+  // deliberately kept tiny for as long as the raid's ORDINARY fight measured 2.11-2.72 —
+  // there was no headroom to put an elite step into, and the note that used to live here
+  // said as much. That difficulty was `turnZombie` deleting a front zombie outright every
+  // few seconds; with the conversion in place the ordinary fight measures 1.33 and the
+  // headroom is back, so the Brain Ticket can finally buy a real fight here instead of
+  // just the brains. The step is now 1.66x, in line with the rest of the table.
+  //
+  // Its multipliers are still the SMALLEST in the table by a distance, and that is right:
+  // it is scaling the heaviest baseline in the game.
+  9: { str: 1.58, con: 1.44, dex: 1.29, throwDamage: 1.72, throwRate: 1.29, wallHp: 1, specialDamage: 2.03 },
 
   // 10 / 11 — Tree World and Valentine's Day. Seasonal, no signature mechanic, and the
   // two weakest waves after McDonnell's, so they take the same broad treatment as

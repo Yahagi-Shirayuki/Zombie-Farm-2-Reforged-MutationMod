@@ -296,7 +296,45 @@ import type { RaidOutcome } from "./types";
 // refuses. The finish path drops a refused ability rather than failing (see
 // `advanceRaidSegment`), so the two simulations would have settled different fights
 // instead of erroring — which is exactly why this needs the bump rather than a quiet fix.
-export const RAID_RULESET_VERSION = 30;
+// v31 ZEDZOX'S TWO SPECIALS. Both change the Video Games transcript from the boss's first
+// action, and both add a transcribed tap, so the bump is forced twice over.
+//
+//   * `turnZombie` CONVERTS instead of deleting. It used to be modelled as
+//     `dealDamage(victim, victim.hp)`: your front zombie evaporated where it stood, with
+//     no projectile, no animation and no attacker within reach, and went home a permanent
+//     casualty. That is the "zombies keep dying suddenly for no reason" players reported
+//     on this invasion, and it was never what the action does — the source name, the wiki
+//     text, and an authored-but-never-spawned `VideoGameStageZombieActor` (con 10000, its
+//     own idle/attack frames, listed in no stage table) all say convert. The zombie is now
+//     carried out of the fight as `taken` — alive, a survivor, NOT a loss — and a pixel
+//     zombie stands up mid-lane wearing its identity. Twenty taps break it open and hand
+//     the zombie back (`turnedTap`). A converted body is excluded from the win condition:
+//     at a million hit points a fight that had to kill it would run to the cap every time.
+//   * `pixelFire` BURNS. Recovered, it lasts exactly one frame — `setOnFire` parks the
+//     zombie's destination on its own position, so the burning state ticks once and
+//     leaves, making the boss's headline special worth about two damage. It now burns for
+//     PIXEL_FIRE_BURN_MS at the recovered 5 %/s while the zombie panics on the spot, and
+//     the player can smother it with a tap (`fireTap`). A DELIBERATE divergence from
+//     ENEMY_DAMAGE_RECOVERED.md, which the doc now records as such.
+//
+// Both taps are transcribed for the reason `wallTap` is (v14): they move the SERVER's
+// simulation too, and an untranscribed one puts the two permanently out of step.
+//
+// The same bump covers an ELITE RE-FIT that the conversion forces. ELITE_PROFILES 3/4/5/6
+// and 9 all move, so every elite transcript on those five raids changes. The old table put
+// the Robots, the Aliens and the Video Games in one shared top BAND, because raid 9's
+// ordinary fight measured 2.11-2.72 on the balance stick and there was no headroom above it
+// to ramp into — and raid 9's own profile was kept deliberately tiny for the same reason,
+// so a Brain Ticket there bought the brains rather than a different fight. That difficulty
+// was the instant kill. With it gone the ordinary fight measures 1.33, and the five late
+// invasions are re-fitted as a smooth RAMP in ladder order instead: Pirates 1.50, Ninjas
+// 1.67, Robots 1.82, Aliens 2.04, Video Games 2.21. Each profile keeps its SHAPE — every
+// multiplier's distance from 1.0 is scaled by one factor per raid — so no raid's character
+// changes, only where it sits. See eliteInvasion.ts.
+//
+// Same cost as every bump: an invasion in flight at deploy time settles as stale_ruleset
+// and pays nothing.
+export const RAID_RULESET_VERSION = 31;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;
@@ -306,6 +344,8 @@ export type RaidReplayInput =
   | { seq: number; tick: number; type: "bubble"; unitId: string }
   | { seq: number; tick: number; type: "ability"; abilityKey: string }
   | { seq: number; tick: number; type: "wallTap"; unitId: string }
+  | { seq: number; tick: number; type: "fireTap"; unitId: string }
+  | { seq: number; tick: number; type: "turnedTap"; unitId: string }
   | { seq: number; tick: number; type: "retreat" };
 
 /** How far the server's replay had to depart from the client's account of the fight.
@@ -343,10 +383,12 @@ export type SegmentResult =
  * player never receives, and the overrun only ever runs the server's OWN deterministic
  * simulation to its own conclusion.
  *
- * A tap the sim REFUSES (`illegal_bubble` / `illegal_ability` / `illegal_wall_tap`) is
- * dropped the same way, for the same reason. All three are the player HELPING their own
- * army — releasing a charged zombie, spending an activated move, chipping a wall — so a
- * refusal is help the server's player never receives, and every consequence lands on the
+ * A tap the sim REFUSES (`illegal_bubble` / `illegal_ability` / `illegal_wall_tap` /
+ * `illegal_fire_tap` / `illegal_turned_tap`) is dropped the same way, for the same reason.
+ * All five are the player HELPING their own army — releasing a charged zombie, spending an
+ * activated move, chipping a wall, smothering a fire, breaking a converted zombie back
+ * out — so a refusal is help the server's player never receives, and every consequence
+ * lands on the
  * server's own outcome: a slower fight, fewer survivors, less reward. It cannot invent a
  * win. Holding them fatal instead cost 84 accounts their hazard-raid victories outright
  * (`clientWin` concedes losses only), which is a far worse answer than settling the
@@ -420,6 +462,23 @@ export function advanceRaidSegment(
         if (typeof input.unitId !== "string") return { ok: false, error: "illegal_wall_tap" };
         if (!sim.tapWall(input.unitId)) {
           const fatal = refuse("illegal_wall_tap");
+          if (fatal) return fatal;
+        }
+      } else if (input.type === "fireTap") {
+        // Smothering a `pixelFire` burn. `tapFire` refuses anything that is not a live
+        // player zombie actually alight, so this can neither reach another unit nor
+        // extinguish a fire twice.
+        if (typeof input.unitId !== "string") return { ok: false, error: "illegal_fire_tap" };
+        if (!sim.tapFire(input.unitId)) {
+          const fatal = refuse("illegal_fire_tap");
+          if (fatal) return fatal;
+        }
+      } else if (input.type === "turnedTap") {
+        // Chipping a converted pixel zombie. `tapTurned` refuses everything that is not a
+        // live turned unit, so it cannot be aimed at an ordinary enemy or the boss.
+        if (typeof input.unitId !== "string") return { ok: false, error: "illegal_turned_tap" };
+        if (!sim.tapTurned(input.unitId)) {
+          const fatal = refuse("illegal_turned_tap");
           if (fatal) return fatal;
         }
       } else if (input.type === "retreat") {

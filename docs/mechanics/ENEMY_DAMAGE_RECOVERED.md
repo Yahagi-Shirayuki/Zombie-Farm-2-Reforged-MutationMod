@@ -75,7 +75,7 @@ its un-modelled `speedMultiplier` partly cancelled the error).
 | --- | --- | --- |
 | boss `throw` | the bossAction's `damage` field, applied **verbatim** — re-verified: no arithmetic between `damageAmount` and `damage:` | `ZFFightPhysics throwProjectile:` copies @"damage" into `damageAmount`; `damageZombie:withProjectile:withContact:` passes it to `[zombie damage:]` |
 | `alienLaser` | flat **200** | `AlienStageBullet collidedWith:` passes the immediate `0x43480000` |
-| `pixelFire` | picks **one** random eligible zombie and calls `setOnFire` — an attack INTERRUPT, not a burn: see below | `ZFFightMan pixelFire`, `ZombieActor fightUpdate:` 0x4dedc |
+| `pixelFire` | picks **one** random eligible zombie and calls `setOnFire` — which, as recovered, burns for a single frame: see below. **The reimpl deliberately diverges here.** | `ZFFightMan pixelFire`, `ZombieActor fightUpdate:` 0x4dedc |
 | `telekinesis` | **no damage** — `knockBackBy:force:` + `stunSelfFor:` only | `ZFFightMan telekinesis:` |
 
 ### pixelFire burns for exactly one frame
@@ -93,14 +93,60 @@ frame: `5 % ÷ 60 ≈ 0.083 %` of max HP, about 2 damage on a 3000 HP zombie. No
 either (the only `setLockState: 0` is on an unrelated path).
 
 That is near-certainly a source bug — the surrounding code fetches the enemy, and moving to your own
-position is a no-op — but it is what ships. **`pixelFire` is an attack interrupt with a cosmetic
-flourish** (cancelled swing, `stun.wav`, `pixelExplosion` particles), not a damage-over-time. The
-reimpl models exactly that, and `PIXEL_FIRE_BURN_MS` is gone. Do not "restore" the burn.
+position is a no-op. As shipped, **`pixelFire` is an attack interrupt with a cosmetic flourish**
+(cancelled swing, `stun.wav`, `pixelExplosion` particles), not a damage-over-time.
+
+#### DELIBERATE DIVERGENCE (ruleset 31): the reimpl burns
+
+The reading above is what the binary does, and it stands. What the reimpl does is different, on
+purpose. A one-frame burn makes the boss's headline special worth about two damage — the player
+cannot see it, cannot answer it, and cannot lose to it — so the reimpl keeps the recovered RATE and
+replaces the accidental duration with a real one:
+
+* the burn lasts `PIXEL_FIRE_BURN_MS` (`src/raid/videoGameStage.ts`) at the recovered
+  5 %/s, so a full untapped burn costs 30 % of max HP;
+* the burning zombie panics — no attacks, no advance, arms overhead, pacing on the spot;
+* the player can **tap the fire out**, which is transcribed as a `fireTap` input and replayed by
+  the verifier (the burn is fully simulated, so an untranscribed smother would desynchronise the
+  two simulations exactly as the ruleset-14 wall bug did).
+
+The cancelled swing, the single-target pick and the 5 %/s rate are all still ground truth. Only the
+duration is ours. If you are here to make the reimpl faithful again, the thing to change is
+`PIXEL_FIRE_BURN_MS`, not `BURN_MAX_HP_FRACTION_PER_SEC`.
 
 Scope check: `pixelFire` appears in exactly ONE unit's `bossActions` in the whole game —
 `VideoGameStageBossActor`, raid 9 (unlock level 43). Likewise `telekinesis` (RobotStageActorBrainBot,
 whose action carries an explicit `"damage": "0"`, corroborating the no-damage reading) and
 `turnZombie` (the same Video Games boss).
+
+### turnZombie CONVERTS — it does not kill
+
+`turnZombie` is the other Video Games boss action, and the reimpl had it modelled as
+`dealDamage(victim, victim.hp)`: the front zombie was dealt its own remaining hit points and died
+where it stood. Nothing was thrown at it, nothing animated, and no attacker was within reach — the
+zombie simply vanished, and went home a permanent casualty. **That is the "zombies die suddenly for
+no reason" players reported on this invasion.**
+
+It was never a kill. The action's name, the raid's own flavour text ("wants to turn all zombies into
+video game cannon fodder"), and `VideoGameStageZombieActor` — a fully authored unit (con 10000,
+dex 6, str 8, `VideoGameZombieBite`) shipping its own idle/attack frames but referenced by no
+`stageSettings` entry anywhere, because nothing spawns it as wave population — all say the same
+thing: the zombie changes sides.
+
+The reimpl (ruleset 31) does that. The victim is marked `taken` — alive, out of this fight, and
+still a survivor rather than a loss, exactly like a Beach crab's passenger — and a pixel zombie
+stands up on the abductee's mark mid-lane carrying its id. `PIXEL_ZOMBIE_TAPS` taps break it open
+and hand the zombie back (`turnedTap`, transcribed).
+
+Three consequences follow from that con of 10000, which is a **million hit points**:
+
+* it is **excluded from the win condition**. A fight that had to kill it could never end.
+* it is **not a lane blocker** and **not a melee target**. Measured: as a blocker it made the
+  invasion unwinnable outright for a maxed roster, and as a target the army just poured the whole
+  four minutes into it. It stands where it lands, swings at whatever files past, and answers only
+  to taps.
+* only **one stands at a time** (the `allowedToSummonBoss` shape), so clearing it is what lets
+  Zedzox turn another.
 
 ## Throws and specials share ONE action budget
 
