@@ -7,7 +7,7 @@ import { CropConfig } from "../Field";
 import type { EpicBossRun } from "../epicBoss/types";
 import type { ZombiePowderStats } from "../zombieColorMixerBucket";
 
-export type Mode = "walk" | "till" | "plant" | "move" | "place" | "remove" | "instagrow" | "rotate";
+export type Mode = "walk" | "till" | "plant" | "move" | "place" | "remove" | "instagrow" | "rotate" | "fence";
 
 // A card in the object buy menu (tree / decor / functional).
 export interface ObjCard {

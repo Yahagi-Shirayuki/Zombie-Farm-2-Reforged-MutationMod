@@ -464,7 +464,7 @@ export class Hud {
       if (e.repeat || hasOverlay()) return;
 
       const key = e.key.toLowerCase();
-      if (!new Set(["1", "2", "3", "4", "5", "p", "m", "i", "z", "b", "r", "q"]).has(key)) return;
+      if (!new Set(["1", "2", "3", "4", "5", "6", "p", "m", "i", "z", "b", "r", "q"]).has(key)) return;
       this.endTemporaryPan();
       const handled = () => { e.preventDefault(); this.audio.play("menuClick"); };
       if (key === "1") { handled(); activate("walk"); }
@@ -475,6 +475,7 @@ export class Hud {
       }
       else if (key === "4") { handled(); activate("till"); }
       else if (key === "5") { handled(); activate("remove"); }
+      else if (key === "6") { handled(); activate("fence"); }
       else if (key === "p") {
         handled();
         this.openPlantMenu((cfg) => this.setPlanting(cfg));
@@ -1116,7 +1117,8 @@ export class Hud {
       this.toolBtn("rotate", "button_rotate.png", "Rotate", "3", () =>
         this.onRotateTool ? this.onRotateTool() : this.setMode("rotate")),
       this.toolBtn("till", "button_plow.png", "Plow", "4", () => this.setMode("till")),
-      this.toolBtn("remove", "button_sell.png", "Remove", "5", () => this.setMode("remove"))
+      this.toolBtn("remove", "button_sell.png", "Remove", "5", () => this.setMode("remove")),
+      this.toolBtn("fence", "button_fence.png", "Fence", "6", () => this.setMode("fence"))
     );
     this.el.appendChild(bar);
     this.refreshTools();
@@ -1153,6 +1155,7 @@ export class Hud {
     return m === "till" ? "button_plow.png"
       : m === "plant" ? "button_plant.png"
       : m === "remove" ? "button_sell.png"
+      : m === "fence" ? "button_fence.png"
       : m === "rotate" ? "button_rotate.png"
       : m === "move" || m === "place" ? "button_move.png"
       : "button_multitool.png";

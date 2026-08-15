@@ -15,7 +15,7 @@ import { harvestXp, plowXp } from "./farmRewards";
 import type { FarmJobQueueSave, FarmJobSave } from "./save/schema";
 import { rollCropCrystalHarvest } from "./powderMachine";
 
-export type JobKind = "till" | "plant" | "harvest";
+export type JobKind = "till" | "plant" | "harvest" | "fence";
 export type JobCurrency = "gold" | "brains";
 // "harvestTree" = harvest a placed fruit tree (uses the harvest animation, 2x fast).
 type Kind = JobKind | "walk" | "harvestTree";
@@ -27,7 +27,8 @@ const WORK_MS = 1250; // ~1.25s of hoeing per plot
 // one giant dt would otherwise stop at the first boundary and discard the rest.
 const CATCH_UP_STEP_SEC = 0.05;
 const PLOW_COST = 10;
-const LABEL: Record<JobKind, string> = { till: "Plow", plant: "Plant", harvest: "Harvest" };
+const LABEL: Record<JobKind, string> = { till: "Plow", plant: "Plant", harvest: "Harvest", fence: "Fence" };
+const FENCE_MARKER = 0xf563ff;
 
 // Progress bar: about half a tilled plot wide, squarish, filled left-to-right.
 const BAR_W = PLOT * TILE_W * 0.5;
@@ -49,6 +50,7 @@ interface Job {
   bar: Bar | null; // progress bar, created only while being worked
   cfg?: CropConfig; // what to plant (plant jobs only)
   objId?: string; // target object (harvestTree jobs only)
+  harvestLocked?: boolean; // target fence state (fence jobs only)
   pendKey?: string; // this job's dedupe key in `pending`
 }
 
@@ -133,7 +135,7 @@ export class JobSystem {
 
   // Queue a tool action on the plot under (col,row) if it's valid and not already
   // queued. Returns true if a job was added.
-  enqueue(kind: JobKind, col: number, row: number, cfg?: CropConfig): boolean {
+  enqueue(kind: JobKind, col: number, row: number, cfg?: CropConfig, harvestLocked?: boolean): boolean {
     // Resolve the target plot origin (till may place a NEW plot; plant/harvest act
     // on the existing plot under the tile).
     let oc: number, or: number;
@@ -141,9 +143,15 @@ export class JobSystem {
       const t = this.field.resolveTill(col, row);
       if (!t.valid) return false;
       oc = t.oc; or = t.or;
+    } else if (kind === "fence") {
+      const at = this.field.plotOriginAt(col, row);
+      if (!at) return false;
+      oc = at.oc; or = at.or;
+      harvestLocked ??= !this.field.isHarvestLocked(oc, or);
+      if (!this.field.canSetHarvestLockedAt(oc, or, harvestLocked)) return false;
     } else {
       const at = this.field.plotOriginAt(col, row);
-      const ok = kind === "plant" ? this.field.canPlant(col, row) : this.field.isRipe(col, row);
+      const ok = kind === "plant" ? this.field.canPlant(col, row) : this.field.isHarvestable(col, row);
       if (!at || !ok) return false;
       oc = at.oc; or = at.or;
     }
@@ -170,8 +178,11 @@ export class JobSystem {
 
     if (kind === "till") this.field.reserveTill(oc, or); // hold the area while queued
     const c = this.field.plotCenterOf(oc, or);
-    const diamond = this.makeDiamond(c.x, c.y, PLOT, kind === "till");
-    this.queue.push({ kind, oc, or, cx: c.x, cy: c.y, queuedAt: Date.now(), diamond, bar: null, cfg, pendKey: k });
+    const diamond = this.makeDiamond(c.x, c.y, PLOT, kind === "till", kind === "fence" ? FENCE_MARKER : undefined);
+    this.queue.push({
+      kind, oc, or, cx: c.x, cy: c.y, queuedAt: Date.now(), diamond, bar: null,
+      cfg, harvestLocked, pendKey: k,
+    });
     this.pending.add(k);
     this.onQueueChanged?.();
     return true;
@@ -203,6 +214,11 @@ export class JobSystem {
   isPlotTillPending(col: number, row: number): boolean {
     const at = this.field.plotOriginAt(col, row);
     return !!at && this.pending.has(this.key("till", at.oc, at.or));
+  }
+
+  isPlotFencePending(col: number, row: number): boolean {
+    const at = this.field.plotOriginAt(col, row);
+    return !!at && this.pending.has(this.key("fence", at.oc, at.or));
   }
 
   isTreeHarvestPending(objId: string): boolean {
@@ -265,6 +281,7 @@ export class JobSystem {
         queuedAt: job.queuedAt,
         cropKey: job.cfg?.key,
         objectId: job.objId,
+        harvestLocked: job.harvestLocked,
       })),
     };
   }
@@ -289,6 +306,8 @@ export class JobSystem {
       } else if (job.kind === "plant") {
         const crop = job.cropKey ? cropOf(job.cropKey) : undefined;
         if (crop) this.enqueue("plant", job.oc, job.or, crop);
+      } else if (job.kind === "fence") {
+        if (typeof job.harvestLocked === "boolean") this.enqueue("fence", job.oc, job.or, undefined, job.harvestLocked);
       } else if (job.kind === "till" || job.kind === "harvest") {
         this.enqueue(job.kind, job.oc, job.or);
       }
@@ -439,8 +458,17 @@ export class JobSystem {
         this.workMs = this.workTotal;
         this.actor.setWorking(true, fast ? 2 : 1);
         const invasiveMint = next.kind === "harvest" && this.field.isInvasiveMintAt(next.oc, next.or);
-        this.playSfx(invasiveMint ? "till" : fast ? "harvest" : (next.kind as JobKind)); // hoe sound
-        next.bar = this.makeBar(invasiveMint ? "Plowing" : fast ? "Harvest" : LABEL[next.kind as JobKind], next.cx, next.cy);
+        const fenceAction = next.kind === "fence" ? (next.harvestLocked ? "Install" : "Remove") : "";
+        let workSfx: Sfx;
+        if (invasiveMint) workSfx = "till";
+        else if (fast) workSfx = "harvest";
+        else if (next.kind === "fence") workSfx = next.harvestLocked ? "place" : "sell";
+        else workSfx = next.kind as "till" | "plant" | "harvest";
+        this.playSfx(workSfx); // hoe sound
+        next.bar = this.makeBar(
+          invasiveMint ? "Plowing" : fast ? "Harvest" : fenceAction || LABEL[next.kind as JobKind],
+          next.cx, next.cy
+        );
       });
       // A malformed/off-field destination must not leave this job active forever
       // and block every queued action behind its persistent green marker.
@@ -469,7 +497,8 @@ export class JobSystem {
 
   private mutationBlocked(kind: Kind): boolean {
     if (kind === "walk") return false;
-    const serverOwned = kind === "harvestTree" ? !!this.state.onTreeHarvest : !!this.state.onFarm;
+    const serverOwned = kind === "fence" ? false
+      : kind === "harvestTree" ? !!this.state.onTreeHarvest : !!this.state.onFarm;
     return serverOwned && !!this.state.canMutateOnline && !this.state.canMutateOnline();
   }
 
@@ -489,7 +518,14 @@ export class JobSystem {
       }
       return true;
     }
-    if (job.kind === "till") {
+    if (job.kind === "fence") {
+      if (typeof job.harvestLocked !== "boolean") return true;
+      const changed = this.field.setHarvestLockedAt(job.oc, job.or, job.harvestLocked);
+      if (changed) {
+        this.float(job.cx, job.cy, job.harvestLocked ? "Fence installed!" : "Fence removed!");
+        this.playSfx(job.harvestLocked ? "place" : "sell");
+      }
+    } else if (job.kind === "till") {
       const cost = this.plowCost(); // 0 with a Plowing Monolith
       const xp = plowXp(cost === 0);
       if (this.state.gold < cost) {
@@ -644,13 +680,13 @@ export class JobSystem {
   }
 
   // Green plot diamond marking a queued/working plot (under the farmer).
-  private makeDiamond(cx: number, cy: number, tiles = PLOT, plow = false): Graphics {
+  private makeDiamond(cx: number, cy: number, tiles = PLOT, plow = false, color = 0x8df25a): Graphics {
     const w = tiles * HW;
     const h = tiles * HH;
     const g = new Graphics();
     g.moveTo(0, -h).lineTo(w, 0).lineTo(0, h).lineTo(-w, 0).lineTo(0, -h)
-      .fill({ color: 0x8df25a, alpha: 0.28 })
-      .stroke({ width: 3, color: 0x8df25a, alpha: 0.95 });
+      .fill({ color, alpha: 0.28 })
+      .stroke({ width: 3, color, alpha: 0.95 });
     g.position.set(cx, cy);
     (plow ? this.field.plowHighlightLayer : this.field.highlightLayer).addChild(g);
     return g;

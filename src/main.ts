@@ -499,8 +499,14 @@ async function main() {
   const field = new Field(assets);
   world.addChild(field.container);
 
+  // Grown crop tops sort above plot dirt/back fences but below near fences.
+  world.addChild(field.cropEntityLayer);
+
+  // Plot fences draw over crops and sort against neighbouring fenced plots.
+  world.addChild(field.fenceLayer);
+
   // Placed objects (trees) and the actors share Field.entityLayer so the farmer
-  // depth-sorts correctly in front of / behind trees.
+  // and zombies stand over fenced plots while still depth-sorting with objects.
   world.addChild(field.entityLayer);
 
   // Plant/harvest job diamonds draw above entities so tall ripe crops do not clip
@@ -2076,6 +2082,8 @@ async function main() {
   const plowStrokeKeys = new Set<string>();
   const plowStrokeClaimed = new Set<string>();
   const plowStrokePreviews = new Map<string, Graphics>();
+  const fenceStrokeKeys = new Set<string>();
+  let fenceStrokeLock: boolean | null = null;
 
   const cancelZombieLongPress = () => {
     if (zombieLongPressTimer !== null) clearTimeout(zombieLongPressTimer);
@@ -2108,6 +2116,10 @@ async function main() {
     plowStrokeClaimed.clear();
     plowStrokeAnchor = null;
   };
+  const clearFenceStroke = () => {
+    fenceStrokeKeys.clear();
+    fenceStrokeLock = null;
+  };
   const recordTouchPlantTile = (col: number, row: number) => {
     const rawKey = tileKey(col, row);
     if (touchGestureTileKeys.has(rawKey)) return;
@@ -2133,6 +2145,20 @@ async function main() {
     for (const tile of touchGestureTiles) enqueueTool(tile.col, tile.row);
     clearTouchToolStroke();
   };
+  const recordFenceStrokeTile = (col: number, row: number): boolean => {
+    const origin = field.plotOriginAt(col, row);
+    if (!origin) return false;
+    const key = tileKey(origin.oc, origin.or);
+    if (fenceStrokeKeys.has(key)) return false;
+    fenceStrokeKeys.add(key);
+    if (fenceStrokeLock === null) fenceStrokeLock = !field.isHarvestLocked(col, row);
+    if (jobs.isPlotFencePending(origin.oc, origin.or)) return false;
+    if (!field.canSetHarvestLockedAt(origin.oc, origin.or, fenceStrokeLock)) return false;
+    return jobs.enqueue("fence", origin.oc, origin.or, undefined, fenceStrokeLock);
+  };
+  const commitFenceStroke = () => {
+    clearFenceStroke();
+  };
 
   // ---- multi-touch pinch-to-zoom (mobile) ----
   // Handled with native touch events (not Pixi pointers): e.touches reliably
@@ -2156,6 +2182,7 @@ async function main() {
     touchOutsideFarmPan = false;
     clearTouchToolStroke();
     clearPlowStroke();
+    clearFenceStroke();
     field.clearTillSelection();
     touchPinch = false;
     pinchDist = 0;
@@ -2187,6 +2214,7 @@ async function main() {
       clearHarvestStroke();
       lastPlot = "";
       clearPlowStroke();
+      clearFenceStroke();
       field.clearTillSelection();
       field.hideCursor();
       const g = pinchInfo(e.touches);
@@ -2248,7 +2276,7 @@ async function main() {
     }
     const origin = field.plotOriginAt(col, row);
     if (!origin) return null; // bare ground never becomes a select-tool plow target
-    const target: HarvestTarget | null = field.isRipe(col, row)
+    const target: HarvestTarget | null = field.isHarvestable(col, row)
       ? {
           kind: "plot", oc: origin.oc, or: origin.or,
           isZombie: field.ripeZombieAt(col, row),
@@ -2270,7 +2298,7 @@ async function main() {
       if (!field.isSpent(target.oc, target.or)) return false;
       return jobs.enqueue("till", target.oc, target.or);
     }
-    if (!field.isRipe(target.oc, target.or)) return false;
+    if (!field.isHarvestable(target.oc, target.or)) return false;
     return jobs.enqueue("harvest", target.oc, target.or);
   };
 
@@ -4531,6 +4559,7 @@ async function main() {
     zombieLongPressActivated = false;
     clearHarvestStroke();
     clearPlowStroke();
+    clearFenceStroke();
     pressStart.copyFrom(e.global);
     clearTouchToolStroke();
     if (visiting) {
@@ -4611,6 +4640,15 @@ async function main() {
       if (!touchOutsideFarmPan) beginPlowStroke(col, row, e.global.x, e.global.y);
       return;
     }
+    if (hud.mode === "fence") {
+      dragging = true;
+      moved = false;
+      last.copyFrom(e.global);
+      if (recordFenceStrokeTile(col, row)) audio.play("place");
+      lastPlot = tileKey(col, row);
+      field.setCursor(col, row, "fence");
+      return;
+    }
     dragging = true;
     moved = false;
     last.copyFrom(e.global);
@@ -4684,6 +4722,18 @@ async function main() {
       field.setObjectHighlight(id);
       if (id) field.hideCursor();
       else field.setCursor(col, row, "remove");
+      return;
+    }
+    if (hud.mode === "fence") {
+      field.setObjectHighlight(null);
+      field.setCursor(col, row, "fence");
+      if (dragging) {
+        const tk = tileKey(col, row);
+        if (tk !== lastPlot) {
+          if (recordFenceStrokeTile(col, row)) audio.play("place");
+          lastPlot = tk;
+        }
+      }
       return;
     }
     if (hud.mode === "instagrow") {
@@ -4841,7 +4891,7 @@ async function main() {
         } else if (objId && objDef) {
           // A placed decoration/tree/Pet Pen: Move / Rotate / Store / Sell popup.
           openObjectActionsFor(objId, objDef);
-        } else if (field.isRipe(col, row)) {
+        } else if (field.isHarvestable(col, row)) {
           const origin = field.plotOriginAt(col, row);
           if (origin) enqueueHarvestTarget({
             kind: "plot", oc: origin.oc, or: origin.or,
@@ -4935,6 +4985,19 @@ async function main() {
         hud.mode === "plant") {
       commitTouchToolStroke();
     }
+    if (dragging && hud.mode === "fence") {
+      commitFenceStroke();
+      dragging = false;
+      moved = false;
+      lastPlot = "";
+      pressPointerId = -1;
+      touchOutsideFarmPan = false;
+      touchSelectStartTile = null;
+      clearTouchToolStroke();
+      clearHarvestStroke();
+      clearPlowStroke();
+      return;
+    }
     endDrag(e);
     pressPointerId = -1;
     touchOutsideFarmPan = false;
@@ -4942,6 +5005,7 @@ async function main() {
     clearTouchToolStroke();
     clearHarvestStroke();
     clearPlowStroke();
+    clearFenceStroke();
   };
   app.stage.on("pointerup", onPointerUp);
   app.stage.on("pointerupoutside", onPointerUp);
@@ -4991,6 +5055,8 @@ async function main() {
       active: hud.mode === "till", onPick: () => equipTool("till") },
     { id: "remove", label: "Remove", icon: "button_sell.png", hint: "5",
       active: hud.mode === "remove", onPick: () => equipTool("remove") },
+    { id: "fence", label: "Fence", icon: "button_fence.png", hint: "6",
+      active: hud.mode === "fence", onPick: () => equipTool("fence") },
     { id: "plant", label: "Plantâ€¦", icon: "button_plant.png", hint: "P",
       active: hud.mode === "plant",
       onPick: () => hud.openPlantMenu((cfg) => hud.setPlanting(cfg)) },

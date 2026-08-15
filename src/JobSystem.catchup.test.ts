@@ -253,6 +253,48 @@ describe("JobSystem elapsed-time catch-up", () => {
     expect(sounds).toEqual([]);
   });
 
+  it("walks to a plot before installing or removing a fence lock", () => {
+    const walk = new FakeWalk();
+    let locked = false;
+    const applied: boolean[] = [];
+    const field = {
+      highlightLayer: new Container(), plowHighlightLayer: new Container(), labelLayer: new Container(),
+      plotOriginAt: (col: number, row: number) => ({ oc: col, or: row }),
+      plotCenterOf: (col: number, row: number) => ({ x: col, y: row }),
+      isHarvestLocked: () => locked,
+      canSetHarvestLockedAt: (_col: number, _row: number, next: boolean) => locked !== next,
+      setHarvestLockedAt: (_col: number, _row: number, next: boolean) => {
+        if (locked === next) return false;
+        locked = next;
+        applied.push(next);
+        return true;
+      },
+      hasFastWork: () => false,
+    };
+    const actor = { setWorking: vi.fn() };
+    const jobs = new JobSystem(
+      field as never, actor as never, walk as never,
+      { onFarm: null, onTreeHarvest: null, canMutateOnline: null } as never,
+      () => {},
+    );
+
+    expect(jobs.enqueue("fence", 4, 8, undefined, true)).toBe(true);
+    expect(locked).toBe(false); // queued, not instant
+    expect(field.highlightLayer.children).toHaveLength(1);
+
+    jobs.advanceElapsed(3);
+
+    expect(walk.arrivals).toEqual([4]);
+    expect(applied).toEqual([true]);
+    expect(locked).toBe(true);
+
+    expect(jobs.enqueue("fence", 4, 8, undefined, false)).toBe(true);
+    jobs.advanceElapsed(3);
+
+    expect(applied).toEqual([true, false]);
+    expect(locked).toBe(false);
+  });
+
   it("drops rejected walk destinations instead of freezing the job queue", () => {
     const walk = {
       moving: false,
@@ -282,7 +324,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     const field = {
       highlightLayer: new Container(), plowHighlightLayer: new Container(), labelLayer: new Container(),
       plotOriginAt: (col: number, row: number) => ({ oc: col, or: row }),
-      isRipe: () => true, ripeZombieAt: () => true,
+      isRipe: () => true, isHarvestable: () => true, ripeZombieAt: () => true,
       plotCenterOf: (col: number, row: number) => ({ x: col, y: row }),
       hasFastWork: () => false,
       harvestAt,

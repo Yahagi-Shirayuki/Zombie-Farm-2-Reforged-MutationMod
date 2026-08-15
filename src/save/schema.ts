@@ -108,7 +108,7 @@ export interface AlmanacSave {
 }
 
 export interface FarmJobSave {
-  kind: "till" | "plant" | "harvest" | "walk" | "harvestTree";
+  kind: "till" | "plant" | "harvest" | "fence" | "walk" | "harvestTree";
   oc: number;
   or: number;
   cx: number;
@@ -116,6 +116,7 @@ export interface FarmJobSave {
   queuedAt?: number;
   cropKey?: string;
   objectId?: string;
+  harvestLocked?: boolean;
 }
 
 export interface FarmJobQueueSave {
@@ -234,6 +235,8 @@ export interface PlotSave {
   oc: number;
   or: number;
   state: PlotStateSave;
+  /** Player fenced this plot to prevent manual/boost harvesting. */
+  harvestLocked?: boolean;
   /** Present iff state === "planted". */
   crop?: CropSave;
 }

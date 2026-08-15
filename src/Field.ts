@@ -2,7 +2,7 @@
 // happens on PLOTS — 4x4 tile blocks that can be placed FREELY anywhere a 4x4 area
 // is available (not on a fixed lattice). A plot cycles through soil states:
 //   plowed -> planted -> (grows) -> harvest -> dirt (crop) / hole (zombie) -> re-till.
-import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
+import { Assets, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import {
   DIRT_FILE, GameAssets, HOLE_FILE, multiplyObjectTint, objectTint, PlaceableDef, PLOWED_FILE, SEED_FILE,
 } from "./assets";
@@ -14,6 +14,7 @@ import { leafTexture, ParticleConfig, ParticleField } from "./raid/Particles";
 import type { PlacedObjectSave, PlotSave } from "./save/schema";
 import { plotsTouch } from "./zombie/cropMutations";
 import { isZombieColorMixerBucketKey } from "./zombieColorMixerBucket";
+import { BASE } from "./base";
 
 export const PLOT = 4; // tiles per plot side
 export const DIAMINT_KEY = "diamint";
@@ -81,6 +82,15 @@ const PEN_OVERLAY_Z = 100000;
 // be. Deliberately far below every actor bias (pets 0.4, zombies 0.5, farmer 0.6): it
 // must separate the pair without ever tying with, or overtaking, a character.
 const BACK_LAYER_BIAS = 0.1;
+const FENCE_BACK_URL = `${BASE}assets/ui/fence_back.png`;
+const FENCE_FRONT_URL = `${BASE}assets/ui/fence_front.png`;
+// Tweak these in screen pixels if the fence art needs nudging against the plot.
+const FENCE_BACK_OFFSET_X = 0;
+const FENCE_BACK_OFFSET_Y = -39;
+const FENCE_FRONT_OFFSET_X = 0;
+const FENCE_FRONT_OFFSET_Y = 12;
+const FENCE_BACK_SORT_BIAS = 0.12;
+const FENCE_FRONT_SORT_BIAS = 0.18;
 
 export interface CropConfig {
   key: string;
@@ -205,6 +215,9 @@ interface Plot {
   soil: Sprite;
   state: PlotState;
   crop?: Planting;
+  harvestLocked?: boolean;
+  fenceBack?: Sprite;
+  fenceFront?: Sprite;
 }
 
 export interface TillTarget {
@@ -258,9 +271,14 @@ export class Field {
   // The soil half of every GROWN crop. A crop renders as two pixel-aligned
   // sprites: its untouched art here (below the entity layer, so its baked dirt
   // can never draw over anything) and a soil-keyed plants-only copy up in the
-  // entity layer. This is what stops a plot's dirt from clipping the tall
+  // crop entity layer. This is what stops a plot's dirt from clipping the tall
   // crop/zombie on the plot behind it. See layoutCrop and cropTop.ts.
   readonly cropGroundLayer = new Container();
+  // Grown crop tops live between plot dirt/back-fence and front-fence/characters.
+  readonly cropEntityLayer = new Container();
+  // main.ts parents this above cropEntityLayer and below entityLayer. Back/front
+  // fence pieces share the layer so neighbouring plots sort against each other.
+  readonly fenceLayer = new Container();
   readonly groundObjectLayer = new Container();
   readonly highlightLayer = new Container();
   readonly labelLayer = new Container();
@@ -281,6 +299,7 @@ export class Field {
   private tillSelectionHandles = new Map<TillHandleDirection, { x: number; y: number }>();
   private cursorGreen = new Graphics();
   private cursorRed = new Graphics();
+  private cursorFence = new Graphics();
   private cursorLabel!: Text;
   private objGhost = new Sprite(); // placement/move preview
   private ghostFlipped = false; // current horizontal-flip of the placement ghost
@@ -305,6 +324,8 @@ export class Field {
   private fenceBlock = new Map<string, Set<string>>();
   private nextObjId = 1;
   private highlightedObj: string | null = null;
+  private fenceBackTex = Texture.EMPTY;
+  private fenceFrontTex = Texture.EMPTY;
   onInvasiveMintChanged: (() => void) | null = null;
 
   constructor(private assets: GameAssets) {
@@ -317,17 +338,19 @@ export class Field {
     this.objGhost.visible = false;
     this.cursor.addChild(this.objGhost);
     this.cropGroundLayer.sortableChildren = true;
+    this.cropEntityLayer.sortableChildren = true;
+    this.fenceLayer.sortableChildren = true;
     // NOTE: highlightLayer is intentionally NOT parented here. It must draw ABOVE
     // the entity layer so the green job diamond is not occluded by a ripe crop's
     // tall sprite (which graduates into entityLayer) — otherwise the top of the
     // harvest highlight gets clipped by the crop. main parents it above entityLayer.
     this.container.addChild(
       this.groundLayer, this.plotLayer, this.plowHighlightLayer,
-      this.cropSeedLayer, this.cropGroundLayer,
-      this.groundObjectLayer
+      this.cropSeedLayer, this.cropGroundLayer, this.groundObjectLayer
     );
     this.plowHighlightLayer.addChild(this.tillSelectionLayer);
     this.fxLayer.addChild(this.fx.container);
+    void this.loadFenceTextures();
   }
 
   private fit(sp: Sprite, tex: Texture, col: number, row: number, tiles: number) {
@@ -338,6 +361,95 @@ export class Field {
     const p = gridToScreen(col, row);
     const gap = (tiles * TILE_H - tex.height * scale) / 2;
     sp.position.set(p.x, p.y + gap);
+  }
+
+  private async loadFenceTextures() {
+    try {
+      const [back, front] = await Promise.all([
+        Assets.load<Texture>(FENCE_BACK_URL),
+        Assets.load<Texture>(FENCE_FRONT_URL),
+      ]);
+      this.fenceBackTex = back;
+      this.fenceFrontTex = front;
+      for (const p of this.plots.values()) {
+        if (p.harvestLocked) this.syncFence(p);
+      }
+    } catch (error) {
+      console.warn("[field] failed to load plot fence art", error);
+    }
+  }
+
+  private layoutFence(p: Plot) {
+    if (p.fenceBack) {
+      this.fit(p.fenceBack, this.fenceBackTex, p.oc, p.or, PLOT);
+      p.fenceBack.position.x += FENCE_BACK_OFFSET_X;
+      p.fenceBack.position.y += FENCE_BACK_OFFSET_Y;
+      setFootprint(p.fenceBack, p.oc, p.or, p.oc + PLOT - 1, p.or + PLOT - 1, FENCE_BACK_SORT_BIAS);
+    }
+    if (p.fenceFront) {
+      this.fit(p.fenceFront, this.fenceFrontTex, p.oc, p.or, PLOT);
+      p.fenceFront.position.x += FENCE_FRONT_OFFSET_X;
+      p.fenceFront.position.y += FENCE_FRONT_OFFSET_Y;
+      setFootprint(p.fenceFront, p.oc, p.or, p.oc + PLOT - 1, p.or + PLOT - 1, FENCE_FRONT_SORT_BIAS);
+    }
+  }
+
+  private clearFence(p: Plot) {
+    p.fenceBack?.destroy();
+    p.fenceFront?.destroy();
+    p.fenceBack = undefined;
+    p.fenceFront = undefined;
+    p.harvestLocked = false;
+  }
+
+  private syncFence(p: Plot) {
+    if (!p.harvestLocked) {
+      this.clearFence(p);
+      return;
+    }
+    if (!p.fenceBack) {
+      p.fenceBack = new Sprite(this.fenceBackTex);
+      this.fenceLayer.addChild(p.fenceBack);
+    }
+    if (!p.fenceFront) {
+      p.fenceFront = new Sprite(this.fenceFrontTex);
+      this.fenceLayer.addChild(p.fenceFront);
+    }
+    this.layoutFence(p);
+  }
+
+  setHarvestLockedAt(col: number, row: number, locked: boolean): boolean {
+    const at = this.plotOriginAt(col, row);
+    if (!at) return false;
+    const p = this.plots.get(this.key(at.oc, at.or));
+    if (!p || !!p.harvestLocked === locked) return false;
+    p.harvestLocked = locked;
+    this.syncFence(p);
+    return true;
+  }
+
+  toggleHarvestLockedAt(col: number, row: number, locked?: boolean): boolean {
+    const at = this.plotOriginAt(col, row);
+    if (!at) return false;
+    const p = this.plots.get(this.key(at.oc, at.or));
+    if (!p) return false;
+    const next = locked ?? !p.harvestLocked;
+    if (!!p.harvestLocked === next) return false;
+    p.harvestLocked = next;
+    this.syncFence(p);
+    return true;
+  }
+
+  isHarvestLocked(col: number, row: number): boolean {
+    const at = this.plotOriginAt(col, row);
+    return !!at && !!this.plots.get(this.key(at.oc, at.or))?.harvestLocked;
+  }
+
+  canSetHarvestLockedAt(col: number, row: number, locked: boolean): boolean {
+    const at = this.plotOriginAt(col, row);
+    if (!at) return false;
+    const p = this.plots.get(this.key(at.oc, at.or));
+    return !!p && !!p.harvestLocked !== locked;
   }
 
   // Per-tile texture VARIANT (stable). The authored base-field asset supplies a
@@ -435,6 +547,7 @@ export class Field {
     };
     diamond(this.cursorGreen, 0x8df25a);
     diamond(this.cursorRed, 0xff5a5a);
+    diamond(this.cursorFence, 0xf563ff);
     this.cursorLabel = new Text({
       text: "",
       style: {
@@ -444,7 +557,7 @@ export class Field {
     });
     this.cursorLabel.anchor.set(0.5, 1);
     this.cursorLabel.position.set(0, -h - 6);
-    this.cursor.addChild(this.cursorGreen, this.cursorRed, this.cursorLabel);
+    this.cursor.addChild(this.cursorGreen, this.cursorRed, this.cursorFence, this.cursorLabel);
     this.cursor.visible = false;
   }
 
@@ -538,6 +651,9 @@ export class Field {
     const c = this.plots.get(this.key(at.oc, at.or))!.crop;
     return !!c && (c.cfg.key === INVADING_MINT_KEY || c.ageMs >= c.cfg.growMs);
   }
+  isHarvestable(col: number, row: number): boolean {
+    return this.isRipe(col, row) && !this.isHarvestLocked(col, row);
+  }
   hasCrop(col: number, row: number): boolean {
     const at = this.plotOriginAt(col, row);
     return !!at && !!this.plots.get(this.key(at.oc, at.or))!.crop;
@@ -565,6 +681,7 @@ export class Field {
   ripeZombieAt(col: number, row: number): boolean {
     const at = this.plotOriginAt(col, row);
     if (!at) return false;
+    if (this.plots.get(this.key(at.oc, at.or))!.harvestLocked) return false;
     const c = this.plots.get(this.key(at.oc, at.or))!.crop;
     return !!c && c.ageMs >= c.cfg.growMs && !!c.cfg.isZombie;
   }
@@ -627,6 +744,7 @@ export class Field {
     this.forEachTile(toOc, toOr, (t) => this.tilePlot.set(t, toKey));
 
     this.fit(plot.soil, plot.soil.texture, toOc, toOr, PLOT);
+    this.layoutFence(plot);
     if (plot.crop) {
       // Re-layout re-parents by stage, so pass the stage the crop is actually on.
       plot.crop.baseY = this.layoutCrop(
@@ -646,6 +764,7 @@ export class Field {
     this.cursor.position.set(c.x, c.y);
     this.cursorGreen.visible = valid;
     this.cursorRed.visible = !valid;
+    this.cursorFence.visible = false;
     this.cursorLabel.visible = true;
     this.cursorLabel.text = "Move";
     this.cursor.visible = true;
@@ -659,6 +778,7 @@ export class Field {
     const p = this.plots.get(k);
     if (!p) return false;
     if (p.crop) destroyCrop(p.crop); // both crop halves; auto-remove from parents
+    this.clearFence(p);
     this.plotLayer.removeChild(p.soil);
     p.soil.destroy();
     this.forEachTile(at.oc, at.or, (t) => this.tilePlot.delete(t));
@@ -730,7 +850,7 @@ export class Field {
   ripePlots(): { oc: number; or: number; isZombie: boolean }[] {
     const out: { oc: number; or: number; isZombie: boolean }[] = [];
     for (const p of this.plots.values())
-      if (p.crop && p.crop.cfg.key !== INVADING_MINT_KEY && p.crop.ageMs >= p.crop.cfg.growMs)
+      if (p.crop && !p.harvestLocked && p.crop.cfg.key !== INVADING_MINT_KEY && p.crop.ageMs >= p.crop.cfg.growMs)
         out.push({ oc: p.oc, or: p.or, isZombie: !!p.crop.cfg.isZombie });
     return out;
   }
@@ -927,10 +1047,10 @@ export class Field {
    *    - the untouched art in cropGroundLayer (below the entity layer), which carries
    *      the baked soil — because it sits under every entity its dirt can never draw
    *      over a neighbouring plot's crop, and
-   *    - a plants-only copy (soil keyed out, assets.cropTop) in the depth-sorted
-   *      entityLayer, footprinted on the whole 4x4 plot like a placed object.
-   *  So the plant still sorts correctly against actors and other crops, but a plot's
-   *  dirt no longer clips the tall crop/zombie growing on the plot behind it. */
+   *    - a plants-only copy (soil keyed out, assets.cropTop) in cropEntityLayer,
+   *      footprinted on the whole 4x4 plot like a placed object.
+   *  So the plant still sorts correctly against other crops, stays behind plot fences,
+   *  and a plot's dirt no longer clips the tall crop/zombie growing behind it. */
   private layoutCrop(c: Planting, stageFile: string, oc: number, or: number): number {
     const full = this.assets.crop[stageFile];
     const top = this.assets.cropTop[stageFile] ?? full;
@@ -961,7 +1081,7 @@ export class Field {
       // whole 4x4 plot, exactly like a 4x4 object), and the full art (with soil)
       // renders beneath in cropGroundLayer, keyed to the plot's front-corner depth.
       c.sprite.texture = top;
-      this.entityLayer.addChild(c.sprite);
+      this.cropEntityLayer.addChild(c.sprite);
       setFootprint(c.sprite, oc, or, oc + PLOT - 1, or + PLOT - 1);
       const g = (c.groundSprite ??= new Sprite());
       g.anchor.set(0.5, 1);
@@ -980,7 +1100,8 @@ export class Field {
   // `name` is the crop/zombie display name (for quest-progress matching).
   harvestAt(oc: number, or: number): HarvestResult | null {
     const p = this.plots.get(this.key(oc, or));
-    if (!p || !p.crop || (p.crop.cfg.key !== INVADING_MINT_KEY && p.crop.ageMs < p.crop.cfg.growMs)) return null;
+    if (!p || p.harvestLocked || !p.crop ||
+        (p.crop.cfg.key !== INVADING_MINT_KEY && p.crop.ageMs < p.crop.cfg.growMs)) return null;
     const { cfg } = p.crop;
     if (cfg.key === INVADING_MINT_KEY) {
       const stage = this.invasiveMintStage(p.crop);
@@ -1091,8 +1212,10 @@ export class Field {
       this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, true, o.flipped, o);
     }
     // Runs LAST in the frame (after the farmer + zombies have moved), so the
-    // footprint depth-sort sees final positions. Ground objects (roads/patch) share
-    // their own layer and only need ordering among themselves.
+    // footprint depth-sort sees final positions. Grown crops sort in their own layer:
+    // below near fences and characters, above dirt and far fences.
+    sortLayer(this.cropEntityLayer);
+    sortLayer(this.fenceLayer);
     sortLayer(this.entityLayer);
     sortLayer(this.groundObjectLayer);
     // Mirror the depth order the entity sort just resolved onto the ground soil
@@ -1106,8 +1229,8 @@ export class Field {
   }
 
   // Position the cursor. "till" resolves free placement (green valid / red invalid);
-  // "plant"/"remove" act on the plot under the tile; null (select) shows nothing.
-  setCursor(col: number, row: number, tool: "till" | "plant" | "remove" | "grow" | null) {
+  // plot tools act on the plot under the tile; null (select) shows nothing.
+  setCursor(col: number, row: number, tool: "till" | "plant" | "remove" | "grow" | "fence" | null) {
     this.objGhost.visible = false; // farming cursor and object ghost are exclusive
     if (tool === null) {
       this.cursor.visible = false;
@@ -1127,16 +1250,19 @@ export class Field {
       valid = tool === "plant" ? this.canPlant(col, row)
         // Grow tool: only a still-growing crop is a valid target.
         : tool === "grow" ? (this.hasCrop(col, row) && !this.isRipe(col, row))
+        : tool === "fence" ? true
         : true;
     }
     const c = this.plotCenterOf(oc, or);
     this.cursor.position.set(c.x, c.y);
-    const showGreen = tool === "remove" ? false : valid;
+    const showFence = tool === "fence" && valid;
+    const showGreen = !showFence && tool !== "remove" && valid;
     this.cursorGreen.visible = showGreen;
-    this.cursorRed.visible = !showGreen;
+    this.cursorRed.visible = !valid || tool === "remove";
+    this.cursorFence.visible = showFence;
     this.cursorLabel.visible = true;
     this.cursorLabel.text = tool === "till" ? "Plow" : tool === "plant" ? "Plant"
-      : tool === "grow" ? "Grow" : "Remove";
+      : tool === "grow" ? "Grow" : tool === "fence" ? "Fence" : "Remove";
     this.cursor.visible = true;
   }
 
@@ -1824,6 +1950,7 @@ export class Field {
     const valid = this.canPlaceObject(oc, or, def, ignoreId);
     this.cursorGreen.visible = false;
     this.cursorRed.visible = false;
+    this.cursorFence.visible = false;
     this.cursorLabel.visible = false;
     this.cursor.position.set(0, 0); // ghost positions are world-space
     this.objGhost.texture = this.assets.objects[def.sprite] ?? Texture.EMPTY;
@@ -1864,6 +1991,7 @@ export class Field {
     const out: PlotSave[] = [];
     for (const p of this.plots.values()) {
       const ps: PlotSave = { oc: p.oc, or: p.or, state: p.state };
+      if (p.harvestLocked) ps.harvestLocked = true;
       if (p.crop) {
         ps.crop = {
           key: p.crop.cfg.key,
@@ -1887,11 +2015,13 @@ export class Field {
     for (const p of this.plots.values()) {
       p.soil.destroy();
       if (p.crop) destroyCrop(p.crop);
+      this.clearFence(p);
     }
     this.plots.clear();
     this.tilePlot.clear();
     this.reserved.clear();
     this.plotLayer.removeChildren();
+    this.fenceLayer.removeChildren();
 
     const soilFile: Record<PlotState, string> = {
       plowed: PLOWED_FILE,
@@ -1907,9 +2037,10 @@ export class Field {
       const soil = new Sprite();
       this.fit(soil, this.assets.soil[soilFile[ps.state]], oc, or, PLOT);
       this.plotLayer.addChild(soil);
-      const plot: Plot = { oc, or, soil, state: ps.state };
+      const plot: Plot = { oc, or, soil, state: ps.state, harvestLocked: !!ps.harvestLocked };
       this.plots.set(k, plot);
       this.forEachTile(oc, or, (t) => this.tilePlot.set(t, k));
+      this.syncFence(plot);
 
       if (ps.state === "planted" && ps.crop) {
         const base = resolve(ps.crop.key);
@@ -1958,6 +2089,7 @@ export class Field {
         if (
           !next ||
           current.state !== next.state ||
+          !!current.harvestLocked !== !!next.harvestLocked ||
           (current.state === "planted" &&
             (!current.crop || !next.crop ||
               current.crop.cfg.key !== next.crop.key ||
