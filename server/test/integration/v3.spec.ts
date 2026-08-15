@@ -1070,7 +1070,11 @@ describe("protocol v3 API", () => {
 
   it("spends a Brain Ticket for an elite invasion, and refuses without one", async () => {
     const session = await signIn();
-    await grantBalance(session, { gold: 30_000 });
+    // 9,500 XP is XP_THRESHOLDS[19] — exactly level 20, the Brain Ticket's Market gate.
+    // The gate is enforced on the SERVER (boostCatalog + engine's `power.buy`), so an
+    // account seeded with gold alone is level 1 and the purchase below is refused
+    // `locked`. See boostCatalogSync.test.ts for why that number lives in two places.
+    await grantBalance(session, { gold: 30_000, xp: 9_500 });
     await grantRoster(session, [{
       id: "elite-raid-zombie",
       key: "ZombieActorRegularTier1",

@@ -128,7 +128,7 @@ and that flag is per-ATTACK, not per-actor:
   this swing and writes `fightData.canInterrupt = !cantInterrupt`.
 * `-[Actor doneAttacking:]` (0x37cd8) puts it back to YES when the swing ends.
 * `-[Actor setInterrupt:]` and `-[CivilianActorFight civilianUpdate]` are the only other
-  writers. (Found with `tools/re/callers.py`, which walks selref materialisation — a plain
+  writers. (Found with `ZF2R_extracted/tools/re/callers.py`, which walks selref materialisation — a plain
   address xref misses ObjC property setters entirely.)
 
 `Attacks.json` carries `cantInterrupt` on **exactly four** attacks: `ZombieBash`,

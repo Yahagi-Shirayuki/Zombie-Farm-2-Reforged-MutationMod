@@ -22,7 +22,7 @@ and are not extracted from anything. Their sources all live in `tools/art/`, and
 - **Backdrops**, which have no catalog row and so carry no `credit`: the autumn sunset
   horizon (`farm_background_autumn_dusk.png`), and the tree-less base
   (`tools/art/farm_background_no_trees.png`) that `tools/prep_backgrounds.py` derives the
-  Lunar, Dead, Urban and Sakura horizons from. The tree-less base is a build input only;
+  Lunar, Dead, Urban, Sakura and Snowy horizons from. The tree-less base is a build input only;
   the sunset ships as-is.
 
 The copyright in each of these is its artist's, not The Playforge's, and the paragraph

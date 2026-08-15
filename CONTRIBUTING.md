@@ -112,9 +112,11 @@ or online mode — that last one narrows things down fast. Browser and device ma
 rendering and touch issues. Console errors are the single most useful thing you can
 paste.
 
-`window.ZF` exposes debug handles (app, world, field, farmer, zombies, state, HUD,
-jobs, audio, save manager, quests, quest bus, raids, and helpers like `ZF.runRaid`) if
-you want to poke at live state.
+In a dev build (`npm run dev`), `window.ZF` exposes debug handles (app, world, field,
+farmer, zombies, state, HUD, jobs, audio, save manager, quests, quest bus, periodic
+quests, raids, and helpers like `ZF.runRaid`) if you want to poke at live state. It is
+compiled out of production bundles, so it won't be there on the deployed site — for a
+report from a player, Settings → Diagnostics is the equivalent.
 
 Security-relevant bugs — anything letting a client forge currency, items, raid
 outcomes, or another player's state — should not be filed as a public issue. See

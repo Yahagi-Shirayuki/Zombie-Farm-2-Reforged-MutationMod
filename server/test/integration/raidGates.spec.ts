@@ -80,3 +80,74 @@ describe("raid start — pinned server state", () => {
     expect(released.status, JSON.stringify(released)).toBe("applied");
   });
 });
+
+// The gates on /raid/finish. These are the ones SECURITY.md's "Verification status"
+// claimed were covered by raidRewards.spec.ts — which is excluded, so they were not
+// running anywhere. The v2 spec asserted `bad_final_tick`; the v3 route spells the same
+// property as `future_finish`, and derives the outcome from the transcript rather than
+// reading a claim off the body at all.
+describe("raid finish — replay-derived, never client-claimed", () => {
+  /** Start a raid and hand back the session plus its id. */
+  async function startRaid(s: Awaited<ReturnType<typeof raidPlayer>>) {
+    const started = await call<{ ok: boolean; sessionId: string }>("POST", "/raid/start", s.token, {
+      raidId: 1, orderedUnitIds: ["z1"], rulesetVersion: RAID_RULESET_VERSION,
+    });
+    expect(started.body.ok, JSON.stringify(started.body)).toBe(true);
+    return started.body.sessionId;
+  }
+
+  it("refuses a finish paced further into the fight than real time allows", async () => {
+    // `pacedTick = floor((now - started_at) / 50) + 40`. A raid started milliseconds ago
+    // cannot honestly have reached tick 100000, so claiming it is a client running the
+    // fight faster than wall time — the cheapest way to shorten a long invasion. This is
+    // defense in depth BEHIND the replay, not a substitute for it: the replay decides who
+    // won, and this decides whether enough time has passed to have fought at all.
+    const s = await raidPlayer("raid-future-finish");
+    const sessionId = await startRaid(s);
+    const forged = await call<{ error: string }>("POST", "/raid/finish", s.token, {
+      sessionId, finalTick: 100_000, inputs: [],
+    });
+    expect(forged, JSON.stringify(forged.body)).toMatchObject({
+      status: 422, body: { error: "future_finish" },
+    });
+  });
+
+  it("pays nothing for a win asserted in the request body", async () => {
+    // The v2-era forgery: claim the outcome AND the reward. The v3 route has no `win`,
+    // `gold` or `xp` input — the only client-supplied outcome field is `clientWin`, which
+    // is ANDed (it can concede a loss, never claim a win). A body like this therefore
+    // carries no transcript, so it cannot produce a finished fight, and it must not settle
+    // as a win or move the balance.
+    const s = await raidPlayer("raid-forged-win");
+    const before = await call<any>("POST", "/bootstrap", s.token, {});
+    const sessionId = await startRaid(s);
+    const forged = await call<any>("POST", "/raid/finish", s.token, {
+      sessionId, win: true, gold: 999_999, xp: 999_999,
+    });
+    // Whichever way it fails, it must not be a paid win.
+    expect(forged.body?.win).not.toBe(true);
+    expect(forged.body?.gold ?? 0).toBe(0);
+    expect(forged.body?.xp ?? 0).toBe(0);
+
+    const after = await call<any>("POST", "/bootstrap", s.token, {});
+    expect(after.body.gameplay.balance).toEqual(before.body.gameplay.balance);
+  });
+
+  it("settles a retreat from the transcript, and replays the stored result on a retry", async () => {
+    // The positive half of the same property: the outcome comes from the inputs. A retreat
+    // transcript settles as a retreat, and re-posting it returns the STORED result rather
+    // than settling twice — which is what stops a duplicate finish from paying twice.
+    const s = await raidPlayer("raid-finish-idempotent");
+    const sessionId = await startRaid(s);
+    const body = { sessionId, finalTick: 0, inputs: [{ seq: 1, tick: 0, type: "retreat" }] };
+    const first = await call<any>("POST", "/raid/finish", s.token, body);
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.body.win).not.toBe(true);
+
+    const replayed = await call<any>("POST", "/raid/finish", s.token, body);
+    expect(replayed.status).toBe(200);
+    expect(replayed.body.gold).toBe(first.body.gold);
+    expect(replayed.body.xp).toBe(first.body.xp);
+    expect(replayed.body.win).toBe(first.body.win);
+  });
+});

@@ -408,6 +408,10 @@ friend codes, roster IDs, or escrow internals.
 Add Black Market wire types and API functions beside `src/net/api.ts`, but put cache,
 filter, cursor, and action orchestration in a focused `src/social/blackMarket.ts` module.
 
+> **As shipped, that split landed elsewhere:** there is no `src/social/blackMarket.ts`. The
+> client-side gating and mutation matching live in `src/blackMarketRules.ts`, the panel lives in
+> `src/hud.ts`, and the authoritative server logic is `server/src/v3/blackMarket.ts`.
+
 Before a market mutation:
 
 1. Ask `EconomyClient` to flush and await its protocol-v3 command queue.

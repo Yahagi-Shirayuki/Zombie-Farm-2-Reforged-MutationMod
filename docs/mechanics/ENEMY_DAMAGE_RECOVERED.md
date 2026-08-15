@@ -144,10 +144,10 @@ behaviour to replace it with.
 farm ramp into `attackCooldownMs` and flags the Scallywag; `BattleSim.cycleMs` applies the depth
 band and the mirror at fight time. `src/raid/balance.ts` is deleted.
 
-**This changes the deterministic transcript**, so `RAID_RULESET_VERSION` went 7 → 8 (it has
-since been bumped again — to **9** for the `pixelFire` and Mini Buddy corrections, and to **10**
-for the shared boss-action budget below — see the
-version history in `src/raid/replay.ts`) and
+**This changes the deterministic transcript**, so `RAID_RULESET_VERSION` went 7 → 8 (it has been
+bumped many times since — 9 for the `pixelFire` and Mini Buddy corrections, 10 for the shared
+boss-action budget below, and on past those; `src/raid/replay.ts` carries the authoritative
+version history and the current value, and is the only place to read it from) and
 `server/src/raidVerifier.ts` passes the same `{ raidId, playerLevel }` the client does. The epic
 boss builders (`src/epicBoss/combat.ts` and `server/src/v3/epicBoss.ts`) both dropped their ×2 —
 they must stay identical or the authoritative replay diverges.

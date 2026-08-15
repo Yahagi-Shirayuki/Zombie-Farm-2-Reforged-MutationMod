@@ -42,7 +42,7 @@ the worked example).
 | --- | --- | --- |
 | `api.spec.ts` | `/friends/block`, `/logout`, `/session/logout-all` | Partly — `v3.spec.ts` covers friend add/accept/requests and the whole gift flow. **Block and logout-all are covered nowhere.** |
 | `raidLoot.spec.ts` | `/raid/checkpoint`, loot rolls on `/raid/finish` | No. `/raid/checkpoint` has **no integration coverage at all**. |
-| `raidRewards.spec.ts` | reward/XP math on `/raid/finish` | Partly — `v3.spec.ts` settles raids but does not assert the payout curve. |
+| `raidRewards.spec.ts` | reward/XP math on `/raid/finish` | Partly — its **gate** assertions (a finish paced past real time, a body-asserted win paying nothing, a duplicate finish replaying the stored result) have been ported to `raidGates.spec.ts`. The **payout curve** is still asserted nowhere: `v3.spec.ts` settles raids without checking the numbers. |
 | `inventory.spec.ts` | boost consumption across `/raid/start` → `/raid/finish` | Partly — unit tests cover the catalog; nothing covers the round trip. |
 
 The highest-value port is `raidLoot.spec.ts`: `/raid/checkpoint` is a live, unverified

@@ -15,7 +15,9 @@ export interface BoostEcon {
   brains: boolean;
   /** Uses granted per purchase. */
   perPurchase: number;
-  /** Player level required (informational; unlock gating stays client-side for now). */
+  /** Player level required. ENFORCED — `v3/engine.ts` rejects a `power.buy` below it with
+   *  `locked`, so this is not informational and must track boosts.json's `level`.
+   *  `boostCatalogSync.test.ts` holds the two tables together. */
   level: number;
   /** Voucher boosts only ("gift" effect): the roster zombie key a use redeems into.
    *  Mirrors boosts.json `giftZombieKey`; every value is a real rosterCatalog key. */
@@ -29,7 +31,11 @@ export const BOOSTS: Readonly<Record<string, BoostEcon>> = {
   concentration: { cost: 1, brains: true, perPurchase: 2, level: 0 },
   golden_dice: { cost: 1, brains: true, perPurchase: 1, level: 0 },
   invasion_voucher: { cost: 2000, brains: false, perPurchase: 1, level: 0 },
-  brain_ticket: { cost: 10000, brains: false, perPurchase: 1, level: 0 },
+  // Level 20 to match boosts.json. It shipped at 0 here while the asset said 20, which
+  // made the Market gate client-side only — the button was hidden, but a `power.buy`
+  // command sent straight at /commands was applied, and an elite invasion is the most
+  // valuable thing a low-level account could have bought its way into.
+  brain_ticket: { cost: 10000, brains: false, perPurchase: 1, level: 20 },
 };
 
 /** The boost that bypasses the raid cooldown — consumed server-side on /raid/start.

@@ -25,10 +25,16 @@ export interface EpicBossDef {
   encounterMs: number;
   baseHp: number;
   multipliers: number[];
-  /** Rungs in this event's ladder. Every boss runs 20, which is exactly as many HP
-   *  multipliers as ZF2 ever authored (EpicBossHP.json): the seven bosses that used
-   *  to advertise 40 were padding levels 21-40 with a copy of level 20's multiplier,
-   *  so the back half of those ladders was 20 more fights at an unchanging 107x. */
+  /** Rungs in this event's ladder. Every boss runs 10, and each rung sums TWO of ZF2's
+   *  authored HP multipliers (EpicBossHP.json), so an event carries exactly the HP it
+   *  always did — 645x `baseHp` — in half as many fights.
+   *
+   *  Two cuts got it here. The seven bosses that advertised 40 were padding levels 21-40
+   *  with a copy of level 20's multiplier, so the back half was 20 more fights at an
+   *  unchanging 107x; that padding went first (40 -> 20). The bottom half of what was
+   *  left was then a formality for any real army — a rung costs at least one attempt
+   *  however far you overkill it — so pairs were merged (20 -> 10), which deletes those
+   *  without touching the rungs where HP genuinely gates progress. */
   maxLevel: number;
   introText: string;
   successText: string;

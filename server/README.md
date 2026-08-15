@@ -24,8 +24,10 @@ Core routes:
 - `POST /writer/acquire`, `POST /writer/release`, `GET /writer/status` — exclusive writer lease
 - `POST /raid/start`, `POST /raid/finish`, `POST /raid/revive`
 - `POST /epic-boss/activate|end|start|finish`
-- `GET /black-market/orders`, `GET /black-market/summary`, `POST /black-market/orders`,
-  `POST /black-market/orders/:id/cancel`, `POST /black-market/orders/:id/fulfill`
+- `GET /black-market/orders`, `GET /black-market/summary`, `GET /black-market/fulfillments`,
+  `GET /black-market/history`, `POST /black-market/orders`,
+  `POST /black-market/orders/:id/cancel`, `POST /black-market/orders/:id/fulfill`,
+  `POST /black-market/orders/:id/collect`, `POST /black-market/orders/:id/repost`
 - `GET /me`, `POST /username`, `POST /session/refresh`, `POST /logout`,
   `POST /session/logout-all`, `GET /session/list`, `POST /session/revoke`
 - `GET /friends`, `GET /friends/requests`, `GET /friends/:id/save` (read-only visit projection),
@@ -45,8 +47,10 @@ server-owned tables and catalogs) into the session row. `/raid/finish` accepts
 replaying that input transcript against the pinned config (`src/raidVerifier.ts` →
 `src/raid/replay.ts`), and rewards are priced from the server catalog against the replayed
 survivor ratio. An elapsed-time gate (`future_finish`) and ruleset-version pinning
-(`stale_ruleset`, currently `RAID_RULESET_VERSION = 10`) are defense-in-depth on top of the
-replay, not substitutes for it.
+(`stale_ruleset`, currently `RAID_RULESET_VERSION = 30` — declared once in
+`src/raid/replay.ts` and imported by both sides) are defense-in-depth on top of the replay,
+not substitutes for it. `/epic-boss/start` performs the same handshake and refuses a
+mismatched client with `426 stale_ruleset` before charging a token or a brain.
 
 The optional `clientWin` / `clientLosses` fields exist because the Beach crab and Circus
 trapeze hazards run **client-only** — `raidVerifier.grabberOf` returns `null`, so the server

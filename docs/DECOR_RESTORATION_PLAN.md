@@ -1,11 +1,15 @@
 # Decor restoration plan
 
+> **Status: SHIPPED (all four phases).** This is the original plan, kept for its rationale
+> rather than as a description of current behaviour. The "shipped" column below is a snapshot
+> of what this project delivered, **not a live count** — decor has been added since (the three
+> sakura trees, the Memorial Statue), so `placeables.json` and `public/assets/objects/` both
+> run ahead of the numbers here. Read the catalogs for current totals.
+
 Goal: every decor item from the source Market is in the game, renders in its intended
 colour, and seasonal content is labelled and gate-able.
 
-Scope in numbers:
-
-**All four phases are complete.**
+Scope in numbers, as of completion:
 
 | | start | shipped |
 |---|---|---|
@@ -169,7 +173,7 @@ so the popup could not be photographed in this environment.
 **Two pre-existing findings surfaced by this phase**, neither caused by it:
 - 42 rows carried `xp: 0` where the generator computes `floor(cost/100)`. The
   *unmodified* generator reproduces the same 42 diffs, so `prep_placeables.py` had
-  drifted from its asset since the DEFECTS.txt fixed-point verification. Both
+  drifted from its asset since the previous fixed-point verification. Both
   `buyXp` and `objectBuyXp` treat 0 as "derive", so no grant changed; the asset and
   `server/src/objectCatalog.ts` are now re-synced and the generator is a fixed point
   again (verified byte-identical over three runs).
@@ -273,8 +277,9 @@ charged, while an owned one still stores and re-places — both covered by new t
 
 ### Phase 5 — Cleanup — **DONE**
 
-- `DEFECTS.txt` records the generator drift each phase surfaced.
-- Both generators re-verified as fixed points (three runs, byte-identical output).
+- Both generators re-verified as fixed points (three runs, byte-identical output) — which is
+  the property that matters, since the drift each phase surfaced was always a generator that
+  had stopped reproducing its own asset.
 - Two more hardcoded-count tests replaced with the property they were reaching for
   (`server/test/objects.test.ts`); they named no missing key and only ever needed
   bumping as the catalog grew.

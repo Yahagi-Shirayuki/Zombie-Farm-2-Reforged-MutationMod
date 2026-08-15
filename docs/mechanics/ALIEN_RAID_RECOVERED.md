@@ -160,6 +160,15 @@ in `initActorSpecificAbilities`, so tag 11 is a generic boss effect, not an alie
 Six symptoms were reported against the reimplementation. Five are real deviations; one is
 not. Everything below is transcribed from the same ARMv7 binary.
 
+> **All five deviations below are FIXED and shipped (raid ruleset 27).** The "REAL BUG"
+> headings record what was wrong and how the binary says it should behave — they are the
+> derivation, not an open work list. What landed: the saucer is dropped at state 9 (§7.2),
+> a six-concurrent swarm on a 10 s drip (§7.3, `ALIEN_MAX_ACTIVE` / `ALIEN_DRIP_MS` in
+> `src/raid/alienStage.ts`), a random per-alien tint (§7.4, `alienTintFor`), abducted
+> humans as the summon (§7.5, `ABDUCTEE_SEED` / `ABDUCTEE_POOL`), and lasers stopping on
+> descent (§7.6). One deliberate divergence rides on top: the minion's `str` ships at 5
+> rather than the recovered 6 — see `UNIT_OVERRIDES` in `tools/prep_raids.py` for why.
+
 Two prerequisites that unlock most of it:
 
 **`ZFFightMan` ivar map** (dumped from `class_ro_t.ivars`; the disassembler prints these as
@@ -301,8 +310,11 @@ So **Zombies vs Aliens is the only raid in the game with a timed drip** — ever
 only ever refills on a death. Combined with `population: 20`, the alien raid is designed as a
 *swarm*: up to six aliens on the field, a fresh one every 10 s, 20 to kill.
 
-`BattleSim.MAX_ACTIVE_ENEMIES = 1` (line 99) is the bug. The faithful model is 6 concurrent
-(1 + 5 slots) with a 10 s alien-only reinforcement clock on top of the on-death refill.
+The reimplementation had a fixed `BattleSim.MAX_ACTIVE_ENEMIES = 1`, which is what produced
+the symptom. The faithful model — 6 concurrent (1 + 5 slots) with a 10 s alien-only
+reinforcement clock on top of the on-death refill — now ships as `ALIEN_MAX_ACTIVE` and
+`ALIEN_DRIP_MS` in `src/raid/alienStage.ts`, read through `waveCadenceFor(raidId)` so every
+other raid keeps the on-death-only behaviour.
 
 `enemyPopulation` decrements only in `civilianUpdate` at state 100, and **only when the dying
 actor is not `fightMan.bossWall`** — so summoned abductees (§7.5) are free and do not eat the

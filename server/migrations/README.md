@@ -17,8 +17,9 @@ Migration filenames are deployed identities, not cosmetic labels. The two histor
 `0020_*` files are an immutable naming collision: renaming either would make an existing
 D1 database see the renamed destructive migration as pending. `npm run migrations:check`
 allows only that exact legacy pair, rejects future duplicate/gapped numbers, and verifies
-that this document's fresh-database baseline contains every migration filename. New
-migrations must therefore continue at `0031` and use one unique number per file.
+that the fresh-database baseline ledger contains every migration filename. New migrations
+must therefore continue at the next free number and use one unique number per file — run
+`npm run migrations:check`, which prints it (`0054` at the time of writing).
 
 ---
 
@@ -87,7 +88,12 @@ manual `schema.sql` touched the table):
 | `0037_raid_zombie_pity` | `ALTER TABLE raid_state_v3 ADD COLUMN zombie_dry_json` | Fails if `zombie_dry_json` exists. Every account starts empty (`'{}'`) — as above, dry wins before this were never counted, and `progress_json` records lifetime wins, not wins since the last rare zombie. |
 | `0038_gift_reward_roll` | Two `ALTER TABLE gifts ADD COLUMN reward_*` statements | Fails if either column exists. Gifts already sitting unclaimed in an inbox take the defaults (`'brain'` / `1`) and so still pay the single brain their sender was promised. |
 | `0039_roster_escrow_return` | `ALTER TABLE roster_v3 ADD COLUMN from_escrow` | Fails if `from_escrow` exists. Every existing unit starts at 0 — zombies restored from a cancelled sale before this were already credited to the Almanac, and those counts never decrease. |
-| `0044_black_market_mutation_width` | **Table rebuild**: recreates `black_market_orders` (to widen `mutation_required`'s CHECK from `BETWEEN 1 AND 8191` to `> 0`) *and* `black_market_receipts`, then drops and renames | The only rebuild since `0020`. Rows are copied by explicit column list; the old **receipts** table is dropped **before** the old orders table, because `DROP TABLE` fires `ON DELETE CASCADE` and would otherwise take every idempotency receipt with it. Re-running it fails (the `_0044` tables already exist) — snapshot both tables first, and verify the counts afterwards. |
+| `0040_black_market_delivery_claim` | Two `ALTER TABLE black_market_orders ADD COLUMN` (`claimed_at`, `delivered_unit_id`) + backfill | Fails if either column exists. Pre-existing FULFILLED rows are backfilled `claimed_at = closed_at`, so historical trades are treated as already collected rather than reappearing as claimable. |
+| `0041_roster_color` | Three `ALTER TABLE … ADD COLUMN` across `roster_v3` (`color`) and `black_market_orders` (`escrow_color`, `delivered_color`) | Fails if any of the three exists. Existing units keep `NULL`, which means "derive the colour from the species" — the same thing the client already did. |
+| `0043_black_market_brain_payout` | `ALTER TABLE black_market_orders ADD COLUMN payout_at` + backfill | Fails if `payout_at` exists. Historical FULFILLED rows backfill from `closed_at` so a long-settled sale isn't presented as an uncollected payout. |
+| `0044_black_market_mutation_width` | **Table rebuild**: recreates `black_market_orders` (to widen `mutation_required`'s CHECK from `BETWEEN 1 AND 8191` to `> 0`) *and* `black_market_receipts`, then drops and renames | The first rebuild since `0020`. Rows are copied by explicit column list; the old **receipts** table is dropped **before** the old orders table, because `DROP TABLE` fires `ON DELETE CASCADE` and would otherwise take every idempotency receipt with it. Re-running it fails (the `_0044` tables already exist) — snapshot both tables first, and verify the counts afterwards. |
+| `0045_black_market_gold` | **Table rebuild**, same shape as `0044`: recreates `black_market_orders` (to widen `price_brains` from `BETWEEN 1 AND 1000000` to `1 … 10,000,000` and add `currency`) and `black_market_receipts` | The second rebuild. The same cascade ordering applies for the same reason — receipts first. Re-running fails on the existing `_0045` tables; snapshot and verify counts as with `0044`. A pre-existing post needs no data change: it is already a brains post. |
+| `0048_fallen_released_at` | `ALTER TABLE fallen_v3 ADD COLUMN released_at` | Fails if `released_at` exists. Existing rows keep `NULL` and are ranked by `died_at`, as they were before. |
 
 The remaining current migrations use repeatable deletes or `CREATE … IF NOT EXISTS`
 (including `0029_restore_ledger`, which recreates the `ledger` table dropped by the v3
@@ -136,6 +142,21 @@ wrangler d1 execute zombiefarm --remote --command \
   `0049` — `ensureV3` writes it and `loadRows` selects it on every bootstrap, so the whole
   game 500s without it (not just one feature). Apply it BEFORE deploying the Worker; see
   "Applying migration `0049_periodic_quests`" in `../RUNBOOK.md`.
+- For the service-closedown switch, verify the one-row `service_state` table exists after
+  migration `0042`. Reads deliberately **fail open**, so a missing table serves `open` rather
+  than erroring — which means its absence is silent. Check it explicitly.
+- For the Memorial Statue, verify `fallen_v3` exists after migration `0047`. Both the invasion
+  and the Epic Boss settlement write to it, and the bootstrap projection selects it.
+- For the tier-4 variant mutations, migration `0050` rewrites live `roster_v3` and
+  `black_market_orders` masks onto the widened catalog bits. It is data-only, but it is a
+  **mask rewrite on live rows** — snapshot both tables first.
+- For the Epic Boss ladder cuts, `0051` (20 rungs → 10) and `0052` (per-boss `baseHp`) repair
+  runs that are mid-flight across the change. Both **cap** `current_hp` rather than resetting
+  it, so damage a player has already paid attempts for is kept. Apply them with the Worker
+  deploy that carries the matching ruleset, not before it.
+- Migration `0053` backfills the graveyard for zombies already lost to an Epic Boss, from the
+  party stored in each finished session's replay config. Names revert to the deterministic
+  default and veterancy reads 0 — neither is recoverable from server-side state.
 - After migration `0044`, verify the rebuild kept everything: `SELECT COUNT(*) FROM
   black_market_orders` and `... FROM black_market_receipts` should match the
   pre-migration snapshot, no `black_market_orders_0044` / `black_market_receipts_0044`

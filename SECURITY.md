@@ -26,7 +26,7 @@ Please give a reasonable window before disclosing publicly.
 ## Scope and status
 
 This document describes the current source tree at gameplay protocol v3 (client integrity
-version 5, raid ruleset version 10). It covers authentication, sessions, the exclusive writer
+version 5, raid ruleset version 30). It covers authentication, sessions, the exclusive writer
 lease, social features, gameplay commands, persistence, economy, farms, quests, raids, Epic
 Boss runs, the Black Market, rate limiting, and operational controls.
 
@@ -157,9 +157,9 @@ the README in the same change.
   (`buildPinnedV3Raid`): player/enemy units, boss throw/specials, summon and wall templates,
   and concentration. The pinned config and `ruleset_version` are stored on the session
   (migrations `0016`, `0017`, `0027`). The config still carries a `grabber` field, but since
-  ruleset 6 (current version 9) `raidVerifier.grabberOf` returns `null` unconditionally — hazards are client-only
+  ruleset 6 (current version 30) `raidVerifier.grabberOf` returns `null` unconditionally — hazards are client-only
   and are not simulated server-side at all.
-- `/raid/finish` requires a matching `rulesetVersion` (`RAID_RULESET_VERSION = 10`; a mismatch
+- `/raid/finish` requires a matching `rulesetVersion` (`RAID_RULESET_VERSION = 30`; a mismatch
   returns `409 stale_ruleset` and closes the session), rejects a `finalTick` beyond the paced
   elapsed real time (`future_finish`), then **replays** the pinned sim with the submitted input
   transcript and derives `win`/`survivors`/`losses`/`retreated`, subject to the one-way
@@ -175,7 +175,12 @@ the README in the same change.
   one row changed; a raced/duplicate finish returns the stored result. Post-battle revival
   restores casualties only from a server-owned snapshot, one brain each, idempotently.
 - Epic Boss activation spends brains atomically; start pins the run; finish replays the input
-  transcript the same way as raids.
+  transcript the same way as raids. `/epic-boss/start` performs the same ruleset handshake as
+  `/raid/start` — a client on a stale bundle is refused `426 stale_ruleset` before a token or
+  brain is charged, rather than being sold an attempt its simulation would settle differently.
+- `RAID_RULESET_VERSION` is declared once, in `src/raid/replay.ts`, and imported by both the
+  client and the Worker. Every bump has to be reflected in the three version numbers quoted in
+  this section, in `server/README.md`, and in `docs/PROTOCOL_V3_ROLLOUT.md`.
 
 ### Black Market (server-authoritative trading)
 
@@ -323,26 +328,36 @@ automatically.
 
 ## Verification status
 
-On 2026-07-28 the following local checks passed on a clean working tree:
+On 2026-08-14 the following local checks passed on a clean working tree:
 
 ```text
-npm test                              # client: 463 passed, 1 skipped (71 files)
+npm test                              # client: 1586 passed, 1 skipped (161 files)
 cd server && npm run typecheck        # passed
-cd server && npm test                 # server: 275 passed (22 files)
-cd server && npm run test:integration # 35 passed (2 files)
+cd server && npm run migrations:check # 54 files verified
+cd server && npm test                 # server: 524 passed (41 files)
+cd server && npm run test:integration # 81 passed (5 files)
 ```
 
-Coverage now includes the anti-forgery paths directly: replay determinism and illegal-input
-rejection (`src/raid/replay.test.ts`), a forged `/raid/finish` rejected with `bad_final_tick`
-(`server/test/integration/raidRewards.spec.ts`), a settlement that derives the retreat rather than
-trusting a client-claimed win plus the `stale_ruleset` gate (`server/test/integration/v3.spec.ts`,
-`raidGates.spec.ts`), a server-only roster-cull rejection (`roster.spec.ts`), and writer-lease
-takeover/replacement (`v3.spec.ts`). Passing tests do not by themselves certify the production
-deployment; confirm the live commit and remote D1 schema per the rollout doc.
+Coverage includes the anti-forgery paths directly: replay determinism and illegal-input
+rejection (`src/raid/replay.test.ts`), a settlement that derives the retreat rather than trusting
+a client-claimed win plus the `stale_ruleset` gate (`server/test/integration/v3.spec.ts`,
+`raidGates.spec.ts`), the `/raid/finish` elapsed-time gate refusing a finish paced past real
+time, a body-asserted win paying nothing and moving no balance, and a duplicate finish replaying
+the stored result rather than settling twice (all `raidGates.spec.ts`), a server-only roster-cull
+rejection (`roster.spec.ts`), and writer-lease takeover/replacement (`v3.spec.ts`). Client and
+server boost economics are held together by `server/test/boostCatalogSync.test.ts`, so a level
+gate cannot again be enforced on the client alone. Passing tests do not by themselves certify the
+production deployment; confirm the live commit and remote D1 schema per the rollout doc.
 
-Note that `vitest.integration.config.ts` allowlists only `v3.spec.ts` and `blackMarket.spec.ts`;
-the other files under `server/test/integration/` are retired protocol-v2 specs and do **not** run.
-A green integration run is not evidence about them.
+**What the integration run does not cover.** `vitest.integration.config.ts` runs every
+`test/integration/**/*.spec.ts` except four excluded protocol-v2 specs — `api`, `inventory`,
+`raidLoot` and `raidRewards`. Those drive routes that now answer `410`; anything they uniquely
+proved about the live surface has to be re-established against v3 before it counts. The
+forged-finish coverage this section used to cite from `raidRewards.spec.ts` was in exactly that
+state and has now been ported to `raidGates.spec.ts` (the v2 spec asserted `bad_final_tick`; the
+v3 route spells the same property as `future_finish`). Reward-table and inventory-grant
+assertions from `raidLoot` / `inventory` have **not** been ported and remain dark at the route
+level, though the unit suites cover the same catalogs.
 
 ## Required release gates
 
