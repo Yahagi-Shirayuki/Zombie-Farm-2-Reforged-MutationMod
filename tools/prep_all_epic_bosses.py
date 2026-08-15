@@ -22,6 +22,11 @@ EXTRACTED = (ROOT / ".." / "ZF2R_extracted").resolve()
 APP = EXTRACTED / "raw" / "ios-1.0" / "1.0" / "Payload" / "ZF2R.app"
 GAMEPLAY = EXTRACTED / "data" / "json" / "gameplay"
 OUT_ROOT = ROOT / "public" / "assets" / "epic-bosses"
+# Hand-authored frame orderings for the three bosses whose atlases shipped without
+# frame metadata. Written against the numbering in tools/dump_epic_boss_frames.py.
+FRAMES_ROOT = ROOT / "tools" / "art" / "epic-boss-frames"
+ATTACKS = json.loads(
+    (EXTRACTED / "data" / "json" / "gameplay" / "Attacks.json").read_text(encoding="utf-8"))
 RECT = re.compile(r"\{\{\s*(-?\d+),\s*(-?\d+)\s*\},\s*\{\s*(\d+),\s*(\d+)\s*\}\}")
 SIZE = re.compile(r"\{\s*(\d+),\s*(\d+)\s*\}")
 POINT = re.compile(r"\{\s*(-?[\d.]+),\s*(-?[\d.]+)\s*\}")
@@ -85,8 +90,10 @@ SKUNK_LOOT = [
 LATE_BOSSES = [
     {
         "id": "rocky-rhino", "sourceId": 8, "name": "Rocky Rhino",
-        "questIds": ["8000"],
-        "sheet": "rockyRhino_default.png", "portrait": "epb8_portrait_intro.png",
+        # Both rungs pay Brock Coley — see prep_quests.py recovered_epic_rewards.
+        "questIds": ["8000", "8011"],
+        "sheet": "rockyRhino_default.png", "staticFrame": (1596, 374, 221, 175),
+        "portrait": "epb8_portrait_intro.png",
         "lootIcon": "epb8_loot_icon.png", "questIcon": "epb8_quest_icon.png",
         "intros": ["epb8_INTRO1.png", "epb8_INTRO2.png", "epb8_INTRO3.png"],
         "support": ["EPB8_BANNER1.png", "EPB8_CAVE.png", "ROCKY_RHINO_GONG.png",
@@ -105,7 +112,8 @@ LATE_BOSSES = [
     {
         "id": "general-larvaelus", "sourceId": 9, "name": "General Larvaelus",
         "questIds": ["9000", "9011"],
-        "sheet": "generalLarvaelus_default.png", "portrait": "EpicBoss9_PORTRAIT_INTRO.png",
+        "sheet": "generalLarvaelus_default.png", "staticFrame": (514, 937, 230, 280),
+        "portrait": "EpicBoss9_PORTRAIT_INTRO.png",
         "lootIcon": "EpicBoss9_LOOT_ICON.png", "questIcon": "EpicBoss9_QUEST_ICON.png",
         "intros": ["EpicBoss9_INTRO1.png", "EpicBoss9_INTRO2.png", "EpicBoss9_INTRO3.png"],
         "support": ["EPB_9_Banner.png", "EPB_9Teleporter_A.png", "EPB_9Teleporter_B.png",
@@ -124,7 +132,8 @@ LATE_BOSSES = [
     {
         "id": "mystical-mamba", "sourceId": 10, "name": "Mystical Mamba",
         "questIds": ["10000", "10011"],
-        "sheet": "mysticalMamba_default.png", "portrait": "EPB_10_portrait_intro.png",
+        "sheet": "mysticalMamba_default.png", "staticFrame": (400, 1054, 193, 167),
+        "portrait": "EPB_10_portrait_intro.png",
         "lootIcon": "EPB_10_loot_Icon.png", "questIcon": "EPB_10_Quest_Icon.png",
         "intros": ["EPB_10_INTRO_1.png", "EPB_10_INTRO_2.png", "EPB_10_INTRO_3.png"],
         "support": ["EPB_10_IPHONE_ns_icon.png", "EPB_10_BANNER.png",
@@ -160,18 +169,79 @@ def compose(sheet: Image.Image, frame: dict) -> Image.Image:
     return canvas
 
 
-def write_strip(out: Path, name: str, names: list[str], frames: dict, sheet: Image.Image) -> dict:
-    images = [compose(sheet, frames[frame]) for frame in names]
-    cell_w = max(image.width for image in images)
-    cell_h = max(image.height for image in images)
+# Frame rate for a strip whose animation authored no `duration`. Only `attack` ever
+# omits one, and its duration is the fight clock rather than a fixed rate (the runtime
+# drives that strip off the attack cycle — see src/raid/epicBossAnimation.ts), so this
+# is a fallback that nothing authored actually depends on.
+DEFAULT_FRAME_SECONDS = 1 / 12
+
+
+def pack_strip(out: Path, name: str, images: list[Image.Image], duration: float | None,
+               cell: tuple[int, int] | None = None) -> dict:
+    """Lay `images` left to right in equal cells, feet on the cell's bottom edge.
+
+    `cell` forces a size shared with this boss's other strips. That matters because the
+    renderer scales an Epic Boss token ONCE, from the first strip it builds, and never
+    recomputes it — so strips that disagree about cell height make the boss change size
+    when it changes state. Every boss ZF2 cut itself uses a single cell for all six.
+    """
+    cell_w = cell[0] if cell else max(image.width for image in images)
+    cell_h = cell[1] if cell else max(image.height for image in images)
     strip = Image.new("RGBA", (cell_w * len(images), cell_h), (0, 0, 0, 0))
     for index, image in enumerate(images):
         strip.alpha_composite(image, (index * cell_w + (cell_w - image.width) // 2,
                                       cell_h - image.height))
     filename = f"{name}.png"
     strip.save(out / filename, optimize=True)
+    # The authored value is the strip's TOTAL run time, not a per-frame rate. Only
+    # `attack` ever lacks one, and it is fitted to the fight clock at runtime, so its
+    # rate here is a placeholder nothing reads (see src/raid/epicBossAnimation.ts).
+    seconds = duration / len(images) if duration else DEFAULT_FRAME_SECONDS
     return {"file": filename, "cellWidth": cell_w, "cellHeight": cell_h,
-            "frameCount": len(images), "frameSeconds": 1 / 12}
+            "frameCount": len(images), "frameSeconds": seconds}
+
+
+def write_strip(out: Path, name: str, animation: dict, frames: dict, sheet: Image.Image) -> dict:
+    """A strip for a boss whose .plist names its frames (EpicEventEnemy.json order)."""
+    images = [compose(sheet, frames[frame]) for frame in animation["frames"]]
+    return pack_strip(out, name, images, animation.get("duration"))
+
+
+def hand_ordered_strips(out: Path, boss: dict) -> dict:
+    """Strips for a boss whose frame metadata did NOT survive.
+
+    Their atlases shipped with no .plist, and the packer's layout carries no clue to
+    the original order (see dump_epic_boss_frames.py), so the ordering is authored by
+    hand in tools/art/epic-boss-frames/<boss>/animations.json against the frame numbers
+    that tool assigns. This reads that manifest back and cuts the strips from the rects
+    it recorded, so the cut PNGs are review material only — the manifest is the source.
+
+    A state with no frames is skipped rather than written empty; the renderer falls back
+    to idle for anything a boss does not have.
+    """
+    manifest_path = FRAMES_ROOT / boss["id"] / "animations.json"
+    if not manifest_path.is_file():
+        print(f"  no hand-ordered manifest for {boss['id']} — shipping a static actor")
+        return {}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rects = manifest["rects"]
+    ordered = {state: authored["frames"] for state, authored in manifest["animations"].items()
+               if authored.get("frames")}
+    if not ordered:
+        return {}
+    # One cell for every strip this boss has — see pack_strip.
+    used = {number for numbers in ordered.values() for number in numbers}
+    cell = (max(rects[str(n)][2] for n in used), max(rects[str(n)][3] for n in used))
+    animations = {}
+    with Image.open(APP / boss["sheet"]).convert("RGBA") as sheet:
+        for state, numbers in ordered.items():
+            images = []
+            for number in numbers:
+                x, y, w, h = rects[str(number)]
+                images.append(sheet.crop((x, y, x + w, y + h)))
+            duration = manifest["animations"][state].get("durationSeconds")
+            animations[state] = pack_strip(out, state, images, duration, cell)
+    return animations
 
 
 def copy(out: Path, source: str, target: str | None = None) -> str | None:
@@ -285,7 +355,27 @@ def ramp_damage(unit_stats: dict, source_id: int) -> dict:
     """
     if source_id not in EPIC_BOSS_DAMAGE:
         raise SystemExit(f"epic boss {source_id} has no EPIC_BOSS_DAMAGE entry")
-    return {**unit_stats, "str": EPIC_BOSS_DAMAGE[source_id]}
+    return {**unit_stats, "str": EPIC_BOSS_DAMAGE[source_id],
+            "attacks": [with_damage_timing(attack) for attack in unit_stats["attacks"]]}
+
+
+def with_damage_timing(attack: dict) -> dict:
+    """Attach the attack's authored damage timing from Attacks.json.
+
+    Where in the swing the blow connects, 0..1. It is presentation-only — the sim's
+    clock decides WHEN a hit lands, this decides which frame is on screen when it does —
+    but it has to travel with the catalog, because both the client and the Worker build
+    the boss from that catalog and would otherwise each need their own copy.
+
+    It is per-ATTACK, not per-boss, and the two differ: the six bosses that swing
+    `EpicBossAttack` connect at 0.88, while Dr. Groundhog and Loco Locust bite
+    (`VideoGameZombieBite`) and connect at 0.25, a quarter into the swing.
+    """
+    authored = ATTACKS.get(attack["name"])
+    if authored is None:
+        print(f"  warning: {attack['name']} is not in Attacks.json — timing left to the default")
+        return dict(attack)
+    return {**attack, "damageTiming": float(authored["damageTiming"])}
 
 
 def scale_loot_levels(loot: list[dict], origin: int) -> list[dict]:
@@ -444,9 +534,9 @@ def prepare_authored(boss: dict, hp: dict, params: dict) -> None:
     animations = {}
     with Image.open(APP / boss["bossSpriteSheeetImage"]).convert("RGBA") as sheet:
         for state in ("idle", "enter", "attack", "defeat", "escape", "fly"):
-            names = boss.get(f"{state}Animation", {}).get("frames", [])
-            if names:
-                animations[state] = write_strip(out, state, names, atlas, sheet)
+            animation = boss.get(f"{state}Animation", {})
+            if animation.get("frames"):
+                animations[state] = write_strip(out, state, animation, atlas, sheet)
         compose(sheet, atlas[boss["initialFrame"]]).save(out / "boss.png", optimize=True)
 
     intro = boss["IntroMovieAssets"]
@@ -504,7 +594,7 @@ def prepare_late(boss: dict, hp: dict, params: dict) -> None:
         (boss["portrait"], "portrait.png"), (boss["lootIcon"], "loot-icon.png"),
         (boss["questIcon"], "quest-icon.png"), (boss["intros"][0], "intro-1.png"),
         (boss["intros"][1], "intro-2.png"), (boss["intros"][2], "intro-3.png"),
-        (boss["intros"][2], "boss.png"), (boss["sheet"], "source-sheet.png"),
+        (boss["sheet"], "source-sheet.png"),
         ("epicEventBGM.wav", "music.wav"), ("epicPunch.wav", "punch.wav"),
         ("epicEventIntroSFX.caf", "intro.caf"),
     ]
@@ -516,6 +606,30 @@ def prepare_late(boss: dict, hp: dict, params: dict) -> None:
         name = copy(out, source)
         if name:
             copied.append(name)
+
+    # The combat actor, cut from the boss's own 2048x2048 atlas.
+    #
+    # These three events shipped their art WITHOUT the .plist that names and locates
+    # each frame — the only such gap in the extraction, and it is total: no frame list
+    # in the bundle, none in the binary's strings, and the packer does not lay frames
+    # out in name order (checked against foulowl.plist, whose reading order and
+    # alphabetical order disagree), so the animations cannot be reassembled from
+    # geometry. The frames themselves are all there as pixels, though, so ONE standing
+    # pose per boss is recoverable and that is exactly what a static actor needs.
+    #
+    # `staticFrame` is that pose's rect in the atlas, chosen by eye from a segmentation
+    # of the sheet (largest opaque island plus anything inside its box — validated
+    # against foulowl.png, where it recovers all 39 real rects at a median IoU of
+    # 0.99). It replaces what used to stand in here: the boss's revealed INTRO CARD,
+    # which is a menu illustration, not combat art.
+    with Image.open(APP / boss["sheet"]).convert("RGBA") as sheet:
+        x, y, w, h = boss["staticFrame"]
+        sheet.crop((x, y, x + w, y + h)).save(out / "boss.png", optimize=True)
+    copied.append("boss.png")
+
+    # …and the hand-authored animation strips, when an ordering has been written.
+    animations = hand_ordered_strips(out, boss)
+
     # Late definitions use the shared battle scene. Preserve its authored layer layout.
     layers = []
     for index in range(1, 13):
@@ -538,12 +652,20 @@ def prepare_late(boss: dict, hp: dict, params: dict) -> None:
         "unitStats": ramp_damage(
             {"str": 2, "dex": 2, "con": 20,
              "attacks": [{"name": "EpicBossAttack", "frequency": 100}]}, boss["sourceId"]),
-        "animations": {}, "levelAssets": layers, "loot": loot, "questIds": boss["questIds"],
+        "animations": animations, "levelAssets": layers, "loot": loot,
+        "questIds": boss["questIds"],
         "portrait": "portrait.png", "lootIcon": "loot-icon.png", "questIcon": "quest-icon.png",
-        "bossTexture": "boss.png", "reconstructed": True, "copied": sorted(set(copied)),
+        "bossTexture": "boss.png", "reconstructed": True,
+        # Where boss.png was cut from, in the boss's own atlas. Recorded so the
+        # provenance is checkable from data: this used to be a copy of the revealed
+        # INTRO CARD, a menu illustration that had never been near the battlefield.
+        "staticFrame": list(boss["staticFrame"]),
+        "copied": sorted(set(copied)),
     })
     (out / "catalog.json").write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
-    print(f"prepared {boss['name']}: static reconstructed actor")
+    print(f"prepared {boss['name']}: reconstructed actor, "
+          f"{len(animations)} hand-ordered animations "
+          f"({', '.join(sorted(animations)) or 'static'})")
 
 
 def main() -> None:

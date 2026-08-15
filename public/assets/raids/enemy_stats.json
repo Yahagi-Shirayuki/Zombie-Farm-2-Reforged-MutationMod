@@ -33,7 +33,7 @@
   "con": 60,
   "dex": 1,
   "standardGoldLoot": true,
-  "str": 6
+  "str": 5
  },
  "BeachStageActorBoss": {
   "attacks": [

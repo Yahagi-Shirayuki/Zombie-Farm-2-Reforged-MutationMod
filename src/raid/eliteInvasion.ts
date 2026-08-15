@@ -181,27 +181,28 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
   // to share a band with Video Games-elite. Nothing about their character changed; they
   // moved because the thing they are pinned to did.
   //
-  // v27 RE-FIT, and CON is where it went — which reverses the paragraph above, on
-  // purpose. The recovered SWARM (six aliens on the field instead of one, see
-  // raid/alienStage.ts) made this raid markedly EASIER against a big army: sixteen
-  // zombies chewing through six targets at once clear twenty minions in a fraction of the
-  // wall-clock the one-at-a-time queue took, and the boss gets far fewer laser casts
-  // before its wave is gone. Measured on the balance stick, elite fell 2.24 -> 1.54 and
-  // dropped out of the top-three band entirely; this puts it back at 2.29, between the
-  // Robots and the Video Games.
+  // v27 RE-FIT, and it goes DOWN — the mechanics now supply the danger the multipliers
+  // used to have to fake. Two recovered changes pull in opposite directions and the
+  // second wins by a distance (see raid/alienStage.ts):
+  //   * the SWARM (six aliens at once instead of one) made the raid EASIER against a big
+  //     army, because sixteen zombies chewing six targets clear twenty minions in a
+  //     fraction of the wall-clock a one-at-a-time queue took;
+  //   * the ABDUCTEES made it much harder. They are beamed into the middle of the stage
+  //     and stand there, so unlike every other enemy in the game they are not something
+  //     the army walks up to — they are a roadblock across the lane that the whole army
+  //     has to stop and clear, one after another, for as long as the boss keeps casting.
+  // Measured on the balance stick, the ORDINARY invasion went 0.84 -> 0.93 (it is a real
+  // fight now, not a queue) and the elite one blew past the stick entirely at 5.16. This
+  // brings it back between the Robots and the Video Games, at multipliers well below
+  // where they started. Currently measures 0.97 / 2.46, after the playtest passes that
+  // settled the minion's str at 5 and moved the wave's hold line right; see
+  // UNIT_OVERRIDES in tools/prep_raids.py and ENEMY_HOLD_X in BattleSim.
   //
-  // Con is now the only lever that buys DANGER rather than grind, which is why it moved
-  // 1.59 -> 2.5. Under the swarm a longer-lived alien is not a longer fight — it is one
-  // more of the six hitting you the whole time it stays up. The other two stats were
-  // capped by the table's own guards: str cannot pass the Pirates' 6.59 (theirs must stay
-  // the biggest strength step) and dex cannot pass the Lawyers' 1.85 (speed is THEIR
-  // mechanic), so both sit just under those ceilings.
-  //
-  // The remaining four multipliers are INERT on this raid and are left alone rather than
-  // scaled for the look of the table: the alien boss has no `throw` and no `wall`, and
-  // its `alienLaser` action carries no authored `damage`, so `specialDamage` multiplies a
+  // The remaining four are INERT on this raid and are left alone rather than scaled for
+  // the look of the table: the alien boss has no `throw` and no `wall`, and its
+  // `alienLaser` action carries no authored `damage`, so `specialDamage` multiplies a
   // zero and BattleSim falls through to the flat 200 the binary hard-codes.
-  6: { str: 6.5, con: 2.5, dex: 1.78, throwDamage: 3.28, throwRate: 1.65, wallHp: 1, specialDamage: 4.9 },
+  6: { str: 3, con: 1.4, dex: 1.45, throwDamage: 3.28, throwRate: 1.65, wallHp: 1, specialDamage: 4.9 },
 
   // 7 — Summer Break. No signature boss mechanic (the crab is a client-side hazard and
   // is deliberately left alone — see below), so it scales broadly, with heavier beach

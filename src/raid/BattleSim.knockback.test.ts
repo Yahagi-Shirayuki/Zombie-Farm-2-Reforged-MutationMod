@@ -141,3 +141,53 @@ describe("the front row still takes the hits", () => {
     for (const p of hurt) expect(Math.abs(p.x - enemy.x)).toBeLessThanOrEqual(60);
   });
 });
+
+// A unit does not have "an attack with knockback" — it rolls ONE attack per swing out of
+// its list and applies THAT attack's flags, so an effect on a rare entry lands rarely.
+// Collapsing the list to a boolean handed every swing the rarest entry's effects: the
+// Lumberjack's shove lives on `LumberjackSpecial`, 10 of his 100 frequency, and he was
+// shoving on all 100. Reported from a playtest as "his hits knock back every time".
+describe("an attack's effects land at that attack's own frequency", () => {
+  /** Shoves delivered over five minutes against a single zombie, by a slow attacker —
+   *  slow enough that a slide is always over before the next swing, so every refused
+   *  re-shove is the roll's doing and not the mid-slide guard's. */
+  const shoves = (knockBackChance: number) => {
+    const player = unit({
+      id: "p", sourceKey: "ZombieActorRegularTier1", team: "player", str: 1, con: 100000,
+    });
+    const enemy = unit({
+      id: "e", sourceKey: "FarmStageActorLumberjack", team: "enemy",
+      con: 100000, str: 1, dex: 1, knockBack: true, knockBackChance,
+    });
+    const sim = new BattleSim(
+      [player], [enemy], null, true, [], 10 * 60 * 1000, null, null, false, false, false, 60, null, null
+    );
+    sim.units.find((u) => u.id === "p")!.state = "advance";
+    let started = 0;
+    let sliding = false;
+    for (let t = 0; t < 300_000; t += 50) {
+      sim.step(50);
+      const p = sim.units.find((u) => u.id === "p")!;
+      if (p.knockBackSpeed > 0) {
+        if (!sliding) started++;
+        sliding = true;
+      } else sliding = false;
+    }
+    return started;
+  };
+
+  it("shoves on every swing when the shove is on the unit's only attack", () => {
+    expect(shoves(1)).toBeGreaterThan(150);
+  });
+
+  it("shoves about one swing in ten at the Lumberjack's authored 10%", () => {
+    const every = shoves(1);
+    const rare = shoves(0.1);
+    expect(rare / every).toBeGreaterThan(0.04);
+    expect(rare / every).toBeLessThan(0.2);
+  });
+
+  it("never shoves when no entry in the list carries one", () => {
+    expect(shoves(0)).toBe(0);
+  });
+});

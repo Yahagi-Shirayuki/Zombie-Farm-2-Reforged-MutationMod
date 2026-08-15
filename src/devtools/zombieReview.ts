@@ -711,7 +711,8 @@ function wireControls() {
       clock = 0;
       for (const child of anims.children) child.classList.remove("on");
       button.classList.add("on");
-      // markDead() is one-way, so entering or leaving death needs fresh rigs.
+      // Rebuild rather than markAlive(): leaving death should show the rig as it
+      // is BUILT, not as a revive restores it, since this board reviews the build.
       if (wasDeath || a.id === "death") rebuild();
     };
     anims.appendChild(button);

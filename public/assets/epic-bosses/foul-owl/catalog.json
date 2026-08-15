@@ -30,7 +30,8 @@
     "attacks": [
       {
         "frequency": 100,
-        "name": "EpicBossAttack"
+        "name": "EpicBossAttack",
+        "damageTiming": 0.88
       }
     ],
     "con": 20,
@@ -50,7 +51,7 @@
       "cellWidth": 375,
       "cellHeight": 275,
       "frameCount": 13,
-      "frameSeconds": 0.08333333333333333
+      "frameSeconds": 0.07692307692307693
     },
     "attack": {
       "file": "attack.png",

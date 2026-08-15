@@ -264,19 +264,46 @@ export function buildPlayerUnits(
  *  its attacks does (Attacks.json `knockBack`); its stun is the longest `stunTimer`
  *  among stun attacks (seconds → ms). Recovered from the binary — knockback sends the
  *  struck zombie to the back of the line (see RAID_TIMING_AND_HAZARDS.md). */
+/** An enemy's knockback / stun, and HOW OFTEN each lands.
+ *
+ *  GROUND TRUTH: a unit does not have "an attack with effects" — it rolls ONE attack per
+ *  swing out of its `attacks` list (`rollAgainstFrequencyInArray:`, the same weighted
+ *  picker the boss action budget uses) and applies THAT attack's flags. So an effect
+ *  carried by one entry lands at that entry's share of the list's total frequency.
+ *
+ *  This used to collapse the list to a single boolean, which handed every entry the
+ *  effects of the rarest one. The Lumberjack is the clearest victim: `LumberjackSlice`
+ *  is 90 % of his swings and carries nothing, while `LumberjackSpecial` is 10 % and
+ *  carries the shove — so he knocked a zombie down the lane on EVERY hit instead of one
+ *  in ten. Most units are unaffected (their effect entry is already 100 %); the ones that
+ *  move are the Lumberjack at 10 %, the Lawyers boss's stun at 40 %, and the
+ *  Special/TreeWorld/Valentine's minions 2 and 3 at 50 %. */
 function attackEffects(
   attacks: { name: string; frequency: number }[] | undefined,
   table: Record<string, AttackDef>
-): { knockBack: boolean; stunMs: number } {
-  let knockBack = false;
+): { knockBack: boolean; knockBackChance: number; stunMs: number; stunChance: number } {
   let stunMs = 0;
+  let knockWeight = 0;
+  let stunWeight = 0;
+  let total = 0;
   for (const a of attacks ?? []) {
+    const freq = a.frequency || 0;
+    total += freq;
     const def = table[a.name];
     if (!def) continue;
-    if (def.knockBack) knockBack = true;
-    if (def.stun) stunMs = Math.max(stunMs, (def.stunTimer ?? 1) * 1000);
+    if (def.knockBack) knockWeight += freq;
+    if (def.stun) {
+      stunWeight += freq;
+      stunMs = Math.max(stunMs, (def.stunTimer ?? 1) * 1000);
+    }
   }
-  return { knockBack, stunMs };
+  const share = (weight: number) => (total > 0 ? weight / total : 0);
+  return {
+    knockBack: knockWeight > 0,
+    knockBackChance: share(knockWeight),
+    stunMs,
+    stunChance: share(stunWeight),
+  };
 }
 
 /** Representative damage-timing for an enemy's swing animation: the `damageTiming` of
@@ -383,7 +410,9 @@ export function buildUnitsForKeys(
     u.mirrorsOpponentSpeed = key === SCALLYWAG_KEY;
     const fx = attackEffects(st.attacks, attacks);
     u.knockBack = fx.knockBack;
+    u.knockBackChance = fx.knockBackChance;
     u.stunMs = fx.stunMs;
+    u.stunChance = fx.stunChance;
     u.attackDamageTiming = primaryDamageTiming(st.attacks, attacks);
     out.push(u);
   };

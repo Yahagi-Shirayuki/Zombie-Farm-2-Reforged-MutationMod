@@ -14,6 +14,40 @@ describe("Dr. Groundhog event", () => {
       expect(epicBossHp(boss, boss.maxLevel)).toBeGreaterThan(0);
     }
   });
+  // The three bosses whose atlases shipped without frame metadata draw from art
+  // recovered out of those sheets by geometry. Both halves used to be missing: the
+  // combat still was a copy of the revealed INTRO CARD (a menu illustration that had
+  // never been near the battlefield), and there were no strips at all, so the boss
+  // fought as a motionless picture.
+  it("gives each reconstructed boss combat art cut from its own sheet", () => {
+    const reconstructed = EPIC_BOSSES.filter((boss) => boss.reconstructed);
+    expect(reconstructed).toHaveLength(3);
+    for (const boss of reconstructed) {
+      expect(boss.bossTexture).toBe("boss.png");
+      // A rect proves the still was CUT from the atlas; a copied intro card has none.
+      const frame = boss.staticFrame;
+      expect(frame, boss.id).toHaveLength(4);
+      expect(frame!.every((value) => Number.isInteger(value) && value >= 0), boss.id).toBe(true);
+      expect(Math.min(frame![2], frame![3]), boss.id).toBeGreaterThan(64);
+      expect(frame![0] + frame![2], boss.id).toBeLessThanOrEqual(2048);
+      expect(frame![1] + frame![3], boss.id).toBeLessThanOrEqual(2048);
+    }
+  });
+
+  // Every strip of one boss must share a cell, because RaidScene scales an Epic Boss
+  // token ONCE from the first strip it builds and never recomputes it — strips that
+  // disagree make the boss change size when it changes state. ZF2's own sheets all do
+  // this; the hand-ordered ones have to be packed to match.
+  it("packs every one of a boss's strips into a single cell", () => {
+    for (const boss of EPIC_BOSSES) {
+      const strips = Object.values(boss.animations);
+      if (!strips.length) continue;
+      const cells = new Set(strips.map((strip) => `${strip.cellWidth}x${strip.cellHeight}`));
+      expect(cells, boss.id).toHaveLength(1);
+      for (const strip of strips) expect(strip.frameCount, boss.id).toBeGreaterThan(0);
+    }
+  });
+
   it("uses the pair-compressed 10-rung HP curve", () => {
     // Each rung is two authored ones added together: 1x+1.4x, 2.2x+3.6x, … 88x+107x.
     // Dr. Groundhog is the BOTTOM of the baseHp ramp at 1500 (0.75x the source's 2000),

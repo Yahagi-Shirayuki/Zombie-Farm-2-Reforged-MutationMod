@@ -163,6 +163,31 @@ describe("RaidActor mutation rendering", () => {
     expect(tinted.length).toBeGreaterThan(0);
   });
 
+  it("puts a revived zombie's head back on, effect and all", () => {
+    // Resurrect is the one way a zombie leaves the dead branch. markDead() used to be
+    // one-way, so a revived unit kept animating its head-pop: it stood back up with
+    // its head (and, for a Headless family, the effect that IS its head) gone.
+    const testAssets = assets();
+    testAssets.zombieModels.ZombieActorHeadlessTier2 = model;
+    const actor = new RaidActor(testAssets, "ZombieActorHeadlessTier2");
+    const head = (actor as unknown as { headParts: { sp: { x: number; y: number } }[] }).headParts;
+    const fx = (actor as unknown as { specialHeadFx: { container: { visible: boolean } } }).specialHeadFx;
+    const [restX, restY] = [head[0].sp.x, head[0].sp.y];
+
+    actor.markDead();
+    actor.update(0.5, false);
+    expect(head[0].sp.x).not.toBeCloseTo(restX);
+    expect(fx.container.visible).toBe(false);
+
+    actor.markAlive();
+    expect(fx.container.visible).toBe(true);
+    // Back under the live animation: the head tracks the neck again rather than
+    // continuing to fly off, and the idle tilt keeps it there.
+    actor.update(0.5, false);
+    expect(head[0].sp.x).toBeCloseTo(restX, 0);
+    expect(head[0].sp.y).toBeCloseTo(restY, 0);
+  });
+
   it("raises healing arms forward from rest to overhead, then resets", () => {
     const actor = new RaidActor(assets(), "test");
     const arms = (actor as unknown as { arms: { rotation: number }[] }).arms;

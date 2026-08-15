@@ -61,6 +61,24 @@ export function epicBossUnlockLevel(boss: EpicBossDef | string): number {
   const id = typeof boss === "string" ? boss : boss.id;
   return EPIC_BOSS_UNLOCK_LEVELS[id] ?? DEFAULT_EPIC_BOSS_UNLOCK_LEVEL;
 }
+/** Where in the boss's swing the blow connects, 0..1, from its attack's authored entry
+ *  in Attacks.json (baked into the catalog by tools/prep_all_epic_bosses.py).
+ *
+ *  Presentation-only: the sim's clock decides when a hit lands, this decides which frame
+ *  is on screen at that moment. It is nonetheless read on BOTH sides — the client and the
+ *  Worker each build the boss unit — so it lives here rather than being written twice.
+ *
+ *  It is NOT one number for all eight. Six of them swing `EpicBossAttack` and connect at
+ *  0.88; Dr. Groundhog and Loco Locust bite (`VideoGameZombieBite`) and connect at 0.25.
+ *  Both used to be hardcoded to 0.88, which put their impact frame two thirds of a swing
+ *  late — invisible until the attack strip started being driven off this number.
+ *
+ *  The fallback matches BattleSim's own default for a unit that names no timing. */
+export function epicBossDamageTiming(def: EpicBossDef): number {
+  const timing = def.unitStats.attacks[0]?.damageTiming;
+  return typeof timing === "number" ? timing : 0.5;
+}
+
 export function epicBossHp(def: EpicBossDef, level: number): number {
   const index = Math.max(0, Math.min(def.maxLevel - 1, Math.floor(level) - 1));
   return Math.round(def.baseHp * (def.multipliers[index] ?? 1));

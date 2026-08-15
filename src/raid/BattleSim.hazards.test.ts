@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BattleSim } from "./BattleSim";
+import { BattleSim, CHARGE_X, ENEMY_HOLD_X } from "./BattleSim";
 import type { CombatUnit, CrabConfig, GrabberConfig } from "./types";
 
 function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | "team">): CombatUnit {
@@ -309,7 +309,9 @@ describe("boss wall (carrotWall / junkWall)", () => {
     expect(wall.hp).toBeLessThan(wallHp);
     expect(h.healCastSeq).toBe(0);
     expect(enemy.hp).toBeLessThan(enemyHp);
-    expect(wall.x).toBeCloseTo(537.5, 1);
+    // The wall materialises at the support line: halfway from the staging slot to the
+    // front, so it moves with ENEMY_HOLD_X rather than sitting on a fixed number.
+    expect(wall.x).toBeCloseTo(CHARGE_X + (ENEMY_HOLD_X - 60 - CHARGE_X) / 2, 1);
   });
 });
 

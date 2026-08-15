@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DR_GROUNDHOG, EPIC_BOSSES, epicBossById, epicBossDamage, epicBossUnlockLevel } from "./catalog";
+import {
+  DR_GROUNDHOG, EPIC_BOSSES, epicBossById, epicBossDamage, epicBossDamageTiming,
+  epicBossUnlockLevel,
+} from "./catalog";
 import { rollEpicBossDrops, rollEpicBossLoot } from "./combat";
 import { EPIC_LOOT_ROLLS, epicBrainTicketChance, epicLootWeight } from "./rewards";
 import { BattleSim } from "../raid/BattleSim";
@@ -10,6 +13,37 @@ import { bitOf } from "../zombie/mutations";
 import type { CombatUnit } from "../raid/types";
 import zombieRows from "../../public/assets/zombies.json";
 import type { ZombieDef } from "../assets";
+
+describe("Epic Boss attack timing", () => {
+  // Every boss used to be hardcoded to 0.88. Two of them don't punch — Dr. Groundhog and
+  // Loco Locust bite, and Attacks.json connects a bite a QUARTER into the swing. Nothing
+  // read the number until the attack strip started being driven off it, at which point
+  // their impact frame was landing two thirds of a swing late.
+  it("takes each boss's connect point from the attack it actually swings", () => {
+    const byAttack: Record<string, number> = {
+      EpicBossAttack: 0.88,
+      VideoGameZombieBite: 0.25,
+    };
+    const seen = new Set<string>();
+    for (const boss of EPIC_BOSSES) {
+      const attacks = boss.unitStats.attacks;
+      expect(attacks.length, boss.id).toBeGreaterThan(0);
+      const named = attacks[0].name;
+      seen.add(named);
+      expect(byAttack[named], `${boss.id} swings an unexpected attack: ${named}`).toBeDefined();
+      expect(epicBossDamageTiming(boss), boss.id).toBe(byAttack[named]);
+    }
+    // Both attacks are in play, so a regression to one shared constant cannot pass.
+    expect([...seen].sort()).toEqual(["EpicBossAttack", "VideoGameZombieBite"]);
+    expect(epicBossDamageTiming(DR_GROUNDHOG)).toBe(0.25);
+    expect(new Set(EPIC_BOSSES.map(epicBossDamageTiming)).size).toBe(2);
+  });
+
+  it("falls back to BattleSim's own default when an attack names no timing", () => {
+    const bare = { unitStats: { attacks: [{ name: "Mystery", frequency: 100 }] } };
+    expect(epicBossDamageTiming(bare as Parameters<typeof epicBossDamageTiming>[0])).toBe(0.5);
+  });
+});
 
 describe("Epic Boss fallback loot", () => {
   it("unlocks source rewards by defeated level and prefers missing rewards", () => {

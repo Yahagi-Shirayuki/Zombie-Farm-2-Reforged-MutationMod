@@ -3416,6 +3416,35 @@
   "removeQuest": false,
   "ignoreCheckQuest": true
  },
+ "8011": {
+  "id": "8011",
+  "title": "Another Brock Coley",
+  "messageComplete": "A second Brock Coley joins the farm!",
+  "tip": "Defeat the Epic Boss at level 10.",
+  "sprite": "questicon_rockyrhino.png",
+  "levelRequired": -1,
+  "prerequisiteQuest": -1,
+  "requirements": [
+   {
+    "notificationID": "kEpicStageEnemyDefeatedNotification",
+    "notificationObject": "10",
+    "countTotal": 1,
+    "text": "Epic Boss Level 10 Defeated",
+    "type": 3,
+    "sprite": "stex1003.png"
+   }
+  ],
+  "rewardType": 5,
+  "rewardValue": 0,
+  "rewardItem": "Brock Coley",
+  "rewardItemKey": "ZombieActorBrockColey",
+  "tutorialQuest": false,
+  "epicEvent": true,
+  "seasonal": false,
+  "seasonalDate": "",
+  "removeQuest": false,
+  "ignoreCheckQuest": true
+ },
  "9000": {
   "id": "9000",
   "title": "Proto Zombie",

@@ -18,6 +18,7 @@ import {
 // Species-aware: an Eyebiscus wears Carrot's bit but is never called a Carrot.
 import { mutationLabelFor } from "./zombie/mutationDisplay";
 import { maskHas } from "./zombie/mutationMask";
+import { visibleMutations } from "./zombie/mutationVisibility";
 import { QuestView } from "./quest/types";
 import type { RaidCardView, RaidPartyView, RaidResultView, RaidLaunchOpts, LootDrop } from "./raid/RaidManager";
 import { lootDropLabel } from "./raid/RaidManager";
@@ -1448,6 +1449,10 @@ export class Hud {
     color?: [number, number, number],
     wanted?: () => boolean,
   ) => Promise<string>) | null = null;
+  /** One zombie's look changed on this device (its card hid or restored a
+   *  mutation). Nothing about the unit itself moved, so the host only has to
+   *  reassemble the rigs that are already on screen. */
+  onZombieAppearanceChanged: ((id: string) => void) | null = null;
   /** Take a deployed zombie off the farm (into the Mausoleum). */
   onZombieStore: ((id: string) => void | Promise<void>) | null = null;
   /** Change an owned zombie's individual display name. */
@@ -2421,7 +2426,9 @@ export class Hud {
       if (z.portrait) portrait.style.backgroundImage = `url(${z.portrait})`;
       if (this.zombieMutationPortraitOf) {
         onFirstVisible(portrait, () => {
-          void this.zombieMutationPortraitOf?.(z.key, z.mutation, z.color, () => portrait.isConnected)
+          void this.zombieMutationPortraitOf?.(
+            z.key, visibleMutations(z.id, z.mutation), z.color, () => portrait.isConnected,
+          )
             .then((image) => { if (portrait.isConnected) portrait.style.backgroundImage = `url(${image})`; })
             .catch(() => { /* retain the static species portrait */ });
         });
@@ -5402,7 +5409,14 @@ export class Hud {
         `<div class="rd-title">${c.name}</div>` +
         (c.bossName ? `<div class="rd-boss">${c.bossName}</div>` : "") +
         `<div class="rd-meta">Recommended level ${c.recommendedLevel}` +
-        (c.firstClearXp > 0 ? ` · First clear: ${c.firstClearXp} XP` : "") +
+        // The XP the NEXT win pays: the big one-time first-clear bonus while it is still
+        // unclaimed, then the per-raid repeat trickle from then on. Only ever one of the
+        // two — they never stack, so advertising both would overstate the reward.
+        (c.firstClearXp > 0
+          ? ` · First clear: ${c.firstClearXp} XP`
+          : c.repeatXp > 0
+            ? ` · ${c.repeatXp} XP per win`
+            : "") +
         `</div>`;
       hero.append(por, info);
 
@@ -5702,7 +5716,9 @@ export class Hud {
       if (z.portrait) por.style.backgroundImage = `url(${z.portrait})`;
       if (this.zombieMutationPortraitOf) {
         onFirstVisible(por, () => {
-          void this.zombieMutationPortraitOf?.(z.key, z.mutation, z.color, () => por.isConnected)
+          void this.zombieMutationPortraitOf?.(
+            z.key, visibleMutations(z.id, z.mutation), z.color, () => por.isConnected,
+          )
             .then((image) => { if (por.isConnected) por.style.backgroundImage = `url(${image})`; })
             .catch(() => { /* retain the static species portrait */ });
         });
@@ -5870,9 +5886,11 @@ export class Hud {
       ["Gold Plundered", String(view.gold), GOLD_ICON],
       ["Brains Plundered", String(view.brains), BRAIN_ICON],
     ];
-    // First-time XP bonus ("You earned Nxp for beating this enemy for the first
-    // time.") — only shown when it was actually granted (first clear of this raid).
-    if (view.xp > 0) rows.push(["First-Time XP", String(view.xp), ""]);
+    // XP, under whichever of the two rules paid it: the one-time first-clear bonus
+    // ("You earned Nxp for beating this enemy for the first time.") or the per-raid
+    // trickle every later win pays. Labelled apart because the amounts overlap — the
+    // panel must never make a routine repeat look like a first clear.
+    if (view.xp > 0) rows.push([view.firstClear ? "First-Time XP" : "XP Earned", String(view.xp), ""]);
     const rowHtml = rows
       .map(
         ([label, val, icon]) =>
@@ -5961,7 +5979,8 @@ export class Hud {
       portrait.alt = "";
       if (this.zombieMutationPortraitOf) {
         onFirstVisible(portrait, () => {
-          void this.zombieMutationPortraitOf?.(zombie.key, zombie.mutation, zombie.color,
+          void this.zombieMutationPortraitOf?.(
+            zombie.key, visibleMutations(zombie.id, zombie.mutation), zombie.color,
             () => portrait.isConnected)
             .then((image) => { if (portrait.isConnected) portrait.src = image; })
             .catch(() => { /* retain the static species portrait */ });

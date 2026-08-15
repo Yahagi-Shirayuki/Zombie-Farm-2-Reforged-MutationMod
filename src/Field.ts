@@ -170,19 +170,32 @@ export interface HarvestResult {
   zombieKey?: string;
   mutationContext?: ZombieMutationContext;
 }
-/** Crops whose art is a piece of GROUND, not something standing on it.
+/** Crops whose GROWING art is a piece of ground, not something standing on it.
  *
  *  The ordinary split render (see layoutCrop) puts the plant half in the depth-sorted
  *  entityLayer so a tall crop can legitimately hide an actor walking behind it. The
- *  Water Lily is a pond: its art is one flat isometric diamond that fills the plot at
- *  every stage, so being sorted at all means the farmer and any zombie crossing the
- *  plot vanish under it. Treated like the flat seed stage instead — cropSeedLayer,
- *  no footprint, never sorts — so characters always walk OVER it.
+ *  Water Lily's middle stage is a pond: one flat isometric diamond filling the plot
+ *  with nothing standing above the water, so being sorted at all means the farmer and
+ *  any zombie crossing the plot vanish under it. That stage is treated like the flat
+ *  seed stage instead — cropSeedLayer, no footprint, never sorts — so characters
+ *  always walk OVER it.
+ *
+ *  The exception stops at the RIPE stage: that art grows a tall flower well clear of
+ *  the water, so it takes the ordinary split path like every other crop and is allowed
+ *  to occlude whatever stands behind it.
  *
  *  Keyed by CROP KEY, in code, on purpose: plants.json is regenerated wholesale by
  *  tools/prep_market.py, which silently drops hand-added fields (see
  *  tools/reforge_economy.py on the same trap). */
-const FLAT_CROPS: ReadonlySet<string> = new Set(["water_lily"]);
+const FLAT_GROWTH_CROPS: ReadonlySet<string> = new Set(["water_lily"]);
+
+/** Does this stage render as pure ground — flat, unsorted, below every entity? True
+ *  for the shared seed stage of any crop, and for the pre-ripe stages of the crops
+ *  above (never their final stage). */
+function isFlatStage(cfg: CropConfig, stageFile: string): boolean {
+  if (stageFile === SEED_FILE) return true;
+  return FLAT_GROWTH_CROPS.has(cfg.key) && stageFile !== cfg.stages[cfg.stages.length - 1];
+}
 
 export const CARROT: CropConfig = {
   key: "carrot",
@@ -889,9 +902,9 @@ export class Field {
     c.sprite.anchor.set(0.5, 1); // bottom-center = the crop's ground contact point
     c.sprite.scale.set(scale);
     c.sprite.position.set(p.x, baseY);
-    // A FLAT_CROPS crop takes the seed stage's ground treatment at every stage: its
-    // art is ground, so it must never join the depth sort at any point in its growth.
-    if (stageFile === SEED_FILE || FLAT_CROPS.has(c.cfg.key)) {
+    // A FLAT_GROWTH_CROPS crop takes the seed stage's ground treatment while it grows:
+    // that art is ground, so it must not join the depth sort until it stands up (ripe).
+    if (isFlatStage(c.cfg, stageFile)) {
       // KEEP IT ON THE GROUND. The usual case is the shared tilled-soil seed
       // (planted_dirt) used by veg crops — it reads like plain land, so it lives in
       // cropSeedLayer (above soil, below the entity layer) with NO footprint. It
@@ -900,7 +913,8 @@ export class Field {
       // any leftover ground sprite from an earlier growth stage. Zombie crops have no
       // flat seed — their first stage is already a standing wooden cross, so it falls
       // through to the split path below and its overhang is protected like every
-      // other stage. The FLAT_CROPS entries take this branch at every stage.
+      // other stage. A FLAT_GROWTH_CROPS entry takes this branch for its growing
+      // stages too, and leaves it once it is ripe.
       c.sprite.texture = full;
       this.cropSeedLayer.addChild(c.sprite);
       if (c.groundSprite) { c.groundSprite.parent?.removeChild(c.groundSprite); c.groundSprite.visible = false; }

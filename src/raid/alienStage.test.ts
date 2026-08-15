@@ -2,7 +2,7 @@
 // disassembly in docs/mechanics/ALIEN_RAID_RECOVERED.md §7. Three of them move fight
 // outcomes (raid ruleset 27); the fourth is the per-alien tint.
 import { describe, expect, it } from "vitest";
-import { BattleSim, type SimUnit } from "./BattleSim";
+import { BattleSim, FIELD_H, FIELD_W, type SimUnit } from "./BattleSim";
 import {
   ABDUCTEE_POOL,
   ABDUCTEE_SEED,
@@ -11,6 +11,8 @@ import {
   waveCadenceFor,
 } from "./alienStage";
 import type { CombatUnit, SummonConfig } from "./types";
+
+const CENTER_Y = FIELD_H / 2;
 
 function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | "team">): CombatUnit {
   return {
@@ -117,9 +119,9 @@ describe("a landed boss has no actions", () => {
 describe("summonBoss abducts humans", () => {
   const abductees = (): SummonConfig => ({
     queue: ABDUCTEE_SEED.map((key) =>
-      unit({ id: key, sourceKey: key, team: "enemy", str: 0, con: 1, hp: 100, maxHp: 100 })),
+      unit({ id: key, sourceKey: key, team: "enemy", str: 2, con: 1, hp: 400, maxHp: 400 })),
     pool: [...new Set(ABDUCTEE_POOL)].map((key) =>
-      unit({ id: key, sourceKey: key, team: "enemy", str: 0, con: 1, hp: 100, maxHp: 100 })),
+      unit({ id: key, sourceKey: key, team: "enemy", str: 2, con: 1, hp: 400, maxHp: 400 })),
   });
 
   const summonSim = () => {
@@ -147,6 +149,50 @@ describe("summonBoss abducts humans", () => {
     expect(victim.sourceKey).not.toBe(ALIEN_MINION_KEY);
     // Straight onto the field rather than queued behind the wave.
     expect(victim.state).not.toBe("queued");
+  });
+
+  // `summonBoss:` spawns at `CGPointMake(240, enemyPosition.y)` — 480 on an iPad — which
+  // is the horizontal CENTRE of that build's stage, not the doorway every other enemy
+  // walks in through. Here it lands on the stage art's SCORCH MARK instead, which sits a
+  // little left of that centre; see SUMMON_SPAWN_X.
+  it("lands mid-field on the scorch mark, not at the wave's doorway", () => {
+    const sim = summonSim();
+    for (let i = 0; i < 20 && !summoned(sim).length; i++) sim.step(50);
+    const victim = summoned(sim)[0];
+    // The burn's core is art x~220 of 480, which through RaidScene's 10 % lane inset is
+    // sim 448 — just left of the field's own midpoint. RaidScene centres the DRAWN figure
+    // on it (enemy rigs anchor at their left edge); the sim keeps the mark itself.
+    expect(victim.x).toBe(448);
+    expect(victim.x).toBeLessThan(FIELD_W / 2);
+    expect(victim.x).toBeGreaterThan(FIELD_W * 0.4);
+    // Well clear of where the wave stands, and past its line rather than behind it.
+    const alienX = sim.units.find((u) => u.sourceKey === ALIEN_MINION_KEY)!.x;
+    expect(victim.x).toBeLessThan(alienX - 200);
+  });
+
+  it("then stands where it landed — an abductee never moves", () => {
+    const sim = summonSim();
+    for (let i = 0; i < 20 && !summoned(sim).length; i++) sim.step(50);
+    const victim = summoned(sim)[0];
+    const landedAt = victim.x;
+    for (let i = 0; i < 400; i++) sim.step(50); // 20 s of fighting
+    expect(victim.x).toBe(landedAt);
+    expect(victim.y).toBe(CENTER_Y);
+  });
+
+  it("is a mid-lane roadblock the army has to stop and clear", () => {
+    const sim = summonSim();
+    for (let i = 0; i < 20 && !summoned(sim).length; i++) sim.step(50);
+    const victim = summoned(sim)[0];
+    for (let i = 0; i < 300; i++) sim.step(50);
+    // Zombies pull up short of it instead of filing past to the doorway…
+    const front = sim.units
+      .filter((u) => u.team === "player" && u.alive && (u.state === "fight" || u.state === "advance"))
+      .reduce((a, b) => (b.x > a.x ? b : a));
+    expect(front.x).toBeLessThan(victim.x);
+    expect(front.x).toBeGreaterThan(victim.x - 120);
+    // …so it can actually be killed, rather than chipping the line from out of reach.
+    expect(victim.hp).toBeLessThan(victim.maxHp);
   });
 
   it("refuses a second while the first still lives, then re-arms when it dies", () => {

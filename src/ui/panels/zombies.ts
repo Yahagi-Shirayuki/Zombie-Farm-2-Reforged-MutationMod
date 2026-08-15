@@ -18,6 +18,9 @@ import {
   ABILITY_POOL, unitAbilityAt, TIER_BOSS, MAX_ABILITY_TIER,
 } from "../../zombie/traits";
 import { mutationEntries, mutationTipText } from "../../zombie/mutationDisplay";
+import {
+  isMutationHidden, pruneMutationVisibility, setMutationHidden, visibleMutations,
+} from "../../zombie/mutationVisibility";
 import { statBreakdown } from "../../zombie/statDisplay";
 import { classTierRank } from "../../zombie/taxonomy";
 import type { AlmanacGuideTopic } from "../../zombie/almanacGuide";
@@ -131,17 +134,20 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   port.className = "zcard-port";
   port.style.backgroundImage = `url(${info.portrait})`;
   // Use the static catalog portrait immediately, then replace it with the cached
-  // individual rig once its mutation-aware render is available.
+  // individual rig once its mutation-aware render is available. Drawn with the
+  // mutations this zombie's own toggles leave visible, so the picture answers the
+  // toggles directly.
+  const paintPortrait = () => {
+    void hud.zombieMutationPortraitOf?.(
+      info.key, visibleMutations(info.id, info.mutation), info.color, () => port.isConnected,
+    )
+      .then((portrait) => {
+        if (port.isConnected) port.style.backgroundImage = `url(${portrait})`;
+      })
+      .catch(() => { /* retain the static species portrait if extraction fails */ });
+  };
   // Deferred until on screen — "My Zombies" stacks one of these cards per owned unit.
-  if (hud.zombieMutationPortraitOf) {
-    onFirstVisible(port, () => {
-      void hud.zombieMutationPortraitOf?.(info.key, info.mutation, info.color, () => port.isConnected)
-        .then((portrait) => {
-          if (port.isConnected) port.style.backgroundImage = `url(${portrait})`;
-        })
-        .catch(() => { /* retain the static species portrait if extraction fails */ });
-    });
-  }
+  if (hud.zombieMutationPortraitOf) onFirstVisible(port, paintPortrait);
   const meta = document.createElement("div");
   meta.className = "zcard-meta";
   meta.innerHTML =
@@ -202,7 +208,15 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   mutHdr.textContent = mutations.length > 1 ? `Mutations (${mutations.length}/5)` : "Mutation";
   const mutRow = document.createElement("div");
   mutRow.className = "zrow zmuts";
+  // An owned zombie can also be told which of its mutations to WEAR. The eye badge
+  // on each tile hides that one vegetable on this zombie alone — the mask, and so
+  // every stat and every slot it occupies, is untouched. Cards without an id (a
+  // Market preview, an Almanac entry) have no unit to remember a choice against,
+  // so they show the row without badges.
+  const canHide = Boolean(info.id);
   for (const mutation of mutations) {
+    const slot = document.createElement("div");
+    slot.className = "zmut-slot";
     const cell = document.createElement("button");
     cell.className = "zmut";
     cell.style.backgroundImage = `url(${MUTATION_FRAME})`;
@@ -212,7 +226,34 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
       e.stopPropagation();
       showTip(cell, mutation.name, mutationTipText(mutation));
     };
-    mutRow.appendChild(cell);
+    slot.appendChild(cell);
+    if (canHide) {
+      const eye = document.createElement("button");
+      eye.className = "zmut-vis";
+      const paint = () => {
+        const hidden = isMutationHidden(info.id, mutation.bit);
+        cell.classList.toggle("mut-off", hidden);
+        eye.classList.toggle("off", hidden);
+        eye.textContent = hidden ? "🚫" : "👁";
+        eye.setAttribute("aria-pressed", String(!hidden));
+        eye.title = hidden
+          ? `Show ${mutation.name} on ${info.name}`
+          : `Hide ${mutation.name} on ${info.name}`;
+        eye.setAttribute("aria-label", eye.title);
+      };
+      paint();
+      eye.onclick = (e) => {
+        e.stopPropagation();
+        setMutationHidden(info.id!, mutation.bit, !isMutationHidden(info.id, mutation.bit));
+        paint();
+        // The card's own picture answers immediately; the farm rig (and the Army
+        // screen behind it) is reassembled by the host.
+        if (hud.zombieMutationPortraitOf) paintPortrait();
+        hud.onZombieAppearanceChanged?.(info.id!);
+      };
+      slot.appendChild(eye);
+    }
+    mutRow.appendChild(slot);
   }
 
   const abilHdr = document.createElement("div");
@@ -448,7 +489,9 @@ export function buildRosterCard(hud: Hud, z: RosterEntry, onClick: () => void): 
   // once, and each render is a blocking GPU readback.
   if (hud.zombieMutationPortraitOf) {
     onFirstVisible(pim, () => {
-      void hud.zombieMutationPortraitOf?.(z.key, z.mutation, z.color, () => pim.isConnected)
+      void hud.zombieMutationPortraitOf?.(
+        z.key, visibleMutations(z.id, z.mutation), z.color, () => pim.isConnected,
+      )
         .then((mutated) => { if (pim.isConnected) pim.src = mutated; })
         .catch(() => { /* retain the static species portrait */ });
     });
@@ -517,6 +560,10 @@ export function openZombiesPanel(hud: Hud, initialTab?: ZombiesPanelTab) {
     // reward sent to storage remains visible and deployable even before the player
     // opens (or has room in) the physical Mausoleum panel.
     const roster = hud.getRoster ? hud.getRoster() : [];
+    // The complete owned roster is in hand exactly here, so this is where the
+    // per-zombie mutation toggles shed the entries of zombies that are gone (ids
+    // are reissued, so a stale one would dress the next zombie grown).
+    pruneMutationVisibility(roster.map((z) => z.id));
     const onFarm = roster.filter((r) => !r.stored).length;
     const stored = roster.length - onFarm;
     head.innerHTML = "";

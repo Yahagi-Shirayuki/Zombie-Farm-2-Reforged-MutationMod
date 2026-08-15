@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BattleSim, type SimUnit } from "./BattleSim";
+import { BattleSim, CHARGE_X, type SimUnit } from "./BattleSim";
 import type { CombatUnit, SummonConfig } from "./types";
 
 function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | "team">): CombatUnit {
@@ -31,6 +31,16 @@ function abducteeQueue(): SummonConfig {
   };
 }
 
+/** Mini Buddy is loaded onto a Large while it stands in the deployment slot, so every
+ *  test of it has to walk the carrier out there first. Returns the ticks it took. */
+function stepUntil(sim: BattleSim, done: () => boolean, limit = 400): number {
+  let n = 0;
+  while (n < limit && !done()) { sim.step(50); n++; }
+  return n;
+}
+const miniReady = (sim: BattleSim) =>
+  sim.activatedStatus().find((s) => s.key === "attachMini")?.ready ?? 0;
+
 describe("Mini Buddy", () => {
   it("preserves mutation state for the raid renderer", () => {
     const player = unit({
@@ -52,6 +62,7 @@ describe("Mini Buddy", () => {
     const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
     const sim = new BattleSim([dapper, imp], [enemy], null, true);
 
+    stepUntil(sim, () => miniReady(sim) > 0);
     expect(sim.activatedStatus()).toContainEqual(
       expect.objectContaining({ key: "attachMini", ready: 1 }),
     );
@@ -68,6 +79,7 @@ describe("Mini Buddy", () => {
     const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 300 });
     const sim = new BattleSim([brute, mini], [enemy], null, true);
 
+    stepUntil(sim, () => miniReady(sim) > 0);
     expect(sim.activatedStatus()).toContainEqual(
       expect.objectContaining({ key: "attachMini", ready: 1 }),
     );
@@ -94,23 +106,41 @@ describe("activated ability display window", () => {
   const presence = (sim: BattleSim, key: string) =>
     sim.activatedStatus().find((s) => s.key === key)?.present ?? false;
 
-  it("shows Mini Buddy only while a Large holds the charge slot", () => {
+  // The window is "a brute IS BEING DEPLOYED and a mini has yet to deploy" — and the
+  // button's look and the tap it accepts are the same predicate, so a lit button always
+  // means a tap will land. It used to arm from the first frame of the fight, off a Large
+  // still queued at the back, and a tap then loaded the mini onto a zombie that was
+  // nowhere near the slot.
+  const miniSetup = () => {
     const brute = unit({
       id: "brute", sourceKey: "ZombieActorLargeTier2", team: "player",
       abilities: ["attachMini"],
     });
     const mini = unit({ id: "mini", sourceKey: "ZombieActorSmallTier1", team: "player" });
     const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 300 });
-    const sim = new BattleSim([brute, mini], [enemy], null, true);
+    return new BattleSim([brute, mini], [enemy], null, true);
+  };
+
+  it("shows Mini Buddy only once the Large has REACHED the charge slot", () => {
+    const sim = miniSetup();
     const b = sim.units.find((u) => u.id === "brute")!;
 
-    // Queued at the back: the move is already "ready", but nothing to point at yet.
+    // Queued at the back — not being deployed, so no button and no tap.
     expect(b.state).toBe("waiting");
     expect(presence(sim, "attachMini")).toBe(false);
+    expect(miniReady(sim)).toBe(0);
 
-    // Stepped out to think it over — this is the whole window.
+    // Walking OUT to the slot. Still "charging", still not there: the state is entered
+    // the moment it leaves the group, and the walk is most of it.
     sim.step(50);
     expect(b.state).toBe("charging");
+    expect(b.x).toBeLessThan(CHARGE_X - 2);
+    expect(presence(sim, "attachMini")).toBe(false);
+    expect(miniReady(sim)).toBe(0);
+
+    // Standing in the slot with its focus bar filling — the whole window.
+    stepUntil(sim, () => miniReady(sim) > 0);
+    expect(Math.abs(b.x - CHARGE_X)).toBeLessThanOrEqual(2);
     expect(presence(sim, "attachMini")).toBe(true);
 
     // Sent forward: too late to mount anyone.
@@ -118,6 +148,57 @@ describe("activated ability display window", () => {
     for (let i = 0; i < 5000 && b.buddyId; i++) sim.step(50);
     expect(b.buddyId).toBeNull();
     expect(presence(sim, "attachMini")).toBe(false);
+  });
+
+  it("refuses a tap while the Large is still queued at the back", () => {
+    const sim = miniSetup();
+    const b = sim.units.find((u) => u.id === "brute")!;
+    const m = sim.units.find((u) => u.id === "mini")!;
+
+    expect(sim.activate("attachMini")).toBe(false);
+    expect(b.buddyId).toBeNull();
+    expect(m.state).toBe("waiting");
+  });
+
+  it("stays dark with no Mini left to pick up, however the Large is placed", () => {
+    const brute = unit({
+      id: "brute", sourceKey: "ZombieActorLargeTier2", team: "player",
+      abilities: ["attachMini"],
+    });
+    const other = unit({ id: "other", sourceKey: "ZombieActorRegularTier1", team: "player" });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 300 });
+    const sim = new BattleSim([brute, other], [enemy], null, true);
+    const b = sim.units.find((u) => u.id === "brute")!;
+
+    const seen = new Set<string>();
+    for (let i = 0; i < 400; i++) {
+      seen.add(b.state);
+      expect(presence(sim, "attachMini")).toBe(false);
+      expect(miniReady(sim)).toBe(0);
+      expect(sim.activate("attachMini")).toBe(false);
+      sim.step(50);
+    }
+    expect(seen).toContain("charging"); // it really did stand in the slot
+  });
+
+  it("goes dark again once the only Mini has deployed on its own feet", () => {
+    const mini = unit({ id: "mini", sourceKey: "ZombieActorSmallTier1", team: "player" });
+    const brute = unit({
+      id: "brute", sourceKey: "ZombieActorLargeTier2", team: "player",
+      abilities: ["attachMini"],
+    });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy", con: 300 });
+    // Mini first in the roster, so it takes the charge slot and leaves before the
+    // brute ever gets there.
+    const sim = new BattleSim([mini, brute], [enemy], null, true);
+    const b = sim.units.find((u) => u.id === "brute")!;
+    const m = sim.units.find((u) => u.id === "mini")!;
+
+    stepUntil(sim, () => m.state === "advance" || m.state === "fight");
+    stepUntil(sim, () => b.state === "charging" && b.x >= CHARGE_X - 2);
+    expect(presence(sim, "attachMini")).toBe(false);
+    expect(sim.activate("attachMini")).toBe(false);
+    expect(b.buddyId).toBeNull();
   });
 
   it("keeps Bash on screen across its wind-up and recharge", () => {

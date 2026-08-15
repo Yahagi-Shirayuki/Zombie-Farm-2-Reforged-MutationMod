@@ -737,6 +737,19 @@
   align-items: center; justify-content: center; filter: drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
 #hud .zmut img { width: 30px; height: 30px; object-fit: contain; image-rendering: pixelated; }
 #hud .zmut:hover { filter: brightness(1.1) drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
+/* an owned zombie's mutation tile also carries a visibility badge: the eye hides
+   that one vegetable on THIS zombie (cosmetic only — the stats stay). A hidden
+   mutation greys its tile so the row reads at a glance. */
+#hud .zmut-slot { position: relative; flex: 0 0 auto; line-height: 0; }
+#hud .zmut.mut-off { opacity: .42; filter: grayscale(1) drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
+#hud .zmut.mut-off:hover { filter: grayscale(1) brightness(1.15) drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
+#hud .zmut-vis { position: absolute; top: -5px; right: -6px; width: 19px; height: 19px;
+  padding: 0; border-radius: 50%; cursor: pointer; font-size: 10px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  background: #1c130a; border: 1.5px solid #d8b45e; color: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.65); }
+#hud .zmut-vis:hover { background: #34240f; }
+#hud .zmut-vis.off { border-color: #8d7a52; opacity: .85; }
 /* small tooltip popup for a stat/ability */
 #hud .ztip { position: fixed; transform: translate(-50%, -100%); z-index: 5;
   box-sizing: border-box; max-width: min(180px, calc(100vw - 16px)); min-width: 96px;
@@ -1873,9 +1886,12 @@
   #hud .zabil img { width: 22px; height: 22px; }
   #hud .zabil .zlock { font-size: 14px; }
   #hud .zabil-none { padding: 5px 2px; font-size: 10px; }
-  #hud .zmuts { gap: 5px; }
+  /* the visibility badge overhangs the tile, so the compact row needs the wider
+     gap the badge costs — otherwise each eye sits on its neighbour's frame. */
+  #hud .zmuts { gap: 10px; }
   #hud .zmut { width: 30px; height: 33px; }
   #hud .zmut img { width: 22px; height: 22px; }
+  #hud .zmut-vis { width: 17px; height: 17px; top: -4px; right: -5px; font-size: 9px; }
 
   #hud .zl-panel { width: min(720px, 94vw); }
   #hud .zl-list { gap: 7px; max-height: 70vh; }

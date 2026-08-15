@@ -2,6 +2,7 @@ import { BRAIN_TICKET_KEY, DICE_KEY, CONCENTRATION_KEY, VOUCHER_KEY, MAX_STACK }
 import { XP_THRESHOLDS, levelForXp, levelUpBrains } from "../levels";
 import { ownedLootCounter, resolveLoot, rollLoot } from "../loot";
 import { raidEcon, raidUnlocked, winGold } from "../raidCatalog";
+import { invasionWinXp } from "../../../src/raid/repeatXp";
 import { applyQuestEvents, MEMORIAL_GRAVEYARD_CAP } from "./engine";
 import { applyPeriodicEvents, refreshPeriodicState, xpToNextLevel } from "../../../src/quest/periodic/generate";
 import type { PeriodicQuestState } from "../../../src/quest/periodic/types";
@@ -449,11 +450,15 @@ export async function finishRaid(
   const zombieDry = parse<Record<string, number>>(raidState.zombie_dry_json, {});
   const firstClear = win && !(progress[String(raidId)] > 0);
   const baseGold = win ? winGold(econ, survivors.length / locked.length) : 0;
-  const xp = firstClear ? econ.xp : 0;
   const boosts = parse<{ dice?: number; brainDrop?: number; elite?: boolean }>(session.boosts_json, {});
   // Elite is read back from the SESSION, not from this request: the ticket was charged
   // and the wave scaled at /raid/start, so that is where the fact lives.
   const eliteLuck = boosts.elite ? ELITE_BRAIN_LUCK : 1;
+  // The first clear pays the enemy's authored bonus; every later win pays the small
+  // per-raid trickle, x4 on a Brain Ticket (repeatXp.ts). Priced here from the raid id
+  // and the SESSION's elite flag — never from anything the client sent — so a repeat
+  // win cannot be re-billed as a first clear.
+  const xp = win ? invasionWinXp(raidId, econ.xp, firstClear, !!boosts.elite) : 0;
   const pinnedBrains = Number.isFinite(boosts.brainDrop)
     ? Math.max(0, Math.trunc(boosts.brainDrop as number))
     : null;

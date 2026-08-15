@@ -4,7 +4,7 @@ import { buildPlayerUnits } from "../raid/CombatEngine";
 import type { CombatUnit, RaidDef } from "../raid/types";
 import type { GameState } from "../GameState";
 import type { OwnedZombie } from "../zombie/types";
-import { epicBossDamage } from "./catalog";
+import { epicBossDamage, epicBossDamageTiming } from "./catalog";
 import type { EpicBossDef, EpicBossLoot, EpicBossRun } from "./types";
 import { EPIC_LOOT_DROP_CHANCE, EPIC_LOOT_ROLLS, epicLootWeight } from "./rewards";
 
@@ -51,7 +51,9 @@ export function buildEpicBossSetup(
     isGarden: false,
     isHeadless: false,
     abilities: [],
-    attackDamageTiming: 0.88,
+    // Per-attack, from the catalog — 0.88 for the six that punch, 0.25 for the two
+    // that bite. MUST stay identical to server/src/v3/epicBoss.ts.
+    attackDamageTiming: epicBossDamageTiming(def),
   };
   const raid: RaidDef = {
     id: -101,

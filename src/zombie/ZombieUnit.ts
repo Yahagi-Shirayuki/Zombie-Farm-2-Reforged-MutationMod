@@ -32,6 +32,7 @@ import {
   zombiePartTint,
 } from "./appearance";
 import { SpecialHeadFx, specialHeadFxKind } from "./specialHeadFx";
+import { visibleMutations } from "./mutationVisibility";
 import { zombieFarmScale } from "./displayScale";
 
 // Head replacements draw over the base skull but under facial parts, so eyes stay
@@ -197,9 +198,13 @@ export class ZombieUnit {
     const m: ZombieModel =
       assets.zombieModels[this.data.key] ??
       assets.zombieModels["ZombieActorRegularTier1"];
-    // What this unit LOOKS like on the farm, after the device's display prefs. The
-    // data keeps its real mask and inherited tint; only the drawing changes.
-    const shown = displayedAppearance(this.data.mutation, this.data.color);
+    // What this unit LOOKS like on the farm, after the mutations its own card hides
+    // and then the device's display prefs. The data keeps its real mask and
+    // inherited tint; only the drawing changes.
+    const shown = displayedAppearance(
+      visibleMutations(this.data.id, this.data.mutation),
+      this.data.color,
+    );
     const [r, g, b] = shown.color ?? m.color;
     const tint = (r << 16) | (g << 8) | b; // authentic Market colour
     const scale = zombieFarmScale(this.data.group, this.data.className, this.data.key);

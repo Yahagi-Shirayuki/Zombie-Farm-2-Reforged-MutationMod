@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { RAIDS, raidEcon, winGold, raidUnlocked } from "../src/raidCatalog";
+import { invasionWinXp, repeatInvasionXp } from "../../src/raid/repeatXp";
 
 describe("raidCatalog", () => {
   it("has the 11 playable raids with positive reward data", () => {
@@ -19,6 +20,35 @@ describe("raidCatalog", () => {
     expect(raidEcon(1)).toMatchObject({ unlockLevel: 0, playable: true }); // McDonnell: from the start
     expect(raidEcon(9)).toMatchObject({ unlockLevel: 43 }); // Video Games: the richest raid
     expect(raidEcon(2)).toMatchObject({ unlockLevel: 16 });
+  });
+});
+
+// The repeat-XP table lives in src/raid/repeatXp.ts and is imported by BOTH sides, so
+// there is no mirror to drift. What CAN drift is coverage: this server catalog is
+// hand-maintained, so a raid added here without a repeat value would quietly pay 0 on
+// every win after its first.
+describe("repeat-invasion XP vs the server raid catalog", () => {
+  it("prices a repeat win for every raid the server will settle", () => {
+    for (const id of Object.keys(RAIDS).map(Number)) {
+      expect(repeatInvasionXp(id), `raid ${id}`).toBeGreaterThan(0);
+    }
+  });
+
+  it("pays the authored bonus on the first clear and the trickle after, never both", () => {
+    for (const [key, r] of Object.entries(RAIDS)) {
+      const id = Number(key);
+      expect(invasionWinXp(id, r.xp, true), `raid ${id} first clear`).toBe(r.xp);
+      expect(invasionWinXp(id, r.xp, false), `raid ${id} repeat`).toBe(repeatInvasionXp(id));
+      expect(invasionWinXp(id, r.xp, false, true), `raid ${id} elite repeat`).toBe(repeatInvasionXp(id) * 4);
+    }
+  });
+
+  // A repeat win must never out-earn the raid's own first clear, or the reward ordering
+  // players are taught ("the first one is the big one") stops being true.
+  it("keeps even an elite repeat below the first clear", () => {
+    for (const [key, r] of Object.entries(RAIDS)) {
+      expect(repeatInvasionXp(Number(key), true), `raid ${key}`).toBeLessThan(r.xp);
+    }
   });
 });
 

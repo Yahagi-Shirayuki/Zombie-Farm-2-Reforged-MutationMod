@@ -17,7 +17,10 @@ describe("Epic Boss zombie rewards", () => {
     const zombies = zombieRows as ZombieDef[];
     const byKey = new Map(zombies.map((zombie) => [zombie.key, zombie]));
     const purchasable = new Set(purchasableZombies(zombies).map((zombie) => zombie.key));
-    expect(Object.keys(EPIC_QUEST_ZOMBIE_REWARDS)).toHaveLength(15);
+    // Two prize zombies per event — the ordinary one on rung 5, the omega on rung 10
+    // (EPIC_PRIZE_RUNGS in tools/prep_quests.py). Rocky Rhino used to carry only the
+    // first, so its top five rungs paid nothing; it now repeats Brock Coley on rung 10.
+    expect(Object.keys(EPIC_QUEST_ZOMBIE_REWARDS)).toHaveLength(EPIC_BOSSES.length * 2);
     for (const [questId, key] of Object.entries(EPIC_QUEST_ZOMBIE_REWARDS)) {
       const quest = questRows[questId as keyof typeof questRows];
       const zombie = byKey.get(key);

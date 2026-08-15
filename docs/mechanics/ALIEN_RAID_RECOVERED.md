@@ -248,6 +248,23 @@ token for the whole fight (`RaidScene.ts` ~1126), so the saucer never leaves.
 **Fix:** drop the two UFO sprites when the boss's sim state leaves `"descending"`. There is
 no re-attach — `setBossShipFront:nil` is permanent.
 
+### 7.2.1 …and the HOVER goes with it
+
+`-[AlienStageActor startAnim:interrupt:]` (0xc7b1e), anim state 0, guards the whole idle
+bob on **two** conditions, not one:
+
+```
+if ([self isKindOfClass:[AlienStageActorBoss class]] && [self bossShipFront] != nil) {
+    // CCSequence of two 0.5 s CCMoveTos on the body attachment, (0,-10) <-> (0,+10)
+}
+```
+
+`bossShipFront` is exactly what §7.2 nils on landing. So it is the SHIP that hovers, and
+the moment it is destroyed the alien stands on the ground like any other enemy. A grounded
+boss still bobbing was the tester's second follow-up report.
+
+**Fix:** gate the renderer's triangle wave on the token still owning its saucer.
+
 ## 7.3 → symptom 2: "new aliens only come after the previous one is killed" — REAL BUG
 
 `-[ZFFightMan spawnEnemyIn:]` (0x58100), in full:
@@ -345,8 +362,9 @@ self.bossSummonList = [NSMutableArray array];
 Every other stage gets an empty list (and `allowedToSummonBoss` needs a non-empty one, so no
 other boss can summon at all).
 
-`-[ZFFightMan summonBoss:]` (0x5ee2c) pops **index 0**, `NSClassFromString`s it, spawns it at
-`enemyPosition` with zOrder 3 — then **refills the queue** with a fresh random name:
+`-[ZFFightMan summonBoss:]` (0x5ee2c) pops **index 0**, `NSClassFromString`s it, spawns it
+**at the CENTRE OF THE STAGE** with zOrder 3 — then **refills the queue** with a fresh
+random name:
 
 ```
 i = (int)((arc4random() % 100) / 100.0f * 5.0f);     // 0..4, 20% each
@@ -367,6 +385,45 @@ return self.bossWall == nil                 // <<< only ONE abductee alive at a 
 
 The spawned human is stored in `self.bossWall` (0x5f190) and `update:` (0x5d6a8) clears that
 ivar when its state hits 100/101, re-arming the summon.
+
+The spawn point is worth spelling out, because it is the one place the method branches on
+the device (0x5ef28) and it is easy to misread as "the enemy door":
+
+```
+r4 = 240.0f                                              // iPhone
+if ([[UIDevice currentDevice] respondsToSelector:@selector(userInterfaceIdiom)]
+    && [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) r4 = 480.0f
+…
+[actorManager spawnFightActor: cls
+                      atPoint: CGPointMake(r4, fightMan.enemyPosition.y)   // x in r3, y on the stack
+                   fromObject: self.parent
+                   withZOrder: 3];
+```
+
+Only the **y** comes from `enemyPosition`. The x is that hard-coded 240 / 480 — the exact
+horizontal **centre** of each build's stage (480 wide on the phone, 960 on the tablet). An
+abductee therefore lands mid-field, already past the wave's hold line, rather than walking
+in through the doorway like every other enemy. Landing them at the door was the tester's
+first follow-up report.
+
+**And it stays there.** It does not walk, chase or reposition — it holds dead centre and
+swings at whatever comes into reach. Two playtest adjustments sit on top of the recovered
+point: it stands on the stage art's SCORCH MARK (art x~220 of 480) rather than the
+arithmetic centre at 240, and RaidScene shifts the drawn figure left by its own half-width
+so that mark lands under its middle — enemy rigs are drawn from their model-space left
+edge, which is invisible in a doorway crowd and obvious on a lone unit mid-field. (A first pass had it advancing on the army, reasoning
+from a `moveToPoint: (0, enemyPosition.y)` site inside `civilianUpdate` that was never
+attributed to a state; the tester corrected it. Do not re-derive that — the site is not
+this actor's.)
+
+One consequence has to be modelled rather than transcribed. The zombies' combat zone
+begins `COMBAT_ZONE_DEPTH` short of the front line, which is well to the right of centre,
+so a stationary abductee would otherwise chip the army as it filed past and never be
+reachable in return. The reimplementation therefore treats it as the mid-lane blocker it
+is, exactly as it already treats a boss WALL: zombies that have not yet passed it stop
+short and fight it, and those already ahead of it carry on (the same `passedWall` latch).
+The two can never coexist — only the Ninja and Robot bosses build walls, and only the alien
+boss summons.
 
 The rest of the cast, for presentation:
 

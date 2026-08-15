@@ -61,8 +61,11 @@ const SIM_PER_SOURCE_X = FIELD_W / SOURCE_STAGE_W;
 const SIM_PER_SOURCE_Y = FIELD_H / SOURCE_STAGE_H;
 
 export const CHARGE_X = 220; // staging slot the front zombie steps into to focus
-export const ENEMY_HOLD_X = 915; // enemies hold in the structure's doorway (not the far edge),
-// ~2/3 of a sprite forward of the entrance so they stand IN the open door
+export const ENEMY_HOLD_X = 940; // enemies hold in the structure's doorway (not the far edge),
+// ~2/3 of a sprite forward of the entrance so they stand IN the open door.
+// Moved 915 -> 940 on a playtest note that the wave stood too far into the lane. It carries
+// the zombies' own line with it (`frontX` below is this minus the melee gap), which was the
+// other half of the same note: they now close to 880 before they start swinging.
 export const ENEMY_SPAWN_X = 1120; // off the right edge (hidden) before emerging
 // Epic Bosses enter from above instead of through the stage doorway. Land them just
 // right of the field's midpoint so zombies spend more of the short attempt fighting
@@ -77,7 +80,7 @@ export const BOSS_STRUCT_Y = -150;
 /** Epic Boss entry starts well above the visible stage, then falls to ground. */
 export const EPIC_BOSS_FALL_Y = -4_000;
 const EPIC_BOSS_FALL_SPEED = 4_800;
-const EPIC_BOSS_LAND_MS = 500;
+export const EPIC_BOSS_LAND_MS = 500;
 const BAND_TOP = 90;
 const BAND_BOT = FIELD_H - 70;
 const CENTER_Y = FIELD_H / 2;
@@ -124,7 +127,6 @@ const BAND_SIZE = 5; // zombies per depth band — `index / 5`, exactly the dama
 const SRC_BAND_GAP = 35; // each band stands this much further back
 const SRC_SLOT_X_STEP = 5; // slots inside one row fan FORWARD by this much
 const SRC_SLOT_Y_STEP = 4; // ...and step DOWN the screen by this much
-const SRC_GARDEN_SETBACK = 120; // `reorderZombies` shoves every Garden's destination back
 /** Per-body-type standoff, SUBTRACTED from x: a heavy body plants further off the enemy, a
  *  light one steps in past the line. Bodies not listed take 0.
  *
@@ -159,7 +161,19 @@ const BODY_ROW_ORDER = ["Headless", "Girl", "Regular", "Large", "Garden"];
 const BAND_GAP = SRC_BAND_GAP * SIM_PER_SOURCE_X;
 const SLOT_X_STEP = SRC_SLOT_X_STEP * SIM_PER_SOURCE_X;
 const SLOT_Y_STEP = SRC_SLOT_Y_STEP * SIM_PER_SOURCE_Y;
-const GARDEN_SETBACK = SRC_GARDEN_SETBACK * SIM_PER_SOURCE_X;
+/** Where a Garden zombie stands to heal — an ABSOLUTE support station rather than a
+ *  setback from the front line.
+ *
+ *  DELIBERATE DIVERGENCE. `reorderZombies` shoves a Garden's destination back by 120
+ *  source points from wherever the line happens to be, which in this sim's deeper
+ *  formation dropped them into the milling crowd — measured at sim ~75, about a sixth of
+ *  the way across the stage, so the healers read as stragglers who had not deployed. They
+ *  now hold at a fixed 3/10 of the visible stage: RaidScene insets the lane by 10 % of the
+ *  stage width at each end, so sim 250 renders exactly 30 % from the left edge of the
+ *  background art. Far enough back to stay out of the combat band (which starts at
+ *  `frontX - COMBAT_ZONE_DEPTH`) and so off the alien laser's target list, which is the
+ *  property the setback existed to produce. */
+const GARDEN_STATION_X = 250;
 /** How much wider than the source the rows are drawn. The recovered 4-point row step packs
  *  five zombies into a 16-point ribbon — correct, and the reason the source ships an
  *  explicit per-zombie zOrder rather than sorting on y. Our sprites are drawn larger
@@ -325,6 +339,36 @@ const CRAB_WANDER_MIN_X = 300;
 const CRAB_WANDER_MAX_X = 760;
 
 // ---- Boss summon / wall specials ----
+/** Where an abducted human is beamed down. GROUND TRUTH (`-[ZFFightMan summonBoss:]`
+ *  0x5ef28): the spawn point is `CGPointMake(240, enemyPosition.y)`, or 480 on an iPad —
+ *  the one value the method picks off `userInterfaceIdiom`. Both are the exact horizontal
+ *  CENTRE of that build's stage (480 wide on the phone, 960 on the tablet), so an abductee
+ *  lands mid-field rather than walking in through the wave's doorway like every other
+ *  enemy.
+ *
+ *  It lands on the SCORCH MARK rather than on that arithmetic centre. The burnt
+ *  crop-circle in fightBGAlien_bg.png — visibly what the beam targets — has its core at
+ *  about x=220 of the 480-wide art, a little LEFT of the middle. RaidScene insets the
+ *  combat lane by FIELD_INSET_FX (10 % of the stage width) at each end, so sim x renders
+ *  at art `48 + (x/1000)*384`; art 220 is sim 448 and the stage centre is sim 500.
+ *  Playtest call, and the art wins: a beam that misses its own landing burn reads as a
+ *  bug however defensible the number behind it is.
+ *
+ *  This is the point the abductee is CENTRED on. Enemy rigs are drawn from their
+ *  model-space left edge rather than their middle, so RaidScene shifts a summon left by
+ *  its own half-width (`hpCenterX`) to put the figure here — per unit, because the five
+ *  abductees are not the same width and a fixed offset would only centre the widest. */
+const SUMMON_SPAWN_X = 448;
+/** An abductee STANDS where it lands. It never walks, chases or repositions — it holds
+ *  dead centre and swings at whatever comes into reach.
+ *
+ *  That makes it a mid-lane roadblock rather than a member of the wave, so zombies treat
+ *  it the way they already treat a boss WALL: those that have not yet passed it stop
+ *  short and fight it, and those already ahead of it carry on (the `passedWall` latch).
+ *  Some such rule is forced — the zombies' combat zone begins COMBAT_ZONE_DEPTH short of
+ *  the front line, well beyond centre, so without it an abductee could chip the army as
+ *  it filed past and never be reachable in return. */
+const SUMMON_MELEE_GAP = ENGAGE;
 // There is deliberately NO summon cap. GROUND TRUTH (`summonBoss:` 0x5ee2c): every cast
 // pops `bossSummonList[0]` and pushes a freshly rolled replacement, so the list never
 // empties. `allowedToSummonBoss` (0x5eda4) is the real limit — the summoned actor is
@@ -472,7 +516,12 @@ export interface SimUnit {
   knockBackSpeed: number; // sim px/s of the slide (0 = not sliding)
   // ---- enemy attack effects inflicted on a struck zombie ----
   knockBack: boolean; // this enemy's attack shoves the zombie back down the lane
+  /** Share of this enemy's swings that actually carry the shove — one attack is rolled
+   *  per swing, so an effect on a 10 %-frequency entry lands one hit in ten. See
+   *  CombatEngine.attackEffects. */
+  knockBackChance: number;
   stunInflictMs: number; // stun this enemy applies to a zombie on hit (ms)
+  stunChance: number; // …and the same share for the stun.
   attackDamageTiming: number; // 0..1 fraction of the swing when it connects (enemy anim)
   isWall: boolean; // boss-summoned blocker (carrotWall / junkWall) — tappable, no attacks
   /** Abducted human beamed in by the alien boss's `summonBoss`. It fights like any other
@@ -700,7 +749,12 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     knockBackToX: 0,
     knockBackSpeed: 0,
     knockBack: !isPlayer && !!u.knockBack,
+    // Absent chance = "every swing carries it", but only where the effect exists at
+    // all: defaulting a unit with no stun to stunChance 1 would open the shared roll
+    // below for it and hand back the every-hit knockback this replaced.
+    knockBackChance: isPlayer ? 0 : u.knockBackChance ?? (u.knockBack ? 1 : 0),
     stunInflictMs: isPlayer ? 0 : u.stunMs ?? 0,
+    stunChance: isPlayer ? 0 : u.stunChance ?? ((u.stunMs ?? 0) > 0 ? 1 : 0),
     attackDamageTiming: u.attackDamageTiming ?? 0.5,
     isWall: false,
     isSummon: false,
@@ -954,6 +1008,8 @@ export class BattleSim {
       knockBackSpeed: u.knockBackSpeed ?? 0,
       passedWall: u.passedWall ?? false,
       isSummon: u.isSummon ?? false,
+      knockBackChance: u.knockBackChance ?? (u.knockBack ? 1 : 0),
+      stunChance: u.stunChance ?? (u.stunInflictMs > 0 ? 1 : 0),
       mirrorsOpponentSpeed: u.mirrorsOpponentSpeed ?? false,
     })));
     this.players = this.units.filter((u) => u.team === "player");
@@ -1030,11 +1086,35 @@ export class BattleSim {
     return p.isGarden && (p.abilities.includes("heal") || p.abilities.includes("healAOE"));
   }
 
+  /** A Mini that has not deployed yet, and so is still available to be picked up.
+   *  One that has been released is out on the field on its own feet — there is
+   *  nothing left to mount. */
   private availableMini(): SimUnit | null {
     return this.players.find(
       (p) => p.alive && this.isSmall(p) && !p.buddyCarrierId &&
         (p.state === "waiting" || p.state === "charging")
     ) ?? null;
+  }
+
+  /** Mini Buddy's whole window, in one place because the button's look and the tap
+   *  it accepts must agree exactly (they did not: see `readyToActivate`).
+   *
+   *  The move is loaded onto a Large WHILE IT IS BEING DEPLOYED — standing in the
+   *  charge slot with its focus bar filling, the one moment the player is deciding
+   *  about that zombie. "charging" alone is not enough: the state is entered the
+   *  instant the zombie leaves the back group and covers its whole walk out to the
+   *  slot, so it has to have ARRIVED (the same 2-unit test the charge step itself
+   *  uses to stop walking and start focusing). */
+  private atChargeSlot(p: SimUnit): boolean {
+    return p.state === "charging" && Math.hypot(CHARGE_X - p.x, CENTER_Y - p.y) <= 2;
+  }
+
+  private canTakeMini(p: SimUnit): boolean {
+    return (
+      p.alive && this.isLarge(p) && p.abilities.includes("attachMini") &&
+      !p.buddyId && !p.usedAbilities.includes("attachMini") &&
+      this.atChargeSlot(p) && !!this.availableMini()
+    );
   }
 
   /** A player unit is READY for an activated move when it's alive, in the thick of
@@ -1048,12 +1128,12 @@ export class BattleSim {
    *  move you most want to pre-time the one move you could not. */
   private readyToActivate(p: SimUnit, key: string): boolean {
     if (p.usedAbilities.includes(key)) return false;
-    if (key === "attachMini") {
-      return (
-        p.alive && this.isLarge(p) && p.abilities.includes(key) && !p.buddyId &&
-        (p.state === "waiting" || p.state === "charging") && !!this.availableMini()
-      );
-    }
+    // Mini Buddy is the one move performed OFF the field, so it does not go through
+    // the in-position test below at all — see `canTakeMini` for its window. It used
+    // to accept a Large still queued at the back ("waiting"), which armed the button
+    // from the first frame of the fight and let a tap load the mini onto a zombie
+    // nowhere near the deployment slot.
+    if (key === "attachMini") return this.canTakeMini(p);
     // Strictly a WIDENING for suicide moves: everything that could be lit before still
     // can, plus the standing-in-position-with-nothing-to-hit case.
     const engaged = p.state === "fight" ||
@@ -1081,7 +1161,7 @@ export class BattleSim {
     if (!p.alive || p.team !== "player") return false;
     if (p.state !== "advance" && p.state !== "fight") return false;
     const wall = this.wallInWay(p);
-    if (wall) return Math.abs(wall.x - p.x) <= WALL_MELEE_GAP + 2;
+    if (wall) return Math.abs(wall.x - p.x) <= this.blockerGap(wall) + 2;
     return p.x >= this.frontX - COMBAT_ZONE_DEPTH;
   }
 
@@ -1090,16 +1170,12 @@ export class BattleSim {
    *  (which also demands off-cooldown and not-already-winding-up) precisely so the
    *  button stays put while its zombie charges and recharges.
    *
-   *  Mini Buddy's window is the narrowest of all: exactly while a Large stands in
-   *  the charge slot deciding whether to go — before that it is queued at the back,
-   *  after it there is nothing left to mount. */
+   *  Mini Buddy is the exception: its window is the narrowest of all — exactly while
+   *  a Large stands in the charge slot deciding whether to go, with a Mini still
+   *  behind it — and it has no cooldown to wait out, so "on screen" and "a tap lands"
+   *  are the same instant. Same predicate as `readyToActivate`, deliberately. */
   private abilityPresent(key: string): boolean {
-    if (key === "attachMini") {
-      return !!this.availableMini() && this.players.some(
-        (p) => p.alive && this.isLarge(p) && p.abilities.includes(key) &&
-          !p.buddyId && !p.usedAbilities.includes(key) && p.state === "charging"
-      );
-    }
+    if (key === "attachMini") return this.players.some((p) => this.canTakeMini(p));
     return this.players.some(
       (p) => this.inAttackPosition(p) &&
         p.abilities.includes(key) && !p.usedAbilities.includes(key)
@@ -1173,6 +1249,47 @@ export class BattleSim {
         ? this.resurrectsLeft()
         : deployed.filter((p) => p.abilities.includes(key)).length,
     }));
+  }
+
+  /** Totals behind the two top-HUD team bars.
+   *
+   *  NUMERATOR AND DENOMINATOR MUST COME FROM THE SAME UNITS. The scene used to divide the
+   *  live HP sum by a constant captured from the roster `buildPlayerUnits` handed over, and
+   *  that roster's con — so its maxHp — already carries the FULL team aura (chivalry / grace
+   *  / fortitude), while `refreshTeamAuras` only pays the aura to zombies that have actually
+   *  DEPLOYED. Before the first zombie marched in, every carrier's maxHp therefore sat below
+   *  the number the bar divided by, and an army holding aura carriers opened the fight with a
+   *  partly dark bar while every zombie in it was at full health. Summing maxHp here tracks
+   *  the aura in lockstep. Dead units keep their maxHp, so a loss stays visible as a loss.
+   *
+   *  Walls and summons are left out of the ENEMY total: they are transient obstacles the boss
+   *  conjures mid-fight, and adding their HP to a numerator whose denominator never heard of
+   *  them pinned the bar at full for as long as one stood. Both keep their own on-field bars.
+   *  The head COUNT still includes them — that is a tally of what is on the field. */
+  teamTotals(): {
+    playerHp: number; playerMax: number; playerAlive: number;
+    enemyHp: number; enemyMax: number; enemyAlive: number;
+  } {
+    let playerHp = 0, playerMax = 0, playerAlive = 0;
+    let enemyHp = 0, enemyMax = 0, enemyAlive = 0;
+    for (const u of this.units) {
+      // Totals count every unit, including a zombie still waiting to charge and an
+      // enemy still queued off-screen.
+      if (u.team === "player") {
+        playerHp += Math.max(0, u.hp);
+        playerMax += u.maxHp;
+        if (u.alive) playerAlive++;
+      } else {
+        if (u.alive) enemyAlive++;
+        if (u.isWall || u.isSummon) continue;
+        enemyHp += Math.max(0, u.hp);
+        enemyMax += u.maxHp;
+      }
+    }
+    return {
+      playerHp, playerMax: Math.max(1, playerMax), playerAlive,
+      enemyHp, enemyMax: Math.max(1, enemyMax), enemyAlive,
+    };
   }
 
   /** Recompute type auras from currently deployed carriers. Their source behavior
@@ -1447,11 +1564,21 @@ export class BattleSim {
     return best;
   }
 
-  /** A stationary wall ahead of this zombie. The latch keeps zombies which were
-   *  already beyond the summon point from turning around to attack it. */
+  /** A stationary blocker ahead of this zombie: a boss WALL, or an abductee beamed into
+   *  the middle of the lane (see SUMMON_SPAWN_X / SUMMON_MELEE_GAP — both stand still
+   *  mid-field rather than holding at the wave's doorway). The latch keeps zombies which
+   *  were already beyond the spawn point from turning around to attack it.
+   *
+   *  The two can never be on the field together — only the Ninja and Robot bosses build
+   *  walls and only the alien boss summons — so they share the one `passedWall` latch. */
   private wallInWay(u: SimUnit): SimUnit | null {
     if (u.passedWall) return null;
-    return this.enemies.find((e) => e.alive && e.isWall && u.x <= e.x + 0.5) ?? null;
+    return this.enemies.find((e) => e.alive && (e.isWall || e.isSummon) && u.x <= e.x + 0.5) ?? null;
+  }
+
+  /** How close a zombie gets to a blocker before trading blows with it. */
+  private blockerGap(e: SimUnit): number {
+    return e.isWall ? WALL_MELEE_GAP : SUMMON_MELEE_GAP;
   }
 
   /** The FRONT-MOST player within an enemy's striking range — the single zombie
@@ -1659,8 +1786,16 @@ export class BattleSim {
       // (0x37738) refuses while the victim's `fightData.canInterrupt` is NO. See
       // `uninterruptible`: only the bash and explode families ever set it.
       if (!this.uninterruptible(foe)) {
-        if (u.stunInflictMs > 0) foe.stunMs = Math.max(foe.stunMs, u.stunInflictMs);
-        if (u.knockBack) this.knockBackZombie(foe);
+        // Which attack this swing WAS decides whether it carries an effect: the source
+        // rolls one entry out of the unit's list per swing and applies that entry's
+        // flags. One roll covers both effects, matching the single `rollAgainstFrequency`
+        // the source makes — so the Lawyers boss's Double Punch is stun-and-shove or
+        // neither, never half of one. See CombatEngine.attackEffects.
+        const special = this.abilityRoll(u) < 100 * Math.max(u.knockBackChance, u.stunChance);
+        if (special && u.stunInflictMs > 0 && u.stunChance > 0) {
+          foe.stunMs = Math.max(foe.stunMs, u.stunInflictMs);
+        }
+        if (special && u.knockBack && u.knockBackChance > 0) this.knockBackZombie(foe);
       }
     }
   }
@@ -2058,10 +2193,12 @@ export class BattleSim {
         -(SRC_BODY_STANDOFF[this.bodyOf(p)] ?? 0) * SIM_PER_SOURCE_X + (n - 1 - slot) * SLOT_X_STEP;
       const relMax = Math.max(...row.map(rel));
       row.forEach((p, slot) => {
-        p.slotX = this.frontX
-          - band * BAND_GAP
-          - (relMax - rel(p, slot)) * this.rowXFit
-          - (p.isGarden ? GARDEN_SETBACK : 0);
+        // A healer keeps its station EXACTLY — no band gap, no row fan. Those terms are
+        // relative to a front line it is not part of, and they dragged it ~36 units off
+        // the mark. Gardens share the one x and are separated by `slotY` below.
+        p.slotX = p.isGarden
+          ? GARDEN_STATION_X
+          : this.frontX - band * BAND_GAP - (relMax - rel(p, slot)) * this.rowXFit;
         // Source: y = 4*slot - 2*n + 10, whose midpoint is y=8 for ANY n. Two adjustments:
         // we hang the row off the lane centre instead of the stage's y origin (so the +10
         // becomes +2 — the formula minus its own fixed centre — and the block stays centred
@@ -2172,7 +2309,7 @@ export class BattleSim {
           // Move to the assigned formation slot (never past the enemy).
           const blockingWall = this.wallInWay(p);
           const destinationX = blockingWall
-            ? Math.min(p.slotX, blockingWall.x - WALL_MELEE_GAP)
+            ? Math.min(p.slotX, blockingWall.x - this.blockerGap(blockingWall))
             : p.slotX;
           const mdx = destinationX - p.x;
           const mdy = p.slotY - p.y;
@@ -2201,7 +2338,7 @@ export class BattleSim {
           if (p.isHeadless && !p.frontPriority && atSlot) p.frontPriority = true;
           if (p.buddyId && enemyArrived && atSlot) this.deployMiniBuddy(p, foe);
           const atBlockingWall = !!blockingWall &&
-            Math.abs(blockingWall.x - p.x) <= WALL_MELEE_GAP + 2;
+            Math.abs(blockingWall.x - p.x) <= this.blockerGap(blockingWall) + 2;
           if (foe && enemyArrived && (inCombatZone || atBlockingWall)) {
             p.state = "fight";
             // A charging zombie makes no normal attacks — it's winding up the big
@@ -2598,10 +2735,19 @@ export class BattleSim {
         if (template) {
           const victim = this.spawnEnemy(template);
           victim.isSummon = true;
-          // Beamed straight onto the field, not queued behind the wave: the source
-          // spawns it at `enemyPosition` there and then. Leaving it "queued" would also
-          // deadlock it, since the wave's release gate deliberately ignores summons.
-          victim.state = "emerging";
+          // Beamed down mid-field, not queued behind the wave at the doorway — see
+          // SUMMON_SPAWN_X. Leaving it "queued" would also deadlock it, since the wave's
+          // release gate deliberately ignores summons.
+          victim.state = "hold";
+          victim.x = SUMMON_SPAWN_X;
+          victim.y = CENTER_Y;
+          victim.prevX = victim.x;
+          victim.prevY = victim.y;
+          // Same latch the wall uses: a zombie already past the spawn point does not turn
+          // round to fight something that appeared behind it.
+          for (const p of this.players) {
+            if (p.alive && p.x > victim.x + 0.5) p.passedWall = true;
+          }
         }
         // The refill roll: `(int)((arc4random() % 100) / 100.0f * 5.0f)`, hashed here for
         // replay. Rolled even when the spawn itself failed, exactly as the source does.

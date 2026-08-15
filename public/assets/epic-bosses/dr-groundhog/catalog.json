@@ -30,7 +30,8 @@
     "attacks": [
       {
         "frequency": 100,
-        "name": "VideoGameZombieBite"
+        "name": "VideoGameZombieBite",
+        "damageTiming": 0.25
       }
     ],
     "con": 20,

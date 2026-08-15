@@ -1,5 +1,5 @@
 import type { EpicBossProjection, QuestProjection } from "../../../src/net/protocol";
-import { epicBossById, epicBossDamage, epicBossHp, epicBossUnlockLevel } from "../../../src/epicBoss/catalog";
+import { epicBossById, epicBossDamage, epicBossDamageTiming, epicBossHp, epicBossUnlockLevel } from "../../../src/epicBoss/catalog";
 import type { EpicBossDef } from "../../../src/epicBoss/types";
 import { ownedLootCounter } from "../loot";
 import { pickByFrequency } from "../../../src/raid/combatStats";
@@ -278,7 +278,8 @@ export async function start(
     // Raw enemy clock (1/dex); mirrors src/epicBoss/combat.ts — keep the two in step.
     attackCooldownMs:deriveAttackIntervalMs(def.unitStats.dex,"enemy"),
     attacks:def.unitStats.attacks.map((attack) => ({...attack,mult:attack.mult ?? 1})),isBoss:true,alive:true,isGarden:false,isHeadless:false,
-    abilities:[],attackDamageTiming:0.88,
+    // Per-attack, from the catalog; mirrors src/epicBoss/combat.ts — keep the two in step.
+    abilities:[],attackDamageTiming:epicBossDamageTiming(def),
   };
   const config: EpicCombatConfig = { rulesetVersion: RAID_RULESET_VERSION, playerUnits, enemyUnits:[boss] };
   const statements: D1PreparedStatement[] = [

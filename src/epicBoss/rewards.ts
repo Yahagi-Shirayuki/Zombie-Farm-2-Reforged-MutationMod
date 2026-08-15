@@ -49,7 +49,10 @@ export const EPIC_QUEST_ZOMBIE_REWARDS: Readonly<Record<string, string>> = {
   "4011": "ZombieActorScrooge",
   "5000": "ZombieActorDiva",
   "5011": "ZombieActorMadame",
+  // Rocky Rhino pays Brock Coley twice — rung 5 and rung 10. It is the only event
+  // whose two prize rungs award the SAME zombie (see tools/prep_quests.py).
   "8000": "ZombieActorBrockColey",
+  "8011": "ZombieActorBrockColey",
   "9000": "ZombieActorProto",
   "9011": "ZombieActorZombug",
   "10000": "ZombieActorZomdini",

@@ -33,11 +33,48 @@
     "attacks": [
       {
         "name": "EpicBossAttack",
-        "frequency": 100
+        "frequency": 100,
+        "damageTiming": 0.88
       }
     ]
   },
-  "animations": {},
+  "animations": {
+    "idle": {
+      "file": "idle.png",
+      "cellWidth": 319,
+      "cellHeight": 281,
+      "frameCount": 8,
+      "frameSeconds": 0.08125
+    },
+    "enter": {
+      "file": "enter.png",
+      "cellWidth": 319,
+      "cellHeight": 281,
+      "frameCount": 5,
+      "frameSeconds": 0.12
+    },
+    "attack": {
+      "file": "attack.png",
+      "cellWidth": 319,
+      "cellHeight": 281,
+      "frameCount": 11,
+      "frameSeconds": 0.08333333333333333
+    },
+    "defeat": {
+      "file": "defeat.png",
+      "cellWidth": 319,
+      "cellHeight": 281,
+      "frameCount": 6,
+      "frameSeconds": 0.06666666666666667
+    },
+    "fly": {
+      "file": "fly.png",
+      "cellWidth": 319,
+      "cellHeight": 281,
+      "frameCount": 3,
+      "frameSeconds": 0.08333333333333333
+    }
+  },
   "levelAssets": [
     {
       "anchor": "{0,0}",
@@ -153,6 +190,12 @@
   "questIcon": "quest-icon.png",
   "bossTexture": "boss.png",
   "reconstructed": true,
+  "staticFrame": [
+    514,
+    937,
+    230,
+    280
+  ],
   "copied": [
     "EPB_9Teleporter_A.png",
     "EPB_9Teleporter_B.png",

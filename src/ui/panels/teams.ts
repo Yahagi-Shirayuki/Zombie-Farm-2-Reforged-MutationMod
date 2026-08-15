@@ -13,6 +13,7 @@ import type { Hud } from "../../hud";
 import { markPrimary, openModal } from "../Modal";
 import { onFirstVisible } from "../onFirstVisible";
 import type { RosterEntry } from "../../zombie/types";
+import { visibleMutations } from "../../zombie/mutationVisibility";
 import {
   assembleReport, MAX_TEAMS, MAX_TEAM_NAME_LENGTH, nextTeamId, normalizeTeamName,
   planTeamAssembly, shortfallNotice, type ZombieTeam,
@@ -26,7 +27,9 @@ function paintPortrait(el: HTMLElement, hud: Hud, z: RosterEntry): void {
   if (portrait) el.style.backgroundImage = `url(${portrait})`;
   if (!hud.zombieMutationPortraitOf) return;
   onFirstVisible(el, () => {
-    void hud.zombieMutationPortraitOf?.(z.key, z.mutation, z.color, () => el.isConnected)
+    void hud.zombieMutationPortraitOf?.(
+      z.key, visibleMutations(z.id, z.mutation), z.color, () => el.isConnected,
+    )
       .then((image) => { if (el.isConnected) el.style.backgroundImage = `url(${image})`; })
       .catch(() => { /* retain the static species portrait */ });
   });

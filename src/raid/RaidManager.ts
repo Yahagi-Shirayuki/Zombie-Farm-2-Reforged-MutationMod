@@ -45,6 +45,7 @@ import {
   RAID_ZOMBIE_DROPS,
 } from "./zombieDrops";
 import { raidBoostBundle } from "./lootBundles";
+import { invasionWinXp, repeatInvasionXp } from "./repeatXp";
 import {
   BRAIN_TICKET_KEY,
   ELITE_BRAIN_LUCK,
@@ -81,6 +82,13 @@ export interface RaidCardView {
   /** XP actually on offer from this card: the enemy's `xp` if never cleared, else 0
    *  — XP is a one-time first-clear bonus (`firstTimeBeatingEnemy`). */
   firstClearXp: number;
+  /** What a win pays once the first clear is behind you (repeatXp.ts). Shown INSTEAD of
+   *  the first-clear figure on an already-cleared raid, so a card always advertises the
+   *  XP the next win will actually hand over. */
+  repeatXp: number;
+  /** The same figure on a Brain Ticket — the elite toggle's XP side, alongside the brain
+   *  odds it already advertises. */
+  eliteRepeatXp: number;
   /** Brain payout odds for a boss win here: the chance of ANY brains, plus the
    *  per-stack tiers behind it. The silent dry-streak floor is not represented — it
    *  must stay invisible (see brainDrops.ts). */
@@ -157,7 +165,11 @@ export interface RaidResultView {
   zombiesLost: number;
   gold: number; // gold plundered
   brains: number; // brains plundered
-  xp: number; // XP earned — the enemy's `xp`, granted only on the FIRST clear (0 otherwise)
+  xp: number; // XP earned — the first-clear bonus, else the per-raid repeat trickle
+  /** Whether this win was the first-ever clear of the raid, i.e. which of the two XP
+   *  rules `xp` came from. Drives the result panel's label; the amounts alone can't be
+   *  told apart (McDonnell's first clear is 100, an elite repeat of the Aliens is 400). */
+  firstClear: boolean;
   loot: LootDrop[]; // item drops (with pictures)
   abilityUnlock: string; // "" unless a tier unlocked on this clear
   /** ONLINE only: the base win gold + first-clear XP the SERVER must credit — NOT
@@ -313,6 +325,8 @@ export class RaidManager {
         unlockLevel: r.unlockLevel,
         xp: r.xp,
         firstClearXp: this.state.hasClearedRaid(String(r.id)) ? 0 : r.xp,
+        repeatXp: repeatInvasionXp(r.id),
+        eliteRepeatXp: repeatInvasionXp(r.id, true),
         brainOdds: {
           chance: brainDropChance(r.recommendedLevel),
           tiers: brainDropTable(r.recommendedLevel),
@@ -697,6 +711,7 @@ export class RaidManager {
     let gold = 0;
     let brains = 0;
     let xp = 0;
+    let firstClear = false;
     const loot: LootDrop[] = [];
     let abilityUnlock = "";
     let serverReward: RaidResultView["serverReward"];
@@ -704,20 +719,24 @@ export class RaidManager {
       const wins = serverRewards
         ? this.state.raidWins(String(raid.id)) + 1
         : this.state.completeRaid(String(raid.id));
-      // XP (GROUND TRUTH — disassembled `firstTimeBeatingEnemy` gate + "You earned
-      // %ixp for beating this enemy for the first time."): the enemy's `xp` is granted
-      // only on the FIRST clear of this raid; repeat wins pay gold/brains but no XP.
-      // One boss enemy per raid, so first-ever win (wins === 1) IS first-time-beaten.
-      if (wins === 1 && raid.xp > 0) xp = raid.xp;
+      // XP. The FIRST clear pays the enemy's authored `xp` (GROUND TRUTH — disassembled
+      // `firstTimeBeatingEnemy` gate + "You earned %ixp for beating this enemy for the
+      // first time."). One boss enemy per raid, so first-ever win (wins === 1) IS
+      // first-time-beaten. Every LATER win pays the small per-raid trickle instead
+      // (x4 on a Brain Ticket) — a deliberate divergence, see repeatXp.ts.
+      firstClear = wins === 1;
+      xp = invasionWinXp(raid.id, raid.xp, firstClear, elite);
       const survivalFrac = party.length ? outcome.survivors.length / party.length : 0;
       gold = winGold(raid, survivalFrac);
-      // ONLINE: the base win gold + first-clear XP are SERVER-authoritative — hand
-      // them off (main.ts → /raid/finish) instead of crediting locally, so the server
-      // prices them and can't be out-fabricated. OFFLINE: credit locally as before.
+      // ONLINE: the base win gold + the win's XP (either rule) are SERVER-authoritative
+      // — hand them off (main.ts → /raid/finish) instead of crediting locally, so the
+      // server prices them and can't be out-fabricated. The figures here are only a
+      // prediction for the result panel; the server re-derives both from the session.
+      // OFFLINE: credit locally as before.
       if (serverRewards) {
         serverReward = { gold, xp, survivalFrac };
       } else {
-        if (xp > 0) this.state.addXp(xp);
+        if (xp > 0) this.state.addXp(xp, "raid");
         this.state.addGold(gold);
       }
       // Loot: ONE weighted drop (source `rollForDrop:`). The rarity tier is chosen
@@ -795,6 +814,7 @@ export class RaidManager {
       gold,
       brains,
       xp,
+      firstClear,
       loot,
       abilityUnlock,
       serverReward,

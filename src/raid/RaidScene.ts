@@ -11,7 +11,7 @@
 // portraits, not side-view stage actors.
 import { AnimatedSprite, Application, Assets, Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
 import { GameAssets, raidImage } from "../assets";
-import { ALIEN_LASER_SPRITE, BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX } from "./BattleSim";
+import { ALIEN_LASER_SPRITE, BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, EPIC_BOSS_LAND_MS, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX } from "./BattleSim";
 import { RaidActor } from "./RaidActor";
 import { EnemyActor, type EnemyAttackPose } from "./EnemyActor";
 import { ParticleField, ParticleConfig } from "./Particles";
@@ -29,8 +29,12 @@ import {
 } from "./renderInterpolation";
 import { advanceRaidArmy, raidArmyHasExited } from "./raidOutro";
 import { zombieRaidHeightScale } from "../zombie/displayScale";
+import { visibleMutations } from "../zombie/mutationVisibility";
 import { zombieBasicAttackName } from "./zombieAttackPresentation";
 import { zombieFacingDelta } from "./zombieFacing";
+import {
+  epicAttackFrameIndex, epicBossAnimationLoops, epicStripFrameIndex, selectEpicBossAnimation,
+} from "./epicBossAnimation";
 import { isMobile } from "../platform";
 import { readSafeAreaInsets } from "../safeArea";
 import { abilityColumnStep, computeRaidHudLayout } from "./raidHudLayout";
@@ -139,6 +143,11 @@ const FUSE_SPARKS: ParticleConfig = {
 // Keep the T3/T4 Regular-zombie laser combat active while its beam presentation
 // is temporarily hidden. Flip this back on when the visual is ready to ship.
 const SHOW_REGULAR_ZOMBIE_LASERS = false;
+// The per-hit dust burst a PLAYER zombie throws off as it connects, held back for
+// now: a full army swinging at once turned the frontline into a permanent cloud.
+// Enemy strikes keep theirs — they land one at a time and the puff is what marks
+// the hit. Flip this back on to restore the zombie side of the effect.
+const SHOW_ZOMBIE_ATTACK_DUST = false;
 const INTRO_MS = 700; // brief establishing hold before combat starts
 const END_PAUSE_MS = 650; // beat after the last blow before we move on
 // On a win, survivors stroll off to the right at a normal walking pace (not the old
@@ -149,6 +158,12 @@ const RETREAT_RESULT_DELAY_MS = 1500;
 const EPIC_BOSS_EXIT_MS = 800; // reverse the sky entry before the result panel appears
 const DEATH_FADE = 0.45; // seconds for a fallen unit to poof + fade out
 const HEAL_POSE_S = 0.7; // Garden healer raises, holds, then lowers both arms
+// Beam-down pillar, recovered from the binary — see spawnLightPillar for the derivation.
+// The width is in design units (of DESIGN_W); the height is the whole stage.
+const PILLAR_DESIGN_W = 100;
+const PILLAR_OPEN_S = 0.2;
+const PILLAR_CLOSE_S = 1.3;
+const PILLAR_TOTAL_S = PILLAR_OPEN_S + PILLAR_CLOSE_S;
 const PLAYER_COLOR = 0x8bc34a;
 const ENEMY_COLOR = 0xef5350;
 const BOSS_COLOR = 0xffc107;
@@ -519,6 +534,8 @@ export class RaidScene {
   private bossHandY = 0;
   private dotTex: Texture | null = null; // round placeholder for sprite-less hazards
   private fxLayer = new Container(); // transient effects (death poofs) above the field
+  private beamLayer = new Container(); // beam-down pillars, BEHIND the units they deliver
+  private beams: { g: Graphics; t: number }[] = [];
   private fx: { g: Graphics; t: number; life: number; color: number }[] = [];
   private laserFx: { g: Graphics; t: number; life: number }[] = [];
   private blastFx: { g: Graphics; t: number; scale: number }[] = [];
@@ -550,8 +567,6 @@ export class RaidScene {
   private roundLabel!: Text; // top-center countdown → "ENRAGED" when it expires
   private pFace = new Container(); // generic zombie face badge, left of the player bar
   private eFace = new Container(); // boss face badge, right of the enemy bar
-  private maxPlayerHp = 1;
-  private maxEnemyHp = 1;
   private retreatBtn = new Container();
   private retreatRequested = false;
   private retreated = false;
@@ -671,8 +686,6 @@ export class RaidScene {
       params.crab ?? null,
       params.waveCadence
     );
-    this.maxPlayerHp = Math.max(1, sumMax(params.playerUnits));
-    this.maxEnemyHp = Math.max(1, sumMax(params.enemyUnits));
   }
 
   /** Build a ready-to-add scene, preloading all textures first. */
@@ -738,6 +751,21 @@ export class RaidScene {
         }
       })
     );
+    // A boss with combat art but no animation strips — the three reconstructed Epic
+    // Bosses, whose atlases shipped without the frame metadata needed to cut strips —
+    // is registered under its own source key so the token below builds it as a
+    // full-size static sprite. Without this it matched no branch and fell through to
+    // the last-resort portrait circle, fighting as a 34 px disc instead of a boss.
+    if (this.bossTexture && !Object.keys(this.bossAnimationDefs ?? {}).length) {
+      const bossKeys = new Set(
+        this.sim.units.filter((u) => u.isBoss && !this.enemyTex.get(u.sourceKey))
+          .map((u) => u.sourceKey)
+      );
+      if (bossKeys.size) {
+        const tex = await loadTex(this.bossTexture);
+        for (const key of bossKeys) this.enemyTex.set(key, tex);
+      }
+    }
     const enemyUrl = this.raid.enemyIcon ? raidImage(this.raid.enemyIcon) : "";
     const bossUrl = this.bossTexture || (this.raid.bossPortrait ? raidImage(this.raid.bossPortrait) : "");
     const fallbackUrls = new Map<string, string>();
@@ -785,6 +813,10 @@ export class RaidScene {
     // The Circus trapeze swings behind the zombies it targets. Add its layer first
     // so every zombie, including the carried one, remains readable in front of it.
     if (this.grabberSprite) this.container.addChild(this.grabLayer);
+    // Beam-down pillars go in BEFORE the tokens, because the source puts them there:
+    // `summonBoss:` adds the column at the arriving actor's `zOrder - 1`. In front, an
+    // opaque full-height bar would white out the very unit it is delivering.
+    this.container.addChild(this.beamLayer);
     this.tokenLayer.sortableChildren = true; // depth-sorted via per-token zIndex bands
     this.container.addChild(this.tokenLayer);
     for (const u of this.sim.units) this.tokens.set(u.id, this.makeToken(u));
@@ -1059,7 +1091,13 @@ export class RaidScene {
     if (u.team === "player") {
       // Real farm-style zombie rig (with the walk animation). Most families use
       // their authored raid height; Headless retains its actual farm silhouette.
-      actor = new RaidActor(this.assets, u.sourceKey, u.mutation, u.group, u.color);
+      // `u.id` is the owned zombie's roster id (CombatEngine builds player units
+      // from it), so the battlefield honours the same per-zombie mutation toggles
+      // as its card and its farm rig. Presentation only — the sim never reads the
+      // mask, and the stats it fights with already have the bonuses baked in.
+      actor = new RaidActor(
+        this.assets, u.sourceKey, visibleMutations(u.id, u.mutation), u.group, u.color,
+      );
       const b = actor.getSizingBounds();
       const heightScale = zombieRaidHeightScale(
         u.group ?? (u.isHeadless ? "Headless" : u.isGarden ? "Garden" : "Regular"),
@@ -1252,6 +1290,13 @@ export class RaidScene {
       healFxSeq: 0, healCastSeq: 0, healPose: 0, laserFxSeq: 0,
       explodeFxSeq: 0, fuseT: 0,
     };
+  }
+
+  /** Seconds a dying token stays fully opaque before the death fade starts — the
+   *  authored defeat strip's own run time for an Epic Boss, 0 for everyone else. */
+  private epicDefeatHoldSecs(tok: Token): number {
+    const def = tok.epicActor ? this.bossAnimationDefs?.defeat : undefined;
+    return def ? def.frameCount * def.frameSeconds : 0;
   }
 
   private playEpic(sprite: AnimatedSprite, name: string, loop: boolean): void {
@@ -1527,10 +1572,10 @@ export class RaidScene {
       return [toX(x), toY(y)];
     };
 
-    let pHp = 0;
-    let eHp = 0;
-    let pAlive = 0;
-    let eAlive = 0;
+    // Both team bars read against live sums the sim owns — never against a total
+    // captured at construction, which drifts from the units it claims to measure as
+    // team auras come and go (see BattleSim.teamTotals).
+    const totals = this.sim.teamTotals();
     for (const u of this.sim.units) {
       // Units spawned mid-fight (summoned minions, walls) get their token on first
       // sight — the renderer only holds tokens for the initial roster otherwise.
@@ -1538,16 +1583,6 @@ export class RaidScene {
       if (!tok) {
         tok = this.makeToken(u);
         this.tokens.set(u.id, tok);
-      }
-
-      // Remaining-team totals count every living unit, including a zombie still
-      // waiting to charge and an enemy still queued off-screen.
-      if (u.team === "player") {
-        pHp += Math.max(0, u.hp);
-        if (u.alive) pAlive++;
-      } else {
-        eHp += Math.max(0, u.hp);
-        if (u.alive) eAlive++;
       }
 
       // Queued enemies haven't emerged yet — keep them hidden off the field.
@@ -1615,6 +1650,17 @@ export class RaidScene {
         sx -= tok.enemyActor.container.width * 0.3 * szs;
         sy += Math.max(0, -tok.topY) * 0.5 * szs;
       }
+      // An abducted human is placed by where it is DRAWN, not by its rig origin. Every
+      // other enemy holds at the doorway in a mass, where left-edge anchoring reads fine;
+      // a summon stands alone mid-field on a mark it is meant to be centred on, so shift
+      // it left by its own half-width. `hpCenterX` is exactly that offset (the actor's
+      // visual centre in token-local space), so this works for all five abductees rather
+      // than only the widest. TOKEN-LOCAL is the trap: the token root is scaled by `szs`,
+      // so the offset has to be scaled with it — unscaled, it lands the abductee on the
+      // mark at szs 1 and drags it further left the smaller the stage gets (on a narrow
+      // portrait viewport it ended up in the zombies' waiting crowd). See
+      // BattleSim.SUMMON_SPAWN_X.
+      if (u.isSummon) sx -= tok.hpCenterX * szs;
       // Perched/exiting bosses use their structure baseline; after re-entering the
       // lane they stand on the same lowered ground baseline as every other unit.
       if (u.isBoss && u.state !== "structure" && u.state !== "descending") {
@@ -1680,7 +1726,13 @@ export class RaidScene {
       // body attachment between (0,-10) and (0,+10), and `movementUpdate:` carries both
       // ship halves along with it, so the whole boss rides the bob. A triangle wave
       // reproduces the linear CCMoveTo pair rather than easing it like a sine would.
-      if (u.isBoss && u.alive && u.sourceKey === ALIEN_BOSS_KEY) {
+      //
+      // It is the SHIP that hovers, not the alien. `-[AlienStageActor startAnim:interrupt:]`
+      // (0xc7b1e) guards the whole CCSequence on
+      // `[self isKindOfClass:[AlienStageActorBoss class]] && [self bossShipFront] != nil`,
+      // and `bossUpdate:` nils `bossShipFront` when he lands — so the moment the saucer is
+      // dropped the bob stops and he stands on the ground like any other enemy.
+      if (u.isBoss && u.alive && u.sourceKey === ALIEN_BOSS_KEY && tok.ufoParts) {
         const phase = (this.hoverClock / (2 * UFO_HOVER_HALF_PERIOD_SEC)) % 1;
         sy += (phase < 0.5 ? 4 * phase - 1 : 3 - 4 * phase) * UFO_HOVER_PX * szs;
       }
@@ -1706,9 +1758,29 @@ export class RaidScene {
       if (!tok.emerged) {
         tok.emerged = true;
         if (this.phase !== "intro" && u.alive) this.spawnPoof(sx, sy + tok.topY * 0.5 * szs, 0xe6d6b0);
+        // An abducted human does not walk on — it is beamed down mid-field, so it
+        // arrives inside the pillar (`summonBoss:` builds both, plus its own particle).
+        if (u.isSummon && u.alive) {
+          this.spawnLightPillar(sx + tok.hpCenterX * szs);
+          this.onStrike?.({ team: "enemy", sfxFile: "resurrect.mp3" });
+        }
       }
 
       if (u.alive) {
+        // Back on its feet: a Garden holder's Resurrect is the one way a unit leaves
+        // the dead branch, and the death presentation has to be handed back with it.
+        // Without this the rig stayed in its head-pop pose for the rest of the fight
+        // (a revived zombie stood up headless), and a second death played no poof
+        // because `deathAnim` never returned to its "not dying" value.
+        if (tok.deathAnim >= 0) {
+          tok.deathAnim = -1;
+          tok.actor?.markAlive();
+          // …and the pillar the source raises over the revived zombie. This edge IS the
+          // revival (only Resurrect brings a unit back out of the dead branch), so no
+          // separate sim signal is needed for it.
+          this.spawnLightPillar(sx + tok.hpCenterX * szs);
+          this.onStrike?.({ team: "player", sfxFile: "resurrect.mp3" });
+        }
         // Every unit holds a stable size. Enemies used to swell 16% on each swing, but
         // the rigs already lunge into their attacks and the impact dust already marks
         // the hit, so the extra breathing only made them read as rubbery. Smash still
@@ -1736,7 +1808,12 @@ export class RaidScene {
           tok.actor?.markDead(); // zombie: pop the head off, tumbling backward
         }
         tok.deathAnim += dtSec;
-        const k = Math.min(1, tok.deathAnim / DEATH_FADE);
+        // An Epic Boss holds full opacity until its authored defeat strip has played
+        // out, THEN fades. Skunkarella's runs 1.2 s against a 0.45 s fade, so without
+        // the hold the boss was transparent for most of its own death animation.
+        const k = Math.min(
+          1, Math.max(0, (tok.deathAnim - this.epicDefeatHoldSecs(tok)) / DEATH_FADE)
+        );
         tok.root.scale.set((1 - 0.28 * k) * szs);
         tok.root.alpha = 1 - k;
         tok.root.y = sy + k * 7 * szs; // slight settle downward
@@ -1901,22 +1978,37 @@ export class RaidScene {
         }
       }
       if (tok.epicActor) {
-        const attackDef = this.bossAnimationDefs?.attack;
-        const attackLeadMs = attackDef
-          ? attackDef.frameCount * attackDef.frameSeconds * 1000 * u.attackDamageTiming
-          : 0;
-        const attackStarting = u.state === "fight" && attackLeadMs > 0 && visualAttackMs <= attackLeadMs;
-        // One-shot strips must be allowed to finish. The old struckThisTick switch
-        // selected attack for one render frame, then reset to idle; on a killing hit
-        // the frozen flag made the attack appear only after combat had ended.
-        const attackPlaying = tok.epicAnim === "attack" && tok.epicActor.playing;
-        const wanted = !u.alive ? "defeat" : bossLeaving ? "escape"
-          : u.state === "falling" ? "fly" : u.state === "landing" ? "enter"
-          : attackPlaying || attackStarting ? "attack" : "idle";
-        const wantedLoop = wanted === "fly" || wanted === "idle";
-        if (wanted && (tok.epicAnim !== wanted || tok.epicActor.loop !== wantedLoop)) {
+        // The attack strip is driven off the sim's attack clock, not off playback: it
+        // is authored LONGER than the cycle it belongs to, so a one-shot that had to
+        // finish before it could restart dropped most of the boss's swings and froze
+        // on its last frame in between. See raid/epicBossAnimation.ts.
+        const wanted = selectEpicBossAnimation({
+          alive: u.alive,
+          leaving: bossLeaving,
+          state: u.state,
+          has: (name) => !!this.bossFrames.get(name)?.length,
+        });
+        const wantedLoop = epicBossAnimationLoops(wanted);
+        // Two strips are fitted to a beat of sim time rather than free-run: the attack
+        // (the attack cycle) and the entrance (EPIC_BOSS_LAND_MS). Both beats are
+        // shorter than the strips authored against them.
+        const clockDriven = wanted === "attack" || wanted === "enter";
+        if (tok.epicAnim !== wanted || tok.epicActor.loop !== wantedLoop) {
           tok.epicAnim = wanted;
           this.playEpic(tok.epicActor, wanted, wantedLoop);
+          if (clockDriven) tok.epicActor.stop();
+        }
+        if (clockDriven) {
+          // Indexed against the sprite's OWN frame count, so a strip that failed to
+          // load degrades to a still rather than an out-of-range texture lookup.
+          const index = wanted === "attack"
+            ? epicAttackFrameIndex(
+              visualAttackMs, u.cooldownMs, u.attackDamageTiming, tok.epicActor.totalFrames
+            )
+            : epicStripFrameIndex(
+              1 - visualAttackMs / EPIC_BOSS_LAND_MS, tok.epicActor.totalFrames
+            );
+          if (tok.epicActor.currentFrame !== index) tok.epicActor.gotoAndStop(index);
         }
       }
 
@@ -2049,10 +2141,16 @@ export class RaidScene {
       for (const c of this.abilityCells) if (c.activated) c.cell.y = c.slot * step;
     }
     // Both team bars read green when full (drain as the team loses HP).
-    this.drawTeamBar(this.pBar, this.pFill, barW, barH, pHp / this.maxPlayerHp, PLAYER_COLOR, this.pBarState);
-    this.drawTeamBar(this.eBar, this.eFill, barW, barH, eHp / this.maxEnemyHp, PLAYER_COLOR, this.eBarState);
-    this.pLabel.text = `Zombies  ${pAlive}`;
-    this.eLabel.text = `${this.raid.bossName || "Enemies"}  ${eAlive}`;
+    this.drawTeamBar(
+      this.pBar, this.pFill, barW, barH,
+      totals.playerHp / totals.playerMax, PLAYER_COLOR, this.pBarState,
+    );
+    this.drawTeamBar(
+      this.eBar, this.eFill, barW, barH,
+      totals.enemyHp / totals.enemyMax, PLAYER_COLOR, this.eBarState,
+    );
+    this.pLabel.text = `Zombies  ${totals.playerAlive}`;
+    this.eLabel.text = `${this.raid.bossName || "Enemies"}  ${totals.enemyAlive}`;
     this.eLabel.x = barW - this.eLabel.width;
 
     // Round countdown → ENRAGED. Only meaningful for a raid with a boss timer.
@@ -2384,14 +2482,67 @@ export class RaidScene {
     }
   }
 
+  /** The beam-down pillar: a column of white light that opens, then closes in from both
+   *  sides as it fades. Delivers a resurrected zombie and an abducted human alike.
+   *
+   *  GROUND TRUTH — `-[ZombieActorGarden ressurectZombie:]` (0x7d698) and
+   *  `-[ZFFightMan summonBoss:]` (0x5f256) build it from the same parts with byte-identical
+   *  numbers, so it really is one effect used twice:
+   *
+   *    CCColorLayer initWithColor:ccc4(255,255,255,255) width:100 height:320
+   *      — opaque white, 100 of the 480-wide design space, and 320 is the WHOLE screen
+   *        height (the iPad branch asks for 640, its own full height).
+   *    setPosition:(actor.x - 50, 0), setScaleX:0
+   *      — standing on the bottom edge, centred on the actor, starting closed. A CCLayer
+   *        positions from its bottom-left but TRANSFORMS about its (0.5, 0.5) anchor, so
+   *        the scale runs in from both sides rather than sliding one edge.
+   *    CCSpawn of two sequences:
+   *      scale: CCScaleTo 0.2s -> (1, 1), then CCScaleTo 1.3s -> (0, 1)
+   *      alpha: CCDelayTime 0.2s, then CCFadeTo 1.3s -> opacity 0, then a cleanup callback
+   *
+   *  The two schedules line up exactly, which is why one ramp drives both here. 1.5 s
+   *  total. Both sites also `playEffect: @"resurrect.wav"` — the abductee's arrival uses
+   *  the resurrection cue too.
+   *
+   *  `x` is the DRAWN centre of the unit, not its token origin: an enemy rig is anchored at
+   *  its model-space left edge, so callers pass `sx + hpCenterX * szs` (hpCenterX is 0 for
+   *  a player rig, which is already centred). */
+  private spawnLightPillar(x: number) {
+    const r = this.bgRect();
+    const w = PILLAR_DESIGN_W * r.scale;
+    const g = new Graphics().rect(-w / 2, 0, w, r.h).fill(0xffffff);
+    g.position.set(x, r.top);
+    g.scale.x = 0;
+    this.beamLayer.addChild(g);
+    this.beams.push({ g, t: 0 });
+  }
+
+  private stepBeams(dtSec: number) {
+    if (!this.beams.length) return;
+    for (const b of this.beams) {
+      b.t += dtSec;
+      const open = Math.min(1, b.t / PILLAR_OPEN_S);
+      const close = Math.max(0, 1 - Math.max(0, b.t - PILLAR_OPEN_S) / PILLAR_CLOSE_S);
+      b.g.scale.x = Math.min(open, close);
+      b.g.alpha = close; // the authored delay+fade is the same schedule as the close
+    }
+    if (this.beams.some((b) => b.t >= PILLAR_TOTAL_S)) {
+      for (const b of this.beams) if (b.t >= PILLAR_TOTAL_S) b.g.destroy();
+      this.beams = this.beams.filter((b) => b.t < PILLAR_TOTAL_S);
+    }
+  }
+
   /** Flash the Regular zombie's automatic T3/T4 beam from its eye line to the
    *  enemy that received the sim's instant laser damage. This is presentation-only:
    *  the replay-safe damage and cadence remain owned by BattleSim.stepLaser. */
   private spawnLaserBeam(source: Token, target: Token, upgraded: boolean) {
-    const x0 = source.root.x + source.hpCenterX + source.base * 0.16;
-    const y0 = source.root.y + source.topY * 0.72;
-    const x1 = target.root.x + target.hpCenterX - target.base * 0.2;
-    const y1 = target.root.y + target.topY * 0.55;
+    // `hpCenterX` / `base` / `topY` are TOKEN-LOCAL; the root carries the size scale, so
+    // every one of them has to be scaled before being added to a screen position.
+    const szs = this.sizeScale();
+    const x0 = source.root.x + (source.hpCenterX + source.base * 0.16) * szs;
+    const y0 = source.root.y + source.topY * 0.72 * szs;
+    const x1 = target.root.x + (target.hpCenterX - target.base * 0.2) * szs;
+    const y1 = target.root.y + target.topY * 0.55 * szs;
     const color = upgraded ? 0x6ffcff : 0x8dff45;
     const g = new Graphics()
       .moveTo(x0, y0).lineTo(x1, y1)
@@ -2550,6 +2701,7 @@ export class RaidScene {
     const dtMs = Math.min(dtSec * 1000, 250);
     this.phaseT += dtMs;
     this.stepFx(dtSec);
+    this.stepBeams(dtSec);
     this.stepShake(dtSec);
     this.stepBrainDrops(dtSec);
     this.particles.update(dtSec);
@@ -2627,7 +2779,8 @@ export class RaidScene {
               if (t) {
                 t.atkCount++; // next basic swing uses the other animation and cue
                 // A small dust burst at the point of impact (victim's mid-body).
-                if (this.bashCfg && u.alive) {
+                const dust = u.team === "enemy" || SHOW_ZOMBIE_ATTACK_DUST;
+                if (dust && this.bashCfg && u.alive) {
                   this.particles.burst(this.bashCfg, t.root.x, t.root.y + t.topY * 0.5, 0.28);
                 }
               }
@@ -2736,8 +2889,4 @@ export class RaidScene {
   destroy() {
     this.container.destroy({ children: true });
   }
-}
-
-function sumMax(units: CombatUnit[]): number {
-  return units.reduce((s, u) => s + u.maxHp, 0);
 }

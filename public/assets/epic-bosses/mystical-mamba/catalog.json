@@ -33,11 +33,48 @@
     "attacks": [
       {
         "name": "EpicBossAttack",
-        "frequency": 100
+        "frequency": 100,
+        "damageTiming": 0.88
       }
     ]
   },
-  "animations": {},
+  "animations": {
+    "idle": {
+      "file": "idle.png",
+      "cellWidth": 344,
+      "cellHeight": 292,
+      "frameCount": 8,
+      "frameSeconds": 0.075
+    },
+    "enter": {
+      "file": "enter.png",
+      "cellWidth": 344,
+      "cellHeight": 292,
+      "frameCount": 8,
+      "frameSeconds": 0.0625
+    },
+    "attack": {
+      "file": "attack.png",
+      "cellWidth": 344,
+      "cellHeight": 292,
+      "frameCount": 9,
+      "frameSeconds": 0.08333333333333333
+    },
+    "defeat": {
+      "file": "defeat.png",
+      "cellWidth": 344,
+      "cellHeight": 292,
+      "frameCount": 3,
+      "frameSeconds": 0.19999999999999998
+    },
+    "fly": {
+      "file": "fly.png",
+      "cellWidth": 344,
+      "cellHeight": 292,
+      "frameCount": 1,
+      "frameSeconds": 0.25
+    }
+  },
   "levelAssets": [
     {
       "anchor": "{0,0}",
@@ -141,6 +178,12 @@
   "questIcon": "quest-icon.png",
   "bossTexture": "boss.png",
   "reconstructed": true,
+  "staticFrame": [
+    400,
+    1054,
+    193,
+    167
+  ],
   "copied": [
     "EPB_10_BANNER.png",
     "EPB_10_BANNER_Icon_MarketItems.png",

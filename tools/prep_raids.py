@@ -78,6 +78,22 @@ ATTACK_OVERRIDES = {
     "CorporateBossPunchSpecial": {"REMOVE": ["knockBack"]},
 }
 
+# Deliberate divergences from UnitStats.json, same contract as ATTACK_OVERRIDES: applied
+# last so a regeneration cannot silently undo them.
+#   AlienStageActorMinion — str 6 -> 5. Nothing is wrong with 6 in isolation; it is a
+#   mid-table minion (60 damage a swing on a 1 s clock, against the Ninja Boy's 180 and
+#   the Crazed Worker's 20). What changed is that the alien raid is the ONLY swarm in the
+#   game — six of them stand on the field at once, and every enemy commits its whole
+#   output to the single front-most zombie (which the source does too), so the authored
+#   number arrives six times over: 360 damage a second onto one unit, twice the worst any
+#   other invasion can produce. Playtest verdict on the shipped value: a full mutated army
+#   was "absolutely creamed". 4 read as too soft on the next pass — an ELITE run cleared
+#   with no losses at all — so it sits at 5: the swarm lands 300/s, still the heaviest
+#   incoming rate on the ladder and still a level-36 fight.
+UNIT_OVERRIDES = {
+    "AlienStageActorMinion": {"str": 5},
+}
+
 
 # Each invasion's stage actors live in UnitStats.json under a family prefix. We use
 # this to resolve every raid's minions + boss so the ladder builder can extrapolate
@@ -428,8 +444,16 @@ def main():
             continue
         attack_defs[name] = a
 
-    # Deliberate divergences (see ATTACK_OVERRIDES) — applied last so they survive
-    # every regeneration.
+    # Deliberate divergences (see UNIT_OVERRIDES / ATTACK_OVERRIDES) — applied last so
+    # they survive every regeneration.
+    for key, override in UNIT_OVERRIDES.items():
+        target = enemy_stats.get(key)
+        if target is None:
+            missing.add(f"UnitOverride:{key}")
+            continue
+        for field, value in override.items():
+            target[field] = value
+
     for name, override in ATTACK_OVERRIDES.items():
         target = attack_defs.get(name)
         if target is None:

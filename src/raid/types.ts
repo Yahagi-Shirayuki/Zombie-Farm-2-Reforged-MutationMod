@@ -174,8 +174,15 @@ export interface CombatUnit {
   /** Enemy attack carries knockback (Attacks.json `knockBack`) — on hit it shoves the
    *  struck zombie back down the lane and interrupts it (see BattleSim). Players: false. */
   knockBack?: boolean;
+  /** How often that shove actually lands: the frequency SHARE of the entries in the
+   *  unit's `attacks` list that carry `knockBack`, since one attack is rolled per swing.
+   *  1 for a unit whose only attack has it, 0.1 for the Lumberjack. Absent = 1 (every
+   *  hit), which is what a caller that predates the split would have meant. */
+  knockBackChance?: number;
   /** Enemy attack stun on hit, in ms (Attacks.json `stun`/`stunTimer`). 0 = none. */
   stunMs?: number;
+  /** Frequency share of the stunning entries, exactly as `knockBackChance`. */
+  stunChance?: number;
   /** Fraction (0..1) of the attack animation at which the strike connects — Attacks.json
    *  `damageTiming` of the enemy's primary attack (Farmhand poke 0.33, Lumberjack slice
    *  0.75, boss punch 0.4). Purely cosmetic: shapes the enemy's lunge/thrust in the raid

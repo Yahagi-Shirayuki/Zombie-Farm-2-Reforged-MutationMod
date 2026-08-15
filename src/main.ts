@@ -89,6 +89,7 @@ import {
 } from "./quest/mutantSubjects";
 import { resolveCropMutations } from "./zombie/cropMutations";
 import { MutationPortraits } from "./zombie/mutationPortrait";
+import { configureMutationVisibilityScope } from "./zombie/mutationVisibility";
 import {
   DR_GROUNDHOG,
   EPIC_BOSSES,
@@ -173,6 +174,9 @@ async function main() {
     await auth.refreshIfSignedIn();
     await requireAuth();
   }
+  configureMutationVisibilityScope(onlineFarm
+    ? `online:${api.getSession()?.accountId ?? "signed-out"}`
+    : `local:${profiles.activeSaveKey()}`);
   // Remote revocation (including another device taking over) is surfaced by the
   // API auth bridge. Reloading re-enters requireAuth before any game state is built.
   auth.onAuthChange(() => {
@@ -349,7 +353,7 @@ async function main() {
   // Level-up popup: gather everything the new level(s) opened up — invasions,
   // market items, boosts — and show the celebratory unlock screen.
   const raidImg = (f: string) => `${BASE}assets/raids/images/${f}`;
-  state.onLevelUpCb = (from, to) => {
+  const presentLevelUp = (from: number, to: number) => {
     const unlocks: LevelUpUnlock[] = [];
     for (const r of assets.raids) {
       if (r.unlockLevel > from && r.unlockLevel <= to) {
@@ -377,6 +381,42 @@ async function main() {
     }
     hud.openLevelUp({ level: to, unlocks });
     audio.play("levelUp");
+  };
+
+  /** A level-up earned mid-battle, held until the player is back on the farm.
+   *
+   *  Invasions pay XP on every win now (repeatXp.ts), not just the first clear, so any
+   *  fight can cross a threshold — and the popup used to land on top of the victory
+   *  panel, interrupting the result the player was still reading. It also announced
+   *  something they could not verify: `.raiding` hides the whole topbar (hud.css), so
+   *  the XP bar and level are invisible from the moment the battle starts until the
+   *  result panel closes. Holding the celebration until the farm is back makes the
+   *  reward land where the player can actually see it happen.
+   *
+   *  Coalesced rather than queued: two crossings in one fight (a win plus the quest it
+   *  completed) become ONE popup spanning `from`..`to`, which is what the unlock list is
+   *  already built to describe. A stack of popups to dismiss is not a bigger celebration.
+   *
+   *  This defers the PRESENTATION only. The XP itself is credited when it is earned and
+   *  saved with the rest of the win — deferring the credit would put it at risk of being
+   *  lost if the tab closed over the result panel, and would buy nothing the player
+   *  could see. */
+  let pendingLevelUp: { from: number; to: number } | null = null;
+  state.onLevelUpCb = (from, to) => {
+    if (raidActive) {
+      pendingLevelUp = pendingLevelUp
+        ? { from: Math.min(pendingLevelUp.from, from), to: Math.max(pendingLevelUp.to, to) }
+        : { from, to };
+      return;
+    }
+    presentLevelUp(from, to);
+  };
+  /** Show anything held back by the battle. Safe to call when nothing is pending, so
+   *  every path that hands the farm back can call it unconditionally. */
+  const flushLevelUps = () => {
+    const pending = pendingLevelUp;
+    pendingLevelUp = null;
+    if (pending) presentLevelUp(pending.from, pending.to);
   };
 
   // World container = camera. Field + entity layer live inside it.
@@ -4070,6 +4110,11 @@ async function main() {
     setShowZombieMutations(prefs.showMutations);
     zombies.refreshAppearance();
   };
+  // Per-zombie mutation toggles (the eye badges on a zombie's card) land the same
+  // way: the choice is already persisted, so all that is left is to reassemble the
+  // standing rigs. Portraits re-render on demand and raid actors are built fresh
+  // on entry, exactly as with the Settings switches above.
+  hud.onZombieAppearanceChanged = () => zombies.refreshAppearance();
 
   hud.getRaidBoosts = (raidId) => ({
     concentration: raids.concentrationCount(),
@@ -4104,6 +4149,9 @@ async function main() {
     world.visible = true;
     hud.setRaiding(false);
     audio.exitRaid();
+    // The farm is back even though the battle ended badly — a level-up earned before
+    // things went wrong is still owed, and nothing else in the session would flush it.
+    flushLevelUps();
   };
 
   hud.onLaunchEpicBoss = async (partyIds, payment) => {
@@ -4201,9 +4249,17 @@ async function main() {
       bossAnimations: def.animations,
       bossFallsFromSky: true,
       bossEngageDistance: 150,
-      // Loco Locust sits low inside his generously padded animation cells. Lift his
-      // whole token slightly so the visible character shares the other bosses' line.
-      bossGroundOffset: { x: 32, y: def.id === "loco-locust" ? 8 : 24 },
+      // The animated bosses sit high and left inside generously padded animation cells,
+      // so their token is nudged to put the visible character on the ground line (Loco
+      // Locust sits lower in his cells than the rest, so he needs less of a drop). A
+      // reconstructed boss draws from a frame cut tight to its own art, with no padding
+      // to compensate for, so it stands on the line unaided.
+      // Keyed on `reconstructed`, not on whether strips exist: a reconstructed boss now
+      // ships hand-ordered strips too, but they are cut tight to the art rather than
+      // sitting inside ZF2's padded cells, so it still needs no compensation.
+      bossGroundOffset: def.reconstructed
+        ? { x: 0, y: 0 }
+        : { x: 32, y: def.id === "loco-locust" ? 8 : 24 },
       onStrike: (strike) => audio.fightStrike(strike),
       onBrainRelease: (sourceKey) => audio.brainForZombie(sourceKey),
       confirmRetreat: () => hud.confirmInGame(
@@ -4256,7 +4312,10 @@ async function main() {
           title: result.completed ? "EPIC BOSS DEFEATED" : result.defeatedLevel !== null ? "LEVEL CLEARED" : "BOSS ESCAPED",
           enemiesBeaten: result.defeatedLevel !== null ? 1 : 0,
           zombiesLost: outcome.losses.length,
-          gold: currency.gold, brains: currency.brains, xp: 0, loot: drops, abilityUnlock: "",
+          // An epic-boss rung pays no XP at all (prizes and currency only), so the
+          // first-clear flag has nothing to label — the XP row never renders.
+          gold: currency.gold, brains: currency.brains, xp: 0, firstClear: false,
+          loot: drops, abilityUnlock: "",
         };
         hud.openRaidResult(view, () => {
           if (raidScene) { app.stage.removeChild(raidScene.container); raidScene.destroy(); raidScene = null; }
@@ -4265,6 +4324,7 @@ async function main() {
           world.visible = true;
           hud.setRaiding(false);
           audio.exitRaid();
+          flushLevelUps(); // and the level-up, if the fight's quest rewards crossed one
           flushQuestCompletions(); // celebrate on the farm, not over the result panel
         });
         };
@@ -4654,6 +4714,12 @@ async function main() {
           world.visible = true;
           hud.setRaiding(false);
           audio.exitRaid(); // battle over — hand the farm bed back
+          // The win's XP (first clear or the repeat trickle) may have crossed a level
+          // while the battle owned the screen. Celebrate it here, on the farm, with the
+          // topbar visible again — and BEFORE the quest events below, which can grant XP
+          // of their own and level the player a second time. Flushing first keeps the two
+          // popups in the order they were earned.
+          flushLevelUps();
           // OFFLINE, advance raid quests only now that we're back on the farm. Online
           // the server already counted this win and its questChanges have been applied,
           // so posting again would count it twice (see src/raid/questEvents.ts).

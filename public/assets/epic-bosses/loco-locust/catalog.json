@@ -30,7 +30,8 @@
     "attacks": [
       {
         "frequency": 100,
-        "name": "VideoGameZombieBite"
+        "name": "VideoGameZombieBite",
+        "damageTiming": 0.25
       }
     ],
     "con": 20,
@@ -50,7 +51,7 @@
       "cellWidth": 275,
       "cellHeight": 275,
       "frameCount": 22,
-      "frameSeconds": 0.08333333333333333
+      "frameSeconds": 0.09090909090909091
     },
     "attack": {
       "file": "attack.png",

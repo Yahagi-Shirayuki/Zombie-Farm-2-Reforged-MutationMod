@@ -14,7 +14,7 @@
 // These tests pin both halves of that. If a future pass "restores" the disassembled
 // `Small` bucket, the first test here is what should stop it.
 import { describe, expect, it } from "vitest";
-import { BattleSim } from "./BattleSim";
+import { BattleSim, ENEMY_HOLD_X } from "./BattleSim";
 import type { CombatUnit } from "./types";
 
 function unit(over: Partial<CombatUnit> & Pick<CombatUnit, "id" | "sourceKey" | "team">): CombatUnit {
@@ -102,5 +102,41 @@ describe("a Headless still pushes to the front of the line", () => {
   it("takes it ahead of a Mini too", () => {
     const sim = deployed([mini("m"), headless("h")]);
     expect(frontMostId(sim)).toBe("h");
+  });
+});
+
+// Where the line stands, in the coordinates a player actually sees. RaidScene insets the
+// combat lane by 10 % of the stage width at each end, so a sim x renders at
+// `art = 48 + (x/1000)*384` of the 480-wide background — which is what these fractions
+// are checked against. Both numbers came from a playtest note about placement.
+describe("where the army plants itself on the stage", () => {
+  /** Sim x as a fraction across the visible stage art. */
+  const stageFraction = (simX: number) => (48 + (simX / 1000) * 384) / 480;
+
+  const garden = (id: string) =>
+    unit({ id, sourceKey: "ZombieActorGardenTier1", group: "Garden", team: "player", isGarden: true });
+
+  it("holds the wave in the doorway, with the front rank closing to melee on it", () => {
+    const sim = deployed([regular("r0"), regular("r1"), regular("r2")]);
+    const enemy = sim.units.find((u) => u.team === "enemy")!;
+    expect(enemy.x).toBe(ENEMY_HOLD_X);
+    const front = sim.units.find((u) => u.id === frontMostId(sim))!;
+    // The front rank stands one melee gap short of the wave, not back in the field.
+    expect(enemy.x - front.x).toBeCloseTo(60, 0);
+    expect(stageFraction(front.x)).toBeGreaterThan(0.8);
+  });
+
+  it("stations Garden healers at 3/10 across the stage", () => {
+    // Their old setback hung off the front line and dropped them into the milling crowd
+    // at roughly a sixth of the way across; they now hold a fixed support station.
+    const sim = deployed([regular("r0"), regular("r1"), garden("g0"), garden("g1")]);
+    for (const id of ["g0", "g1"]) {
+      const g = sim.units.find((u) => u.id === id)!;
+      expect(stageFraction(g.x), id).toBeGreaterThan(0.25);
+      expect(stageFraction(g.x), id).toBeLessThan(0.34);
+    }
+    // …and well behind the front rank, so they stay out of the combat band.
+    const front = sim.units.find((u) => u.id === frontMostId(sim))!;
+    expect(front.x - sim.units.find((u) => u.id === "g0")!.x).toBeGreaterThan(300);
   });
 });

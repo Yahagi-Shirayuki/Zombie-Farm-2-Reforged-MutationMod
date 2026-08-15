@@ -394,6 +394,25 @@ export class RaidActor {
     }
   }
 
+  /** Undo markDead: a Garden holder's Resurrect puts this zombie back on its feet.
+   *
+   *  The death pose is not something the idle/walk animation grows out of — while
+   *  `deathT` is set, update() takes the head-pop branch and returns, so the head
+   *  keeps flying further away every frame and the head effect stays hidden. A
+   *  revived zombie therefore stood back up headless (most visibly the Headless
+   *  families, whose whole head IS the effect, and anything wearing a head
+   *  mutation). Put the head back on the neck and hand the rig to the live
+   *  animation again. Idempotent. */
+  markAlive() {
+    if (this.deathT < 0) return;
+    this.deathT = -1;
+    for (const h of this.headParts) {
+      h.sp.position.set(h.bx, h.by);
+      h.sp.rotation = 0;
+    }
+    if (this.specialHeadFx) this.specialHeadFx.container.visible = true;
+  }
+
   update(dt: number, moving: boolean, focusing = false) {
     // Dead: pop the head off and let it tumble backward (skip the normal idle/walk).
     if (this.deathT >= 0) {

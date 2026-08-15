@@ -350,15 +350,25 @@ def main():
     recovered_epic_rewards = [
         (5011, 10, "Madame Zombie", "ZombieActorMadame", "questicon_skunkarella.png"),
         (8000, 5, "Brock Coley", "ZombieActorBrockColey", "questicon_rockyrhino.png"),
+        # Rocky Rhino is the one event whose only recovered prize sat on rung 5, so its
+        # top five rungs paid nothing at all. It pays a SECOND Brock Coley on rung 10
+        # rather than a new named zombie: Brock is already the reason the event is
+        # gated at level 30 (see EPIC_BOSS_UNLOCK_LEVELS), and inventing an eighth
+        # omega prize would price the ladder against a zombie ZF2 never authored.
+        (8011, 10, "Brock Coley", "ZombieActorBrockColey", "questicon_rockyrhino.png"),
         (9000, 5, "Proto Zombie", "ZombieActorProto", "questicon_generallarvaelus.png"),
         (9011, 10, "Zombug", "ZombieActorZombug", "questicon_generallarvaelus.png"),
         (10000, 5, "Zomdini", "ZombieActorZomdini", "questicon_mysticalmamba.png"),
         (10011, 10, "Zomtar", "ZombieActorZomtar", "questicon_mysticalmamba.png"),
     ]
+    # A boss that pays the SAME zombie on both rungs needs its second quest to read as
+    # a second one in the rail, where only the title is shown.
+    repeat_prize_titles = {8011: ("Another Brock Coley", "A second Brock Coley joins the farm!")}
     for qid, level, name, key, sprite in recovered_epic_rewards:
+        title, message = repeat_prize_titles.get(qid, (name, f"You earned {name}!"))
         add_quest(str(qid), {
-            "questID": qid, "title": name,
-            "messageComplete": f"You earned {name}!",
+            "questID": qid, "title": title,
+            "messageComplete": message,
             "tip": f"Defeat the Epic Boss at level {level}.", "sprite": sprite,
             "levelRequired": -1, "prerequisiteQuest": -1,
             "requirements": [{
@@ -379,7 +389,8 @@ def main():
         "3000": "ZombieActorCaptain", "3011": "ZombieActorAdmiral",
         "4000": "ZombieActorChristmasGhost", "4011": "ZombieActorScrooge",
         "5000": "ZombieActorDiva", "5011": "ZombieActorMadame",
-        "8000": "ZombieActorBrockColey", "9000": "ZombieActorProto",
+        "8000": "ZombieActorBrockColey", "8011": "ZombieActorBrockColey",
+        "9000": "ZombieActorProto",
         "9011": "ZombieActorZombug", "10000": "ZombieActorZomdini",
         "10011": "ZombieActorZomtar",
     }

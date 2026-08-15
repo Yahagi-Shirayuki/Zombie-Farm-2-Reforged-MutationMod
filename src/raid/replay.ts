@@ -230,6 +230,22 @@ import type { RaidOutcome } from "./types";
 //     refilled by a five-way roll on every cast, so it never runs dry; the real limit is
 //     `allowedToSummonBoss` refusing a second while the first still lives. It replaces a
 //     cap of three copies of the wave's own minion, and the abductee is off-budget.
+//   * AN ATTACK'S EFFECTS LAND AT ITS OWN FREQUENCY. A unit rolls ONE entry out of its
+//     `attacks` list per swing and applies that entry's flags, so knockback and stun
+//     belong to the entry that carries them, not to the unit. Collapsing the list to a
+//     boolean gave every swing the rarest entry's effects — the Lumberjack's shove lives
+//     on a 10 %-frequency special and he was shoving on all 100 %. Also moves the Lawyers
+//     boss's stun (40 %) and the Special/TreeWorld/Valentine's minions 2 and 3 (50 %);
+//     every other carrier is already at 100 % and is unchanged.
+// Two data changes ride along, both playtest verdicts rather than recovered values, and
+// both recorded where a regeneration cannot undo them (tools/prep_raids.py UNIT_OVERRIDES,
+// BattleSim SUMMON_SPAWN_X): the alien minion's str 6 -> 5 (4 was tried first and read as
+// too soft), because the recovered swarm delivers the authored number six times over onto
+// one zombie; and the abductee's landing point moved from the stage's arithmetic centre
+// onto the scorch mark it is visibly beamed onto. A later playtest also moved the two
+// LINES both armies stand on — ENEMY_HOLD_X 915 -> 940 (the zombies' front rank follows it)
+// and the Garden healers off a relative setback onto a fixed station at 3/10 of the stage
+// (GARDEN_STATION_X) — which changes who is in range of what from the first frame.
 // ELITE_PROFILES 6 and 9 are re-fitted in the same change — both raids' difficulty moved
 // under the rules above, and the profiles are pinned to a measured ladder.
 // Same cost as v15: an invasion in flight at deploy time settles as stale_ruleset and pays
@@ -265,7 +281,22 @@ import type { RaidOutcome } from "./types";
 // an endgame event should not be. Damage is regressive by design here: it costs a weak
 // roster far more than a developed one, and that IS the gate. The bounding rule is
 // unchanged and still holds at the new top-rung values — see epicBoss/combat.test.ts.
-export const RAID_RULESET_VERSION = 29;
+//
+// v30 COMBAT POSITIONING AND EFFECT-FREQUENCY PASS. Production is already pinned to v29,
+// so this deterministic batch needs its own version. It changes enemy/front-line and
+// Garden support positions, makes alien abductees stationary mid-field blockers, and
+// makes knockback/stun respect authored attack-entry frequency instead of every swing.
+//
+// The same bump covers MINI BUDDY's window. The move is loaded onto a Large while it
+// stands in the deployment slot, and
+// `readyToActivate` also accepted one still queued at the back ("waiting"), which is not a
+// display detail: the button armed from the first frame of the fight and a tap loaded the
+// mini onto whichever carrier was furthest right, deployment slot or not. It now requires
+// the carrier to have REACHED the slot, which is a tap the sim used to accept and now
+// refuses. The finish path drops a refused ability rather than failing (see
+// `advanceRaidSegment`), so the two simulations would have settled different fights
+// instead of erroring — which is exactly why this needs the bump rather than a quiet fix.
+export const RAID_RULESET_VERSION = 30;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

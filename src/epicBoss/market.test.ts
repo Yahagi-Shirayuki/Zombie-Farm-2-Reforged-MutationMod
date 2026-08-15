@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import questRows from "../../public/assets/quests.json";
 import {
   EPIC_BOSSES,
+  ROCKY_RHINO,
   SKUNKARELLA,
   epicBossUnlockLevel,
 } from "./catalog";
@@ -58,7 +59,15 @@ describe("Epic Boss market", () => {
       "Levels 2, 3, 4, 5: Diva Zombie",
       "Level 10: Madame Zombie",
     ]);
-    expect(EPIC_BOSSES.flatMap((boss) => epicZombieRewardNotes(boss, quests))).toHaveLength(15);
+    // Every event advertises two prize zombies, one per pinned rung. Rocky Rhino's
+    // rung-10 note used to be missing entirely — a ladder whose top half paid nothing.
+    for (const boss of EPIC_BOSSES) {
+      expect(epicZombieRewardNotes(boss, quests), boss.id).toHaveLength(2);
+    }
+    expect(epicZombieRewardNotes(ROCKY_RHINO, quests)).toEqual([
+      "Level 5: Brock Coley",
+      "Level 10: Brock Coley",
+    ]);
   });
 
   it("keeps every prize quest on a rung its ladder actually has", () => {

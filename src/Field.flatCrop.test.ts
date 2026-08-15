@@ -4,12 +4,15 @@ import plants from "../public/assets/plants.json";
 import { SEED_FILE } from "./assets";
 import { CARROT, CropConfig, Field } from "./Field";
 
-// The Water Lily's art is a POND: one flat isometric diamond filling the plot at every
-// growth stage. The ordinary crop render graduates a grown crop into the depth-sorted
-// entityLayer so a tall plant can hide an actor walking behind it — which for a piece of
-// ground means the farmer and any zombie crossing the plot disappear underneath it.
-// FLAT_CROPS keeps it in cropSeedLayer (below every entity, no footprint) for its whole
-// life, so characters always walk over it.
+// The Water Lily's MIDDLE stage is a POND: one flat isometric diamond filling the plot,
+// nothing standing above the water. The ordinary crop render graduates a growing crop
+// into the depth-sorted entityLayer so a tall plant can hide an actor walking behind it
+// — which for a piece of ground means the farmer and any zombie crossing the plot
+// disappear underneath it. FLAT_GROWTH_CROPS keeps that stage in cropSeedLayer (below
+// every entity, no footprint) so characters always walk over it.
+//
+// The exception is that one stage only. The ripe art grows a tall flower well clear of
+// the water, so it rejoins the ordinary split render and sorts like any other crop.
 
 /** A stand-in for the Sprite layoutCrop positions. Real Sprites need a GPU texture; the
  *  only Sprite API layoutCrop touches is anchor/scale/position/texture, and everything
@@ -72,8 +75,10 @@ const cfgFor = (key: string): CropConfig => {
 };
 
 describe("flat crops", () => {
-  it("keeps a grown Water Lily below the actors, not in the depth sort", () => {
-    expect(layerOfGrown(cfgFor("water_lily"))).toBe("seed");
+  it("graduates a RIPE Water Lily into the depth sort like any other crop", () => {
+    // Its flower stands well above the water, so the ripe stage is not ground and must
+    // not be pinned below the actors.
+    expect(layerOfGrown(cfgFor("water_lily"))).toBe("entity");
   });
 
   it("still graduates an ordinary crop into the depth-sorted entity layer", () => {
@@ -82,23 +87,38 @@ describe("flat crops", () => {
     expect(layerOfGrown(CARROT)).toBe("entity");
   });
 
-  it("draws a Water Lily flat at every stage, including the first growth stage", () => {
+  it("draws a Water Lily flat while it GROWS, and only while it grows", () => {
     const cfg = cfgFor("water_lily");
+    const ripe = cfg.stages[cfg.stages.length - 1];
     for (const stage of cfg.stages) {
       const field = makeField();
       const sprite = makeSprite();
       field.layoutCrop({ cfg, sprite }, stage, 4, 4);
-      expect(sprite.parent, `stage ${stage} left the ground layer`).toBe(field.cropSeedLayer);
+      const want = stage === ripe ? field.entityLayer : field.cropSeedLayer;
+      expect(sprite.parent, `stage ${stage} landed in the wrong layer`).toBe(want);
     }
   });
 
-  it("leaves no soil companion in the crop ground layer for a flat crop", () => {
-    // The split render's second copy is what carries baked dirt. A flat crop IS its own
-    // ground, so a companion would double-draw the pond.
+  it("re-parents out of the ground layer when the lily ripens", () => {
+    // The whole ladder in one crop, the way a real plot grows: the mid stage must not
+    // strand the sprite in cropSeedLayer once the flower opens.
     const field = makeField();
     const sprite = makeSprite();
     const cfg = cfgFor("water_lily");
     for (const stage of cfg.stages) field.layoutCrop({ cfg, sprite }, stage, 4, 4);
+    expect(field.cropSeedLayer.children.length).toBe(0);
+  });
+
+  it("leaves no soil companion in the crop ground layer for the flat stage", () => {
+    // The split render's second copy is what carries baked dirt. The pond IS its own
+    // ground, so a companion would double-draw it.
+    const field = makeField();
+    const sprite = makeSprite();
+    const cfg = cfgFor("water_lily");
+    for (const stage of cfg.stages.slice(0, -1)) field.layoutCrop({ cfg, sprite }, stage, 4, 4);
     expect(field.cropGroundLayer.children.length).toBe(0);
+    // ...and the ripe stage takes the ordinary split render, dirt copy and all.
+    field.layoutCrop({ cfg, sprite }, cfg.stages[cfg.stages.length - 1], 4, 4);
+    expect(field.cropGroundLayer.children.length).toBe(1);
   });
 });

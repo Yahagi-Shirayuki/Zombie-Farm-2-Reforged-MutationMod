@@ -171,6 +171,7 @@ export const QUEST_REWARDS: Readonly<Record<string, QuestReward>> = {
   "5000": { rewardType: 5, rewardValue: 0, rewardItemKey: "ZombieActorDiva" },
   "5011": { rewardType: 5, rewardValue: 0, rewardItemKey: "ZombieActorMadame" },
   "8000": { rewardType: 5, rewardValue: 0, rewardItemKey: "ZombieActorBrockColey" },
+  "8011": { rewardType: 5, rewardValue: 0, rewardItemKey: "ZombieActorBrockColey" },
   "9000": { rewardType: 5, rewardValue: 0, rewardItemKey: "ZombieActorProto" },
   "9011": { rewardType: 5, rewardValue: 0, rewardItemKey: "ZombieActorZombug" },
   "10000": { rewardType: 5, rewardValue: 0, rewardItemKey: "ZombieActorZomdini" },

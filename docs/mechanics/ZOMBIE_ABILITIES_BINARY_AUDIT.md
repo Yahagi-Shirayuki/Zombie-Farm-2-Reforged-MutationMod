@@ -101,3 +101,41 @@ narrower than it first appears.
 Everything else in this section is implemented faithfully as of ruleset 26
 (`BattleSim.stepResurrect` / `resurrect`); the earlier ruleset-21 re-arm, which handed
 a revived exploder its fuse back, has been removed along with `SimUnit.abilityRearms`.
+
+## The beam-down pillar (2026-08-14)
+
+Reported from play: "a large pillar of white light that shrinks and fades horizontally"
+on a resurrection, and the same effect when an abducted unit is beamed in. It is in the
+code, and it is literally ONE effect built twice — `-[ZombieActorGarden ressurectZombie:]`
+(0x7d698) and `-[ZFFightMan summonBoss:]` (0x5f256) assemble it from the same classes with
+byte-identical constants:
+
+| piece | call | value |
+| --- | --- | --- |
+| the column | `CCColorLayer initWithColor:width:height:` | `ccc4(255,255,255,255)`, `100 x 320` |
+| placement | `setPosition:` | `(actor.x - 50, 0)` — bottom edge, centred on the actor |
+| start state | `setScaleX:` | `0` (closed) |
+| open | `CCScaleTo actionWithDuration:scaleX:scaleY:` | `0.2 s -> (1, 1)` |
+| close | `CCScaleTo` | `1.3 s -> (0, 1)` |
+| hold | `CCDelayTime` | `0.2 s` |
+| fade | `CCFadeTo actionWithDuration:opacity:` | `1.3 s -> 0` |
+| teardown | `CCCallFuncND cleanupNode:data:` | removes the node |
+| sound | `SimpleAudioEngine playEffect:` | `@"resurrect.wav"` (BOTH sites) |
+
+The two sequences run under one `CCSpawn`, so the fade is exactly the close: 0.2 s to open,
+1.3 s to shrink away, 1.5 s total.
+
+Three things are easy to get wrong reading it back:
+
+- **320 is the WHOLE SCREEN.** The height is not a sprite dimension — it is the full design
+  height, and the iPad branch (`userInterfaceIdiom`) asks for 640, its own full height. The
+  column spans the stage top to bottom.
+- **It shrinks from BOTH sides.** A `CCLayer` positions from its bottom-left
+  (`isRelativeAnchorPoint = NO`) but transforms about its `(0.5, 0.5)` anchor, so `scaleX`
+  closes inward rather than sliding one edge across. The `-50` in the position is half the
+  width, which is what centres it on the actor.
+- **It is BEHIND the arriving actor.** `summonBoss:` adds it at `actor.zOrder - 1`. In front,
+  an opaque full-height bar would white out the unit it is delivering.
+
+Reimplemented in `RaidScene.spawnLightPillar`, fired from the revival edge (a token leaving
+the dead branch) and from a summon's first frame on the field.

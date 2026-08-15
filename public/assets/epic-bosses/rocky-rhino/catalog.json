@@ -33,11 +33,55 @@
     "attacks": [
       {
         "name": "EpicBossAttack",
-        "frequency": 100
+        "frequency": 100,
+        "damageTiming": 0.88
       }
     ]
   },
-  "animations": {},
+  "animations": {
+    "idle": {
+      "file": "idle.png",
+      "cellWidth": 254,
+      "cellHeight": 217,
+      "frameCount": 8,
+      "frameSeconds": 0.075
+    },
+    "enter": {
+      "file": "enter.png",
+      "cellWidth": 254,
+      "cellHeight": 217,
+      "frameCount": 11,
+      "frameSeconds": 0.045454545454545456
+    },
+    "attack": {
+      "file": "attack.png",
+      "cellWidth": 254,
+      "cellHeight": 217,
+      "frameCount": 9,
+      "frameSeconds": 0.08333333333333333
+    },
+    "defeat": {
+      "file": "defeat.png",
+      "cellWidth": 254,
+      "cellHeight": 217,
+      "frameCount": 5,
+      "frameSeconds": 0.1
+    },
+    "escape": {
+      "file": "escape.png",
+      "cellWidth": 254,
+      "cellHeight": 217,
+      "frameCount": 4,
+      "frameSeconds": 0.1
+    },
+    "fly": {
+      "file": "fly.png",
+      "cellWidth": 254,
+      "cellHeight": 217,
+      "frameCount": 3,
+      "frameSeconds": 0.08333333333333333
+    }
+  },
   "levelAssets": [
     {
       "anchor": "{0,0}",
@@ -145,13 +189,20 @@
     }
   ],
   "questIds": [
-    "8000"
+    "8000",
+    "8011"
   ],
   "portrait": "portrait.png",
   "lootIcon": "loot-icon.png",
   "questIcon": "quest-icon.png",
   "bossTexture": "boss.png",
   "reconstructed": true,
+  "staticFrame": [
+    1596,
+    374,
+    221,
+    175
+  ],
   "copied": [
     "EPB8_BANNER1.png",
     "EPB8_CAVE.png",
