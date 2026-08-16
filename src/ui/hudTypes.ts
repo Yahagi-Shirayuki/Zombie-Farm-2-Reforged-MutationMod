@@ -38,6 +38,9 @@ export interface MenuCard {
   zombie?: {
     group: string; className: string; classColor: string;
     str: number; dex: number; con: number; focus: number; mutation: number; mutationIds?: string[];
+    abilityKeys?: string[];
+    /** Catalog-only: stats are rolled when obtained, so hide the preview numbers. */
+    randomDisplayStats?: boolean;
   };
 }
 
@@ -74,8 +77,11 @@ export interface ZombieInfo {
   dex: number;
   con: number;
   focus: number;
+  /** Market/catalog previews can hide stats that are randomized on harvest. */
+  hideStats?: boolean;
   mutation: number; // vanilla mutation bitmask â€” stats it boosts render green
   mutationIds?: string[]; // local modded mutation ids
+  abilityKeys?: string[]; // explicit per-unit ability slots, when a species overrides the matrix
   portrait: string;
   color?: [number, number, number]; // individual tint used by the generated portrait
   powderStats?: ZombiePowderStats;

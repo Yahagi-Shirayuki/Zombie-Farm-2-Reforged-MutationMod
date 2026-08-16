@@ -30,6 +30,32 @@ export const DEFAULT_ZOMBIE_EYE_TINT = 0xffffff;
 export const BRUTE_ZOMBIE_EYE_TINT = 0x111111;
 export const DEFAULT_ZOMBIE_TEETH_TINT = 0xffffff;
 export const BRUTE_EYEBALL_SCALE = 0.2;
+export const LUCKYBOX_ZOMBIE_KEY = "ZombieActorLuckybox";
+export const LUCKYBOX_ZOMBIE_KEYS = new Set([
+  "ZombieActorLuckyboxSilver",
+  "ZombieActorLuckyboxGold",
+  LUCKYBOX_ZOMBIE_KEY,
+]);
+export const LUCKYBOX_PALETTE_STEP_MS = 25;
+
+const LUCKYBOX_BODY_PALETTE = [
+  0xfc0a0a, 0xfc830a, 0xfcf00a, 0xc3ff00, 0x09ff00, 0x1cffc2, 0x00eeff,
+  0x006ce0, 0x0b00a1, 0x4800a1, 0xc010e3, 0xff17cd, 0xff4f8a,
+];
+
+export function hasLuckyboxPalette(key: string): boolean {
+  return LUCKYBOX_ZOMBIE_KEYS.has(key);
+}
+
+export function luckyboxPaletteTint(elapsedMs: number): number {
+  const step = Math.floor(Math.max(0, elapsedMs) / LUCKYBOX_PALETTE_STEP_MS);
+  return LUCKYBOX_BODY_PALETTE[step % LUCKYBOX_BODY_PALETTE.length];
+}
+
+export function luckyboxPaletteColor(elapsedMs: number): [number, number, number] {
+  const tint = luckyboxPaletteTint(elapsedMs);
+  return [(tint >> 16) & 0xff, (tint >> 8) & 0xff, tint & 0xff];
+}
 
 /** Large/brute zombies keep their black eye disks, with a tiny copy of the
  * authored eyeball centered inside each one. */

@@ -49,6 +49,11 @@ describe("rollLootTier — bracket 3+ (over-luck) compresses toward t5", () => {
     // A high roll is always the rarest tier regardless of how many dice.
     expect(rollLootTier(0.99, 7)).toBe(5);
   });
-  it("normalizes negative/fractional bonus like 0", () =>
+  it("normalizes negative bonus like 0", () =>
     expect(rollLootTier(0.05, -2)).toBe(0));
+
+  it("supports fractional modded luck between Golden Dice brackets", () => {
+    expect(rollLootTier(0.97, 0)).toBe(4);
+    expect(rollLootTier(0.97, 0.5)).toBe(5);
+  });
 });

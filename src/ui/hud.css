@@ -1627,7 +1627,7 @@
 #hud .pm-port img { height: 46px; max-width: 76px; width: auto; object-fit: contain;
   image-rendering: auto; }
 #hud .pm-card.zombie .pm-port { width: 96px; height: 78px; justify-content: center; overflow: hidden; }
-#hud .pm-card.zombie .pm-port img { width: 96px; height: 96px; max-width: none; flex: 0 0 auto;
+#hud .pm-card.zombie .pm-port img { width: 60px; height: 60px; max-width: none; flex: 0 0 auto;
   object-fit: contain; transform: scale(1.35); transform-origin: 50% 58%; }
 #hud .pm-right { grid-area: right; display: flex; flex-direction: column; justify-content: center;
   align-items: flex-end; gap: 5px; color: #452c0c; font-weight: 700; font-size: 13px; }

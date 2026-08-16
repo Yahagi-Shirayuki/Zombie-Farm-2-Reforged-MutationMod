@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { GameState } from "./GameState";
-import { ABILITY_TIER } from "./zombie/traits";
+import { ABILITY_TIER, TIER_BOSS } from "./zombie/traits";
 
 // Ability unlocking is per-ABILITY, not per-tier: beating a tier's invasion boss
 // (winning raid id 1..4) unlocks ONE still-locked ability of that tier per win, in
@@ -41,5 +41,27 @@ describe("GameState ability unlocking", () => {
     s.completeRaid("1");
     expect(s.tierAbilitiesUnlocked(2)).toBe(0);
     expect(s.abilityUnlocked(ABILITY_TIER[2][0])).toBe(false);
+  });
+
+  it("treats tier 0 as always unlocked without unlocking unknown keys", () => {
+    const s = new GameState();
+    expect(s.tierAbilitiesUnlocked(0)).toBe(ABILITY_TIER[0].length);
+    expect(s.abilityUnlocked(ABILITY_TIER[0][0])).toBe(true);
+    expect(s.abilityUnlocked("notARealAbility")).toBe(false);
+  });
+
+  it("uses Robots as tier 5 and keeps Aliens wired as tier 6", () => {
+    const s = new GameState();
+    expect(TIER_BOSS[5]).toBe("the Robots");
+    expect(TIER_BOSS[6]).toBe("the Aliens");
+
+    s.completeRaid("6");
+    expect(s.tierAbilitiesUnlocked(5)).toBe(0);
+    expect(s.tierAbilitiesUnlocked(6)).toBe(0);
+
+    s.completeRaid("5");
+    expect(s.tierAbilitiesUnlocked(5)).toBe(1);
+    expect(s.abilityUnlocked(ABILITY_TIER[5][0])).toBe(true);
+    expect(s.abilityUnlocked(ABILITY_TIER[5][1])).toBe(false);
   });
 });

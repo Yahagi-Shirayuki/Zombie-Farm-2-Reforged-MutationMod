@@ -210,7 +210,7 @@ function installLocalFarmHotkeys(playMode: PlayMode, state: GameState, saves: Sa
 
       case "KeyJ":
         saves.flush();
-        skipLocalFarmTime(playMode, saves, 30);
+        skipLocalFarmTime(playMode, saves, 60);
         break;
 
       case "KeyK":
@@ -414,6 +414,8 @@ async function main() {
         group: z.group, className: z.className, classColor: z.classColor,
         str: z.str, dex: z.dex, con: z.con, focus: z.focus, mutation: z.mutation ?? 0,
         mutationIds: z.mutationIds,
+        abilityKeys: z.abilityKeys,
+        randomDisplayStats: !!z.randomizeOnCreate?.displayStats,
       },
       cfg,
     };
@@ -499,11 +501,8 @@ async function main() {
   const field = new Field(assets);
   world.addChild(field.container);
 
-  // Grown crop tops sort above plot dirt/back fences but below near fences.
+  // Grown crop tops and plot fences sort together above plot dirt and below actors.
   world.addChild(field.cropEntityLayer);
-
-  // Plot fences draw over crops and sort against neighbouring fenced plots.
-  world.addChild(field.fenceLayer);
 
   // Placed objects (trees) and the actors share Field.entityLayer so the farmer
   // and zombies stand over fenced plots while still depth-sorting with objects.
@@ -4506,6 +4505,7 @@ async function main() {
       str: d.str * state.farmerZombieStrengthMult(), dex: d.dex,
       con: d.con * state.farmerZombieLifeMult(), focus: d.focus, mutation: d.mutation, mutationIds: d.mutationIds,
       invasions: d.invasions,
+      abilityKeys: d.abilityKeys,
       portrait: zombiePortrait(d.key), color: d.color, powderStats: d.powderStats,
       // Friend-farm visits are inspect-only, so omit action-bearing unit IDs.
       id: visiting ? undefined : d.id, stored: false,

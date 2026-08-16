@@ -4,8 +4,11 @@ import {
   BRUTE_ZOMBIE_EYE_TINT,
   DEFAULT_ZOMBIE_EYE_TINT,
   DEFAULT_ZOMBIE_TEETH_TINT,
+  LUCKYBOX_PALETTE_STEP_MS,
   displayedAppearance,
+  hasLuckyboxPalette,
   isBruteEyeball,
+  luckyboxPaletteTint,
   zombiePartTint,
 } from "./appearance";
 
@@ -45,5 +48,18 @@ describe("zombie appearance", () => {
     expect(isBruteEyeball("Large", "defaultEyeR.png")).toBe(true);
     expect(isBruteEyeball("Regular", "defaultEyeL")).toBe(false);
     expect(isBruteEyeball("Large", "defaultHead")).toBe(false);
+  });
+
+  it("loops Luckybox through the body-color palette every half second", () => {
+    expect(hasLuckyboxPalette("ZombieActorLuckyboxSilver")).toBe(true);
+    expect(hasLuckyboxPalette("ZombieActorLuckyboxGold")).toBe(true);
+    expect(hasLuckyboxPalette("ZombieActorLuckybox")).toBe(true);
+    expect(hasLuckyboxPalette("ZombieActorRegularTier1")).toBe(false);
+    expect(LUCKYBOX_PALETTE_STEP_MS).toBe(500);
+    expect(luckyboxPaletteTint(0)).toBe(0xfc0a0a);
+    expect(luckyboxPaletteTint(499)).toBe(0xfc0a0a);
+    expect(luckyboxPaletteTint(500)).toBe(0xfc830a);
+    expect(luckyboxPaletteTint(6_000)).toBe(0xff4f8a);
+    expect(luckyboxPaletteTint(6_500)).toBe(0xfc0a0a);
   });
 });

@@ -2,7 +2,7 @@
 // synchronized through the online save service (see save/SaveManager). Levels/XP
 // curve is build-verified from PlayerLevels.plist.
 import { Friend, canGiftBrain, nextFriendId } from "./social/friends";
-import { ABILITY_TIER, abilityTierOf } from "./zombie/traits";
+import { ABILITY_TIER, abilityTierOf, raidIdForAbilityTier } from "./zombie/traits";
 import { TutorialSave } from "./save/schema";
 import type { FarmerCatalog } from "./assets";
 import {
@@ -716,7 +716,8 @@ export class GameState {
   tierAbilitiesUnlocked(tier: number): number {
     const pool = ABILITY_TIER[tier];
     if (!pool) return 0;
-    return Math.min(pool.length, this.raidWins(String(tier)));
+    if (tier === 0) return pool.length;
+    return Math.min(pool.length, this.raidWins(raidIdForAbilityTier(tier)));
   }
 
   /** Whether a specific ability KEY is unlocked yet. An ability unlocks once its
@@ -724,7 +725,8 @@ export class GameState {
    *  first `tierAbilitiesUnlocked(tier)` entries of its tier's canonical pool. */
   abilityUnlocked(key: string): boolean {
     const tier = abilityTierOf(key);
-    if (tier <= 0) return false;
+    if (tier === 0) return true;
+    if (tier < 0) return false;
     const idx = ABILITY_TIER[tier].indexOf(key);
     return idx >= 0 && idx < this.tierAbilitiesUnlocked(tier);
   }

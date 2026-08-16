@@ -4,6 +4,7 @@
 // only as a test/dev utility. No side effects — RaidManager applies these.
 import type { RaidDef, RaidStage } from "./types";
 import { raidBoostBundle } from "./lootBundles";
+import { TIER_RAID_ID } from "../zombie/traits";
 
 /** Minimum army to launch an invasion (Help.json: "at least 8, best with 16"). */
 export const MIN_ARMY = 8;
@@ -96,9 +97,10 @@ export function fightStage(raid: RaidDef, playerLevel: number): RaidStage | null
   return raid.stages[idx];
 }
 
-/** Ability tier this raid unlocks on a win (McDonnell=1 … Ninjas=4; 0 = none). */
+/** Ability tier this raid unlocks on a win (McDonnell=1 … Ninjas=4, Robots=5, Aliens=6; 0 = none). */
 export function raidTier(raid: RaidDef): number {
-  return raid.id >= 1 && raid.id <= 4 ? raid.id : 0;
+  const id = String(raid.id);
+  return Number(Object.entries(TIER_RAID_ID).find(([, raidId]) => raidId === id)?.[0] ?? 0);
 }
 
 /** The boosts this raid's loot table can hand over, in tier order. */

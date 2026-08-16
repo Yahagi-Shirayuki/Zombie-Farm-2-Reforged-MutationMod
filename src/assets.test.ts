@@ -61,6 +61,22 @@ describe("loose mutation art", () => {
     expect(looseMutationFiles(parts, atlas)).toEqual(["shared.png"]);
   });
 
+  it("adds authored facing variants for folder-based Luckybox heads", () => {
+    const parts = {
+      silver: part("luckybox_zombie/luckybox_head_silver.png"),
+      gold: part("luckybox_zombie/luckybox_head_gold.png"),
+      platinum: part("luckybox_zombie/luckybox_head_plat.png"),
+    };
+    expect(looseMutationFiles(parts, atlas).sort()).toEqual([
+      "luckybox_zombie/luckybox_head_gold.png",
+      "luckybox_zombie/luckybox_head_gold_flip.png",
+      "luckybox_zombie/luckybox_head_plat.png",
+      "luckybox_zombie/luckybox_head_plat_flip.png",
+      "luckybox_zombie/luckybox_head_silver.png",
+      "luckybox_zombie/luckybox_head_silver_flip.png",
+    ]);
+  });
+
   it("resolves a bare filename under assets/zombie/mutations/", () => {
     expect(looseMutationPath("cornhead.png")).toBe("mutations/cornhead.png");
     expect(looseMutationPath("cornhead")).toBe("mutations/cornhead.png");

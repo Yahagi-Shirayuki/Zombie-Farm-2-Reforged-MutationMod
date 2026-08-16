@@ -36,6 +36,8 @@ const splitMutationInput = (mutation?: MutationInput, mutationIds?: readonly str
 
 const sameColor = (a?: readonly [number, number, number], b?: readonly [number, number, number]): boolean =>
   (!a && !b) || (!!a && !!b && a[0] === b[0] && a[1] === b[1] && a[2] === b[2]);
+const sameOptionalNumber = (a?: number, b?: number): boolean =>
+  (a === undefined && b === undefined) || (a !== undefined && b !== undefined && a === b);
 const samePowderStats = (
   a?: Partial<Record<PowderStatColor, number>>,
   b?: Partial<Record<PowderStatColor, number>>
@@ -830,12 +832,16 @@ export class ZombieField {
     const live = this.units.map((u) => {
       const d = u.getData();
       return { id: d.id, key: d.key, name: d.name, invasions: d.invasions, mutation: d.mutation,
-        mutationIds: d.mutationIds, color: d.color, powderStats: d.powderStats,
+        mutationIds: d.mutationIds, abilityKeys: d.abilityKeys, visualGroup: d.visualGroup,
+        visualScale: d.visualScale,
+        rolledStats: d.rolledStats, color: d.color, powderStats: d.powderStats,
         powderStatProgress: d.powderStatProgress, pos: { col: d.col, row: d.row } };
     });
     const kept = this.stored.map((d) => ({
       id: d.id, key: d.key, name: d.name, invasions: d.invasions, mutation: d.mutation,
-      mutationIds: d.mutationIds, color: d.color, powderStats: d.powderStats,
+      mutationIds: d.mutationIds, abilityKeys: d.abilityKeys, visualGroup: d.visualGroup,
+      visualScale: d.visualScale,
+      rolledStats: d.rolledStats, color: d.color, powderStats: d.powderStats,
       powderStatProgress: d.powderStatProgress, pos: { col: d.col, row: d.row }, stored: true,
     }));
     return [...live, ...kept];
@@ -1007,7 +1013,12 @@ export class ZombieField {
       // Pass s.mutation (may be undefined) so an old save without the field falls
       // back to the species' default bit; an explicit 0 stays unmutated.
       const data = makeOwned(s.id, def, col, row, s.invasions ?? 0, s.mutation, s.color, s.name, s.mutationIds,
-        s.powderStats, s.powderStatProgress);
+        s.powderStats, s.powderStatProgress, {
+          abilityKeys: s.abilityKeys,
+          visualGroup: s.visualGroup,
+          visualScale: s.visualScale,
+          rolledStats: s.rolledStats,
+        });
       if (s.stored) this.stored.push(data);
       else this.addUnit(data);
       const m = /^z(\d+)$/.exec(s.id);
@@ -1044,6 +1055,7 @@ export class ZombieField {
   reconcileServerRoster(
     saves: { id: string; key: string; mutation: number; invasions: number; stored: boolean;
       restored?: boolean; color?: [number, number, number];
+      abilityKeys?: string[]; visualGroup?: string; visualScale?: number; rolledStats?: OwnedZombieSave["rolledStats"];
       powderStats?: Partial<Record<PowderStatColor, number>>;
       powderStatProgress?: Partial<Record<PowderStatColor, number>> }[],
     aliases: Record<string, string> = {}
@@ -1063,6 +1075,7 @@ export class ZombieField {
         if (direct && direct.key === save.key && direct.mutation === save.mutation &&
             direct.invasions === save.invasions && direct.stored === save.stored &&
             sameColor(direct.color, save.color) &&
+            sameOptionalNumber(direct.visualScale, save.visualScale) &&
             samePowderStats(direct.powderStats, save.powderStats) &&
             samePowderProgress(direct.powderStatProgress, save.powderStatProgress)) continue;
         if (source) this.takeOwned(source.id);
@@ -1078,7 +1091,12 @@ export class ZombieField {
         // species' catalog colour, permanently, once the next save was written.
         const data = makeOwned(save.id, def, home.col, home.row, save.invasions, save.mutation,
           save.color ?? source?.color, source?.name, source?.mutationIds,
-          save.powderStats ?? source?.powderStats, save.powderStatProgress ?? source?.powderStatProgress);
+          save.powderStats ?? source?.powderStats, save.powderStatProgress ?? source?.powderStatProgress, {
+            abilityKeys: save.abilityKeys ?? source?.abilityKeys,
+            visualGroup: save.visualGroup ?? source?.visualGroup,
+            visualScale: save.visualScale ?? source?.visualScale,
+            rolledStats: save.rolledStats ?? source?.rolledStats,
+          });
         if (save.stored) this.stored.push(data);
         else this.addUnit(data);
         // A server unit with no local counterpart arriving AFTER go-live is a real

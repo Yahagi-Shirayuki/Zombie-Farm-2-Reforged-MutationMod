@@ -312,6 +312,8 @@ export interface SimUnit {
   team: "player" | "enemy";
   name: string;
   group?: string;
+  visualGroup?: string;
+  visualScale?: number;
   className?: string;
   /** Presentation-only body tint (see CombatUnit.color). Never read by the sim. */
   color?: [number, number, number];
@@ -381,6 +383,7 @@ export interface SimUnit {
   usedAbilities: string[]; // one-use activated abilities already consumed
   resurrectUsed: boolean; // one-use automatic Resurrect latch
   stunMs: number; // ms of stun left â€” can't act while > 0 (enemies AND zombies)
+  freezeMs: number; // presentation-only freeze overlay left; mechanics use stunMs
   // ---- enemy attack effects inflicted on a struck zombie ----
   knockBack: boolean; // this enemy's attack shoves the zombie back down the lane
   stunInflictMs: number; // stun this enemy applies to a zombie on hit (ms)
@@ -520,6 +523,8 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     team: u.team,
     name: u.name,
     group: u.group,
+    visualGroup: u.visualGroup,
+    visualScale: u.visualScale,
     className: u.className,
     color: u.color,
     isBoss: u.isBoss,
@@ -589,6 +594,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     usedAbilities: [],
     resurrectUsed: false,
     stunMs: 0,
+    freezeMs: 0,
     knockBack: !isPlayer && !!u.knockBack,
     stunInflictMs: isPlayer ? 0 : u.stunMs ?? 0,
     attackDamageTiming: u.attackDamageTiming ?? 0.5,
@@ -785,6 +791,7 @@ export class BattleSim {
       critRollSeq: u.critRollSeq ?? 0,
       usedAbilities: [...(u.usedAbilities ?? [])],
       resurrectUsed: u.resurrectUsed ?? false,
+      freezeMs: u.freezeMs ?? 0,
       power: u.power ?? u.damage,
       // An old checkpoint parked at the 1-HP floor has necessarily consumed
       // its protection. New checkpoints persist the explicit latch.
@@ -836,12 +843,8 @@ export class BattleSim {
 
   // ---- activated abilities (player-triggered from the battle strip) ----
 
-  private isLarge(p: SimUnit): boolean {
-    return p.group === "Large" || /^ZombieActorLarge/i.test(p.sourceKey);
-  }
-
   private isSmall(p: SimUnit): boolean {
-    return p.group === "Small" || /^ZombieActorSmall/i.test(p.sourceKey);
+    return p.group === "Small" || p.visualGroup === "Small" || /^ZombieActorSmall/i.test(p.sourceKey);
   }
 
   private isHealer(p: SimUnit): boolean {
@@ -861,7 +864,7 @@ export class BattleSim {
     if (p.usedAbilities.includes(key)) return false;
     if (key === "attachMini") {
       return (
-        p.alive && this.isLarge(p) && p.abilities.includes(key) && !p.buddyId &&
+        p.alive && p.abilities.includes(key) && !p.buddyId &&
         (p.state === "waiting" || p.state === "charging") && !!this.availableMini()
       );
     }
@@ -897,13 +900,13 @@ export class BattleSim {
    *  (which also demands off-cooldown and not-already-winding-up) precisely so the
    *  button stays put while its zombie charges and recharges.
    *
-   *  Mini Buddy's window is the narrowest of all: exactly while a Large stands in
+   *  Mini Buddy's window is the narrowest of all: exactly while a carrier stands in
    *  the charge slot deciding whether to go â€” before that it is queued at the back,
    *  after it there is nothing left to mount. */
   private abilityPresent(key: string): boolean {
     if (key === "attachMini") {
       return !!this.availableMini() && this.players.some(
-        (p) => p.alive && this.isLarge(p) && p.abilities.includes(key) &&
+        (p) => p.alive && p.abilities.includes(key) &&
           !p.buddyId && !p.usedAbilities.includes(key) && p.state === "charging"
       );
     }
@@ -946,7 +949,9 @@ export class BattleSim {
     const fortitude = counts.get("tankHitPointsBuff") ?? 0;
     for (const p of this.players) {
       const stats = p.teamAuraStats;
-      p.damageReduction = p.group === "Headless" ? 0 : Math.min(0.95, protect * 0.20);
+      const protectReduction = p.group === "Headless" ? 0 : protect * 0.20;
+      const selfReduction = p.abilities.includes("castle") ? 0.5 : 0;
+      p.damageReduction = Math.min(0.95, protectReduction + selfReduction);
       if (!stats) continue;
       const statCarriers = p.group === "Female" ? chivalry : p.group === "Regular" ? grace : 0;
       const lifeCarriers = statCarriers + (p.group === "Headless" ? fortitude : 0);
@@ -1016,14 +1021,12 @@ export class BattleSim {
       for (const e of this.enemies) {
         if (!e.alive || e.state === "queued" || e.state === "structure" || e.state === "descending") continue;
         if (e.isBoss && !ab.hitBoss && (key === "explode" || key === "explodeV2")) continue;
-        this.dealDamage(e, hit.amount, true, hit.critLayers);
+        this.dealPlayerDamage(p, e, hit.amount, hit.critLayers);
         if (ab.stunMs) e.stunMs = Math.max(e.stunMs, ab.stunMs);
-        this.playerDamage += hit.amount;
       }
     } else {
-      this.dealDamage(foe, hit.amount, true, hit.critLayers);
+      this.dealPlayerDamage(p, foe, hit.amount, hit.critLayers);
       if (ab.stunMs) foe.stunMs = Math.max(foe.stunMs, ab.stunMs);
-      this.playerDamage += hit.amount;
     }
     p.struckThisTick = true;
     this.attacksLanded++;
@@ -1194,6 +1197,13 @@ export class BattleSim {
     return roll;
   }
 
+  /** Same replay-safe proc stream, widened for very rare modded rolls. */
+  private abilityRoll1000(u: SimUnit): number {
+    const roll = (stringSeed(u.id) + u.abilityRollSeq * 397) % 1000;
+    u.abilityRollSeq++;
+    return roll;
+  }
+
   /** Replay-safe 0..1 roll for player physical crits. Kept separate from abilityRoll
    *  so crits do not change the proc cadence for Block/Stun/Double Strike. */
   private critRoll01(u: SimUnit): number {
@@ -1230,12 +1240,11 @@ export class BattleSim {
     const foe = this.targetEnemy(u);
     if (foe) {
       const dmg = Math.max(1, Math.round(u.power * 0.10));
-      this.dealDamage(foe, dmg, true);
+      this.dealPlayerDamage(u, foe, dmg);
       u.laserTargetId = foe.id;
       u.laserFxSeq++;
       u.struckThisTick = true;
       this.attacksLanded++;
-      this.playerDamage += dmg;
     }
     u.laserTimerMs += interval;
   }
@@ -1264,25 +1273,47 @@ export class BattleSim {
     // Player normal swings take the lineup-depth band (front five full, then 0.85/0.7/0.55);
     // enemies always hit at band 1.0. See combatStats.lineupDamageBand (ground truth).
     if (u.team === "enemy") {
-      this.dealEnemyDamage(foe, u.damage);
+      this.dealEnemyDamage(foe, u.damage, u);
     } else {
-      const hit = this.playerPhysicalDamageResult(u, u.damage * lineupDamageBand(u.lineupIndex));
-      this.dealDamage(foe, hit.amount, true, hit.critLayers);
-      this.playerDamage += hit.amount;
+      const band = lineupDamageBand(u.lineupIndex);
+      const hit = this.playerPhysicalDamageResult(u, u.damage * band);
+      this.dealPlayerDamage(u, foe, hit.amount, hit.critLayers);
 
       // Girl `damageIn:` uses integer rolls >.70 and >.95. Double Strike adds
       // the authored 0.25Ã— Power strike; Random Stun holds the target for 1s.
       if (u.abilities.includes("doubleStrike") && this.abilityRoll(u) > 70 && foe.alive) {
         const bonus = this.playerPhysicalDamageResult(
           u,
-          u.power * 0.25 * lineupDamageBand(u.lineupIndex)
+          u.power * 0.25 * band
         );
-        this.dealDamage(foe, bonus.amount, true, bonus.critLayers);
-        this.playerDamage += bonus.amount;
+        this.dealPlayerDamage(u, foe, bonus.amount, bonus.critLayers);
+        this.attacksLanded++;
+      }
+      if (u.abilities.includes("triple") && this.abilityRoll(u) > 66 && foe.alive) {
+        for (let i = 0; i < 2 && foe.alive; i++) {
+          const bonus = this.playerPhysicalDamageResult(u, u.damage * band);
+          this.dealPlayerDamage(u, foe, bonus.amount, bonus.critLayers);
+          this.attacksLanded++;
+        }
+      }
+      if (u.abilities.includes("quad") && this.abilityRoll(u) > 74 && foe.alive) {
+        for (let i = 0; i < 3 && foe.alive; i++) {
+          const bonus = this.playerPhysicalDamageResult(u, u.damage * band);
+          this.dealPlayerDamage(u, foe, bonus.amount, bonus.critLayers);
+          this.attacksLanded++;
+        }
+      }
+      if (u.abilities.includes("deathPunch") && this.abilityRoll1000(u) === 0 && foe.alive) {
+        const death = this.playerPhysicalDamageResult(u, u.damage * band * 1000);
+        this.dealPlayerDamage(u, foe, death.amount, death.critLayers);
         this.attacksLanded++;
       }
       if (u.abilities.includes("stun") && this.abilityRoll(u) > 95 && foe.alive) {
         foe.stunMs = Math.max(foe.stunMs, 1000);
+      }
+      if (u.abilities.includes("freeze") && this.abilityRoll(u) > 89 && foe.alive) {
+        foe.stunMs = Math.max(foe.stunMs, 3000);
+        foe.freezeMs = Math.max(foe.freezeMs, 3000);
       }
     }
     u.struckThisTick = true;
@@ -1307,10 +1338,12 @@ export class BattleSim {
     p.timerMs = this.cycleMs(p, null);
   }
 
-  private dealDamage(foe: SimUnit, dmg: number, fromPlayer: boolean, critLayers = 0) {
+  private dealDamage(foe: SimUnit, dmg: number, fromPlayer: boolean, critLayers = 0): number {
+    if (!foe.alive || dmg <= 0) return 0;
+    const applied = Math.min(foe.hp, dmg);
     this.recordDamageEvent(foe, dmg, fromPlayer, critLayers);
     foe.hp -= dmg;
-    if (foe.hp > 0) return;
+    if (foe.hp > 0) return applied;
     foe.hp = 0;
     foe.alive = false;
     foe.state = "dead";
@@ -1320,9 +1353,22 @@ export class BattleSim {
       if (carrier) carrier.buddyId = null;
       foe.buddyCarrierId = null;
     }
-    if (foe.team === "player" && this.tryResurrect(foe)) return;
+    if (foe.team === "player" && this.tryResurrect(foe)) return applied;
     // A downed enemy opens the gate for the next to emerge after a beat.
     if (fromPlayer && foe.team === "enemy") this.emergeCooldown = ENEMY_EMERGE_GAP_MS;
+    return applied;
+  }
+
+  private dealPlayerDamage(attacker: SimUnit, foe: SimUnit, dmg: number, critLayers = 0): number {
+    const applied = this.dealDamage(foe, dmg, true, critLayers);
+    if (applied > 0) {
+      this.playerDamage += applied;
+      if (attacker.abilities.includes("lifeSteal")) {
+        const healed = this.healUnit(attacker, Math.floor(applied * 0.02));
+        if (healed > 0) attacker.healFxSeq++;
+      }
+    }
+    return applied;
   }
 
   /** Resurrect is automatic and one-use. A living Garden holder revives the
@@ -1347,13 +1393,14 @@ export class BattleSim {
     defeated.windupKey = null;
     defeated.windupMs = 0;
     defeated.stunMs = 0;
+    defeated.freezeMs = 0;
     defeated.oneShotProtectionUsed = false;
     defeated.healFxSeq++;
     return true;
   }
 
   /** Apply an ordinary enemy hit through the recovered player-zombie one-shot floor. */
-  private dealEnemyDamage(foe: SimUnit, dmg: number) {
+  private dealEnemyDamage(foe: SimUnit, dmg: number, attacker?: SimUnit) {
     if (dmg > 0 && foe.abilities.includes("block") && this.abilityRoll(foe) > 90) return;
     const applied = applyDamage(dmg, 0, foe.team === "player" ? foe.damageReduction ?? 0 : 0);
     if (
@@ -1364,12 +1411,26 @@ export class BattleSim {
       foe.hp > 1 &&
       (foe.hp - applied) / foe.maxHp < ONE_SHOT_FLOOR
     ) {
-      this.recordDamageEvent(foe, foe.hp - 1, false, 0);
+      const actual = foe.hp - 1;
+      this.recordDamageEvent(foe, actual, false, 0);
       foe.hp = 1;
       foe.oneShotProtectionUsed = true;
+      this.reflectTakenDamage(foe, attacker, actual);
       return;
     }
-    this.dealDamage(foe, applied, false);
+    const actual = this.dealDamage(foe, applied, false);
+    this.reflectTakenDamage(foe, attacker, actual);
+  }
+
+  private reflectTakenDamage(defender: SimUnit, attacker: SimUnit | undefined, taken: number) {
+    if (
+      !attacker || taken <= 0 ||
+      defender.team !== "player" || attacker.team !== "enemy" ||
+      !defender.abilities.includes("spike")
+    ) return;
+    const reflected = Math.max(1, Math.round(taken * 0.5));
+    const applied = this.dealDamage(attacker, reflected, true);
+    this.playerDamage += applied;
   }
 
   private recordDamageEvent(foe: SimUnit, dmg: number, fromPlayer: boolean, critLayers: number) {
@@ -1381,10 +1442,10 @@ export class BattleSim {
     this.damageEvents.push({ targetId: foe.id, amount, fromPlayer, critLayers });
   }
 
-  private healUnit(target: SimUnit, amount: number) {
-    if (!target.alive || amount <= 0) return;
+  private healUnit(target: SimUnit, amount: number): number {
+    if (!target.alive || amount <= 0) return 0;
     const healed = Math.min(target.maxHp - target.hp, amount);
-    if (healed <= 0) return;
+    if (healed <= 0) return 0;
     target.hp += healed;
     this.damageEvents.push({
       targetId: target.id,
@@ -1393,6 +1454,7 @@ export class BattleSim {
       critLayers: 0,
       heal: true,
     });
+    return healed;
   }
 
   /** Advance the charging zombie's focus bar, running the bubble minigame unless
@@ -1636,6 +1698,7 @@ export class BattleSim {
           // Stunned by an enemy hit â€” can't move or attack until it wears off.
           if (p.stunMs > 0) {
             p.stunMs -= dtMs;
+            p.freezeMs = Math.max(0, p.freezeMs - dtMs);
             p.timerMs = this.cycleMs(p, null);
             break;
           }
@@ -1761,6 +1824,7 @@ export class BattleSim {
       // Stunned (by an Explode) â€” can't act; hold its attack clock.
       if (e.stunMs > 0) {
         e.stunMs -= dtMs;
+        e.freezeMs = Math.max(0, e.freezeMs - dtMs);
         e.timerMs = this.cycleMs(e, null);
         continue;
       }
@@ -2123,6 +2187,7 @@ export class BattleSim {
           victim.windupKey = null;
           victim.windupMs = 0;
           victim.stunMs = 0;
+          victim.freezeMs = 0;
         }
       } else if (g.state === "carry") {
         const z = g.grabbedId ? this.players.find((p) => p.id === g.grabbedId) : null;
@@ -2197,6 +2262,7 @@ export class BattleSim {
           victim.windupKey = null;
           victim.windupMs = 0;
           victim.stunMs = 0;
+          victim.freezeMs = 0;
         }
       } else if (c.state === "hold" || c.state === "carry") {
         const z = c.grabbedId ? this.players.find((p) => p.id === c.grabbedId) : null;
@@ -2264,6 +2330,7 @@ export class BattleSim {
         z.y = CENTER_Y;
         z.timerMs = this.cycleMs(z, null);
         z.stunMs = 0;
+        z.freezeMs = 0;
         z.formOrder = this.releaseSeq++;
         z.frontPriority = false;
       }
@@ -2309,6 +2376,7 @@ export class BattleSim {
       zombie.windupKey = null;
       zombie.windupMs = 0;
       zombie.stunMs = 0;
+      zombie.freezeMs = 0;
     }
   }
 
@@ -2365,6 +2433,7 @@ export class BattleSim {
         z.y = CENTER_Y;
         z.timerMs = this.cycleMs(z, null);
         z.stunMs = 0;
+        z.freezeMs = 0;
         z.formOrder = this.releaseSeq++; // re-enters at the back of the formation
         z.frontPriority = false;
       }

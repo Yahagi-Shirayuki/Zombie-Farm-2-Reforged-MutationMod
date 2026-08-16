@@ -343,5 +343,38 @@
   "ay": 0.4,
   "z": 8,
   "replaces": "armF"
+ },
+ "luckybox_head_silver": {
+  "file": "luckybox_zombie/luckybox_head_silver.png",
+  "group": "head",
+  "headRel": false,
+  "ox": 7,
+  "oy": 36,
+  "ax": 0.72,
+  "ay": 0.82,
+  "z": 4,
+  "replaces": "head"
+ },
+ "luckybox_head_gold": {
+  "file": "luckybox_zombie/luckybox_head_gold.png",
+  "group": "head",
+  "headRel": false,
+  "ox": 7,
+  "oy": 36,
+  "ax": 0.72,
+  "ay": 0.82,
+  "z": 4,
+  "replaces": "head"
+ },
+ "luckybox_head_plat": {
+  "file": "luckybox_zombie/luckybox_head_plat.png",
+  "group": "head",
+  "headRel": false,
+  "ox": 7,
+  "oy": 36,
+  "ax": 0.72,
+  "ay": 0.82,
+  "z": 4,
+  "replaces": "head"
  }
 }

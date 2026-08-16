@@ -129,6 +129,7 @@ export class EnemyActor {
   private bodies: {
     sp: Sprite; baseX: number; baseY: number; baseRot: number; baseScaleX: number; baseScaleY: number;
   }[] = [];
+  private sprites: Sprite[] = [];
   private wings: { sp: Sprite; baseRot: number; back: boolean }[] = [];
   private wheels: { sp: Sprite; baseRot: number }[] = [];
   private hasLegs = false;
@@ -164,6 +165,7 @@ export class EnemyActor {
         frame: new Rectangle(p.rx, p.ry, p.rw, p.rh),
       });
       const sp = new Sprite(tex);
+      this.sprites.push(sp);
       sp.anchor.set(p.ax, p.ay);
       sp.position.set(p.px, p.py);
       sp.rotation = p.rot;
@@ -205,6 +207,10 @@ export class EnemyActor {
   setFacingFromDelta(dx: number) {
     if (dx > 0.01) this.facing = -1;
     else if (dx < -0.01) this.facing = 1;
+  }
+
+  setTint(tint: number) {
+    for (const sp of this.sprites) sp.tint = tint;
   }
 
   /**

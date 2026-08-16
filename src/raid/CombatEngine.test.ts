@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolveRaid, buildEnemyUnits, buildPlayerUnits } from "./CombatEngine";
+import { activeAbilities, naturalLeaderAllStatsMult } from "../zombie/abilities";
 import type { CombatUnit } from "./types";
 import type { OwnedZombie } from "../zombie/types";
 import shippedStats from "../../public/assets/raids/enemy_stats.json";
@@ -334,6 +335,84 @@ describe("buildPlayerUnits — binary-authentic zombie abilities", () => {
     expect(fast.dex).toBeCloseTo(normal.dex);
     expect(fast.attackCooldownMs).toBeCloseTo(normal.attackCooldownMs);
     expect(fast.walkingSpeedMult).toBe(2);
+  });
+});
+
+describe("modded zombie abilities", () => {
+  const owned = (over: Partial<OwnedZombie> = {}): OwnedZombie => ({
+    id: "modded",
+    key: "ZombieActorRegularSpecial",
+    name: "Modded",
+    typeName: "Modded",
+    group: "Regular",
+    className: "Special",
+    classColor: "#000",
+    mutation: 0,
+    str: 10,
+    dex: 2,
+    con: 20,
+    focus: 50,
+    invasions: 0,
+    col: 0,
+    row: 0,
+    ...over,
+  });
+
+  it("Natural Leader grants +15% all stats to the whole army per holder", () => {
+    expect(naturalLeaderAllStatsMult([["naturalLeader"], []])).toBeCloseTo(1.15);
+    expect(naturalLeaderAllStatsMult([["naturalLeader"], ["naturalLeader"]])).toBeCloseTo(1.30);
+  });
+
+  it("tier-0 explicit abilities are active without a raid unlock", () => {
+    expect(activeAbilities(
+      owned({ abilityKeys: ["freeze", "notARealAbility"] }),
+      () => false
+    )).toEqual(["freeze"]);
+  });
+
+  it("Gym rat boosts self Power and Life", () => {
+    const base = buildPlayerUnits([owned()], { abilityUnlocked: () => false })[0];
+    const gym = buildPlayerUnits([owned({ abilityKeys: ["gymRat"] })], { abilityUnlocked: () => false })[0];
+    expect(gym.str).toBeCloseTo(base.str * 1.2);
+    expect(gym.maxHp).toBe(Math.round(base.maxHp * 1.2));
+  });
+
+  it("Castle body reduces self damage by 50%", () => {
+    const [castle] = buildPlayerUnits(
+      [owned({ abilityKeys: ["castle"] })],
+      { abilityUnlocked: () => false }
+    );
+    expect(castle.damageReduction).toBeCloseTo(0.5);
+  });
+
+  it("Improvise rolls a battle-only ability without changing the farm ability key", () => {
+    const impro: OwnedZombie = {
+      id: "impro",
+      key: "ZombieActorRegularSpecial",
+      name: "Impro",
+      typeName: "Impro",
+      group: "Regular",
+      className: "Special",
+      classColor: "#000",
+      mutation: 0,
+      abilityKeys: ["improvise"],
+      str: 10,
+      dex: 2,
+      con: 20,
+      focus: 50,
+      invasions: 0,
+      col: 0,
+      row: 0,
+    };
+    const unlocked = (key: string) => key === "improvise" || key === "heal" || key === "healAOE" || key === "attachMini";
+
+    const [built] = buildPlayerUnits([impro], {
+      abilityUnlocked: unlocked,
+      abilityRandom: () => 0,
+    });
+
+    expect(impro.abilityKeys).toEqual(["improvise"]);
+    expect(built.abilities).toEqual(["freeze"]);
   });
 });
 

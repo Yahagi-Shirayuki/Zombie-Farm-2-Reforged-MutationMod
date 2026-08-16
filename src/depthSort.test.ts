@@ -30,6 +30,27 @@ describe("sortLayer ordering", () => {
     sortLayer(layer);
     expect(a.zIndex).toBeGreaterThan(b.zIndex);
   });
+
+  it("orders fenced plots as rear fence, plot content, near fence", () => {
+    const PLOT = 4;
+    const layer = new Container();
+    const currentBack = make(layer, PLOT, PLOT, PLOT * 2 - 1, PLOT * 2 - 1, -0.12);
+    const currentCrop = make(layer, PLOT, PLOT, PLOT * 2 - 1, PLOT * 2 - 1);
+    const currentFront = make(layer, PLOT, PLOT, PLOT * 2 - 1, PLOT * 2 - 1, 0.12);
+    const nwFront = make(layer, 0, PLOT, PLOT - 1, PLOT * 2 - 1, 0.12);
+    const neFront = make(layer, PLOT, 0, PLOT * 2 - 1, PLOT - 1, 0.12);
+    const swBack = make(layer, PLOT, PLOT * 2, PLOT * 2 - 1, PLOT * 3 - 1, -0.12);
+    const seBack = make(layer, PLOT * 2, PLOT, PLOT * 3 - 1, PLOT * 2 - 1, -0.12);
+
+    sortLayer(layer);
+
+    expect(currentBack.zIndex).toBeLessThan(currentCrop.zIndex);
+    expect(currentCrop.zIndex).toBeLessThan(currentFront.zIndex);
+    expect(nwFront.zIndex).toBeLessThan(currentBack.zIndex);
+    expect(neFront.zIndex).toBeLessThan(currentBack.zIndex);
+    expect(currentFront.zIndex).toBeLessThan(swBack.zIndex);
+    expect(currentFront.zIndex).toBeLessThan(seBack.zIndex);
+  });
 });
 
 describe("sortLayer no-op frames", () => {

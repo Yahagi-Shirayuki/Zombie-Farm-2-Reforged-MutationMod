@@ -1980,5 +1980,203 @@
   "mutation": 512,
   "tier": 4,
   "marketHidden": false
+ },
+ {
+  "key": "ZombieActorLuckyboxSilver",
+  "name": "Silver Box Zombie",
+  "portraitKey": "ZombieActorRegularTier1",
+  "modelJson": "Luckybox_silver_zombie.json",
+  "cost": 5000,
+  "growMs": 3600000,
+  "category": "special",
+  "level": 16,
+  "xp": 1,
+  "brainsNeeded": false,
+  "group": "Regular",
+  "className": "Special",
+  "classColor": "#c077ff",
+  "str": 2.332,
+  "dex": 0.44,
+  "con": 2.97,
+  "focus": 10,
+  "mutation": 0,
+  "tier": 5,
+  "marketHidden": false,
+  "mutationProfile": "headless",
+  "abilityKeys": [
+   "randomAbility",
+   "randomAbility",
+   "randomAbility",
+   "randomAbility"
+  ],
+  "randomizeOnCreate": {
+   "bodyColor": true,
+   "abilitySlots": 4,
+   "abilityTiers": [
+    1,
+    2
+   ],
+   "visualGroups": [
+    "Regular",
+    "Female",
+    "Small",
+    "Large"
+   ],
+   "visualScale": {
+    "min": 0.2,
+    "max": 2.0
+   },
+   "displayStats": {
+    "str": {
+     "min": 10,
+     "max": 50
+    },
+    "dex": {
+     "min": 10,
+     "max": 50
+    },
+    "con": {
+     "min": 10,
+     "max": 50
+    },
+    "focus": {
+     "min": 10,
+     "max": 50
+    }
+   }
+  }
+ },
+ {
+  "key": "ZombieActorLuckyboxGold",
+  "name": "Gold Box Zombie",
+  "portraitKey": "ZombieActorRegularTier1",
+  "modelJson": "Luckybox_gold_zombie.json",
+  "cost": 10000,
+  "growMs": 43200000,
+  "category": "special",
+  "level": 21,
+  "xp": 1,
+  "brainsNeeded": false,
+  "group": "Regular",
+  "className": "Special",
+  "classColor": "#c077ff",
+  "str": 6.996,
+  "dex": 1.32,
+  "con": 8.91,
+  "focus": 30,
+  "mutation": 0,
+  "tier": 5,
+  "marketHidden": false,
+  "mutationProfile": "headless",
+  "abilityKeys": [
+   "randomAbility",
+   "randomAbility",
+   "randomAbility",
+   "randomAbility"
+  ],
+  "randomizeOnCreate": {
+   "bodyColor": true,
+   "abilitySlots": 4,
+   "abilityTiers": [
+    1,
+    2,
+    3
+   ],
+   "visualGroups": [
+    "Regular",
+    "Female",
+    "Small",
+    "Large"
+   ],
+   "visualScale": {
+    "min": 0.2,
+    "max": 2.0
+   },
+   "displayStats": {
+    "str": {
+     "min": 30,
+     "max": 150
+    },
+    "dex": {
+     "min": 30,
+     "max": 150
+    },
+    "con": {
+     "min": 30,
+     "max": 150
+    },
+    "focus": {
+     "min": 30,
+     "max": 150
+    }
+   }
+  }
+ },
+ {
+  "key": "ZombieActorLuckybox",
+  "name": "Platinum Box Zombie",
+  "portraitKey": "ZombieActorRegularTier1",
+  "modelJson": "Luckybox_zombie.json",
+  "cost": 5,
+  "growMs": 86400000,
+  "category": "special",
+  "level": 26,
+  "xp": 1,
+  "brainsNeeded": true,
+  "group": "Regular",
+  "className": "Special",
+  "classColor": "#c077ff",
+  "str": 11.66,
+  "dex": 2.2,
+  "con": 14.85,
+  "focus": 50,
+  "mutation": 0,
+  "tier": 5,
+  "marketHidden": false,
+  "mutationProfile": "headless",
+  "abilityKeys": [
+   "randomAbility",
+   "randomAbility",
+   "randomAbility",
+   "randomAbility"
+  ],
+  "randomizeOnCreate": {
+   "bodyColor": true,
+   "abilitySlots": 4,
+   "abilityTiers": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "visualGroups": [
+    "Regular",
+    "Female",
+    "Small",
+    "Large"
+   ],
+   "visualScale": {
+    "min": 0.2,
+    "max": 2.0
+   },
+   "displayStats": {
+    "str": {
+     "min": 50,
+     "max": 200
+    },
+    "dex": {
+     "min": 50,
+     "max": 200
+    },
+    "con": {
+     "min": 50,
+     "max": 200
+    },
+    "focus": {
+     "min": 50,
+     "max": 200
+    }
+   }
+  }
  }
 ]

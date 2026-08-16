@@ -33,6 +33,7 @@ import {
   zombiePartTint,
 } from "./appearance";
 import { SpecialHeadFx, specialHeadFxKind } from "./specialHeadFx";
+import { zombiePartTextureForFacing } from "./facingPartTexture";
 import { zombieFarmScale } from "./displayScale";
 
 // Head replacements draw over the base skull but under facial parts, so eyes stay
@@ -93,6 +94,9 @@ export class ZombieUnit {
   private footBBaseY = 0;
   private arms: { sp: Sprite; baseRotation: number }[] = [];
   private armReplaceable: Pick<Record<MutationReplacement, Sprite[]>, "armF" | "armB"> = { armF: [], armB: [] };
+  private facingPartSprites: { sp: Sprite; file: string }[] = [];
+  private facingPartAssets: GameAssets | null = null;
+  private facingPartMirrored: boolean | null = null;
   private mutationArmSprites: { ref: MutationRef; sp: Sprite }[] = [];
   private mutationArmAssets: GameAssets | null = null;
   private mutationArmModel: ZombieModel | null = null;
@@ -209,7 +213,8 @@ export class ZombieUnit {
     const shownMutationIds = displayedMutationIds(this.data.mutationIds);
     const [r, g, b] = shown.color ?? m.color;
     const tint = (r << 16) | (g << 8) | b; // authentic Market colour
-    const scale = zombieFarmScale(this.data.group, this.data.className, this.data.key);
+    const scale = zombieFarmScale(this.data.visualGroup ?? this.data.group, this.data.className, this.data.key)
+      * (this.data.visualScale ?? 1);
     this.renderScale = scale;
     // Both feet are resolved from the model below, or stubbed at the end for a rig
     // that has none (Headless). Cleared first so a rebuild cannot hold on to the
@@ -219,6 +224,9 @@ export class ZombieUnit {
     this.neck = { x: m.neck.x, y: m.neck.y };
     const replaceable: Record<MutationReplacement, Sprite[]> = { body: [], armF: [], armB: [], head: [] };
     this.armReplaceable = { armF: replaceable.armF, armB: replaceable.armB };
+    this.facingPartSprites = [];
+    this.facingPartAssets = assets;
+    this.facingPartMirrored = this.facing < 0;
     this.mutationArmSprites = [];
     this.mutationArmAssets = assets;
     this.mutationArmModel = m;
@@ -226,7 +234,7 @@ export class ZombieUnit {
     const headForeground: Sprite[] = [];
 
     for (const p of m.parts) {
-      const tex = assets.zombiePartTex[p.file];
+      const tex = zombiePartTextureForFacing(assets, p, this.facing < 0);
       if (!tex) continue;
       const sp = new Sprite(tex);
       sp.anchor.set(p.ax, p.ay);
@@ -236,6 +244,7 @@ export class ZombieUnit {
       if (p.tint) sp.tint = zombiePartTint(p.file, tint, this.data.group);
       this.parts.push(sp);
       this.root.addChild(sp);
+      this.facingPartSprites.push({ sp, file: p.file });
       if (matchesMutationReplacement(p.file, "body")) replaceable.body.push(sp);
       if (matchesMutationReplacement(p.file, "armF")) replaceable.armF.push(sp);
       if (matchesMutationReplacement(p.file, "armB")) replaceable.armB.push(sp);
@@ -304,6 +313,9 @@ export class ZombieUnit {
     this.eyeParts = [];
     this.arms = [];
     this.armReplaceable = { armF: [], armB: [] };
+    this.facingPartSprites = [];
+    this.facingPartAssets = null;
+    this.facingPartMirrored = null;
     this.mutationArmSprites = [];
     this.mutationArmAssets = null;
     this.mutationArmModel = null;
@@ -419,6 +431,17 @@ export class ZombieUnit {
       for (const basePart of this.armReplaceable[replacement]) basePart.visible = false;
     }
     this.mutationArmSwap = swap;
+  }
+
+  private syncBasePartFacing() {
+    const assets = this.facingPartAssets;
+    const mirrored = this.facing < 0;
+    if (!assets || this.facingPartMirrored === mirrored) return;
+    for (const entry of this.facingPartSprites) {
+      const texture = zombiePartTextureForFacing(assets, entry, mirrored);
+      if (texture) entry.sp.texture = texture;
+    }
+    this.facingPartMirrored = mirrored;
   }
 
   setSelected(on: boolean) {
@@ -629,6 +652,7 @@ export class ZombieUnit {
       }
     }
     this.setEyesClosed(this.sleeping && this.path.length === 0);
+    this.syncBasePartFacing();
     this.syncMutationArmFacing();
     this.tilt(dt, walking);
     this.legs(walking, dt);

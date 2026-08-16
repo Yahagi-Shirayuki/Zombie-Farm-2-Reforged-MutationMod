@@ -14,6 +14,7 @@ import { RosterEntry } from "./zombie/types";
 import {
   bitAllowed, MUTATION_LIST, mutationLabel, mutationBonus,
 } from "./zombie/mutations";
+import { hasLuckyboxPalette, LUCKYBOX_PALETTE_STEP_MS, luckyboxPaletteColor } from "./zombie/appearance";
 import { maskHas } from "./zombie/mutationMask";
 import { QuestView } from "./quest/types";
 import type { RaidCardView, RaidPartyView, RaidResultView, RaidLaunchOpts, LootDrop } from "./raid/RaidManager";
@@ -163,6 +164,38 @@ function tintMarketPortrait(img: HTMLImageElement, color?: [number, number, numb
   };
   if (img.complete) apply();
   else img.addEventListener("load", apply, { once: true });
+}
+
+function setZombieMarketPortrait(
+  img: HTMLImageElement,
+  render: (key: string, mutation: number, color?: [number, number, number], mutationIds?: readonly string[]) => Promise<string>,
+  key: string,
+  mutation: number,
+  color?: [number, number, number],
+  mutationIds?: readonly string[],
+) {
+  if (!hasLuckyboxPalette(key)) {
+    void render(key, mutation, color, mutationIds)
+      .then((source) => { if (img.isConnected) img.src = source; })
+      .catch(() => { /* retain the static species portrait */ });
+    return;
+  }
+
+  let elapsedMs = 0;
+  let generation = 0;
+  const step = () => {
+    if (!img.isConnected) return;
+    const myGeneration = ++generation;
+    const previewColor = luckyboxPaletteColor(elapsedMs);
+    elapsedMs += LUCKYBOX_PALETTE_STEP_MS;
+    void render(key, mutation, previewColor, mutationIds)
+      .then((source) => {
+        if (img.isConnected && myGeneration === generation) img.src = source;
+      })
+      .catch(() => { /* retain whichever frame is currently visible */ });
+    window.setTimeout(step, LUCKYBOX_PALETTE_STEP_MS);
+  };
+  step();
 }
 
 /** Player-facing "what does it do" blurb for a functional Market item, shown when the
@@ -2376,9 +2409,10 @@ export class Hud {
     tintMarketPortrait(img, en.tint);
     if (en.zombieKey && this.zombieMutationPortraitOf) {
       onFirstVisible(img, () => {
-        void this.zombieMutationPortraitOf?.(en.zombieKey!, en.mutation ?? 0, en.color, en.mutationIds)
-          .then((mutated) => { if (img.isConnected) img.src = mutated; })
-          .catch(() => { /* retain the static species portrait */ });
+        const render = this.zombieMutationPortraitOf;
+        if (render) setZombieMarketPortrait(
+          img, render, en.zombieKey!, en.mutation ?? 0, en.color, en.mutationIds
+        );
       });
     }
     body.appendChild(img);
@@ -2775,6 +2809,14 @@ export class Hud {
     const pimg = document.createElement("img");
     pimg.src = c.portrait;
     port.appendChild(pimg);
+    if (c.cfg.isZombie && c.zombie && this.zombieMutationPortraitOf) {
+      const { mutation, mutationIds } = c.zombie;
+      const zombieKey = c.cfg.key;
+      onFirstVisible(pimg, () => {
+        const render = this.zombieMutationPortraitOf;
+        if (render) setZombieMarketPortrait(pimg, render, zombieKey, mutation, undefined, mutationIds);
+      });
+    }
 
     const right = document.createElement("div");
     right.className = "pm-right";
@@ -3709,6 +3751,7 @@ export class Hud {
       dex: zombie.dex + bonus.dex,
       con: (zombie.con + bonus.con) * this.state.farmerZombieLifeMult(),
       focus: zombie.focus, mutation: mask, invasions: order.invasions ?? 0,
+      abilityKeys: zombie.abilityKeys,
       portrait: card.portrait,
     };
     const { panel, close } = openModal({

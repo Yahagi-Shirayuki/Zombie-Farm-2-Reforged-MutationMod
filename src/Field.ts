@@ -89,8 +89,8 @@ const FENCE_BACK_OFFSET_X = 0;
 const FENCE_BACK_OFFSET_Y = -39;
 const FENCE_FRONT_OFFSET_X = 0;
 const FENCE_FRONT_OFFSET_Y = 12;
-const FENCE_BACK_SORT_BIAS = 0.12;
-const FENCE_FRONT_SORT_BIAS = 0.18;
+const FENCE_BACK_SORT_BIAS = -0.12;
+const FENCE_FRONT_SORT_BIAS = 0.12;
 
 export interface CropConfig {
   key: string;
@@ -274,11 +274,11 @@ export class Field {
   // crop entity layer. This is what stops a plot's dirt from clipping the tall
   // crop/zombie on the plot behind it. See layoutCrop and cropTop.ts.
   readonly cropGroundLayer = new Container();
-  // Grown crop tops live between plot dirt/back-fence and front-fence/characters.
+  // Grown crop tops and plot fences share one depth-sorted layer: for one plot
+  // the order is rear fence -> crop/state top -> near fence, while adjacent plots
+  // still sort by their isometric footprints.
   readonly cropEntityLayer = new Container();
-  // main.ts parents this above cropEntityLayer and below entityLayer. Back/front
-  // fence pieces share the layer so neighbouring plots sort against each other.
-  readonly fenceLayer = new Container();
+  readonly fenceLayer = this.cropEntityLayer;
   readonly groundObjectLayer = new Container();
   readonly highlightLayer = new Container();
   readonly labelLayer = new Container();
@@ -339,7 +339,6 @@ export class Field {
     this.cursor.addChild(this.objGhost);
     this.cropGroundLayer.sortableChildren = true;
     this.cropEntityLayer.sortableChildren = true;
-    this.fenceLayer.sortableChildren = true;
     // NOTE: highlightLayer is intentionally NOT parented here. It must draw ABOVE
     // the entity layer so the green job diamond is not occluded by a ripe crop's
     // tall sprite (which graduates into entityLayer) — otherwise the top of the
@@ -1212,10 +1211,9 @@ export class Field {
       this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, true, o.flipped, o);
     }
     // Runs LAST in the frame (after the farmer + zombies have moved), so the
-    // footprint depth-sort sees final positions. Grown crops sort in their own layer:
-    // below near fences and characters, above dirt and far fences.
+    // footprint depth-sort sees final positions. Crop tops and plot fences share
+    // one sort so rear fence/crop/near fence can interleave per plot and neighbor.
     sortLayer(this.cropEntityLayer);
-    sortLayer(this.fenceLayer);
     sortLayer(this.entityLayer);
     sortLayer(this.groundObjectLayer);
     // Mirror the depth order the entity sort just resolved onto the ground soil

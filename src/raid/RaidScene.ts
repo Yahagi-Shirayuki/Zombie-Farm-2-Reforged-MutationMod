@@ -300,6 +300,7 @@ const BUBBLE_BUTTERFLY = BASE + "assets/ui/thoughtBubbleButterfly.png";
 const BUBBLE_BRAIN = BASE + "assets/ui/thoughtBubbleBrains.png";
 const BUBBLE_HMM = BASE + "assets/ui/thoughtBubbleHmm.png";
 const DROP_BRAIN = BASE + "assets/ui/topbar_brain_icon.png";
+const FREEZE_TINT = 0x83f2fc;
 const BUBBLE_SCALE = 0.91; // the source art is 64x62 (1.3 enlarged, then scaled ~30% down)
 const BUBBLE_DX = 74; // shift the (mirrored) bubble right of the charging zombie (~one bubble width: 16 + 64*0.91)
 
@@ -317,6 +318,7 @@ interface Token {
   }; // authentic pre-rendered Video Games frames
   epicActor?: AnimatedSprite;
   epicAnim?: string;
+  tintSprites: Sprite[];
   hp: Graphics;
   charge: Graphics; // focus bar (zombies, while charging)
   base: number; // half-width for the bars
@@ -910,6 +912,7 @@ export class RaidScene {
     let frameActor: Token["frameActor"];
     let epicActor: AnimatedSprite | undefined;
     let epicAnim: string | undefined;
+    const tintSprites: Sprite[] = [];
     let base = 22;
     let hpCenterX = 0;
     let topY = -60;
@@ -917,18 +920,19 @@ export class RaidScene {
     let actorBaseY = 0;
 
     if (u.team === "player") {
+      const visualGroup = u.visualGroup ?? u.group;
       // Real farm-style zombie rig (with the walk animation). Most families use
       // their authored raid height; Headless retains its actual farm silhouette.
-      actor = new RaidActor(this.assets, u.sourceKey, u.mutation, u.group, u.color, u.mutationIds);
+      actor = new RaidActor(this.assets, u.sourceKey, u.mutation, visualGroup, u.color, u.mutationIds);
       const b = actor.getSizingBounds();
       const heightScale = zombieRaidHeightScale(
-        u.group ?? (u.isHeadless ? "Headless" : u.isGarden ? "Garden" : "Regular"),
+        visualGroup ?? (u.isHeadless ? "Headless" : u.isGarden ? "Garden" : "Regular"),
         u.className ?? "Green",
         u.sourceKey,
         actor.getNativeSizingHeight(),
         this.getRegularZombieNativeHeight(),
       );
-      const targetHeight = ZOMBIE_H * heightScale;
+      const targetHeight = ZOMBIE_H * heightScale * (u.visualScale ?? 1);
       const s = targetHeight / Math.max(1, b.height);
       actor.container.scale.set(s);
       actor.container.y = -(b.y + b.height) * s; // stand its feet at the origin
@@ -953,6 +957,7 @@ export class RaidScene {
         sp.loop = initialEpicAnim === "fly";
         sp.play();
         root.addChild(sp);
+        tintSprites.push(sp);
         base = Math.max(16, epicFrames[0].width * sp.scale.x / 2);
         topY = -targetH;
         epicActor = sp;
@@ -967,6 +972,7 @@ export class RaidScene {
         const s = targetH / Math.max(1, frames.idle[0].height);
         sp.scale.set(s);
         root.addChild(sp);
+        tintSprites.push(sp);
         base = Math.max(16, frames.idle[0].width * s / 2);
         topY = -targetH;
         frameActor = { sprite: sp, idle: frames.idle, attack: frames.attack, time: 0 };
@@ -996,6 +1002,7 @@ export class RaidScene {
         const s = targetH / Math.max(1, tex.height);
         sp.scale.set(s); // composites already face LEFT toward the zombies â€” no mirror
         root.addChild(sp);
+        tintSprites.push(sp);
         base = Math.max(16, (tex.width * s) / 2);
         topY = -targetH;
       } else {
@@ -1010,6 +1017,7 @@ export class RaidScene {
           body.scale.set((R * 2 * 1.06) / Math.max(t.width, t.height, 1));
           const mask = new Graphics().circle(0, 0, R).fill(0xffffff);
           root.addChild(mask, body);
+          tintSprites.push(body);
           body.mask = mask;
         }
         root.addChild(new Graphics().circle(0, 0, R).stroke({ width: 3, color, alpha: 0.95 }));
@@ -1072,6 +1080,7 @@ export class RaidScene {
     }
     return {
       root, actor, enemyActor, frameActor, epicActor, epicAnim: epicActor ? epicAnim : undefined,
+      tintSprites,
       hp, charge, base, hpCenterX, topY, pulse: 0, atkCount: 0,
       deathAnim: -1, emerged: false, hpKey: -1, chargeKey: -1,
       smashSlam: -1, wasSmashWindup: 0, actorBaseScale, actorBaseY,
@@ -1394,6 +1403,11 @@ export class RaidScene {
         continue;
       }
       tok.root.visible = true;
+      if (u.team === "enemy") {
+        const tint = (u.freezeMs ?? 0) > 0 ? FREEZE_TINT : 0xffffff;
+        tok.enemyActor?.setTint(tint);
+        for (const sp of tok.tintSprites) sp.tint = tint;
+      }
 
       // The sim drops a generic boss from perch height to ground height on the same
       // tick that its state becomes "emerging". ENEMY_SPAWN_X fully hides normal

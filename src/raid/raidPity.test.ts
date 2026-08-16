@@ -4,6 +4,7 @@ import { GameState } from "../GameState";
 import { BRAIN_PITY_INVASIONS } from "./brainDrops";
 import { OLD_MC_ZOMBIE_KEY, RAID_ZOMBIE_PITY_WINS } from "./zombieDrops";
 import type { RaidDef, RaidOutcome } from "./types";
+import type { OwnedZombie } from "../zombie/types";
 
 // The OFFLINE half of the two silent pity systems (online lives in server/src/v3/raid.ts,
 // on raid_state_v3.brain_dry_streak / zombie_dry_json). beginRaid pre-rolls the brain drop
@@ -18,6 +19,24 @@ const RAID = {
 } as unknown as RaidDef;
 
 const PARTY = [{ id: "a" }] as never;
+const LUCKY_PARTY = [{
+  id: "lucky",
+  key: "ZombieActorRegularSpecial",
+  name: "Lucky",
+  typeName: "Lucky",
+  group: "Regular",
+  className: "Special",
+  classColor: "#000",
+  mutation: 0,
+  abilityKeys: ["lucky"],
+  str: 10,
+  dex: 2,
+  con: 20,
+  focus: 50,
+  invasions: 0,
+  col: 0,
+  row: 0,
+}] satisfies OwnedZombie[];
 const WIN: RaidOutcome = { win: true, rounds: 1, survivors: ["a"], losses: [], enemiesBeaten: 1, playerDamage: 0 };
 const LOSS: RaidOutcome = { win: false, rounds: 1, survivors: [], losses: ["a"], enemiesBeaten: 0, playerDamage: 0 };
 
@@ -25,7 +44,7 @@ function makeManager() {
   const state = new GameState();
   const zombies = { roster: () => [], recordInvasion: () => {}, removeCasualties: () => {} } as never;
   const granted: string[] = [];
-  const raids = new RaidManager({} as never, state, zombies, {
+  const raids = new RaidManager({ boosts: [], drops: {}, placeables: [] } as never, state, zombies, {
     save: () => {},
     grantZombie: (key: string) => { granted.push(key); },
   });
@@ -131,5 +150,33 @@ describe("offline rare-zombie luck from Golden Dice", () => {
     const view = raids.finishRaid(MCDONNELLS, PARTY, WIN, 1, false, 0, true);
     expect(granted).toEqual([OLD_MC_ZOMBIE_KEY]);
     expect(view.loot.some((drop) => drop.name === "Old McZombie")).toBe(true);
+  });
+
+  it("also widens the roll with a Lucky zombie and no dice spent", () => {
+    vi.mocked(Math.random).mockReturnValue(0.0105);
+    const { raids, granted } = makeManager();
+    const view = raids.finishRaid(MCDONNELLS, LUCKY_PARTY, WIN, 0, false, 0, true);
+    expect(granted).toEqual([OLD_MC_ZOMBIE_KEY]);
+    expect(view.loot.some((drop) => drop.name === "Old McZombie")).toBe(true);
+  });
+});
+
+describe("offline item loot luck from modded abilities", () => {
+  const LUCK_RAID = {
+    id: 99, name: "Luck Test", recommendedLevel: 5,
+    goldReward: 100, bonusGold: 0, xp: 0,
+    loot: [[], [], [], [], ["Rare"], ["Ultra Rare"]],
+  } as unknown as RaidDef;
+
+  beforeEach(() => { vi.spyOn(Math, "random").mockReturnValue(0.97); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("uses passive luck as fractional Golden Dice for item rarity", () => {
+    const { raids: plain } = makeManager();
+    expect(plain.finishRaid(LUCK_RAID, PARTY, WIN, 0, false, 0, false).loot[0]?.name).toBe("Rare");
+
+    const { raids: lucky } = makeManager();
+    const superLuckyParty = [{ ...LUCKY_PARTY[0], abilityKeys: ["superLucky"] }];
+    expect(lucky.finishRaid(LUCK_RAID, superLuckyParty, WIN, 0, false, 0, false).loot[0]?.name).toBe("Ultra Rare");
   });
 });

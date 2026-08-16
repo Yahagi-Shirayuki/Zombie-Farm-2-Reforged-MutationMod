@@ -15,7 +15,7 @@ import { MAX_ZOMBIE_NAME_LENGTH, RosterEntry } from "../../zombie/types";
 import { mutationBonus, SLOTS } from "../../zombie/mutations";
 import {
   STATS, veterancy, STAT_TILE, VALUE_FILL, VALUE_END, ABILITY_FRAME, MUTATION_FRAME,
-  ABILITY_POOL, unitAbilityAt, TIER_BOSS, MAX_ABILITY_TIER, wisToFocusBonus,
+  ABILITY_POOL, unitAbilityAt, TIER_BOSS, MAX_ABILITY_TIER, wisToFocusBonus, abilityTierOf,
 } from "../../zombie/traits";
 import { mutationEntries, mutationTipText } from "../../zombie/mutationDisplay";
 import { statBreakdown, statTone } from "../../zombie/statDisplay";
@@ -164,17 +164,21 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   // Stats render by their resolved total vs base: green for above-base, red for below,
   // yellow for extreme above-base values.
   for (const s of STATS) {
-    const bd = statBreakdown(info, s.key, abilityUnlocked);
-    const tone = statTone(bd.base, bd.total);
+    const bd = info.hideStats ? null : statBreakdown(info, s.key, abilityUnlocked);
+    const tone = bd ? statTone(bd.base, bd.total) : "";
     const cell = document.createElement("button");
     cell.className = "zstat";
     cell.innerHTML =
       `<span class="zstat-tile" style="background-image:url(${STAT_TILE})">` +
       `<img src="${s.icon}" alt=""></span>` +
       `<span class="zstat-val${tone ? ` ${tone}` : ""}" style="background-image:url(${VALUE_END}),url(${VALUE_FILL})">` +
-      `${bd.total}</span>`;
+      `${bd ? bd.total : "???"}</span>`;
     cell.onclick = (e) => {
       e.stopPropagation();
+      if (!bd) {
+        showTip(cell, s.label, "This stat is randomized when the zombie is unearthed.");
+        return;
+      }
       // desc, then Base â†’ each modifier (dim if +0) â†’ Total, as aligned rows.
       const rows = [`<span class="zbd-row"><span>Base</span><span>${bd.base}</span></span>`]
         .concat(
@@ -223,15 +227,25 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   // An ability that's been unlocked shows the real icon; still-locked ones show a
   // padlock naming the boss. Some groups (Small) have no ability at low tiers, so
   // their abilities only appear on higher-class units.
+  const explicitAbilities = info.abilityKeys?.length
+    ? info.abilityKeys
+        .map((key) => ({ key, tier: abilityTierOf(key), explicit: true }))
+        .filter((slot) => !!ABILITY_POOL[slot.key])
+    : null;
   const rank = Math.min(MAX_ABILITY_TIER, classTierRank(info.className));
-  for (let t = 1; t <= rank; t++) {
-    const key = unitAbilityAt(info.key, info.group, t);
+  const abilitySlots = explicitAbilities ?? Array.from({ length: rank }, (_, index) => {
+    const tier = index + 1;
+    return { key: unitAbilityAt(info.key, info.group, tier), tier, explicit: false };
+  });
+  for (const slot of abilitySlots) {
+    const key = slot.key;
     if (!key) continue; // no ability at this tier for this unit
     const meta = ABILITY_POOL[key];
     if (!meta) continue;
     const cell = document.createElement("button");
     cell.style.backgroundImage = `url(${ABILITY_FRAME})`;
-    if (hud.state.abilityUnlocked(key)) {
+    const unlocked = key === "randomAbility" || slot.tier <= 0 || hud.state.abilityUnlocked(key);
+    if (unlocked) {
       cell.className = "zabil";
       cell.innerHTML = `<img src="${meta.icon}" alt="">`;
       cell.onclick = (e) => {
@@ -245,7 +259,7 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
     } else {
       cell.className = "zabil locked";
       cell.innerHTML = `<span class="zlock">ðŸ”’</span>`;
-      const boss = TIER_BOSS[t];
+      const boss = TIER_BOSS[slot.tier];
       cell.onclick = (e) => {
         e.stopPropagation();
         showTip(cell, meta.label, `Defeat ${boss} to unlock this ability.`);
@@ -399,6 +413,8 @@ export function openCatalogZombieCard(hud: Hud, card: MenuCard) {
     dex: zombie.dex + bonus.dex,
     con: (zombie.con + bonus.con) * hud.state.farmerZombieLifeMult(),
     focus: (zombie.focus ?? 0) + wisToFocusBonus(bonus.wis), mutation: zombie.mutation, mutationIds: zombie.mutationIds, invasions: 0,
+    abilityKeys: zombie.abilityKeys,
+    hideStats: !!zombie.randomDisplayStats,
     portrait: card.portrait,
   };
   const { panel } = openModal({
@@ -421,6 +437,7 @@ export function rosterInfo(hud: Hud, z: RosterEntry): ZombieInfo {
     str: z.str * hud.state.farmerZombieStrengthMult(), dex: z.dex,
     con: z.con * hud.state.farmerZombieLifeMult(), focus: z.focus, mutation: z.mutation,
     mutationIds: z.mutationIds,
+    abilityKeys: z.abilityKeys,
     invasions: z.invasions,
     portrait: hud.zombiePortraitOf ? hud.zombiePortraitOf(z.key) : "",
     color: z.color,

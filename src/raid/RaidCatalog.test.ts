@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bossThrowIntervalSecs, winGold } from "./RaidCatalog";
+import { bossThrowIntervalSecs, raidTier, winGold } from "./RaidCatalog";
 import type { RaidDef, RaidStage } from "./types";
 
 // winGold: wiki-figure raids scale their known payout by survival; raids without a
@@ -45,5 +45,12 @@ describe("bossThrowIntervalSecs", () => {
     expect(bossThrowIntervalSecs(mcdonnell, fasterStage, 0)).toBe(2);
     expect(bossThrowIntervalSecs(mcdonnell, fasterStage, 1)).toBe(1.5);
     expect(bossThrowIntervalSecs(other, fasterStage, 0)).toBe(1);
+  });
+});
+
+describe("raidTier", () => {
+  it("maps Robots and Aliens to the later ability tiers", () => {
+    expect(raidTier(raid({ id: 5 }))).toBe(5);
+    expect(raidTier(raid({ id: 6 }))).toBe(6);
   });
 });

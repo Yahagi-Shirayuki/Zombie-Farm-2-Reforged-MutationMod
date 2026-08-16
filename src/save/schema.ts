@@ -304,6 +304,14 @@ export interface OwnedZombieSave {
   mutation?: number;
   /** Local modded mutation string ids. */
   mutationIds?: string[];
+  /** Explicit ability slots for one-off/randomized zombies. */
+  abilityKeys?: string[];
+  /** Render-only body family. Mechanics still use the catalog group. */
+  visualGroup?: string;
+  /** Render-only individual scale multiplier. Mechanics still use the catalog group. */
+  visualScale?: number;
+  /** Persisted random base stats, before mutation bonuses. */
+  rolledStats?: { str: number; dex: number; con: number; focus: number };
   /** Optional inherited display tint for Zombie Pot results. Omitted means use
    *  the source model's catalog tint. */
   color?: [number, number, number];

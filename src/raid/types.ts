@@ -150,6 +150,10 @@ export interface CombatUnit {
   name: string;
   /** Player zombie taxonomy, carried for presentation sizing. Enemies omit it. */
   group?: string;
+  /** Render-only body family. Combat targeting and auras still use group. */
+  visualGroup?: string;
+  /** Render-only individual size multiplier. Combat stats and targeting ignore it. */
+  visualScale?: number;
   className?: string;
   /** Owned body tint (Zombie Pot children inherit a mixed parent colour). Purely
    *  presentational â€” carried so the battlefield rig matches the farm and the

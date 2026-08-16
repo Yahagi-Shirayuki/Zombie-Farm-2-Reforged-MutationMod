@@ -17,6 +17,7 @@
 // each further die keeps compressing the roll toward the rarest tiers.
 
 type Threshold = readonly [cum: number, tier: number];
+type TierChances = readonly [number, number, number, number, number, number];
 
 // Ascending cumulative thresholds per bracket + the fall-through tier.
 const BRACKET_0: readonly Threshold[] = [
@@ -42,11 +43,42 @@ function pickFromTable(roll: number, table: readonly Threshold[], fallthrough: n
   return fallthrough;
 }
 
+function integerTierChances(bonus: number): TierChances {
+  if (bonus === 0) return [0.09, 0.15, 0.60, 0.08, 0.08, 0];
+  if (bonus === 1) return [0, 0.14, 0.60, 0.10, 0.08, 0.08];
+  if (bonus === 2) return [0, 0, 0.59, 0.20, 0.10, 0.11];
+  const n = bonus - 3;
+  const decay = Math.pow(0.9, n);
+  const t3Cum = Math.max(0, Math.min(1, 0.39 * decay - 0.10 * n));
+  const t4Cum = Math.max(t3Cum, Math.min(1, 0.79 * decay - 0.10 * n));
+  return [0, 0, 0, t3Cum, t4Cum - t3Cum, 1 - t4Cum];
+}
+
+function pickFromChances(roll: number, chances: TierChances): number {
+  let cumulative = 0;
+  for (let tier = 0; tier < chances.length; tier++) {
+    cumulative += chances[tier];
+    if (roll < cumulative) return tier;
+  }
+  return chances.length - 1;
+}
+
 /** Choose a loot rarity tier (0–5) for a win. `roll` is a uniform [0,1) sample;
  *  `bonus` is the loot-luck bracket (Golden Dice spent, 0 = none). Mirrors the
- *  binary's `rollForDrop:` tier selection exactly. */
+ *  binary's `rollForDrop:` tier selection exactly for whole-number dice. Fractional
+ *  modded luck interpolates between adjacent Golden Dice brackets. */
 export function rollLootTier(roll: number, bonus: number): number {
-  const b = Math.max(0, Math.floor(bonus));
+  const raw = Math.max(0, Number.isFinite(bonus) ? bonus : 0);
+  const b = Math.floor(raw);
+  const frac = raw - b;
+  if (frac > 0) {
+    const lo = integerTierChances(b);
+    const hi = integerTierChances(b + 1);
+    return pickFromChances(
+      roll,
+      lo.map((chance, i) => chance * (1 - frac) + hi[i] * frac) as unknown as TierChances
+    );
+  }
   if (b === 0) return pickFromTable(roll, BRACKET_0, 4);
   if (b === 1) return pickFromTable(roll, BRACKET_1, 5);
   if (b === 2) return pickFromTable(roll, BRACKET_2, 5);

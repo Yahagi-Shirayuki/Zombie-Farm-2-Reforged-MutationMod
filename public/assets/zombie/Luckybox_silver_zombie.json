@@ -1,0 +1,75 @@
+{
+ "name": "Silver Box Zombie",
+ "neck": {
+  "x": 7,
+  "y": -36
+ },
+ "scale": 0.9,
+ "color": [
+  0,
+  0,
+  0
+ ],
+ "parts": [
+  {
+   "file": "defaultArmB",
+   "group": "root",
+   "px": -3,
+   "py": -25,
+   "ax": 0.93,
+   "ay": 0.24,
+   "z": 0,
+   "tint": true
+  },
+  {
+   "file": "defaultFootB",
+   "group": "footB",
+   "px": -1,
+   "py": -8,
+   "ax": 0.75,
+   "ay": 0.1,
+   "z": 1,
+   "tint": true
+  },
+  {
+   "file": "defaultFootF",
+   "group": "footF",
+   "px": 16,
+   "py": -8,
+   "ax": 0.75,
+   "ay": 0.1,
+   "z": 2,
+   "tint": true
+  },
+  {
+   "file": "defaultBody",
+   "group": "root",
+   "px": 10,
+   "py": -13,
+   "ax": 0.63,
+   "ay": 0.66,
+   "z": 3,
+   "tint": true
+  },
+  {
+   "file": "luckybox_zombie/luckybox_head_silver.png",
+   "group": "head",
+   "px": 7,
+   "py": -36,
+   "ax": 0.72,
+   "ay": 0.82,
+   "z": 4,
+   "tint": false
+  },
+  {
+   "file": "defaultArmF",
+   "group": "root",
+   "px": 9,
+   "py": -28,
+   "ax": 0.93,
+   "ay": 0.28,
+   "z": 7,
+   "tint": true
+  }
+ ]
+}

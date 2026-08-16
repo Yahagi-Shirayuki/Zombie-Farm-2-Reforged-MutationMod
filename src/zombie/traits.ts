@@ -38,7 +38,7 @@ export const STATS: StatMeta[] = [
   { key: "str", label: "Damage", desc: "How much damage the zombie inflicts.", icon: `${ZD}stat_damage.png` },
   { key: "dex", label: "Speed", desc: "How fast the zombie is.", icon: `${ZD}stat_speed.png` },
   { key: "con", label: "Life", desc: "How much damage the zombie can take.", icon: `${ZD}stat_life.png` },
-  { key: "focus", label: "Focus", desc: "How distracted the zombie is.", icon: `${ZD}stat_focus.png` },
+  { key: "focus", label: "Focus", desc: "How distracted the zombie is and how fast the bar fills.", icon: `${ZD}stat_focus.png` },
 ];
 
 // ---------------------------------------------------------------------------
@@ -118,32 +118,51 @@ export interface AbilityMeta {
 // recovered from ZF2R's ARMv7 methods and authored Attacks.json; they deliberately
 // do not describe the reimplementation's current approximations.
 export const ABILITY_POOL: Record<string, AbilityMeta> = {
-  // ---- Tier 1 (mostly passive stat buffs; the buff IS the display name) ----
-  buffAllStats: { label: "+5% All Stats", effect: "+5% All Stats", desc: "Zombie is a little stronger", icon: `${AB}ability_buffAllStats.png` },
-  attackSpeedBuff: { label: "+10% Speed", effect: "+10% Speed", desc: "Zombie attacks faster", icon: `${AB}ability_attackSpeedBuff.png` },
-  powerBuff: { label: "+10% Damage", effect: "+10% Damage", desc: "Zombie hits harder", icon: `${AB}ability_powerBuff.png` },
-  hitPointsBuff: { label: "+10% Life", effect: "+10% Life", desc: "Zombie is tougher", icon: `${AB}ability_hitPointsBuff.png` },
-  heal: { label: "Heal", effect: "Heals an ally for 50% Power", desc: "Heal other zombies", icon: `${AB}ability_heal.png` },
-  // ---- Tier 2 ----
-  chivalry: { label: "Chivalry", effect: "+10% Damage/Life and +10% Speed to nearby Girl zombies", desc: "Girl zombies are stronger around you", icon: `${AB}ability_chivalry.png` },
-  grace: { label: "Grace", effect: "+10% Damage/Life and +10% Speed to nearby Regular zombies", desc: "Regular zombies are stronger around you", icon: `${AB}ability_grace.png` },
-  attachMini: { label: "Mini Buddy", effect: "One pre-deployment mini ram", desc: "Carry a mini zombie and ram the enemy (use before sending zombie)", icon: `${AB}ability_attachMini.png` },
-  protect: { label: "Protect", effect: "20% less damage to nearby non-Headless zombies", desc: "Other zombie types take less damage when you're near", icon: `${AB}ability_protect.png` },
-  tankHitPointsBuff: { label: "Fortitude", effect: "+10% Life to Headless zombies", desc: "Headless zombies are a little tougher", icon: `${AB}ability_tankHitPointsBuff.png` },
-  // ---- Tier 3 ----
-  laserBeam: { label: "Laser Beam", effect: "Automatic shots for 10% Power", desc: "Shoot a laser beam while you're walking!", icon: `${AB}ability_laserBeam.png` },
-  stun: { label: "Random Stun", effect: "4% chance to stun for 1 second", desc: "Small chance to stun your target", icon: `${AB}ability_stun.png` },
-  explode: { label: "Explode", effect: "One 10Ã— area hit and 3-second stun", desc: "Zombie will explode and stun the enemy (use when fighting)", icon: `${AB}ability_explode.png` },
-  bash: { label: "Bash", effect: "2.75Ã— attack; 10-second recharge", desc: "Bashes the enemy when activated (use when fighting)", icon: `${AB}ability_bash.png` },
-  turboSpeed: { label: "Turbo Walking Speed", effect: "2Ã— walking speed", desc: "Zombie walks twice as fast", icon: `${AB}ability_turboSpeed.png` },
-  ressurect: { label: "Resurrect", effect: "Revives one non-mini zombie once", desc: "Resurrect any zombie once", icon: `${AB}ability_ressurect.png` },
-  // ---- Tier 4 (the ".Ver.2" upgrades of earlier abilities) ----
-  zomBeam: { label: "Laser Beam Ver.2", effect: "Automatic laser at 2Ã— the base firing rate", desc: "New and improved", icon: `${AB}ability_zomBeam.png` },
-  doubleStrike: { label: "Double Strike", effect: "29% chance of a bonus strike", desc: "Small chance to hit twice", icon: `${AB}ability_doubleStrike.png` },
-  explodeV2: { label: "Explode Ver.2", effect: "One 10Ã— area hit and 3-second stun; hits bosses", desc: "Can hit and stun the boss (use when fighting)", icon: `${AB}ability_explodeV2.png` },
-  bashV2: { label: "Smash", effect: "1.8Ã— attack and 1-second stun; 10-second recharge", desc: "Smashes the enemy when activated (use when fighting)", icon: `${AB}ability_bashV2.png` },
-  block: { label: "Block", effect: "9% chance to block an attack", desc: "Small chance to block any attack", icon: `${AB}ability_block.png` },
-  healAOE: { label: "Heal All", effect: "50% Power to all injured zombies every 20 seconds", desc: "Heal all zombies every once in awhile", icon: `${AB}ability_healAOE.png` },
+  // modded skills
+  randomAbility: { label: "Schrödinger Skill", effect: "Random existing ability", desc: "What's inside? Unbox to find out.", icon: `${AB}ability_random.png` },
+  naturalLeader: { label: "Natural Leader", effect: "+15% All Stats to all zombies", desc: "Everyone fights harder when you're around.", icon: `${AB}ability_lead.png` },
+  improvise: { label: "Improvise", effect: "Rolls a random unlocked ability for each raid", desc: "Make it up as you go.", icon: `${AB}ability_improv.png` },
+  freeze: { label: "Freeze", effect: "10% chance to freeze for 3 seconds", desc: "Stop them cold.", icon: `${AB}ability_freeze.png` },
+  lifeSteal: { label: "Life steal", effect: "Heal for 2% of damage dealt", desc: "Take a little life for yourself.", icon: `${AB}ability_drain.png` },
+  castle: { label: "Castle body", effect: "Take 50% less damage", desc: "Built like a fortress.", icon: `${AB}ability_placeholder.png` },
+  gymRat: { label: "Gym rat", effect: "+20% Power and Life", desc: "No pain, no gain.", icon: `${AB}ability_placeholder.png` },
+  triple: { label: "Triple dips", effect: "33% chance to strike 2 bonus times", desc: "Why stop at one extra hit?", icon: `${AB}ability_triple.png` },
+  quad: { label: "Combo", effect: "25% chance to strike 3 bonus times", desc: "Keep the hits coming.", icon: `${AB}ability_quad.png` },
+  deathPunch: { label: "Death Punch", effect: "0.1% chance to deal 1000× attack", desc: "Sometimes you just really need to hit something.", icon: `${AB}ability_death.png` },
+  spike: { label: "Spiky", effect: "Reflect 50% of damage taken", desc: "Don't touch me.", icon: `${AB}ability_placeholder.png` },
+  lucky: { label: "Lucky", effect: "+10% drop rate", desc: "Maybe today's your lucky day.", icon: `${AB}ability_placeholder.png` }, 
+  extraLucky: { label: "Blessed", effect: "+25% drop rate", desc: "The stars aligned", icon: `${AB}ability_placeholder.png` },
+  superLucky: { label: "Leprechaun bloodline", effect: "+50% drop rate", desc: "Perk of being a half Leprechaun", icon: `${AB}ability_placeholder.png` },
+
+  // Tier 1
+  buffAllStats: { label: "Happy Mind", effect: "+5% All Stats", desc: "A little boost to everything.", icon: `${AB}ability_buffAllStats.png` },
+  attackSpeedBuff: { label: "Quickie", effect: "+10% Attack Speed", desc: "Get those attacks out faster.", icon: `${AB}ability_attackSpeedBuff.png` },
+  powerBuff: { label: "Jock", effect: "+10% Damage", desc: "Hits harder than it looks.", icon: `${AB}ability_powerBuff.png` },
+  hitPointsBuff: { label: "Healthy", effect: "+10% Life", desc: "A little extra toughness goes a long way.", icon: `${AB}ability_hitPointsBuff.png` },
+  heal: { label: "Heal", effect: "Heals an ally for 50% Power", desc: "Keep your fellow zombies in the fight.", icon: `${AB}ability_heal.png` },
+
+  // Tier 2
+  chivalry: { label: "Chivalry", effect: "+10% Damage/Life and +10% Speed to nearby Girl zombies", desc: "The ladies fight better with you around.", icon: `${AB}ability_chivalry.png` },
+  grace: { label: "Grace", effect: "+10% Damage/Life and +10% Speed to nearby Regular zombies", desc: "Nearby Regular zombies move with a little more grace.", icon: `${AB}ability_grace.png` },
+  attachMini: { label: "Mini Buddy", effect: "One pre-deployment mini ram", desc: "Bring a little friend along for the first hit.", icon: `${AB}ability_attachMini.png` },
+  protect: { label: "Protect", effect: "20% less damage to nearby non-Headless zombies", desc: "Stand nearby and keep your allies safe.", icon: `${AB}ability_protect.png` },
+  tankHitPointsBuff: { label: "Fortitude", effect: "+10% Life to Headless zombies", desc: "Makes Headless zombies harder to put down.", icon: `${AB}ability_tankHitPointsBuff.png` },
+
+  // Tier 3
+  laserBeam: { label: "Laser Beam", effect: "Automatic shots for 10% Power", desc: "Shoot lasers while you walk!", icon: `${AB}ability_laserBeam.png` },
+  stun: { label: "Random Stun", effect: "4% chance to stun for 1 second", desc: "Sometimes, your attack leaves them seeing stars.", icon: `${AB}ability_stun.png` },
+  explode: { label: "Explode", effect: "One 10× area hit and 3-second stun", desc: "Go out with a bang and leave everyone stunned.", icon: `${AB}ability_explode.png` },
+  bash: { label: "Bash", effect: "2.75× attack; 10-second recharge", desc: "Smack the enemy with a devastating blow.", icon: `${AB}ability_bash.png` },
+  turboSpeed: { label: "Turbo", effect: "2× walking speed", desc: "Gotta go fast.", icon: `${AB}ability_turboSpeed.png` },
+  ressurect: { label: "Resurrect", effect: "Revives one non-mini zombie once", desc: "Death doesn't have to be the end.", icon: `${AB}ability_ressurect.png` },
+
+  // Tier 4
+  zomBeam: { label: "Mega Beam", effect: "Automatic laser at 2× the base firing rate", desc: "The laser got an upgrade.", icon: `${AB}ability_zomBeam.png` },
+  doubleStrike: { label: "Double Strike", effect: "29% chance of a bonus strike", desc: "Sometimes one hit just isn't enough.", icon: `${AB}ability_doubleStrike.png` },
+  explodeV2: { label: "Nuke", effect: "One 10× area hit and 3-second stun; hits bosses", desc: "Big enough to shake even the boss.", icon: `${AB}ability_explodeV2.png` },
+  bashV2: { label: "Smash", effect: "1.8× attack and 1-second stun; 10-second recharge", desc: "A crushing blow that leaves them stunned.", icon: `${AB}ability_bashV2.png` },
+  block: { label: "Block", effect: "9% chance to block an attack", desc: "Sometimes the best attack is not getting hit.", icon: `${AB}ability_block.png` },
+  healAOE: { label: "Great Heal", effect: "50% Power to all injured zombies every 20 seconds", desc: "A little healing for everyone, every now and then.", icon: `${AB}ability_healAOE.png` },
 };
 
 // ---------------------------------------------------------------------------
@@ -163,25 +182,65 @@ export const TIER_BOSS: Record<number, string> = {
   2: "the Lawyers",
   3: "the Pirates",
   4: "the Ninjas",
+  5: "the Robots",
+  6: "the Aliens",
 };
 
-/** Highest ability tier that exists (Silver/"Combined" zombies see all of these). */
-export const MAX_ABILITY_TIER = 4;
+/** Which raid win advances each ability tier. Tier 5 is Robots, tier 6 is Aliens. */
+export const TIER_RAID_ID: Record<number, string> = {
+  1: "1",
+  2: "2",
+  3: "3",
+  4: "4",
+  5: "5",
+  6: "6",
+};
 
-/** ABILITY_POOL keys grouped by tier. Every pool key appears exactly once. */
+export function raidIdForAbilityTier(tier: number): string {
+  return TIER_RAID_ID[tier] ?? String(tier);
+}
+
+/** Highest ability tier that exists (Silver/"Combined" zombies see all original tiers). */
+export const MAX_ABILITY_TIER = 6;
+
+/** Usable ability keys grouped by tier. Tier 0 is always unlocked for testing/modded skills. */
 export const ABILITY_TIER: Record<number, string[]> = {
+  0: [
+    "freeze", "lifeSteal", "castle", "gymRat", "triple", "quad", "deathPunch", "spike",
+    "lucky", "extraLucky", "superLucky",
+  ],
   1: ["buffAllStats", "attackSpeedBuff", "powerBuff", "hitPointsBuff", "heal"],
   2: ["chivalry", "grace", "attachMini", "protect", "tankHitPointsBuff"],
   3: ["laserBeam", "stun", "explode", "bash", "turboSpeed", "ressurect"],
-  4: ["zomBeam", "doubleStrike", "explodeV2", "bashV2", "block", "healAOE"],
+  4: ["zomBeam", "doubleStrike", "explodeV2", "bashV2", "block", "healAOE", ],
+  5: ["naturalLeader", "improvise"],
+  6: [],
 };
 
-/** The tier an ability belongs to (0 if it isn't assigned to any tier). */
-export function abilityTierOf(key: string): number {
-  for (let t = 1; t <= MAX_ABILITY_TIER; t++) {
-    if (ABILITY_TIER[t].includes(key)) return t;
+export const RANDOM_ABILITY_EXCLUSIONS = new Set(["heal", "healAOE"]);
+
+/** Random ability sources (Luckybox/improvise) include always-unlocked modded
+ *  skills in tier 0 even when a box asks for only boss tiers like [1,2,3]. */
+export function randomAbilityPoolForTiers(tiers?: readonly number[]): string[] {
+  const selected = tiers?.length ? [0, ...tiers] : Object.keys(ABILITY_TIER).map(Number);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const tier of selected) {
+    for (const key of ABILITY_TIER[tier] ?? []) {
+      if (seen.has(key) || RANDOM_ABILITY_EXCLUSIONS.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+    }
   }
-  return 0;
+  return out;
+}
+
+/** The tier an ability belongs to (0 = always unlocked, -1 = unknown/unassigned). */
+export function abilityTierOf(key: string): number {
+  for (let t = 0; t <= MAX_ABILITY_TIER; t++) {
+    if ((ABILITY_TIER[t] ?? []).includes(key)) return t;
+  }
+  return -1;
 }
 
 // Each zombie GROUP's ability per tier (index 0 = t1 â€¦ index 3 = t4). A unit shows
@@ -190,7 +249,7 @@ export function abilityTierOf(key: string): number {
 // mini abilities appear on Red-and-up). Every ABILITY_POOL key is used exactly once.
 export const GROUP_ABILITIES: Record<string, (string | null)[]> = {
   //         t1               t2                  t3            t4
-  Regular:  ["buffAllStats",  "chivalry",         "laserBeam",  "zomBeam"],
+  Regular:  ["buffAllStats",  "chivalry",          "laserBeam",  "zomBeam"], //"buffAllStats"
   Female:   ["attackSpeedBuff", "grace",          "stun",       "doubleStrike"],
   Headless: ["hitPointsBuff", "protect",          "turboSpeed", "block"],
   Large:    ["powerBuff",     "attachMini",       "bash",       "bashV2"],
@@ -252,4 +311,3 @@ export function veterancy(survivals: number): string {
 export function veterancyMultiplier(survivals: number): number {
   return 1 + VET_STAT_STEP * veterancyLevel(survivals);
 }
-

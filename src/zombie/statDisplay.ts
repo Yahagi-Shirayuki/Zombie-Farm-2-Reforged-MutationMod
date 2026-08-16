@@ -40,6 +40,7 @@ export interface StatSource {
   key: string; // named-unique ability overrides
   group: string; // group ability set
   className: string; // colour class â†’ ability rank
+  abilityKeys?: readonly string[]; // explicit per-unit ability slots
 }
 
 /** One line in a stat's hover breakdown. */
@@ -73,7 +74,7 @@ function affectsSelfStat(e: AbilityCombatEffect): boolean {
  *  the detail card / CombatEngine use, minus team buffs, activated moves, and abilities
  *  whose only effect is army-wide. `abilityUnlocked` gates by beaten-boss tier. */
 export function selfStatAbilities(
-  z: Pick<StatSource, "key" | "group" | "className">,
+  z: Pick<StatSource, "key" | "group" | "className" | "abilityKeys">,
   abilityUnlocked: (key: string) => boolean
 ): string[] {
   return activeAbilities(z, abilityUnlocked).filter(

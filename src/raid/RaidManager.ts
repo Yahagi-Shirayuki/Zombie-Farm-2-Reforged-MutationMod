@@ -32,6 +32,7 @@ import {
   seededRandom,
 } from "./RaidCatalog";
 import { ABILITY_TIER, ABILITY_POOL } from "../zombie/traits";
+import { activeAbilities, dropChanceBonus } from "../zombie/abilities";
 import { displayStatTones, displayTotals, type StatTone } from "../zombie/statDisplay";
 import { BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidDef, RaidOutcome, RaidStage } from "./types";
 import { rollLootTier } from "./LootTable";
@@ -708,7 +709,9 @@ export class RaidManager {
       // spend-only economy and the removed inventory `grant`, so loot evaporated.
       // OFFLINE: roll and grant locally, exactly as before.
       if (!serverRewards) {
-        const drop = this.rollLoot(raid, dice);
+        const abilityUnlocked = (key: string) => this.state.abilityUnlocked(key);
+        const luckBonus = dropChanceBonus(party.map((z) => activeAbilities(z, abilityUnlocked)));
+        const drop = this.rollLoot(raid, dice + luckBonus);
         if (drop === "Bonus Gold") {
           const bonusGold = raid.recommendedLevel * 100; // getBonusGoldLootForStageLevel:
           gold += bonusGold;
@@ -739,7 +742,7 @@ export class RaidManager {
         // same way it shifts the item roll's tier.
         const zombieDrop = rollRaidZombieDropWithPity(
           raid.id, true, Math.random(), this.state.zombieDryWins[dryKey] ?? 0, dice,
-          elite ? ELITE_BRAIN_LUCK : 1
+          (elite ? ELITE_BRAIN_LUCK : 1) * (1 + luckBonus)
         );
         if (hasRaidZombieDrop(raid.id)) {
           this.state.zombieDryWins[dryKey] = nextRaidZombieDryWins(this.state.zombieDryWins[dryKey] ?? 0, !!zombieDrop);

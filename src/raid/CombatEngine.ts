@@ -13,10 +13,16 @@
 // deterministic, and close enough for an instant resolve). Each unit attacks the
 // first living enemy on the opposite team; a side loses when all its units die.
 import type { OwnedZombie } from "../zombie/types";
-import { clampResolvedRawStat, veterancyMultiplier, wisToFocusBonus } from "../zombie/traits";
+import {
+  abilityTierOf,
+  clampResolvedRawStat,
+  randomAbilityPoolForTiers,
+  veterancyMultiplier,
+  wisToFocusBonus,
+} from "../zombie/traits";
 import { mutationBonus } from "../zombie/mutations";
 import { sanitizeZombiePowderStats } from "../zombieColorMixerBucket";
-import { activeAbilities, combatEffect } from "../zombie/abilities";
+import { activeAbilities, combatEffect, naturalLeaderAllStatsMult } from "../zombie/abilities";
 import {
   applyDamage,
   levelScaleStat,
@@ -44,6 +50,28 @@ const STEP_MS = 100; // simulation tick
 const MAX_SIM_MS = 20 * 60 * 1000; // safety cap (min-damage 1 prevents true stalls)
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+const IMPROVISE_KEY = "improvise";
+
+function rollImproviseAbilities(
+  keys: readonly string[],
+  abilityUnlocked: (key: string) => boolean,
+  random: () => number
+): string[] {
+  if (!keys.includes(IMPROVISE_KEY)) return [...keys];
+  const pool = randomAbilityPoolForTiers()
+    .filter((key) => key !== IMPROVISE_KEY && (abilityTierOf(key) === 0 || abilityUnlocked(key)));
+  if (!pool.length) return keys.filter((key) => key !== IMPROVISE_KEY);
+  const available = pool.filter((key) => !keys.includes(key));
+  return keys.map((key) => {
+    if (key !== IMPROVISE_KEY) return key;
+    const choices = available.length ? available : pool;
+    const index = Math.min(choices.length - 1, Math.floor(random() * choices.length));
+    const rolled = choices[index];
+    if (choices === available) available.splice(index, 1);
+    return rolled;
+  });
+}
 
 /** Frequency-weighted mean of one Attacks.json field over a unit's attack list.
  *
@@ -181,17 +209,19 @@ export function buildPlayerUnits(
     playerLevel?: number;
     farmerStrengthMult?: number;
     farmerLifeMult?: number;
+    abilityRandom?: () => number;
   } = {}
 ): CombatUnit[] {
   // Abilities are off unless the caller supplies the per-ability unlock gate.
   const abilityUnlocked = opts.abilityUnlocked ?? (() => false);
+  const abilityRandom = opts.abilityRandom ?? Math.random;
   const conc = !!opts.concentration;
   const lvl = opts.playerLevel;
 
   // Resolve each unit's ability set once, then count the original group auras.
   // ZFActorFightEffect accumulates percentage changes additively.
   const rows = party.map((z) => {
-    const keys = activeAbilities(z, abilityUnlocked);
+    const keys = rollImproviseAbilities(activeAbilities(z, abilityUnlocked), abilityUnlocked, abilityRandom);
     return { z, keys, eff: combatEffect(keys) };
   });
   const auraCount = (key: string) => rows.filter((r) => r.keys.includes(key)).length;
@@ -199,6 +229,7 @@ export function buildPlayerUnits(
   const grace = auraCount("grace");
   const protect = auraCount("protect");
   const fortitude = auraCount("tankHitPointsBuff");
+  const naturalLeader = naturalLeaderAllStatsMult(rows.map((r) => r.keys));
 
   return rows.map(({ z, keys, eff }) => {
     const v = veterancyMultiplier(z.invasions);
@@ -219,10 +250,10 @@ export function buildPlayerUnits(
     const bCon = lvl == null ? rawCon : levelScaleStat(z.group, "con", rawCon, lvl);
     const statAura = z.group === "Female" ? chivalry : z.group === "Regular" ? grace : 0;
     const lifeAura = statAura + (z.group === "Headless" ? fortitude : 0);
-    const auraBaseStr = bStr * v * eff.allStatsMult * eff.selfDamageMult *
+    const auraBaseStr = bStr * v * naturalLeader * eff.allStatsMult * eff.selfDamageMult *
       (opts.farmerStrengthMult ?? 1);
-    const auraBaseDex = bDex * v * eff.allStatsMult * eff.selfSpeedMult;
-    const auraBaseCon = bCon * v * eff.allStatsMult * eff.selfHpMult *
+    const auraBaseDex = bDex * v * naturalLeader * eff.allStatsMult * eff.selfSpeedMult;
+    const auraBaseCon = bCon * v * naturalLeader * eff.allStatsMult * eff.selfHpMult *
       (opts.farmerLifeMult ?? 1);
     // A mutation may carry a PENALTY (mutations.ts MutationStats), so the flat term
     // added here can be negative and can in principle outweigh a weak species' base
@@ -237,7 +268,7 @@ export function buildPlayerUnits(
     const str = clampResolvedRawStat("str", auraBaseStr * (1 + statAura * 0.10) + mut.str + (powder.red ?? 0));
     const dex = clampResolvedRawStat("dex", auraBaseDex * (1 + statAura * 0.10) + mut.dex + (powder.green ?? 0));
     const con = clampResolvedRawStat("con", auraBaseCon * (1 + lifeAura * 0.10) + mut.con + (powder.blue ?? 0));
-    const focus = clampResolvedRawStat("focus", rawFocus * v * eff.allStatsMult + focusMutation + focusPowder);
+    const focus = clampResolvedRawStat("focus", rawFocus * v * naturalLeader * eff.allStatsMult + focusMutation + focusPowder);
     // Distraction resistance keys off the unit's real focus stat. Damage abilities
     // are already part of finalPower (`str`) so lasers and healing see them too.
     const mult = focusFactor(focus, conc);
@@ -248,11 +279,14 @@ export function buildPlayerUnits(
       z.group === "Garden", z.group === "Headless"
     );
     u.group = z.group;
+    u.visualGroup = z.visualGroup;
+    u.visualScale = z.visualScale;
     u.className = z.className;
     u.mutation = z.mutation;
     u.mutationIds = z.mutationIds;
     u.color = z.color;
-    u.damageReduction = z.group === "Headless" ? 0 : Math.min(0.95, protect * 0.20);
+    const protectReduction = z.group === "Headless" ? 0 : protect * 0.20;
+    u.damageReduction = Math.min(0.95, protectReduction + eff.selfDamageReduction);
     u.teamAuraStats = {
       baseStr: auraBaseStr + mut.str,
       baseDex: auraBaseDex + mut.dex,

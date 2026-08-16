@@ -13,7 +13,7 @@ import {
   setShowDamageNumbers,
   setSpriteSet,
 } from "../../prefs";
-import { ABILITY_POOL, ABILITY_TIER, TIER_BOSS } from "../../zombie/traits";
+import { ABILITY_POOL, ABILITY_TIER, TIER_BOSS, raidIdForAbilityTier } from "../../zombie/traits";
 import { otherPlayMode, playModeDestinationLabel } from "../../playMode";
 import { updateCheckMessage, type UpdateCheckResult } from "../../updateCheck";
 
@@ -547,14 +547,18 @@ export function openDevMenu(hud: Hud): void {
   raidStatus.textContent = "Beat a tier boss to unlock its next ability:";
   const raidBtns = document.createElement("div");
   raidBtns.className = "dev-raid-btns";
-  for (let t = 1; t <= 4; t++) {
+  const visibleTiers = Object.keys(ABILITY_TIER)
+    .map(Number)
+    .filter((t) => t > 0 && (ABILITY_TIER[t]?.length ?? 0) > 0)
+    .sort((a, b) => a - b);
+  for (const t of visibleTiers) {
     const b = document.createElement("button");
     b.className = "dev-btn";
     b.textContent = `Win T${t} — ${TIER_BOSS[t]}`;
     b.onclick = () => {
       const pool = ABILITY_TIER[t] ?? [];
       const before = hud.state.tierAbilitiesUnlocked(t);
-      hud.state.completeRaid(String(t));
+      hud.state.completeRaid(raidIdForAbilityTier(t));
       const after = hud.state.tierAbilitiesUnlocked(t);
       if (after > before) {
         const label = ABILITY_POOL[pool[after - 1]]?.label ?? pool[after - 1];

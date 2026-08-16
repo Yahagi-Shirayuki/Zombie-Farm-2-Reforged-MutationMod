@@ -76,12 +76,12 @@ const AUTHORED_MODDED_MUTATIONS: Readonly<Record<MutationKey, ModdedMutationDef>
 	turnip_eye:		    { modded: true, key: "turnip_eye",		  name: "Turnip-eyed",		    slot: "hair_eye",	stats: { wis: 2 } },
 	turnip_head:		  { modded: true, key: "turnip_head",		  name: "Turnip-head",		    slot: "head",		  stats: { con: 2 } },
 	bread_neck:		    { modded: true, key: "bread_neck",		  name: "Bread neck",		      slot: "neck",		  stats: { con: 3 } },
-	apple_head:		    { modded: true, key: "apple_head",		  name: "Red-delicious Head",	slot: "head",		  stats: { str: 1, dex: 1 } },
+	apple_head:		    { modded: true, key: "apple_head",		  name: "Red-delicious Head",	slot: "head",		  stats: { str: 2, dex: 1 } },
 	melon_head:		    { modded: true, key: "melon_head",		  name: "Felon-Headon",		    slot: "head",		  stats: { con: 3 } },
 	sampaguita_hair:	{ modded: true, key: "sampaguita_hair",	name: "Sampaguita hair",	  slot: "hair_eye",	stats: { dex: 1, wis: 2 } },
 	corn_head:		    { modded: true, key: "corn_head",		    name: "Corned head",		    slot: "head",		  stats: { str: 1, con: 2, wis: 1 } },
 	corn_arm:		      { modded: true, key: "corn_arm",		    name: "Corned Arm",		      slot: "arm",		  stats: { str: 3, con: 1 } },
-	spineapple_body:	{ modded: true, key: "spineapple_body",	name: "Spine-ap-body",		  slot: "body",		  stats: { str: 1, con: 3 } },
+	spineapple_body:	{ modded: true, key: "spineapple_body",	name: "Spine-ap-body",		  slot: "body",		  stats: { str: 3, con: 1 } },
 	kale_arm:		      { modded: true, key: "kale_arm",		    name: "Malakale Arm",		    slot: "arm",		  stats: { str: 2, con: 1, dex: 1 } },
 	berry_eye:		    { modded: true, key: "berry_eye",		    name: "Beryl-eyed",		      slot: "hair_eye",	stats: { dex: 1, wis: 2, con: 1 } },
 	spinach_hair:		  { modded: true, key: "spinach_hair",		name: "Spinel hair",		    slot: "hair_eye",	stats: { con: 2, dex: 1, wis: 1 } },
@@ -90,7 +90,7 @@ const AUTHORED_MODDED_MUTATIONS: Readonly<Record<MutationKey, ModdedMutationDef>
   /*
 	mint_neck:		    { modded: true, key: "mint_neck",		    name: "Diamint lei",		    slot: "neck",		  stats: { con: 2, wis: 2, dex: 1 } },
 	*/
-	bloodberry_hair:	{ modded: true, key: "bloodberry_hair",	name: "Bloody-hairy",		    slot: "hair_eye",	stats: { str: 2, dex: 1, wis: 2 } },
+	bloodberry_hair:	{ modded: true, key: "bloodberry_hair",	name: "Bloody-hairy",		    slot: "hair_eye",	stats: { str: 3, dex: 1, wis: 1 } },
 	skellyberry_body:	{ modded: true, key: "skellyberry_body",name: "Skelly-belly",		    slot: "body",		  stats: { str: 2, con: 4 } },
 });
 

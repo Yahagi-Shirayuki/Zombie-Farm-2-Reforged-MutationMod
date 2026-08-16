@@ -24,6 +24,7 @@ import {
   zombiePartTint,
 } from "../zombie/appearance";
 import { SpecialHeadFx, specialHeadFxKind } from "../zombie/specialHeadFx";
+import { zombiePartTextureForFacing } from "../zombie/facingPartTexture";
 
 const MODEL_BASE = 0.95;
 const TILT_AMP_MOVE = 0.1;
@@ -94,6 +95,9 @@ export class RaidActor {
   private footBBaseY = 0;
   private arms: Sprite[] = []; // ArmF/ArmB sprites, for the activated wind-up pose
   private armReplaceable: Pick<Record<MutationReplacement, Sprite[]>, "armF" | "armB"> = { armF: [], armB: [] };
+  private facingPartSprites: { sp: Sprite; file: string }[] = [];
+  private facingPartAssets: GameAssets | null = null;
+  private facingPartMirrored: boolean | null = null;
   private mutationArmSprites: { ref: MutationRef; sp: Sprite }[] = [];
   private mutationArmAssets: GameAssets | null = null;
   private mutationArmModel: ZombieModel | null = null;
@@ -156,6 +160,9 @@ export class RaidActor {
     const m: ZombieModel =
       assets.zombieModels[key] ?? assets.zombieModels["ZombieActorRegularTier1"];
     this.armReplaceable = { armF: [], armB: [] };
+    this.facingPartSprites = [];
+    this.facingPartAssets = assets;
+    this.facingPartMirrored = this.facing < 0;
     this.mutationArmSprites = [];
     this.mutationArmAssets = assets;
     this.mutationArmModel = m;
@@ -191,7 +198,7 @@ export class RaidActor {
         && (matchesMutationReplacement(p.file, "head")
           || (coversFace && shouldPromoteBaseHeadForegroundPart(p.file, p.z)))
       ) continue;
-      const tex = assets.zombiePartTex[p.file];
+      const tex = zombiePartTextureForFacing(assets, p, this.facing < 0);
       if (!tex) continue;
       const sp = new Sprite(tex);
       sp.anchor.set(p.ax, p.ay);
@@ -202,6 +209,7 @@ export class RaidActor {
         : p.z;
       if (p.tint) sp.tint = zombiePartTint(p.file, tint, group);
       this.root.addChild(sp);
+      this.facingPartSprites.push({ sp, file: p.file });
       if (matchesMutationReplacement(p.file, "armF")) this.armReplaceable.armF.push(sp);
       if (matchesMutationReplacement(p.file, "armB")) this.armReplaceable.armB.push(sp);
       if (p.group === "head") {
@@ -269,7 +277,19 @@ export class RaidActor {
   setFacingFromDelta(dx: number) {
     if (dx > 0.01) this.facing = -1;
     else if (dx < -0.01) this.facing = 1;
+    this.syncBasePartFacing();
     this.syncMutationArmFacing();
+  }
+
+  private syncBasePartFacing() {
+    const assets = this.facingPartAssets;
+    const mirrored = this.facing < 0;
+    if (!assets || this.facingPartMirrored === mirrored) return;
+    for (const entry of this.facingPartSprites) {
+      const texture = zombiePartTextureForFacing(assets, entry, mirrored);
+      if (texture) entry.sp.texture = texture;
+    }
+    this.facingPartMirrored = mirrored;
   }
 
   private syncMutationArmFacing() {

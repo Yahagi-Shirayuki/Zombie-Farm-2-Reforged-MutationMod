@@ -50,6 +50,25 @@ describe("Mini Buddy", () => {
     expect(sim.units.find((candidate) => candidate.id === "dapper")?.buddyId).toBe("imp");
   });
 
+  it("lets a Luckybox carrier use Mini Buddy with any mini-type passenger", () => {
+    const box = unit({
+      id: "box", sourceKey: "ZombieActorLuckybox", group: "Regular", team: "player",
+      abilities: ["attachMini"],
+    });
+    const miniBox = unit({
+      id: "mini-box", sourceKey: "ZombieActorLuckyboxGold", group: "Regular",
+      visualGroup: "Small", team: "player",
+    });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
+    const sim = new BattleSim([box, miniBox], [enemy], null, true);
+
+    expect(sim.activatedStatus()).toContainEqual(
+      expect.objectContaining({ key: "attachMini", ready: 1 }),
+    );
+    expect(sim.activate("attachMini")).toBe(true);
+    expect(sim.units.find((candidate) => candidate.id === "box")?.buddyId).toBe("mini-box");
+  });
+
   it("mounts before deployment, doubles the carrier run, then deploys both with a stun", () => {
     const brute = unit({
       id: "brute", sourceKey: "ZombieActorLargeTier2", team: "player",
@@ -192,6 +211,26 @@ describe("Focus charge timing", () => {
 });
 
 describe("deployed team ability counts", () => {
+  it("shows modded self passives in the informational strip", () => {
+    const freezer = unit({
+      id: "freezer", sourceKey: "ZombieActorRegularSpecial", team: "player",
+      abilities: ["freeze", "gymRat", "lucky"],
+    });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
+    const sim = new BattleSim([freezer], [enemy], null, true);
+    expect(sim.teamAbilityStatus()).toEqual([
+      { key: "freeze", count: 0 },
+      { key: "gymRat", count: 0 },
+      { key: "lucky", count: 0 },
+    ]);
+    sim.units.find((candidate) => candidate.id === "freezer")!.state = "advance";
+    expect(sim.teamAbilityStatus()).toEqual([
+      { key: "freeze", count: 1 },
+      { key: "gymRat", count: 1 },
+      { key: "lucky", count: 1 },
+    ]);
+  });
+
   it("counts only living carriers on the battlefield", () => {
     const first = unit({
       id: "first", sourceKey: "ZombieActorRegularTier2", team: "player",
@@ -682,6 +721,119 @@ describe("binary-authentic ability procs", () => {
       if (e.stunMs === 1000) procs++;
     }
     expect(procs).toBe(4);
+  });
+
+  it("freezes on exactly the ten >89 integer results in each 100-roll cycle", () => {
+    const freezer = unit({
+      id: "freezer", sourceKey: "ZombieActorRegularSpecial", team: "player",
+      abilities: ["freeze"],
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000,
+    });
+    const sim = new BattleSim([freezer], [enemy], null, true);
+    const f = sim.units.find((u) => u.id === "freezer")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    let procs = 0;
+    for (let i = 0; i < 100; i++) {
+      e.stunMs = 0;
+      f.timerMs = 0;
+      (sim as any).tryAttack(f, e, 0);
+      if (e.stunMs === 3000) procs++;
+    }
+    expect(procs).toBe(10);
+    expect(e.freezeMs).toBe(3000);
+  });
+
+  it("Triple dips adds 33 pairs of full bonus strikes per 100 attacks", () => {
+    const striker = unit({
+      id: "triple", sourceKey: "ZombieActorRegularSpecial", team: "player",
+      abilities: ["triple"],
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000,
+    });
+    const sim = new BattleSim([striker], [enemy], null, true);
+    const s = sim.units.find((u) => u.id === "triple")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    for (let i = 0; i < 100; i++) {
+      s.timerMs = 0;
+      (sim as any).tryAttack(s, e, 0);
+    }
+    expect(e.hp).toBe(100_000 - 100 * 50 - 33 * 2 * 50);
+  });
+
+  it("Combo adds 25 triplets of full bonus strikes per 100 attacks", () => {
+    const striker = unit({
+      id: "quad", sourceKey: "ZombieActorRegularSpecial", team: "player",
+      abilities: ["quad"],
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000,
+    });
+    const sim = new BattleSim([striker], [enemy], null, true);
+    const s = sim.units.find((u) => u.id === "quad")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    for (let i = 0; i < 100; i++) {
+      s.timerMs = 0;
+      (sim as any).tryAttack(s, e, 0);
+    }
+    expect(e.hp).toBe(100_000 - 100 * 50 - 25 * 3 * 50);
+  });
+
+  it("Death Punch deals a 1000x attack on its 0.1% roll", () => {
+    const striker = unit({
+      id: "death", sourceKey: "ZombieActorRegularSpecial", team: "player",
+      abilities: ["deathPunch"],
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000,
+    });
+    const sim = new BattleSim([striker], [enemy], null, true);
+    const s = sim.units.find((u) => u.id === "death")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    s.abilityRollSeq = 136;
+    s.timerMs = 0;
+    (sim as any).tryAttack(s, e, 0);
+    expect(e.hp).toBe(100_000 - 50 - 50 * 1000);
+  });
+
+  it("Life steal heals for 2% of actual damage dealt", () => {
+    const drainer = unit({
+      id: "drainer", sourceKey: "ZombieActorRegularSpecial", team: "player",
+      str: 10, hp: 100, maxHp: 3000, abilities: ["lifeSteal"],
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 100_000, maxHp: 100_000,
+    });
+    const sim = new BattleSim([drainer], [enemy], null, true);
+    const d = sim.units.find((u) => u.id === "drainer")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    d.timerMs = 0;
+    (sim as any).tryAttack(d, e, 0);
+    expect(d.hp).toBe(102);
+  });
+
+  it("Spiky reflects half of direct enemy melee damage", () => {
+    const spiky = unit({
+      id: "spiky", sourceKey: "ZombieActorRegularSpecial", team: "player",
+      hp: 3000, maxHp: 3000, abilities: ["spike"],
+    });
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      hp: 1000, maxHp: 1000,
+    });
+    const sim = new BattleSim([spiky], [enemy], null, true);
+    const p = sim.units.find((u) => u.id === "spiky")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    (sim as any).dealEnemyDamage(p, 100, e);
+    expect(p.hp).toBe(2900);
+    expect(e.hp).toBe(950);
   });
 });
 

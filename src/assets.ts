@@ -4,6 +4,7 @@ import { makeCropTopTexture } from "./cropTop";
 import type { QuestDef } from "./quest/types";
 import type { RaidDef, EnemyStat, AttackDef } from "./raid/types";
 import { setZombieNames } from "./zombie/names";
+import { extraZombieFacingPartFiles } from "./zombie/facingPartTexture";
 import { BASE } from "./base";
 import { AssetHttpError, fetchJson, mapConcurrent } from "./assetLoading";
 import { MAX_ZOMBIE_POTS } from "./placementLimit";
@@ -194,6 +195,8 @@ export interface ZombieDef {
   baseKey?: string;
   /** Optional portrait species key when this row has no dedicated portrait file. */
   portraitKey?: string;
+  /** Optional standalone modular model JSON under /assets/zombie/. */
+  modelJson?: string;
   cost: number;
   growMs: number; // authoritative (source) grow time
   level: number; // player level required to unlock
@@ -202,6 +205,18 @@ export interface ZombieDef {
   category: "normal" | "special" | "mutant";
   mutation?: number; // mutation BITMASK for market mutants (Carrot=4); 0/absent = none
   mutationIds?: string[]; // local modded mutation ids for market mutants
+  mutationProfile?: "headless"; // forbids head/hair-eye mutations without changing group
+  /** Explicit ability slots for catalog previews or one-off owned zombies. */
+  abilityKeys?: string[];
+  /** One-time random rolls applied when this catalog row becomes an owned zombie. */
+  randomizeOnCreate?: {
+    bodyColor?: boolean;
+    abilitySlots?: number;
+    abilityTiers?: number[];
+    visualGroups?: string[];
+    visualScale?: { min: number; max: number };
+    displayStats?: Partial<Record<"str" | "dex" | "con" | "focus", { min: number; max: number }>>;
+  };
   // Phase 3 taxonomy + combat stats (baked by tools/prep_market.py).
   group: string; // Regular / Female / Small / Large / Headless / Garden
   className: string; // Green / Blue / Red / Silver / Special / Yellow
@@ -557,8 +572,12 @@ export function looseMutationFiles(
   parts: Readonly<Record<string, MutationPart>>,
   atlas: Readonly<Record<string, unknown>>,
 ): string[] {
+  const files = Object.values(parts).map((part) => part.file);
   return [...new Set(
-    Object.values(parts).map((part) => part.file).filter((file) => !(file in atlas))
+    [
+      ...files,
+      ...extraZombieFacingPartFiles(files),
+    ].filter((file) => !(file in atlas))
   )];
 }
 
@@ -588,6 +607,19 @@ async function loadLooseMutationParts(
       }
     },
   );
+}
+
+async function loadStandaloneZombieModels(
+  zombies: readonly ZombieDef[],
+  zombieModels: Record<string, ZombieModel>,
+): Promise<void> {
+  await Promise.all(zombies.filter((row) => row.modelJson).map(async (row) => {
+    try {
+      zombieModels[row.key] = await json<ZombieModel>(`${BASE}assets/zombie/${row.modelJson}`);
+    } catch (error) {
+      console.warn(`[assets] zombie model "${row.modelJson}" for "${row.key}" could not be loaded`, error);
+    }
+  }));
 }
 
 // Load the complete modular Farmer rig so every market head/body can be equipped.
@@ -754,6 +786,7 @@ export async function loadAssets(): Promise<GameAssets> {
     });
   }
   await loadLooseMutationParts(mutationParts, zombiePartTex);
+  await loadStandaloneZombieModels(zombies, zombieModels);
 
   // A named special's plist contains only the attachments it replaces. Load those
   // dedicated parts, then merge them over a plain skeleton so partial actors do not
