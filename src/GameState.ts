@@ -286,8 +286,12 @@ export class GameState {
     this.onMoney?.("brains", n, reason);
     this.emit();
   }
-  addZombieMax(n: number) {
-    this.zombieMax = Math.max(1, this.zombieMax + n);
+  /** Adopt a freshly DERIVED army cap (base + placed objects). The cap is never
+   *  accumulated — see armyCapacity.ts for why a running total could not hold. */
+  syncArmyCapacity(zombieMax: number) {
+    const next = Math.max(1, zombieMax);
+    if (next === this.zombieMax) return;
+    this.zombieMax = next;
     this.emit();
   }
   /** Adopt server base capacity plus authoritative placed-object effects. */

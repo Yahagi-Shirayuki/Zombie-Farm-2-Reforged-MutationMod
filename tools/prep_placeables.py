@@ -663,11 +663,18 @@ def extract_first_animated_frame(tp):
 # its base frame, where the next-widest animated tile is 3.0x and every other one has
 # its subject in the base frame already — this is the only tile of its kind.
 #
+# The Pixel Campfire is the same shape at raid-reward scale: pixel_campfire_base.png is
+# the crossed logs alone and all three flame frames live in the animation, so it shipped
+# as an unlit fire pit ("Pixel campfire only shows the base"). Its area ratio is a mild
+# 1.5x — the subject-in-the-base test above does not catch it — but the missing piece is
+# the entire point of the object, and lighting.ts already carves a warm light out of the
+# night for it, which only made the unlit logs read as a bug.
+#
 # The reimplementation draws placeables as single static sprites, so the fix is to bake
 # the orbit's FIRST frame over the plinth, exactly as extract_multiplepieces bakes a
 # rigged object's layers. Frame 01 is also the widest spread of the twelve and the only
-# one the source itself starts on.
-ANIMATION_OVER_BASE = {"spaceSolarSystem"}
+# one the source itself starts on; the campfire's flame frames likewise start at fr00.
+ANIMATION_OVER_BASE = {"spaceSolarSystem", "pixelCampfire"}
 
 
 def extract_animated_over_base(tp):
@@ -1047,6 +1054,10 @@ def main():
         sprite_img = None
         if tp.get("multiplePieces"):
             sprite_img = extract_multiplepieces(tp)
+        elif tile in ANIMATION_OVER_BASE:
+            # frameName is only the part that stands still (the Pixel Campfire's logs
+            # without its fire); bake the animation's first frame on.
+            sprite_img = extract_animated_over_base(tp)
         elif tp.get("frameList") and tp.get("frameName"):
             sprite_img = extract_from_atlas(tp["frameList"], tp["frameName"])
         else:

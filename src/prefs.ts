@@ -45,6 +45,7 @@ const RAID_TIP_KEY = "zf2r.seenRaidTip."; // + raid id
 const BODY_COLOR_KEY = "zf2r.zombieBodyColor";
 const SHOW_MUTATIONS_KEY = "zf2r.showZombieMutations";
 const LANTERN_KEY = "zf2r.farmerLantern";
+const LANTERN_TAP_KEY = "zf2r.farmerLanternTap";
 
 /** localStorage.getItem that survives a browser with storage denied (private mode,
  *  blocked third-party context). Appearance prefs are read while DRAWING, so a throw
@@ -97,6 +98,21 @@ export function getFarmerLantern(): boolean {
 
 export function setFarmerLantern(on: boolean): void {
   writePref(LANTERN_KEY, on ? "1" : "0");
+}
+
+/** Whether tapping the farmer after dark toggles his lantern. Defaults to on.
+ *
+ *  Off makes the lantern a Settings-only switch: the tap falls through to whatever
+ *  is under him, so a farmer standing on a ripe plot can never eat the harvest and
+ *  the lantern can't be flipped by a stray tap. The Settings row above still works
+ *  either way, so turning this off can't strand the lantern in a state you can't
+ *  change. */
+export function getFarmerLanternTap(): boolean {
+  return readPref(LANTERN_TAP_KEY) !== "0";
+}
+
+export function setFarmerLanternTap(on: boolean): void {
+  writePref(LANTERN_TAP_KEY, on ? "1" : "0");
 }
 
 /** Both appearance choices at once, for the render sites that apply them. */

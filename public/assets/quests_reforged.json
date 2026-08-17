@@ -207,7 +207,7 @@
     "id": "20008",
     "title": "Heavy Machinery",
     "messageComplete": "The boss never saw the big one coming.",
-    "tip": "Large zombies learn Smash at Red rank, and Smash can reach a boss.",
+    "tip": "A Bash hits harder; Smash trades damage for a 1-second stun. Either counts.",
     "sprite": "Icon_Quest_Invasion.png",
     "levelRequired": 24,
     "prerequisiteQuest": -1,
@@ -216,7 +216,7 @@
         "notificationID": "kBossDefeatedByAbilityNotification",
         "notificationObject": "Smash",
         "countTotal": 1,
-        "text": "Defeat a boss with a Smash",
+        "text": "Land the killing blow on a boss with a Smash",
         "type": 1,
         "sprite": ""
       }
@@ -500,6 +500,35 @@
     "rewardType": 0,
     "rewardValue": 5600,
     "rewardBrains": 1,
+    "rewardItem": "",
+    "rewardItemKey": "",
+    "tutorialQuest": false,
+    "epicEvent": false,
+    "seasonal": false,
+    "seasonalDate": "",
+    "removeQuest": false,
+    "ignoreCheckQuest": false
+  },
+  "20017": {
+    "id": "20017",
+    "title": "Game Over, Zedzox",
+    "messageComplete": "Three runs through the pixel world. Zedzox is out of continues.",
+    "tip": "Win Zombies vs Video Games three times.",
+    "sprite": "Icon_Quest_Invasion.png",
+    "levelRequired": 43,
+    "prerequisiteQuest": -1,
+    "requirements": [
+      {
+        "notificationID": "kInvasionSuccessfulNotification",
+        "notificationObject": "Zombies vs Video Games",
+        "countTotal": 3,
+        "text": "Beat the Video Games 3x",
+        "type": 2,
+        "sprite": "Icon_Quest_Invasion.png"
+      }
+    ],
+    "rewardType": 0,
+    "rewardValue": 6000,
     "rewardItem": "",
     "rewardItemKey": "",
     "tutorialQuest": false,

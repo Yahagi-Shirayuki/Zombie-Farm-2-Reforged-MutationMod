@@ -11,10 +11,12 @@ const DEF = {
 // A field where the listed tiles are covered by an object, everything else walkable.
 function fieldStub(blocked: string[], w = 30, h = 30) {
   const keys = new Set(blocked);
+  const open = (c: number, r: number) =>
+    c >= 0 && r >= 0 && c < w && r < h && !keys.has(`${c},${r}`);
   return {
     inBounds: (c: number, r: number) => c >= 0 && r >= 0 && c < w && r < h,
-    isPassable: (c: number, r: number) =>
-      c >= 0 && r >= 0 && c < w && r < h && !keys.has(`${c},${r}`),
+    isPassable: open,
+    isOpenGround: open, // no priced terrain in the stub: walkable == somewhere to stand
   };
 }
 

@@ -1707,6 +1707,10 @@ export class Hud {
   /** The farmer's night lantern. Also toggled by tapping him after dark. */
   getFarmerLantern: (() => boolean) | null = null;
   onSetFarmerLantern: ((on: boolean) => void) | null = null;
+  /** Whether tapping the farmer toggles that lantern at all. Off leaves the Settings
+   *  row as the only switch, so the tap falls through to the ground under him. */
+  getFarmerLanternTap: (() => boolean) | null = null;
+  onSetFarmerLanternTap: ((on: boolean) => void) | null = null;
   /** Current farm-background (foliage density) choice. */
   getFarmBackground: (() => FarmBackground) | null = null;
   /** Change the farm background — rebuilds the foliage ring live. */

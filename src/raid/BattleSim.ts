@@ -312,7 +312,10 @@ const GRABBER_SWING_RADIUS_X = FIELD_W * 0.5;
 const GRABBER_CONTACT_DEG = 90;
 const GRABBER_RISE_SPEED = 92; // carry-off rise speed (sim px/s), the slow 0.5 speed
 const GRABBER_CARRY_PAUSE_MS = 1000; // changeStateWithDelay_run_1: hold 1s before rising
-const GRABBER_TAP_CD_MS = 250; // tapDelay 0.25 — min gap between registered taps
+// tapDelay 0.25 — min gap between registered taps, shared by both rescue hazards. This is
+// the AUTHORED (touch) pace; the live scene overrides it per input device through
+// `hazardTapCooldownMs`. See src/raid/hazardTaps.ts.
+const RESCUE_TAP_CD_MS = 250;
 // The renderer places this pivot at horizontal center and one-quarter viewport above
 // the top edge. The logical x is retained for target-angle and snapshot calculations.
 const GRABBER_PIVOT_X = FIELD_W * 0.5;
@@ -335,7 +338,6 @@ const CRAB_WALK_SPEED = 70; // lane speed (sim px/s). NOT ground truth — the s
 const CRAB_CARRY_SPEED = 95; // speed while hauling a zombie toward the left edge
 const CRAB_EXIT_X = -60; // past this (off the left edge) the carried zombie is out
 const CRAB_HIT_R = 30; // contact radius for the grab (sim units)
-const CRAB_TAP_CD_MS = 250; // min gap between registered taps (matches the trapeze tapDelay)
 const CRAB_WANDER_MS = 1400; // how long it holds one wander heading before re-picking
 // Wander band: the source picks random destinations around the mid-lane. The exact
 // formula did not disassemble cleanly, so this is a bounded patrol of the contested
@@ -800,6 +802,13 @@ export class BattleSim {
    *  renderer can pick the authored impact cue (the alien bolt plays stun.wav, not the
    *  generic splat). Cleared with the count above. */
   lastProjectileImpactSprite = "";
+  /** Minimum gap between rescue-hazard taps that register (Trapeze Artist, Beach crab).
+   *  Defaults to the authored touch pace; the live scene lowers it for a mouse, which
+   *  clicks two to three times faster than the gate allows and had most of those clicks
+   *  silently discarded. Safe to vary because BOTH hazards are client-only and neither
+   *  one's taps are transcribed — the verifier never calls tapCrab/tapGrabber at all, so
+   *  it keeps this default forever. See src/raid/hazardTaps.ts. */
+  hazardTapCooldownMs = RESCUE_TAP_CD_MS;
   private players: SimUnit[];
   private enemies: SimUnit[];
   private boss: SimUnit | null;
@@ -1470,6 +1479,21 @@ export class BattleSim {
     if (wasAlive && !target.alive) {
       this.feats.abilityKills.push({ ability: key, boss: target.isBoss });
     }
+  }
+
+  /** What a Mini Buddy carrier is CHARGING AT: the nearest enemy that has actually come
+   *  out and is standing on the field. Null when there is nothing to ram yet, in which
+   *  case the carrier walks to its formation slot as usual and waits — it should not go
+   *  and stand on the doorway a queued enemy has yet to walk through.
+   *
+   *  A blocker in the lane (a boss wall, an alien abductee) is a legitimate ram target;
+   *  the caller clamps the destination to it anyway. A converted pixel zombie is NOT —
+   *  `targetEnemy` refuses it, and this uses the same rule so the pair never charge a
+   *  hazard the army is not supposed to be fighting. */
+  private ramTargetFor(carrier: SimUnit): SimUnit | null {
+    const foe = this.targetEnemy(carrier);
+    if (!foe || (foe.state !== "hold" && foe.state !== "fight")) return null;
+    return foe;
   }
 
   /** Dismount a Mini Buddy at the line. The shipped ram stuns the enemy for two
@@ -2440,10 +2464,21 @@ export class BattleSim {
             break;
           }
           // Move to the assigned formation slot (never past the enemy).
+          //
+          // …EXCEPT while carrying a Mini Buddy, which is a RAM and not a march. A brute
+          // with a mini aboard drives at the enemy line rather than to its own slot: the
+          // move is "it runs forward and stuns what it hits", and a Large's slot is the
+          // furthest back of any body type (v23 gave each body its own standoff), so
+          // aiming at the slot stopped the charge well SHORT of the enemy — measured on a
+          // real party: it halted 72 units behind its own front rank and stunned a knight
+          // 162 units away that it had never reached. The stun looked like it fired at
+          // random from across the field, because effectively it did.
           const blockingWall = this.wallInWay(p);
+          const ramTarget = p.buddyId ? this.ramTargetFor(p) : null;
+          const slotX = ramTarget ? ramTarget.x - this.engageDistance : p.slotX;
           const destinationX = blockingWall
-            ? Math.min(p.slotX, blockingWall.x - this.blockerGap(blockingWall))
-            : p.slotX;
+            ? Math.min(slotX, blockingWall.x - this.blockerGap(blockingWall))
+            : slotX;
           const mdx = destinationX - p.x;
           const mdy = p.slotY - p.y;
           const md = Math.hypot(mdx, mdy);
@@ -2469,7 +2504,14 @@ export class BattleSim {
           // enough for another row to fill the open front slot. Once it reaches that
           // recovery slot, restore its defining behavior: it pushes forward again.
           if (p.isHeadless && !p.frontPriority && atSlot) p.frontPriority = true;
-          if (p.buddyId && enemyArrived && atSlot) this.deployMiniBuddy(p, foe);
+          // The ram lands on CONTACT with the thing it charged, not on arrival at a slot.
+          // `atSlot` is kept as a backstop so a carrier whose target dies mid-charge (or
+          // that is walled off short of it) still puts its passenger down instead of
+          // running around with it for the rest of the fight.
+          if (p.buddyId && enemyArrived) {
+            const reached = Math.abs(foe!.x - p.x) <= this.engageDistance + 2;
+            if (reached || atSlot) this.deployMiniBuddy(p, foe);
+          }
           const atBlockingWall = !!blockingWall &&
             Math.abs(blockingWall.x - p.x) <= this.blockerGap(blockingWall) + 2;
           if (foe && enemyArrived && (inCombatZone || atBlockingWall)) {
@@ -3173,13 +3215,15 @@ export class BattleSim {
     });
   }
 
-  /** Player tapped a crab: one tap of damage (rate-limited). Ground truth 100 damage vs
-   *  1000 HP = exactly 10 taps. Killing it releases any zombie it holds back onto the lane
+  /** Player tapped a crab: one tap of damage (rate-limited). Ground truth is 100 damage a
+   *  tap against 1000 HP — ten taps; the shipped HP is tuned down per input device (seven
+   *  taps on touch, four with a mouse — see RaidManager.crabOf and raid/hazardTaps.ts),
+   *  and the rate limit likewise. Killing it releases any zombie it holds back onto the lane
    *  (source state 9 → 10, invincibility off) and frees its spawn slot. */
   tapCrab(id: string): boolean {
     const c = this.crabs.find((x) => x.id === id && x.state !== "gone");
     if (!c || c.tapCdMs > 0) return false;
-    c.tapCdMs = CRAB_TAP_CD_MS;
+    c.tapCdMs = this.hazardTapCooldownMs;
     c.hp -= c.tapDamage;
     c.struckThisTick = true;
     if (c.hp <= 0) {
@@ -3287,7 +3331,7 @@ export class BattleSim {
   tapGrabber(id: string): boolean {
     const g = this.grabbers.find((x) => x.id === id && x.state !== "gone");
     if (!g || g.tapCdMs > 0) return false;
-    g.tapCdMs = GRABBER_TAP_CD_MS;
+    g.tapCdMs = this.hazardTapCooldownMs;
     g.hp -= g.tapDamage;
     g.struckThisTick = true;
     if (g.hp <= 0) {

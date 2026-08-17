@@ -8,6 +8,8 @@ import "pixi.js/unsafe-eval";
 import { loadAssets, canMirrorObject, ensureBackgroundTexture, ensureObjectTexture, ensureObjectTextures, objectSpriteFiles, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
 import { pickPiece, type PathSpec, type RoadSpec, type SceneryPiece, type SkylineSpec, type SpringSpec, surroundingsTheme, themeObjectFiles } from "./surroundings";
 import { MAX_ZOMBIE_POTS, noRoomForAnother } from "./placementLimit";
+import { armingSurvives } from "./placementArming";
+import { armyCapacityOf, BASE_ARMY_MAX } from "./armyCapacity";
 import { Field, CARROT, CropConfig, objectFootprint, PLOT } from "./Field";
 import { Actor } from "./Actor";
 import { PetActor } from "./PetActor";
@@ -63,6 +65,7 @@ import {
   DEFAULT_FARM_BACKGROUND, getFarmBackground, isFarmBackground, setFarmBackground,
   FARM_BG_DENSITY, type FarmBackground, getDayNightMode, setDayNightMode,
   isLocalNight, isLocalDusk, type DayNightMode, getFarmerLantern, setFarmerLantern,
+  getFarmerLanternTap, setFarmerLanternTap,
   hasSeenHazardTip, markHazardTipSeen,
   hasSeenRaidTip, markRaidTipSeen,
   zombieAppearancePrefs, setZombieBodyColorMode, setShowZombieMutations,
@@ -467,6 +470,23 @@ async function main() {
 
   const field = new Field(assets);
   world.addChild(field.container);
+
+  /** The army base the server last reported. Offline nothing ever reports one, so it
+   *  stays at the shipped default — the same number the server derives from. */
+  let serverArmyBase = BASE_ARMY_MAX;
+  /** Re-derive the army cap from the objects actually standing on the farm. Every path
+   *  that puts a functional object down or takes one away calls this instead of nudging
+   *  the number by the def's `armyMax`: a running total only had to miss one branch to
+   *  be permanently wrong offline, where no reconcile comes along to fix it (see
+   *  armyCapacity.ts). Cheap and idempotent — it no-ops when nothing changed, so it is
+   *  also safe to call on a placement that turned out not to land. */
+  const refreshArmyCap = () => {
+    state.syncArmyCapacity(armyCapacityOf(
+      serverArmyBase,
+      field.placedKeys(),
+      (key) => placeCatalog.get(key)?.armyMax,
+    ));
+  };
 
   // Placed objects (trees) and the actors share Field.entityLayer so the farmer
   // depth-sorts correctly in front of / behind trees.
@@ -1048,6 +1068,10 @@ async function main() {
   // for. Toggled by tapping the farmer (see the Select tool's tap handling) and from
   // Settings; persisted, so it survives a reload.
   let lanternOn = getFarmerLantern();
+  // Whether that tap-the-farmer shortcut is armed at all. Off leaves Settings as the
+  // only way to switch the lantern, which is what you want if you keep flipping it by
+  // accident while working the plots he is standing on.
+  let lanternTapEnabled = getFarmerLanternTap();
   const setNight = (on: boolean) => {
     // A browser may preserve the JS objects while discarding their GPU render
     // target in the background. Rebuild on an off->on transition so a cold night
@@ -1084,6 +1108,11 @@ async function main() {
   };
   hud.getFarmerLantern = () => lanternOn;
   hud.onSetFarmerLantern = setLantern;
+  hud.getFarmerLanternTap = () => lanternTapEnabled;
+  hud.onSetFarmerLanternTap = (on) => {
+    lanternTapEnabled = on;
+    setFarmerLanternTap(on);
+  };
   hud.getDayNightMode = () => dayNightMode;
   hud.onSetDayNightMode = (mode) => {
     dayNightMode = mode;
@@ -2118,6 +2147,12 @@ async function main() {
         },
       });
     }
+    // Repair a cap the save disagrees with. A local save carries the number rather
+    // than deriving it, so any farm drifted by the old accumulate-as-you-go handling
+    // — most visibly a Zombie Monolith standing on the farm whose +4 was never
+    // counted — comes back wrong and stays wrong. Deriving it here settles it once,
+    // and every placement path keeps it settled from then on.
+    refreshArmyCap();
     saveManager.enableAutosave();
     // Backfill newly-added presentation fields (such as woodland density) even
     // when an existing player does not immediately change another farm value.
@@ -2410,10 +2445,15 @@ async function main() {
       // would drop them straight back into the state this just repaired.
       if (orphans.length) saveManager.flushCritical();
 
-      const placed = field.serializeObjects();
-      const armyBonus = placed.reduce((sum, object) => sum + (placeCatalog.get(object.key)?.armyMax ?? 0), 0);
-      const itemCap = placed.reduce((cap, object) => Math.max(cap, placeCatalog.get(object.key)?.storageSlots ?? 0), 8);
-      state.syncCapacities(baseZombieMax + armyBonus, itemCap);
+      // The server's own base wins from here on, so an offline-default client and an
+      // account whose base the server later changes agree on what the objects add to.
+      serverArmyBase = baseZombieMax;
+      const placed = [...field.placedKeys()];
+      const itemCap = placed.reduce((cap, key) => Math.max(cap, placeCatalog.get(key)?.storageSlots ?? 0), 8);
+      state.syncCapacities(
+        armyCapacityOf(serverArmyBase, placed, (key) => placeCatalog.get(key)?.armyMax),
+        itemCap,
+      );
       return true; // aliases consumed — EconomyClient may drop them
     };
     economy.onRosterState = (roster, aliases, settled) => {
@@ -2576,7 +2616,7 @@ async function main() {
         const def = field.objectDefOf(id);
         if (def) {
           field.removeObject(id);
-          if (def.armyMax) state.addZombieMax(-def.armyMax);
+          refreshArmyCap();
           objectPurchases.delete(id);
           saveManager.flushCritical();
         }
@@ -3224,6 +3264,12 @@ async function main() {
   hud.onBuy = async (def) => {
     if (onlineGameplayBlocked()) return;
     if (hud.objectLimitReached?.(def)) return;
+    // A purchase is never a free placement. Dropping both armings here covers the
+    // one case the def check in onModeChange cannot see: buying the SAME key that a
+    // pending retrieve holds, where the tap would spend the shed copy and hand the
+    // player their purchase for nothing.
+    retrieving = null;
+    receiving = null;
     await ensureObjectTextures(assets, def);
     if (def.storageSlots && field.shedId()) upgradeBuilding(def, field.shedId()); // upgrade, don't place
     // A placed Mausoleum upgrades in place too; a lower/equal tier is a no-op.
@@ -5038,7 +5084,7 @@ async function main() {
       }
       field.placeObject(def, oc, or, selected.instanceId, undefined, placeFlipped);
       audio.play("place");
-      if (def.armyMax) state.addZombieMax(def.armyMax); // re-apply functional effect
+      refreshArmyCap(); // re-apply functional effect
       economy?.submitObjectStatus(selected.instanceId, "placed");
       retrieving = null;
       hud.setPlacing(null); // one at a time
@@ -5048,14 +5094,26 @@ async function main() {
     if (receiving !== null) {
       const receivedIndex = receiving;
       const itemName = state.received[receivedIndex];
+      // Resolve the reward BEFORE putting anything down, and check it is still the one
+      // this placement was armed for. The arming is an INDEX, and claiming or selling
+      // another reward re-indexes the bucket underneath it — so it can come to point at
+      // a different entry, or past the end entirely. Placing first left that object
+      // standing on the farm owned by nobody and paid for by nobody: a Zombie Monolith
+      // stranded that way never got the +4, and storing it later took away four slots
+      // the cap had never been given.
+      if (!itemName || receivedDef(itemName)?.key !== def.key) {
+        receiving = null;
+        hud.setPlacing(null);
+        return;
+      }
       const placedId = field.placeObject(def, oc, or, undefined, undefined, placeFlipped);
-      if (!placedId || !itemName) return;
+      if (!placedId) return;
       if (economy && !economy.submitStorageClaim(itemName, { localObjectId: placedId })) {
         field.removeObject(placedId);
         return;
       }
       audio.play("place");
-      if (def.armyMax) state.addZombieMax(def.armyMax);
+      refreshArmyCap();
       state.takeReceivedAt(receivedIndex);
       receiving = null;
       hud.setPlacing(null); // one at a time
@@ -5095,8 +5153,8 @@ async function main() {
       void economy!.settleBeforeDependency().then(() => saveManager.flushCritical()).catch(() => {});
     }
     audio.play("place");
-    if (def.armyMax) state.addZombieMax(def.armyMax); // functional effect
-    if (def.storageSlots) state.upgradeStorage(def.storageSlots); // shed capacity
+    refreshArmyCap(); // functional effect — no-ops when the placement did not land
+    if (def.storageSlots && placedId) state.upgradeStorage(def.storageSlots); // shed capacity
     const c = tileCenter(col, row);
     floatText(c.x, c.y, `-${cost}${useBrains ? "b" : "g"}`);
     showPurchaseXp(xp, c);
@@ -5172,7 +5230,7 @@ async function main() {
     field.removeObject(id);
     if (!def || !o) return;
     audio.play("sell");
-    if (def.armyMax) state.addZombieMax(-def.armyMax); // reverse functional effect
+    refreshArmyCap(); // reverse functional effect
     const purchase = objectPurchases.get(id);
     const boughtWithBrains = purchase ? purchase.currency === "brains" : !!def.brainsNeeded;
     const refund = purchase ? sellBack(purchase.cost, boughtWithBrains) : sellRefund(def);
@@ -5255,8 +5313,8 @@ async function main() {
     const def = field.objectDefOf(id);
     if (!def) return;
     if (!state.storeItem(def.key)) return; // shed full
-    if (def.armyMax) state.addZombieMax(-def.armyMax); // reverse functional effect
     field.removeObject(id);
+    refreshArmyCap(); // reverse functional effect — derived, so it reads the farm AFTER
     const storedIds = storedObjectIds.get(def.key) ?? [];
     storedIds.push(id);
     storedObjectIds.set(def.key, storedIds);
@@ -5486,9 +5544,11 @@ async function main() {
    *  On MOUSE this resolves just after the zombie pick, ahead of the tile. On TOUCH it
    *  is the last resort, the same deal a zombie gets: a finger covers the plot behind
    *  him, so the plot keeps the tap and the farmer is only reachable on open ground.
-   *  Settings carries the same switch for anyone who would rather not chase him. */
+   *  Settings carries the same switch for anyone who would rather not chase him, and
+   *  a second Settings toggle disarms this tap entirely for anyone who keeps hitting
+   *  it by accident. */
   const tapFarmer = (wx: number, wy: number): boolean => {
-    if (!isNight || visiting || tutorial.active) return false;
+    if (!lanternTapEnabled || !isNight || visiting || tutorial.active) return false;
     if (!actor.containsPoint(wx, wy)) return false;
     setLantern(!lanternOn);
     audio.play("menuClick");
@@ -6077,8 +6137,13 @@ async function main() {
     field.setObjectHighlight(null);
     zombies.clearSelection();
     cancelCarry();
-    if (hud.mode !== "place") retrieving = null; // leaving placement drops a pending retrieve
-    if (hud.mode !== "place") receiving = null; // ...and a pending Received placement
+    // Leaving placement drops a pending retrieve / Received placement — and so does
+    // switching WHAT is being placed, which is the same abandonment by another route:
+    // the Market calls setPlacing with a new def without ever leaving "place" mode.
+    // See placementArming.ts for what an arming spent on the wrong def destroys.
+    const armedReward = receiving === null ? undefined : receivedDef(state.received[receiving] ?? "");
+    if (!armingSurvives(hud.mode, hud.placing?.key, retrieving?.key)) retrieving = null;
+    if (!armingSurvives(hud.mode, hud.placing?.key, armedReward?.key)) receiving = null;
     if (hud.mode !== "place") placeFlipped = false; // and reset the ghost orientation
   };
   hud.onTemporaryPanChange = () => {

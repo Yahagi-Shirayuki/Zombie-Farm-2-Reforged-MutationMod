@@ -334,7 +334,24 @@ import type { RaidOutcome } from "./types";
 //
 // Same cost as every bump: an invasion in flight at deploy time settles as stale_ruleset
 // and pays nothing.
-export const RAID_RULESET_VERSION = 31;
+//
+// v32 — MINI BUDDY RAMS TO CONTACT, on a player report. The move is "the brute runs forward
+// with the mini aboard and stuns what it HITS", and it charged to the carrier's own
+// formation SLOT instead. A Large's slot is the furthest back of any body type (v23 gave
+// each body its own standoff), so with a real army the charge stopped short and the stun
+// paid out at range — measured: the carrier halted 72 units behind its own front rank and
+// stunned a knight 162 units away. A carrier with a passenger now drives at the enemy line
+// and dismounts on contact, with the old arrival-at-slot test kept only as a backstop for a
+// target that dies mid-charge.
+//
+// This wanted to ride along on v31 above and CANNOT, which is worth spelling out because
+// the mistake is invisible: 31 was already deployed — pushed to Pages and served by the
+// live Worker — by the time the ram was fixed. `session.ruleset_version !== VERSION` at
+// /raid/finish is the only guard there is, so leaving the number alone does not mean "no
+// bump", it means every session started before the deploy replays under rules it was not
+// played under, and settles as a disagreement rather than as stale_ruleset. A transcript
+// change gets its own number the moment the previous one is live, however small it is.
+export const RAID_RULESET_VERSION = 32;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

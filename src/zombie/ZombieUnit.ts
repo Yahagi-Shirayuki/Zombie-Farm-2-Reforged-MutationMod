@@ -11,7 +11,8 @@ import { GameAssets, MutationPart, ZombieModel } from "../assets";
 import { Field } from "../Field";
 import { depth, screenToGrid, tileCenter } from "../iso";
 import { setFootprint } from "../depthSort";
-import { findEscape, findPath } from "../pathfind";
+import { findEscape, findPath, type Cell } from "../pathfind";
+import { RouteWalker, walkRoute, type Waypoint } from "../walkRoute";
 import { OwnedZombie } from "./types";
 import { slotOf } from "./mutations";
 import {
@@ -94,9 +95,13 @@ export class ZombieUnit {
   private arms: { sp: Sprite; baseRotation: number }[] = [];
   private renderScale = 1;
 
-  private wx = 0;
-  private wy = 0;
-  private path: { x: number; y: number }[] = []; // remaining tile-center waypoints
+  // Position, and the remaining (straightened — see walkRoute) waypoints. `warp` marks
+  // the far side of a wormhole hop: the zombie is moved there outright rather than
+  // walking the gap. Shared with the farmer, who walks a route the same way.
+  private walker = new RouteWalker(0, 0, {
+    onLeg: (dx) => { this.facing = dx > 0 ? -1 : 1; },
+    onFinish: () => { this.pauseMs = this.nextIdlePause(); },
+  });
   private pauseMs = IDLE_PAUSE_MIN_MS;
   private sleeping = false; // gathered on the Zombie Patch: stay put, don't wander
   private facing = 1;
@@ -108,8 +113,17 @@ export class ZombieUnit {
   private hitH = 60;
   private fertilizeCastMs = 0;
   private fertilizeCloud = new Graphics();
+  // Patch tile to lie back down on once the fertilize cast finishes (see teleportTo).
+  private fertilizeReturn: { col: number; row: number } | null = null;
   private invasionBubble!: Sprite;
   private specialHeadFx: SpecialHeadFx | null = null;
+
+  // The walker owns the position outright; these keep the rig's many readers of it
+  // spelled the way they always were rather than reaching through the indirection.
+  private get wx(): number { return this.walker.x; }
+  private set wx(v: number) { this.walker.x = v; }
+  private get wy(): number { return this.walker.y; }
+  private set wy(v: number) { this.walker.y = v; }
 
   constructor(assets: GameAssets, field: Field, data: OwnedZombie) {
     this.field = field;
@@ -146,15 +160,19 @@ export class ZombieUnit {
   }
 
   /** Instantly move to a world spot and pause there a beat — a Garden zombie
-   *  "teleports" to a crop it fertilizes, then resumes wandering. */
-  teleportTo(wx: number, wy: number) {
-    this.wx = wx;
-    this.wy = wy;
-    this.path = [];
+   *  "teleports" to a crop it fertilizes, then resumes wandering.
+   *
+   *  `returnTo` is its Zombie Patch resting tile when the farm is gathered: the
+   *  cast wakes the unit (it has to stand up and raise its arms), so without it
+   *  the one zombie that fertilized would be left wandering the farm while the
+   *  rest of the army stayed asleep. It walks back and lies down again instead. */
+  teleportTo(wx: number, wy: number, returnTo: { col: number; row: number } | null = null) {
+    this.walker.moveTo(wx, wy);
     this.sleeping = false;
     this.setEyesClosed(false);
     this.pauseMs = 100;
     this.fertilizeCastMs = FERTILIZE_CAST_MS;
+    this.fertilizeReturn = returnTo;
     this.sync();
   }
 
@@ -424,21 +442,24 @@ export class ZombieUnit {
     return depth(g.col, g.row);
   }
 
-  // Walk to a specific tile and stay there — the Zombie Patch "calls" units to
-  // nap on it. Stops wandering until woken.
-  sleepAt(col: number, row: number) {
-    this.sleeping = true;
-    // Stay awake for the walk over; the eyes close once the final tile is reached.
-    this.setEyesClosed(false);
+  /** Walk to a specific tile and stay there — the Zombie Patch "calls" units to nap
+   *  on it. Stops wandering until woken. Returns false, and stays where it is, when
+   *  the patch cannot be walked to: a unit fenced away from it used to answer the
+   *  call by cutting a straight line to the patch, fences and all. */
+  sleepAt(col: number, row: number): boolean {
     const g = screenToGrid(this.wx, this.wy);
     const from = { col: Math.round(g.col), row: Math.round(g.row) };
     const cells = findPath(
       from, { col, row }, (c, r) => this.field.isPassable(c, r), this.pathOpts()
     );
-    this.path = cells.length
-      ? cells.map((c) => tileCenter(c.col, c.row))
-      : [tileCenter(col, row)];
+    if (!cells.length && (from.col !== col || from.row !== row)) return false;
+    this.sleeping = true;
+    // Stay awake for the walk over; the eyes close once the final tile is reached.
+    this.setEyesClosed(false);
+    this.walker.setRoute(this.route(from, cells));
+    return true;
   }
+
   // Wake up and resume wandering.
   wake() {
     this.sleeping = false;
@@ -460,26 +481,35 @@ export class ZombieUnit {
     if (!this.field.isPassable(from.col, from.row)) {
       const escape = findEscape(from, (c, r) => this.field.isPassable(c, r), this.pathOpts());
       if (escape.length) {
-        this.path = escape.map((c) => tileCenter(c.col, c.row));
+        this.walker.setRoute(this.route(from, escape));
         return;
       }
     }
     for (let tries = 0; tries < 12; tries++) {
       const col = Math.round(from.col + (Math.random() * 2 - 1) * WANDER_RADIUS);
       const row = Math.round(from.row + (Math.random() * 2 - 1) * WANDER_RADIUS);
-      if (!this.field.isPassable(col, row)) continue;
+      // Somewhere it would happily stand: a hedge tile is walkable in a pinch but
+      // is not a place to go and loiter.
+      if (!this.field.isOpenGround(col, row)) continue;
       const cells = findPath(
         from, { col, row }, (c, r) => this.field.isPassable(c, r), this.pathOpts()
       );
       if (cells.length) {
-        this.path = cells.map((c) => tileCenter(c.col, c.row));
+        this.walker.setRoute(this.route(from, cells));
         return;
       }
     }
   }
 
+  // Tile route -> straightened world waypoints. Wandering runs the search constantly,
+  // so without this every zombie on the farm shuffles along a raster line instead of
+  // walking somewhere. See src/walkRoute.ts.
+  private route(from: Cell, cells: Cell[]): Waypoint[] {
+    return walkRoute(this.field, from, { x: this.wx, y: this.wy }, cells);
+  }
+
   private pathOpts() {
-    return { inBounds: (c: number, r: number) => this.field.inBounds(c, r) };
+    return this.field.pathOptions();
   }
 
   private nextIdlePause(): number {
@@ -561,7 +591,7 @@ export class ZombieUnit {
     // Animation follows the route, not displacement in just this frame. Reaching a
     // waypoint can consume a frame without translating; treating that as idle made
     // the arms and feet flash down between every pair of path cells.
-    let walking = this.path.length > 0;
+    let walking = this.walker.walking;
     if (this.fertilizeCastMs > 0) {
       this.fertilizeCloud.visible = true;
       this.fertilizeCastMs = Math.max(0, this.fertilizeCastMs - dt * 1000);
@@ -578,33 +608,24 @@ export class ZombieUnit {
       }
       if (this.fertilizeCastMs <= 0) {
         for (const arm of this.arms) arm.sp.rotation = arm.baseRotation;
+        const home = this.fertilizeReturn;
+        this.fertilizeReturn = null;
+        // Walk back to the nap. sleepAt only fails when the patch is unreachable
+        // (built over, or the crop is walled off); settle where it stands rather
+        // than wander, so it still reads as part of a sleeping army.
+        if (home && !this.sleepAt(home.col, home.row)) this.sleeping = true;
       }
-    } else if (this.path.length) {
-      const t = this.path[0];
-      const dx = t.x - this.wx;
-      const dy = t.y - this.wy;
-      const dist = Math.hypot(dx, dy);
-      const step = SPEED_PX * dt;
-      if (dist <= step || dist === 0) {
-        this.wx = t.x;
-        this.wy = t.y;
-        this.path.shift();
-        if (!this.path.length) this.pauseMs = this.nextIdlePause();
-      } else {
-        this.wx += (dx / dist) * step;
-        this.wy += (dy / dist) * step;
-        if (dx > 0.1) this.facing = -1;
-        else if (dx < -0.1) this.facing = 1;
-      }
+    } else if (this.walker.walking) {
+      this.walker.advance(SPEED_PX * dt);
     } else if (!this.sleeping) {
       // Napping units stay put; only wandering units pick a new destination.
       this.pauseMs -= dt * 1000;
       if (this.pauseMs <= 0) {
         this.repath();
-        walking = this.path.length > 0;
+        walking = this.walker.walking;
       }
     }
-    this.setEyesClosed(this.sleeping && this.path.length === 0);
+    this.setEyesClosed(this.sleeping && !this.walker.walking);
     this.tilt(dt, walking);
     this.legs(walking, dt);
     this.poseArms(walking, dt);

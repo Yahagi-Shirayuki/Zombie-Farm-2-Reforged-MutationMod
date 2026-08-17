@@ -11,6 +11,10 @@ import { clampPointToGrid, footprintOrigin, gridToScreen, HH, HW, screenToGrid, 
 import { setFootprint, sortLayer } from "./depthSort";
 import { makeLight, OBJECT_GLOWS } from "./lighting";
 import { mintObjectId, objectIdFloor } from "./objectIds";
+import {
+  COST_AVOID, COST_GROUND, COST_PATH, isGate, objectWalkCost, wormholeSide,
+} from "./pathCosts";
+import type { Cell, PathOptions } from "./pathfind";
 import { leafTexture, ParticleConfig, ParticleField, petalTexture } from "./raid/Particles";
 import type { PlacedObjectSave, PlotSave } from "./save/schema";
 import { plotsTouch } from "./zombie/cropMutations";
@@ -378,6 +382,13 @@ export class Field {
   // that overhang into a neighbour tile). Keyed tile -> set of object ids blocking it,
   // so overlapping overhangs (two fences meeting) and removal stay correct.
   private fenceBlock = new Map<string, Set<string>>();
+  // Wormhole links, built on demand from the placed pads and dropped whenever
+  // placement changes. See portalMap().
+  private portals: Map<string, Cell> | null = null;
+  // Whether a path has been laid anywhere on the farm. Same lifetime as `portals`.
+  private paths: boolean | null = null;
+  // The shared search options handed to every walker. Same lifetime again.
+  private walkOpts: PathOptions | null = null;
   private nextObjId = 1;
   private highlightedObj: string | null = null;
 
@@ -527,19 +538,138 @@ export class Field {
     return col >= 0 && row >= 0 && col < this.w && row < this.h;
   }
 
-  // Can an actor walk on this tile? Placed objects block movement, EXCEPT the
-  // Zombie Patch (it's walkable soil zombies nap on). Plots and bare ground are
-  // walkable. Used by pathfinding (farmer + wandering zombies).
-  isPassable(col: number, row: number): boolean {
-    if (!this.inBounds(col, row)) return false;
+  /** What one step onto this tile costs a walker: `COST_GROUND` for plots and bare
+   *  ground, less on a path, more in a pond, ruinously more through a hedge, and
+   *  `Infinity` for a solid object or anything off the field. src/pathCosts.ts owns
+   *  the table and explains the ordering. */
+  tileCost(col: number, row: number): number {
+    if (!this.inBounds(col, row)) return Infinity;
     const k = `${col},${row}`;
-    // A solid object on the tile blocks it (the walkable Zombie Patch is the exception).
-    const id = this.tileObject.get(k);
-    if (id && !this.objects.get(id)?.def.zombiePatch) return false;
-    // A fence panel overhanging from a neighbour tile blocks it for movement too, even
-    // though nothing "owns" this tile for placement.
-    if (this.fenceBlock.get(k)?.size) return false;
-    return true;
+    const own = this.tileObject.get(k);
+    const def = own ? this.objects.get(own)?.def : undefined;
+    const cost = def ? objectWalkCost(def) : COST_GROUND;
+    if (!Number.isFinite(cost)) return Infinity;
+    // A fence panel overhanging from a neighbour tile is as hard to cross as the
+    // fence it belongs to, even though nothing "owns" this tile for placement.
+    //
+    // A GATE is the deliberate hole in a fence run, and the last fence in the run
+    // bridges into the gate's tile (see objectAnchor) — so a gate keeps its own
+    // price. Otherwise sealing a pen would seal its door too.
+    const ext = this.fenceBlock.get(k);
+    if (ext?.size && !(def && isGate(def))) {
+      let worst = cost;
+      for (const oid of ext) {
+        const o = this.objects.get(oid);
+        if (o) worst = Math.max(worst, objectWalkCost(o.def));
+      }
+      return worst;
+    }
+    return cost;
+  }
+
+  // Can an actor walk on this tile at all? Only solid objects and the field edge say
+  // no; a hedge is merely expensive. Used by pathfinding (farmer + wandering zombies).
+  isPassable(col: number, row: number): boolean {
+    return Number.isFinite(this.tileCost(col, row));
+  }
+
+  /** Is this tile somewhere a walker would happily BE — grass, a path, a plot, even
+   *  a pond, but not a hedge or a closed gate? Destinations and arrival spots go
+   *  through this; only the pathfinder itself may cross a barrier. */
+  isOpenGround(col: number, row: number): boolean {
+    return this.tileCost(col, row) < COST_AVOID;
+  }
+
+  /** Where stepping onto this tile comes out, for the tiles of a linked wormhole
+   *  pad — otherwise null. */
+  portalExit(col: number, row: number): Cell | null {
+    return this.portalMap().get(`${col},${row}`) ?? null;
+  }
+
+  /** Is there a working wormhole pair on the farm? A walk that would otherwise be a
+   *  plain straight line has to be searched properly once there is, or the shortcut
+   *  is only ever taken by accident. */
+  hasPortals(): boolean {
+    return this.portalMap().size > 0;
+  }
+
+  /** Is anything on the farm CHEAPER to walk on than bare ground — i.e. has a path
+   *  been laid? Same reason as hasPortals: a straight line over plain grass is
+   *  already the best route there is until a road exists to be drawn onto. */
+  hasPaths(): boolean {
+    if (this.paths === null) {
+      this.paths = false;
+      for (const o of this.objects.values()) {
+        if (objectWalkCost(o.def) < COST_GROUND) { this.paths = true; break; }
+      }
+    }
+    return this.paths;
+  }
+
+  /** The options every walker on this farm searches with: its bounds, its terrain
+   *  prices, and its wormholes.
+   *
+   *  Held rather than rebuilt, because a wandering zombie asks for these once per
+   *  candidate destination — up to a dozen per re-target, for every unit on the farm —
+   *  and the answer only changes when the placement does. Callers that want a variant
+   *  (the farmer's `crossBarriers`) spread it into their own object, so the shared one
+   *  is never written to. */
+  pathOptions(): PathOptions {
+    if (this.walkOpts) return this.walkOpts;
+    const opts: PathOptions = {
+      inBounds: (c, r) => this.inBounds(c, r),
+      cost: (c, r) => this.tileCost(c, r),
+      minTileCost: COST_PATH,
+      // Hedges and shut gates are walls first and expensive second — see findPath.
+      // Callers opt into crossing one; by default a route simply goes round or not
+      // at all, which is what makes a fenced pen actually hold anything.
+      avoidCost: COST_AVOID,
+    };
+    // Only once a pair is actually placed: `portal` costs the search its heuristic,
+    // which is not a price worth paying on a farm with no wormholes on it.
+    if (this.hasPortals()) opts.portal = (c, r) => this.portalExit(c, r);
+    return (this.walkOpts = opts);
+  }
+
+  // Wormhole pads: tile -> the tile stepping onto it comes out at. Rebuilt lazily
+  // after any placement change (see topologyChanged).
+  //
+  // Pads pair off A-with-B in placement order, so a farm with two of each has two
+  // independent links rather than one four-way junction; a lone pad with no partner
+  // is inert decor. Both tiles of a 1x2 pad lead to the same exit — the partner's
+  // origin tile — and the partner leads back, which makes the link an ordinary
+  // bidirectional edge in the search graph.
+  private portalMap(): Map<string, Cell> {
+    if (this.portals) return this.portals;
+    const map = new Map<string, Cell>();
+    const sides: Record<"A" | "B", FarmObject[]> = { A: [], B: [] };
+    for (const o of this.objects.values()) {
+      const side = wormholeSide(o.def);
+      if (side) sides[side].push(o);
+    }
+    const order = (a: FarmObject, b: FarmObject) => a.oc - b.oc || a.or - b.or;
+    sides.A.sort(order);
+    sides.B.sort(order);
+    const pairs = Math.min(sides.A.length, sides.B.length);
+    for (let i = 0; i < pairs; i++) {
+      this.linkPad(map, sides.A[i], sides.B[i]);
+      this.linkPad(map, sides.B[i], sides.A[i]);
+    }
+    return (this.portals = map);
+  }
+  private linkPad(map: Map<string, Cell>, from: FarmObject, to: FarmObject) {
+    const exit = { col: to.oc, row: to.or };
+    const fp = objectFootprint(from.def, from.flipped);
+    this.forEachFootprint(from.oc, from.or, fp.w, fp.h, (t) => map.set(t, exit));
+  }
+  // Placement changed, so what is derived from it may have. Called from the one
+  // place every add / move / rotate / remove funnels through.
+  private topologyChanged() {
+    this.portals = null;
+    this.paths = null;
+    // Whether the shared options carry a `portal` is derived from the pads, so the
+    // options go too.
+    this.walkOpts = null;
   }
 
   private key(oc: number, or: number) {
@@ -1155,17 +1285,24 @@ export class Field {
   // collideExtend overhangs). A horizontal flip mirrors the art, which in iso reflects
   // col<->row, so a flipped object's overhang offsets swap dc<->dr.
   private extensionTiles(def: PlaceableDef, oc: number, or: number, flipped: boolean): string[] {
-    const ext = def.collideExtend;
-    if (!ext?.length) return [];
     const out: string[] = [];
-    for (const e of ext) {
-      const c = oc + (flipped ? e.dr : e.dc);
-      const r = or + (flipped ? e.dc : e.dr);
+    for (const e of this.extensionOffsets(def, flipped)) {
+      const c = oc + e.dc;
+      const r = or + e.dr;
       if (c >= 0 && r >= 0 && c < this.w && r < this.h) out.push(`${c},${r}`);
     }
     return out;
   }
+  // The overhang offsets in the orientation the object is actually placed in.
+  private extensionOffsets(def: PlaceableDef, flipped: boolean): { dc: number; dr: number }[] {
+    const ext = def.collideExtend;
+    if (!ext?.length) return [];
+    return flipped ? ext.map((e) => ({ dc: e.dr, dr: e.dc })) : ext;
+  }
   private setExtensionBlocks(id: string, def: PlaceableDef, oc: number, or: number, flipped: boolean, add: boolean) {
+    // Every placement change comes through here, whether or not the object has an
+    // overhang, so this is where the derived wormhole links get dropped.
+    this.topologyChanged();
     for (const t of this.extensionTiles(def, oc, or, flipped)) {
       let set = this.fenceBlock.get(t);
       if (add) {
@@ -1199,9 +1336,17 @@ export class Field {
   private objectScale(): number {
     return TILE_W / this.assets.field.tileW;
   }
-  // One-tile fence art bridges from its occupied tile into the next tile, while
-  // gates use a true multi-tile footprint. Center the fence panel on that bridge
-  // (half a tile lower on screen) so its end posts share the gate's ground points.
+  /** Where an object's art stands: the bottom-centre of its footprint, dropped half a
+   *  tile for a fence panel.
+   *
+   *  A fence panel is not a thing standing ON a tile, it is a wall segment standing on
+   *  the EDGE between two of them. Its rail is two tiles long and bridges into the
+   *  neighbour it also blocks (`collideExtend`); the half-tile drop is what puts its
+   *  two posts on the lattice CORNERS either end of that edge — measured, (c+0.5,
+   *  r-0.5) and (c+0.5, r+1.5) for an unflipped panel at (c,r). Everything about a
+   *  fence line depends on that: runs meet post to post, two runs meet squarely at a
+   *  corner, and a run meets a gate's end post, because all of them land on the same
+   *  lattice of tile corners. Move it and every junction on the farm goes crooked. */
   private objectRenderY(def: PlaceableDef, y: number): number {
     return y + (def.collideExtend?.length ? HH : 0);
   }
@@ -2091,6 +2236,13 @@ export class Field {
     this.update(0);
   }
 
+  /** The catalog key of every object standing on the farm, one entry per placed copy.
+   *  What the derived capacities are a function of (see armyCapacity.ts) — they have
+   *  no business going through the save serializer to read a key off a save record. */
+  *placedKeys(): Generator<string> {
+    for (const o of this.objects.values()) yield o.def.key;
+  }
+
   serializeObjects(): PlacedObjectSave[] {
     const out: PlacedObjectSave[] = [];
     for (const o of this.objects.values()) {
@@ -2136,6 +2288,7 @@ export class Field {
     this.objects.clear();
     this.tileObject.clear();
     this.fenceBlock.clear();
+    this.topologyChanged();
     const restored: string[] = [];
     for (const s of saves) {
       const def = resolve(s.key);

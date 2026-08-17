@@ -309,7 +309,7 @@ export interface GrabberConfig {
 export interface CrabConfig {
   sprite: string; // beach_crab.png
   hp: number; // tuned crab HP (source-derived value is 1000)
-  tapDamage: number; // hitBoxTouched -> damage:100 (=> exactly 10 taps)
+  tapDamage: number; // hitBoxTouched -> damage:100 (10 taps at the authored 1000 HP)
   spawnMs: number; // obstacleSpawnTimer (5 s on raid 7)
   limit: number; // obstacleLimit — concurrent cap, slot returned when one dies
   holdMs: number; // grab -> carry delay (CCDelayTime 2.0 s)

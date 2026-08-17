@@ -5,8 +5,11 @@ dist/
 __pycache__/
 *.pyc
 
-# Rig captures written by /zombie-review.html via the dev-only /__capture endpoint
-tmp/review-shots/
+# Scratch space: rig captures written by /zombie-review.html via the dev-only
+# /__capture endpoint, console-setup dumps, working files. Ignored wholesale — put
+# nothing here you mean to keep. (The QA renders already committed under tmp/pdfs/
+# stay tracked; an ignore rule only ever applies to files git isn't following yet.)
+tmp/
 
 # Local output of launcher/build-package.ps1 (the ~90 MB Windows zip).
 launcher/out/

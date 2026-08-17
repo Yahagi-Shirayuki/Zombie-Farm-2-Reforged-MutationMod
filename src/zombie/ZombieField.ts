@@ -106,8 +106,11 @@ export class ZombieField {
     const at = this.farmerTile();
     const col = Math.round(at.col);
     const row = Math.round(at.row);
-    if (this.field.isPassable(col, row)) return { col, row };
-    const out = findEscape({ col, row }, (c, r) => this.field.isPassable(c, r), {
+    // "Walkable" is not enough: a hedge tile is crossable but is no place to put a
+    // zombie down, so the search walks out to real open ground.
+    const open = (c: number, r: number) => this.field.isOpenGround(c, r);
+    if (open(col, row)) return { col, row };
+    const out = findEscape({ col, row }, open, {
       inBounds: (c, r) => this.field.inBounds(c, r),
     });
     return out.length ? out[out.length - 1] : { col, row };
@@ -175,9 +178,19 @@ export class ZombieField {
     }
     if (!winner || !this.field.markFertilized(oc, or)) return null;
     const spot = this.field.plotFrontSpot(oc, or);
-    winner.teleportTo(spot.x, spot.y);
+    winner.teleportTo(spot.x, spot.y, this.patchRestSpot(winner));
     this.playFertilizeSfx();
     return winner.displayName;
+  }
+
+  /** The Zombie Patch tile a fertilizing unit should return to, or null when the
+   *  farm isn't gathered (it goes back to wandering like everyone else). The tile
+   *  is the same one gatherTo would have given it, so it lies back down in its own
+   *  spot rather than doubling up on someone else's. */
+  private patchRestSpot(unit: ZombieUnit): { col: number; row: number } | null {
+    const index = this.units.indexOf(unit);
+    if (index < 0) return null;
+    return joiningPatchTile(this.gathered, this.field.patchRestTiles(), index);
   }
 
   /** Live on-farm character containers used by Pet Pen silhouette occlusion. */
@@ -205,7 +218,7 @@ export class ZombieField {
     if (!gardens.length) return null;
     const winner = gardens[Math.floor(Math.random() * gardens.length)];
     const spot = this.field.plotFrontSpot(oc, or);
-    winner.teleportTo(spot.x, spot.y);
+    winner.teleportTo(spot.x, spot.y, this.patchRestSpot(winner));
     this.playFertilizeSfx();
     return winner.displayName;
   }

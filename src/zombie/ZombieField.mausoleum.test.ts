@@ -19,6 +19,7 @@ const withMausoleum = (tier?: PlaceableDef, stored = 0) => {
     objectDefOf: () => tier,
     inBounds: () => true,
     isPassable: () => true, // positionless saves arrive on the farmer's tile
+    isOpenGround: () => true,
   } as unknown as Field;
   const zombies = new ZombieField(
     {} as GameAssets, field, new GameState(), (key) => (key === def.key ? def : undefined)
@@ -82,6 +83,7 @@ describe("grantReward Almanac accounting", () => {
       objectDefOf: () => tombs[0],
       inBounds: () => true,
       isPassable: () => true,
+      isOpenGround: () => true,
     } as unknown as Field;
     const zombies = new ZombieField(
       {} as GameAssets, field, state, (key) => (key === def.key ? def : undefined)

@@ -23,6 +23,7 @@ const fieldWith = (slots: number | null): Field => ({
   patchRestTiles: () => [],
   inBounds: () => true,
   isPassable: () => true,
+  isOpenGround: () => true,
   zombiePotId: () => null,
   mausoleumId: () => (slots === null ? null : "crypt"),
   objectDefOf: () => ({ zombieSlots: slots ?? 0 }),

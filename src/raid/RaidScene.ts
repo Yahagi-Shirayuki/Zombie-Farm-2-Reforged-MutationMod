@@ -36,6 +36,7 @@ import {
   epicAttackFrameIndex, epicBossAnimationLoops, epicStripFrameIndex, selectEpicBossAnimation,
 } from "./epicBossAnimation";
 import { PixelFire } from "./pixelFireFx";
+import { hazardTapProfile } from "./hazardTaps";
 import { isMobile } from "../platform";
 import { readSafeAreaInsets } from "../safeArea";
 import { abilityColumnStep, computeRaidHudLayout } from "./raidHudLayout";
@@ -711,6 +712,11 @@ export class RaidScene {
       params.waveCadence,
       params.turnedTemplate ?? null
     );
+    // Rescue-hazard taps are paced for a finger by default. A mouse clicks two to three
+    // times faster than that gate, so most of a click-spamming player's clicks landed
+    // inside the cooldown and were dropped — which is what "there is a delay before my
+    // clicks register" was. Client-only hazards, so this cannot reach the verifier.
+    this.sim.hazardTapCooldownMs = hazardTapProfile().cooldownMs;
   }
 
   /** Build a ready-to-add scene, preloading all textures first. */
@@ -2330,9 +2336,10 @@ export class RaidScene {
     }
   }
 
-  /** Mirror the Beach crab hazards into tappable sprites. Ten taps kills one, which frees
-   *  any zombie it holds; an HP bar appears after the first tap so the player can see the
-   *  rescue landing. Crabs walk the ground line, so they use mapY (not mapProjY). */
+  /** Mirror the Beach crab hazards into tappable sprites. Seven taps kills one on touch
+   *  and four with a mouse (see hazardTaps.ts), which frees any zombie it holds; an HP bar
+   *  appears after the first tap so the player can see the rescue landing. Crabs walk the
+   *  ground line, so they use mapY (not mapProjY). */
   private syncCrabs() {
     if (!this.crabTex) return;
     const live = new Set<string>();
@@ -2348,7 +2355,10 @@ export class RaidScene {
         root.addChild(body, bar);
         root.eventMode = "static";
         root.cursor = "pointer";
-        root.on("pointertap", () => this.sim.tapCrab(c.id));
+        // pointerDOWN, not pointertap: a tap only fires on RELEASE, and on a moving
+        // target it does not fire at all if the crab has scuttled out from under the
+        // cursor before the button comes back up. Both read as a click that did nothing.
+        root.on("pointerdown", () => this.sim.tapCrab(c.id));
         this.crabLayer.addChild(root);
         entry = { root, body, bar };
         this.crabSprites.set(c.id, entry);
@@ -2404,7 +2414,9 @@ export class RaidScene {
         // Only the trapeze bitmap itself should be tappable.
         body.eventMode = "static";
         body.cursor = "pointer";
-        body.on("pointertap", () => this.sim.tapGrabber(g.id));
+        // On press, not on release — see the crab above. The trapeze swings, so it is the
+        // worse of the two for a click that lands and then has its target move away.
+        body.on("pointerdown", () => this.sim.tapGrabber(g.id));
         this.grabLayer.addChild(root);
         entry = { root, pendulum, ropeExtension, body, bar, extensionLength: 0 };
         this.grabSprites.set(g.id, entry);

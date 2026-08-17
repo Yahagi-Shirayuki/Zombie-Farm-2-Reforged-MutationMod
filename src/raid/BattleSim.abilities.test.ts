@@ -103,6 +103,50 @@ describe("Mini Buddy", () => {
     expect(["advance", "fight"]).toContain(m.state);
     expect(e.stunMs).toBeGreaterThan(0);
   });
+
+  it("rams all the way to the enemy it stuns, not just to its own slot", () => {
+    // The move is "the brute runs forward and stuns what it HITS". It used to charge to
+    // the carrier's own formation SLOT instead, and a Large's slot is the furthest back
+    // of any body type (v23 gave each body its own standoff) — so with a full army the
+    // charge stopped short and the stun landed on an enemy it had never reached.
+    // Measured on a real party before the fix: the carrier halted 72 units behind its own
+    // front rank and stunned a knight 162 units away.
+    //
+    // A CROWD is what makes this bite: with a two-zombie party the Large's slot is the
+    // front line anyway, which is why the test above never caught it.
+    const brute = unit({
+      id: "brute", sourceKey: "ZombieActorLargeTier2", team: "player",
+      abilities: ["attachMini"],
+    });
+    const mini = unit({ id: "mini", sourceKey: "ZombieActorSmallTier1", team: "player" });
+    const crowd = Array.from({ length: 10 }, (_, i) =>
+      unit({ id: `filler${i}`, sourceKey: "ZombieActorRegularTier1", team: "player" }));
+    const enemy = unit({
+      id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy",
+      str: 0, con: 3000, hp: 1e6, maxHp: 1e6,
+    });
+    // Order matters as much as the crowd does. The carrier deploys ELEVENTH, which is what
+    // puts it in a rear depth band (bands are five deep) with ten zombies already parked
+    // in front of it — the real party's shape. The mini comes last so it is still waiting
+    // when the carrier reaches the charge slot.
+    const sim = new BattleSim([...crowd, brute, mini], [enemy], null, true);
+
+    // Eleven zombies deploy one at a time, so the carrier's turn at the charge slot comes
+    // well past stepUntil's usual 20-second budget.
+    stepUntil(sim, () => miniReady(sim) > 0, 4000);
+    expect(sim.activate("attachMini")).toBe(true);
+    const b = sim.units.find((u) => u.id === "brute")!;
+    const m = sim.units.find((u) => u.id === "mini")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
+    expect(b.buddyId).toBe("mini");
+
+    for (let i = 0; i < 5000 && m.state === "carried"; i++) sim.step(50);
+    expect(b.buddyId).toBeNull();
+    expect(e.stunMs).toBeGreaterThan(0);
+    // The whole point: it is standing ON the thing it just stunned. ENGAGE is 60, so
+    // anything much past that means the ram paid out at a distance again.
+    expect(Math.abs(e.x - b.x)).toBeLessThanOrEqual(70);
+  });
 });
 
 // `present` drives whether the battle strip shows a move's button at all. It is a

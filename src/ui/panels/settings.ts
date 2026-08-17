@@ -290,7 +290,18 @@ export function openSettings(hud: Hud): void {
     ambienceBlock.push(
       settingRow("Farmer's Lantern", hud.getFarmerLantern(),
         (v) => hud.onSetFarmerLantern?.(v)),
-      noteEl("Off puts the lamp away and leaves the farm dark after sunset, lit only by whatever you have placed. You can also tap the farmer at night to switch it."),
+      noteEl("Off puts the lamp away and leaves the farm dark after sunset, lit only by whatever you have placed."),
+    );
+  }
+  // Whether the farmer himself is a lantern switch. Sits under the lantern row it
+  // governs, and only alongside it — on its own it would read as a setting for a
+  // feature that isn't there.
+  if (hud.getFarmerLantern && hud.onSetFarmerLantern
+      && hud.getFarmerLanternTap && hud.onSetFarmerLanternTap) {
+    ambienceBlock.push(
+      settingRow("Tap Farmer for Lantern", hud.getFarmerLanternTap(),
+        (v) => hud.onSetFarmerLanternTap?.(v)),
+      noteEl("On, tapping the farmer at night switches his lantern. Off, that tap goes to the ground under him instead — use the row above to switch the lantern."),
     );
   }
   const farmMode = document.createElement("div");

@@ -22,7 +22,7 @@
 // touches the listed entries.
 
 /** Bump when adding to STALE_ART. Each new value re-runs the sweep once per browser. */
-const ART_EPOCH = "2";
+const ART_EPOCH = "3";
 const EPOCH_KEY = "zf.artEpoch";
 
 /** Paths (relative to the deploy root) whose cached copy is known to be wrong. */
@@ -54,6 +54,13 @@ const STALE_ART: readonly string[] = [
   "assets/objects/cobblestoneRoadIntersection.png",
   "assets/objects/rocks.png",
   "assets/objects/soil_zombiePatch.png",
+
+  // Epoch 3 — the Pixel Campfire, the same failure as the Worm Holes above: its
+  // `frameName` (pixel_campfire_base.png) is the crossed logs alone and all three flame
+  // frames live in the animation, so the raid reward shipped as an unlit fire pit while
+  // lighting.ts carved a warm glow out of the night above it. The generator bakes the
+  // first flame frame on now (ANIMATION_OVER_BASE in tools/prep_placeables.py).
+  "assets/objects/pixelCampfire.png",
 ];
 
 /** Drop the known-bad art from every runtime art cache, once per ART_EPOCH.

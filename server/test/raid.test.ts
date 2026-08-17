@@ -87,6 +87,11 @@ describe("winGold — server mirror of RaidCatalog.winGold", () => {
     expect(winGold(mc, Infinity)).toBe(0);
   });
   it("matches the biggest raid's ceiling", () => {
-    expect(winGold(RAIDS[9], 1)).toBe(5000 + 1200); // Video Games
+    // Spelled out rather than read back off RAIDS[9], so an accidental edit to the
+    // catalog has to be justified here too. Video Games' base moved 5,000 -> 6,300
+    // deliberately: it is the last invasion unlocked and the hardest fight on the
+    // ladder, and at 5,000 it paid barely more per run than the Aliens five levels
+    // below it. Keep in step with tools/prep_raids.py WIKI_GOLD.
+    expect(winGold(RAIDS[9], 1)).toBe(6300 + 1200); // Video Games
   });
 });

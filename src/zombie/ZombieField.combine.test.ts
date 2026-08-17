@@ -35,6 +35,7 @@ const renderableField = (extra: Partial<Record<string, unknown>> = {}): Field =>
   hasCombineMonolith: () => false,
   inBounds: () => true,
   isPassable: () => true,
+  isOpenGround: () => true,
   ...extra,
 } as unknown as Field);
 
@@ -79,6 +80,7 @@ describe("ZombieField combine save migration", () => {
     // the farmer's tile.
     const field = {
       zombiePotId: () => "pot", inBounds: () => true, isPassable: () => true,
+      isOpenGround: () => true,
     } as unknown as Field;
     const zombies = new ZombieField({} as GameAssets, field, state, (key) => key === def.key ? def : undefined);
     zombies.restore([{ id: "z1", key: def.key, stored: true, name: "Original" }]);

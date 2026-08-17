@@ -10,6 +10,7 @@ import { GameState } from "../GameState";
 import { ZombieField } from "../zombie/ZombieField";
 import { OwnedZombie } from "../zombie/types";
 import { buildEnemyUnits, buildPlayerUnits, resolveRaid } from "./CombatEngine";
+import { rescueHazardHp } from "./hazardTaps";
 import {
   ARMY_CAP,
   bossThrowIntervalSecs,
@@ -66,8 +67,11 @@ const GRAB_SPRITE: Record<number, string> = {
  *  per-id table, since that field is exactly what the source's obstacle timer spawns. */
 const CRAB_ACTOR = "BeachStageActorCrab";
 const CRAB_SPRITE = "hazard_beach_crab.png";
-// Desktop tapping is slower than the original touch interaction. Seven landed taps is
-// two-thirds of the source-derived 1000 HP while retaining the authored 100 damage/tap.
+// Seven landed taps is two-thirds of the source-derived 1000 HP while retaining the
+// authored 100 damage/tap. That is the TOUCH figure; `rescueHazardHp` halves it again for
+// a mouse (four clicks), because clicking a hazard apart seven times, several times a
+// fight, is a lot of clicking for one rescue. See src/raid/hazardTaps.ts — both hazards
+// are client-only, so the two devices may legitimately differ here.
 const RESCUE_HAZARD_HP = 667;
 
 // ---- HUD-facing view models ----
@@ -555,7 +559,7 @@ export class RaidManager {
   private grabberOf(raid: RaidDef): GrabberConfig | null {
     const sprite = GRAB_SPRITE[raid.id];
     if (!raid.hasGrab || !sprite) return null;
-    return { sprite, hp: RESCUE_HAZARD_HP, tapDamage: 100, spawnDelayMs: 4000 };
+    return { sprite, hp: rescueHazardHp(RESCUE_HAZARD_HP), tapDamage: 100, spawnDelayMs: 4000 };
   }
 
   /** Beach crab hazard config, from the raid's own `initialSpawnClass` + obstacle timer.
@@ -571,7 +575,7 @@ export class RaidManager {
     if (raid.initialSpawnClass !== CRAB_ACTOR || !raid.obstacleLimit) return null;
     return {
       sprite: CRAB_SPRITE,
-      hp: RESCUE_HAZARD_HP,
+      hp: rescueHazardHp(RESCUE_HAZARD_HP),
       tapDamage: 100,
       spawnMs: (raid.obstacleSpawnSecs > 0 ? raid.obstacleSpawnSecs : 5) * 1000,
       limit: raid.obstacleLimit,

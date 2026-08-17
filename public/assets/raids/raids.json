@@ -733,7 +733,7 @@
   "successText": "Zedzox has gone slinking back to his lair. He has learned a valuable lesson about pigeonholing the role of zombies in the modern game. (At least until he forgets it.)",
   "failureText": "It's game over for you! Luckily, you have infinite continues on your side.",
   "xp": 5500,
-  "goldReward": 5000,
+  "goldReward": 6300,
   "bonusGold": 1200,
   "throwSpeed": 2,
   "music": "fightBGM.mp3",

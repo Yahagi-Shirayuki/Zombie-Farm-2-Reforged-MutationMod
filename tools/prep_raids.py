@@ -61,7 +61,10 @@ WIKI_GOLD = {
     6: (4000, 2000),   # Zombies vs Aliens
     7: (1200, 600),    # Summer Break (filled — not in wiki)
     8: (1200, 600),    # Zombies vs Circus
-    9: (5000, 1200),   # Zombies vs Video Games
+    # Video Games' base is deliberately 1,300 above the wiki's 5,000. It is the last
+    # invasion unlocked and the hardest fight on the ladder, and at the wiki figure it
+    # paid barely more per run than the Aliens five levels below it.
+    9: (6300, 1200),   # Zombies vs Video Games
     10: (1200, 600),   # Tree World
     11: (1200, 600),   # Valentine's Day (filled — not in wiki)
 }

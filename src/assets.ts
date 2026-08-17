@@ -8,6 +8,7 @@ import { setZombieNames } from "./zombie/names";
 import { hidesHeadMutationArt } from "./zombie/mutationVisual";
 import { BASE } from "./base";
 import { fetchJson, mapConcurrent } from "./assetLoading";
+import { isFencePanel } from "./pathCosts";
 import { MAX_ZOMBIE_POTS } from "./placementLimit";
 
 export interface Tile {
@@ -675,29 +676,42 @@ export async function loadAssets(): Promise<GameAssets> {
     BASE + "assets/ui/thoughtBubbleBrains.png"
   )) as Texture;
 
-  // Fence panels are 1 tile for placement but their rail bridges into a neighbour, so
-  // movement collision extends one tile. A spaced fence wall only SEALS if the overhang
-  // points into the gap between panels — which way depends on how the run is laid/flipped.
-  // ┌── TOGGLE for testing: base (unflipped) overhang offset. A horizontal flip swaps
-  // │   dc<->dr at runtime, so this one value covers both flip states of a run.
-  // │   Candidates (only these two seal anything; negatives point the wrong way):
-  // │     [{ dc: 1, dr: 0 }]  — seals col-walls unflipped / row-walls flipped
-  // │     [{ dc: 0, dr: 1 }]  — seals col-walls flipped   / row-walls unflipped
-  // │   Or block BOTH neighbours to seal EVERY orientation: [{ dc: 1, dr: 0 }, { dc: 0, dr: 1 }]
-  // └── (null disables the overhang entirely).
+  // Fence panels are 1 tile for placement but their rail is roughly twice that wide and
+  // BRIDGES into the next tile, so movement collision extends one tile to match. Which
+  // neighbour depends on the flip, and Field.extensionOffsets swaps dc<->dr to follow it.
+  //
+  // The offset has to be the one the ART actually bridges along, and for these panels
+  // that is the ROW axis: measure pen_01.png and the rail rises to the right, which in
+  // this projection is -row, with its two posts exactly two row-steps apart. It is the
+  // same axis the 1x5 gates run along, which is what lets a run meet a gate end to
+  // end. Mirrored, the rail bridges +col instead, and Field.extensionOffsets swaps
+  // dc<->dr to follow it. Do not re-derive this axis from a screenshot of a RUN —
+  // panels overlap each other by half their length, so a run reads as a wall whichever
+  // way it was laid, and it is only the single panel that tells you anything.
+  //
+  // Field.objectRenderY drops the art half a tile so its posts land on the lattice
+  // corners either end of this pair; the two have to agree or the art and the wall it
+  // stands for part company.
+  //
+  // WHICH objects get it is `isFencePanel` — every one-tile barrier in the catalog,
+  // derived from the terrain price list rather than named here. This used to be four
+  // hard-coded keys, one per fence family, so the six colour variants beside them
+  // (Pink / Blue / Red / Black Fence, Pink Iron Fence, Christmas Fence) drew the same
+  // two-tile rail while blocking only one tile: a spaced run of any of them looked
+  // solid and had a walkable hole at every gap.
   const FENCE_OVERHANG: { dc: number; dr: number }[] | null = [{ dc: 0, dr: 1 }];
-  const FENCE_KEYS = new Set(["pen_01", "barbWireFence_01", "cemeteryFence_01", "hazardFence"]);
 
   // Flag functional items by key. (TODO: bake these into prep_placeables.py so
   // they're source-driven rather than derived here.)
   for (const p of placeables) {
-    if (FENCE_OVERHANG && FENCE_KEYS.has(p.key)) p.collideExtend = FENCE_OVERHANG;
     // Footprints are whole tiles in the base game (`-[Tile dimensions]` reads
     // tileWidth/tileHeight via integerValue, truncating). Coerce any authored
     // fractional size (e.g. coolerLarge 1.5) to an integer so occupancy and the
-    // depth footprint cover exact tiles with no half-tile hole.
+    // depth footprint cover exact tiles with no half-tile hole. BEFORE the panel
+    // test below, which asks how many tiles the footprint really covers.
     p.tileW = Math.max(1, Math.floor(p.tileW));
     p.tileH = Math.max(1, Math.floor(p.tileH));
+    if (FENCE_OVERHANG && isFencePanel(p)) p.collideExtend = FENCE_OVERHANG;
     if (/^mausoleum/i.test(p.key)) p.zombieStorage = true;
     const grave = /^gravestone(Blue|Red|Silver)$/.exec(p.key);
     if (grave) p.graveColor = grave[1] as "Blue" | "Red" | "Silver";
