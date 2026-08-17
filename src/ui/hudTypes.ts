@@ -59,6 +59,8 @@ export interface EpicBossMarketView {
   encounterRemainingMs: number;
   rewards: string[];
   zombieRewards: string[];
+  /** Display name of this boss's favourite crop, or null for an event with no pairing. */
+  favoriteCrop: string | null;
 }
 
 // An owned zombie's inspectable info (shown by openZombieInfo).

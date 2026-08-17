@@ -32,6 +32,9 @@ import { combineMasks } from "../../../src/zombie/mutations";
 import { resolveCropMutations, plotsTouch } from "../../../src/zombie/cropMutations";
 import { createCombineRandom, isCombinePromotion, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
 import { harvestXp, plowXp } from "../../../src/farmRewards";
+import { epicBossById, epicBossHp, epicBossUnlockLevel } from "../../../src/epicBoss/catalog";
+import { bossForFavoriteCrop, luresEpicBoss } from "../../../src/epicBoss/favoriteCrops";
+import { reopenEpicQuests } from "../../../src/epicBoss/rewards";
 import { questSubjectMatches } from "../../../src/quest/matching";
 import {
   applyPeriodicEvents, claimPeriodicQuest, refreshPeriodicState, xpToNextLevel,
@@ -417,6 +420,54 @@ function adjacentCropKeys(
   return keys;
 }
 
+/** Roll a just-harvested crop for an Epic Boss LURE: the rare chance that this crop's
+ *  favourite boss (src/epicBoss/favoriteCrops.ts) turns up and starts its own event,
+ *  free, when none is running.
+ *
+ *  UNLIKE the Boss Token roll two functions down, this one is the SERVER'S. A token is
+ *  worth a single brain, which is why the client is allowed to mint its own and merely
+ *  report them; a lure is worth the boss's whole activation price AND reopens its prize
+ *  quest chain, signature zombie included. That is squarely the kind of grant this
+ *  project keeps on the authoritative side, and the roll costs nothing extra here — the
+ *  harvest is already being replayed and grow-gated against the server's own clock.
+ *
+ *  The gates are the same three the market card enforces, in the order that makes the
+ *  cheapest check first: no event already running, the crop is somebody's favourite,
+ *  and that somebody is unlocked at this account's level. A locked boss's crop is a
+ *  silent no-op rather than a fallback to some other boss — which boss you might draw
+ *  is supposed to be the player's planting decision, not the game's consolation prize.
+ *
+ *  Returns whether an event was started; the caller uses it only to stop rolling. */
+function maybeLureEpicBoss(
+  state: MutableGameplayState, cropKey: string, options: Required<EngineOptions>
+): boolean {
+  const run = state.epicBoss;
+  if (run && !run.completedAt && run.expiresAt > options.now) return false;
+  const def = epicBossById(bossForFavoriteCrop(cropKey));
+  if (!def || levelForXp(state.balance.xp) < epicBossUnlockLevel(def)) return false;
+  const econ = cropEcon(cropKey);
+  if (!econ || !luresEpicBoss(econ.growMs, options.random)) return false;
+  const hp = epicBossHp(def, 1);
+  state.epicBoss = {
+    runId: options.id(), bossId: def.id, activatedAt: options.now,
+    expiresAt: options.now + def.durationMs, level: 1, maxHp: hp, currentHp: hp,
+    encounterStartedAt: 0, retryReadyAt: 0, tokenCount: 0, completedAt: 0,
+    attackOrder: [],
+    // What the client announces on: a run carrying a crop is one the player never
+    // asked for. A bought run leaves this unset (v3/epicBoss.ts activate).
+    startedCrop: cropKey,
+  };
+  // Exactly what a paid activation does, and for the same reason — a new run re-offers
+  // this boss's chain so its prizes are earnable again. Skipped when nothing of this
+  // boss's was ever finished, which is what reopenEpicQuests returning null means.
+  const reopened = reopenEpicQuests(state.quests, def.questIds);
+  if (reopened) {
+    state.quests.completed = reopened.completed;
+    state.quests.progress = reopened.progress;
+  }
+  return true;
+}
+
 function rewardHarvest(
   state: MutableGameplayState,
   key: string,
@@ -709,6 +760,10 @@ function applyOne(
       const harvest = rewardHarvest(state, plot.cropKey, plot, options.id, created,
         options.random, adjacentCropKeys(state.farm.plots, command.oc, command.or));
       if (!harvest.ok) return reject(sequence, harvest.error);
+      // After the harvest is known to have applied: a rejected one (a full army on a
+      // zombie crop) leaves the crop in the ground, and a crop still standing has not
+      // been pulled, so it cannot have lured anything.
+      if (!plot.zombie) maybeLureEpicBoss(state, plot.cropKey, options);
       state.farm.plots[key] = { state: "spent", zombie: plot.zombie };
       events.push(harvest.event);
       const createdIds = created.slice(createdBefore);
@@ -801,6 +856,10 @@ function applyOne(
           const harvest = rewardHarvest(state, plot.cropKey, plot, options.id, created,
             options.random, adjacentCropKeys(mutationPlots, oc, or));
           if (!harvest.ok) continue; // capacity-full zombie crops remain planted
+          // One sweep can pull dozens of favourite crops. Each rolls, but the first to
+          // hit leaves an event running, and maybeLureEpicBoss refuses from then on —
+          // so a field-wide Insta-Harvest can start one event, never a queue of them.
+          if (!plot.zombie) maybeLureEpicBoss(state, plot.cropKey, options);
           if (created.length > createdAt) {
             createdZombieSources.push({ id: created[created.length - 1], oc, or });
           }

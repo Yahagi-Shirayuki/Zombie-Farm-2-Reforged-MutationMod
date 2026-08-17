@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RosterUnitProjection, SequencedCommand } from "../../src/net/protocol";
-import { EPIC_BOSSES } from "../../src/epicBoss/catalog";
+import { DR_GROUNDHOG, EPIC_BOSSES } from "../../src/epicBoss/catalog";
+import { XP_THRESHOLDS } from "../src/levels";
 import { COMBINE_SPECIAL_CHANCE, createCombineRandom } from "../../src/zombie/combineSpecies";
 import { encodeReceivedZombie } from "../../src/zombie/receivedReward";
 import { EPIC_PRIZE_SELL, RAID_DROP_SELL } from "../../src/awardSellValue";
@@ -294,6 +295,100 @@ describe("protocol v3 command engine", () => {
     const absurd = applyCommandBatch(state, commands({ type: "epicBoss.token", runId: "run", count: 5_000 }), { now: 1_000 });
     expect(absurd.results[0].status).toBe("rejected");
     expect(absurd.state.epicBoss?.tokenCount).toBe(2);
+  });
+
+  // The event LURE is the opposite call from the token roll above: it is worth a whole
+  // activation and reopens the boss's prize chain, so it stays server-side.
+  describe("favourite crop event lure", () => {
+    const potatoPlot = () => ({
+      state: "planted" as const, cropKey: "potato", plantedAt: -86_400_000, growMs: 86_400_000,
+      sell: 99, xp: 5, fertilized: false, zombie: false,
+    });
+    // Dr. Groundhog unlocks at 24, and potato is its favourite.
+    const eligible = () => {
+      const state = freshGameplayState();
+      state.balance.xp = XP_THRESHOLDS[23];
+      state.farm.plots["0:0"] = potatoPlot();
+      return state;
+    };
+    const harvest = (state: MutableGameplayState, random: () => number) =>
+      applyCommandBatch(state, commands({ type: "farm.harvest", oc: 0, or: 0 }), { now: 1_000, random });
+
+    it("starts the crop's own event, free, and records the crop that did it", () => {
+      const state = eligible();
+      const brainsBefore = state.balance.brains;
+      const lured = harvest(state, () => 0);
+      expect(lured.results[0].status).toBe("applied");
+      expect(lured.state.epicBoss?.bossId).toBe("dr-groundhog");
+      expect(lured.state.epicBoss?.startedCrop).toBe("potato");
+      expect(lured.state.epicBoss?.level).toBe(1);
+      expect(lured.state.epicBoss?.tokenCount).toBe(0);
+      expect(lured.state.epicBoss?.expiresAt).toBe(1_000 + DR_GROUNDHOG.durationMs);
+      // Free means free: harvest gold is still paid, and nothing is deducted for it.
+      expect(lured.state.balance.brains).toBe(brainsBefore);
+    });
+
+    it("reopens that boss's finished quests exactly as a paid activation does", () => {
+      const state = eligible();
+      const questId = DR_GROUNDHOG.questIds[0];
+      state.quests.completed.push(questId);
+      state.quests.progress.push({ questId, counts: [1] });
+      const lured = harvest(state, () => 0);
+      expect(lured.state.quests.completed).not.toContain(questId);
+      expect(lured.state.quests.progress.some((entry) => entry.questId === questId)).toBe(false);
+      expect(lured.questChanged).toBe(true);
+    });
+
+    it("never lures while an event is already running", () => {
+      const state = eligible();
+      state.epicBoss = activeRun();
+      const harvested = harvest(state, () => 0);
+      expect(harvested.state.epicBoss?.runId).toBe("run");
+      expect(harvested.state.epicBoss?.startedCrop).toBeUndefined();
+    });
+
+    // An expired or completed run is not a running one, so the farm is eligible again.
+    it("lures over a finished or expired run", () => {
+      const expired = eligible();
+      expired.epicBoss = { ...activeRun(), expiresAt: 999 };
+      expect(harvest(expired, () => 0).state.epicBoss?.startedCrop).toBe("potato");
+
+      const done = eligible();
+      done.epicBoss = { ...activeRun(), completedAt: 900 };
+      expect(harvest(done, () => 0).state.epicBoss?.startedCrop).toBe("potato");
+    });
+
+    it("stays silent below the boss's unlock level", () => {
+      const state = eligible();
+      state.balance.xp = XP_THRESHOLDS[22]; // level 23, one short of Dr. Groundhog
+      expect(harvest(state, () => 0).state.epicBoss).toBeNull();
+    });
+
+    it("ignores a crop that is nobody's favourite", () => {
+      const state = eligible();
+      state.farm.plots["0:0"] = { ...potatoPlot(), cropKey: "carrot", growMs: 900_000 };
+      expect(harvest(state, () => 0).state.epicBoss).toBeNull();
+    });
+
+    it("loses the roll on an ordinary harvest", () => {
+      expect(harvest(eligible(), () => 0.99).state.epicBoss).toBeNull();
+    });
+
+    // A field-wide Insta-Harvest rolls every plot it pulls. It may start ONE event.
+    it("starts at most one event per Insta-Harvest sweep", () => {
+      const state = eligible();
+      state.balance.xp = XP_THRESHOLDS[23];
+      state.inventory["insta_harvest"] = 1;
+      for (let plot = 0; plot < 6; plot++) state.farm.plots[`${plot * 4}:0`] = potatoPlot();
+      const swept = applyCommandBatch(
+        state, commands({ type: "power.use", key: "insta_harvest" }), { now: 1_000, random: () => 0 }
+      );
+      expect(swept.results[0].status).toBe("applied");
+      expect(swept.state.epicBoss?.startedCrop).toBe("potato");
+      expect(swept.state.epicBoss?.runId).toBeTruthy();
+      // Every plot was still harvested; only the extra ACTIVATIONS are suppressed.
+      expect(Object.values(swept.state.farm.plots).every((plot) => plot.state === "spent")).toBe(true);
+    });
   });
 
   it("accepts the freely placed, non-grid-aligned plot used by the tutorial", () => {

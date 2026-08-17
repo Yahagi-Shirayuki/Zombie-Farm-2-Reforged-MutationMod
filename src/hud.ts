@@ -2342,6 +2342,15 @@ export class Hud {
           `<p class="${view.levelLocked ? "epic-wait" : ""}">Available at player level ${view.unlockLevel}.</p>` +
           (view.reconstructed ? `<p class="epic-wait">Recovered static battle art.</p>` : "") +
           (view.completed ? "<p>Previous run completed!</p>" : view.expired ? "<p>Previous run expired.</p>" : "")) +
+      // Every boss has one crop it cannot leave alone (epicBoss/favoriteCrops.ts). Shown
+      // on the active card too — during the event that crop is where the extra Boss
+      // Tokens come from, which is exactly when the player wants to be told.
+      (view.favoriteCrop
+        ? `<p class="epic-market-favorite">Favourite crop: <b>${view.favoriteCrop}</b>` +
+          (view.active
+            ? " — harvest it during the event for more Boss Tokens.</p>"
+            : " — harvesting it may lure this boss to the farm.</p>")
+        : "") +
       `<details><summary>Possible rewards</summary><div>${view.rewards.join("<br>")}</div>` +
         (view.zombieRewards.length
           ? `<p class="epic-zombie-rewards"><b>Special zombie milestones</b><br>${view.zombieRewards.join("<br>")}</p>`

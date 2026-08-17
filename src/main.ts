@@ -105,8 +105,12 @@ import { epicBossCurrencyReward, epicBrainTicketChance } from "./epicBoss/reward
 import { BRAIN_TICKET_KEY } from "./raid/eliteInvasion";
 import { epicZombieRewardNotes, visibleEpicBosses } from "./epicBoss/market";
 import { dropsEpicBossToken, EPIC_BOSS_FIGHT_BRAIN_COST } from "./epicBoss/tokens";
+import {
+  bossForFavoriteCrop, favoriteCropOf, isFavoriteCrop, luresEpicBoss,
+} from "./epicBoss/favoriteCrops";
 import { epicAsset, epicLootImage, epicLootImageByName } from "./epicBoss/lootImage";
 import { offerFullscreenPrompt } from "./ui/panels/fullscreenPrompt";
+import { shouldAnnounceEpicBossStart, showEpicBossStart } from "./ui/panels/epicBossStart";
 import { openToolWheel, type ToolWheelHandle, type ToolWheelItem } from "./ui/toolWheel";
 import {
   choosePlayMode, getPreferredPlayMode, setPreferredPlayMode, showOnlineUnavailable,
@@ -1508,6 +1512,15 @@ async function main() {
   const questBus = new QuestBus();
   let tutorial: TutorialController | null = null;
 
+  /** The crop lure, assigned by the Epic Boss block far below once the pieces it needs
+   *  (the quest rail, the save manager, the UI sync) exist — hence the forward
+   *  declaration up here, where the job system that reaches it is built.
+   *
+   *  Assigned in BOTH modes; only ever CALLED offline. The mode test lives at the call
+   *  site (onCropHarvested), because online the lure is the server's roll and a second
+   *  one here would be a client minting itself free events. */
+  let lureEpicBossOffline: ((cropKey: string, growMs: number) => void) | null = null;
+
   /** Roll a harvested crop for a Boss Token and, when it hits, award it HERE — in the
    *  same frame, out of the plot that produced it.
    *
@@ -1517,11 +1530,18 @@ async function main() {
    *  is now the client's in both modes and the server simply records what it reports
    *  (see `epicBoss.token` in net/protocol.ts). An edited client can therefore mint
    *  tokens; that is deliberate. A token buys one Epic Boss attempt, the drop is
-   *  common, and the paid alternative is a single brain. */
-  const awardEpicBossToken = (growMs: number, value: number, x: number, y: number): boolean => {
+   *  common, and the paid alternative is a single brain.
+   *
+   *  The running boss's FAVOURITE crop rolls a quarter better (epicBoss/favoriteCrops.ts).
+   *  That is decided here, against the run actually in progress, so planting some other
+   *  boss's favourite earns nothing extra. */
+  const awardEpicBossToken = (
+    crop: { key: string; growMs: number; value: number }, x: number, y: number
+  ): boolean => {
     const run = state.epicBossRun;
     const def = epicBossById(run?.bossId);
-    if (!run || !def || !new EpicBossManager(def).isActive(run) || !dropsEpicBossToken(growMs, value)) return false;
+    if (!run || !def || !new EpicBossManager(def).isActive(run)
+      || !dropsEpicBossToken(crop.growMs, crop.value, Math.random, isFavoriteCrop(def.id, crop.key))) return false;
     state.setEpicBossRun({ ...run, tokenCount: (run.tokenCount ?? 0) + 1 });
     // Online, tell the server about it. Grants for THIS run fold into one command, so a
     // field-wide Insta-Harvest that turns up a dozen tokens still costs one command.
@@ -1533,6 +1553,23 @@ async function main() {
     // now stack that many identical toasts on top of each other.
     audio.play("xp");
     return true;
+  };
+
+  /** Everything a harvested vegetable crop owes the Epic Boss system: a token roll while
+   *  an event is running, and — when none is — the far rarer chance that this crop's
+   *  boss noticed it and turned up.
+   *
+   *  Only the token half is the client's online. A lure is worth the boss's whole brain
+   *  price AND reopens its prize quest chain, so online the Worker rolls it while it
+   *  replays the harvest it already grow-gates (server/src/v3/engine.ts). The event then
+   *  arrives on the next settle and announces itself; nothing is drawn over the plot,
+   *  because an event starting is a screen-level moment rather than a "+1" on some dirt
+   *  the player has already replanted. */
+  const onCropHarvested = (
+    crop: { key: string; growMs: number; value: number }, x: number, y: number
+  ): boolean => {
+    if (!state.onFarm) lureEpicBossOffline?.(crop.key, crop.growMs);
+    return awardEpicBossToken(crop, x, y);
   };
 
   // The farmer's job queue (till / plant / harvest / walk). He walks to each target,
@@ -1547,7 +1584,7 @@ async function main() {
     questBus,
     (oc, or) => zombies.tryFertilize(oc, or),
     (oc, or) => tutorial?.onPlotPlowed(oc, or),
-    awardEpicBossToken,
+    onCropHarvested,
     (currency, needed) => hud.showToast(
       currency === "gold" ? "Not enough coins." : `Not enough brains (need ${needed}).`
     ),
@@ -1920,8 +1957,12 @@ async function main() {
           r.isZombie ? QuestEvent.ZombieHarvested : QuestEvent.CropHarvested,
           r.name, 1, harvestAliases
         );
-        const bossToken = !r.isZombie &&
-          awardEpicBossToken(r.growMs, r.sell, cropCenter.x, cropCenter.y);
+        // Same hook the farmer's own harvests use, so an Insta-Harvest can lure a boss
+        // too. The first plot to hit takes it: every later roll in this sweep sees an
+        // event already running and stops.
+        const bossToken = !r.isZombie && onCropHarvested(
+          { key: r.key, growMs: r.growMs, value: r.sell }, cropCenter.x, cropCenter.y
+        );
         // Each plot pops its OWN reward numbers, in this one frame, so the farm
         // reads as having been harvested all at once (as the original game did).
         if (r.zombieKey) {
@@ -3648,6 +3689,7 @@ async function main() {
           ? Math.max(0, ownRun.encounterStartedAt + def.encounterMs - now) : 0,
         rewards: def.loot.map((loot) => loot.name),
         zombieRewards: epicZombieRewardNotes(def, assets.quests),
+        favoriteCrop: assets.plants.find((plant) => plant.key === favoriteCropOf(def.id))?.name ?? null,
       };
     });
   };
@@ -3658,13 +3700,70 @@ async function main() {
     const days = active && run ? Math.max(1, Math.ceil((run.expiresAt - Date.now()) / 86_400_000)) : 0;
     hud.setBossShortcut(active, days ? `Boss · ${days}d` : "Boss");
   };
+  // Runs whose start has already been announced, so the popup fires once per event.
+  // Seeded from the first state we adopt — that one is the bootstrap, and an event
+  // already under way when the game loaded is not news.
+  const announcedEpicRuns = new Set<string>();
+  let adoptedEpicBossState = false;
+  const announceEpicBossStart = (bossId: string, luredCropKey: string | null) => {
+    const def = epicBossById(bossId);
+    const run = epicRun();
+    if (!def || !run) return;
+    const crop = luredCropKey ? assets.plants.find((plant) => plant.key === luredCropKey) : null;
+    void showEpicBossStart(hud.el, {
+      name: def.name,
+      portrait: epicAsset(def, def.portrait),
+      maxLevel: def.maxLevel,
+      days: Math.max(1, Math.round(def.durationMs / 86_400_000)),
+      // A lure with an unrecognised crop key still announces — as a plain start, not a
+      // sentence with a hole in it.
+      luredBy: crop?.name ?? null,
+      onView: () => hud.openMarket("Epic Boss"),
+    });
+  };
   // No token FX here any more: a harvested token is popped by awardEpicBossToken, at
-  // the plot it came from, in the frame the crop was pulled. This handler now only
-  // adopts the authoritative run (the count it carries already includes any grant still
-  // waiting in the outbox — see EconomyClient.withPendingBossTokens).
+  // the plot it came from, in the frame the crop was pulled. This handler adopts the
+  // authoritative run (the count it carries already includes any grant still waiting in
+  // the outbox — see EconomyClient.withPendingBossTokens) and is also where a
+  // SERVER-lured event surfaces: the Worker rolled it while replaying a harvest, so the
+  // first this client hears of it is the projection arriving with `startedCrop` set.
   if (economy) economy.onEpicBossState = (run) => {
     state.setEpicBossRun(run ?? null);
     syncEpicBossUi();
+    const current = epicRun();
+    const adopted = current
+      ? { runId: current.runId, startedCrop: current.startedCrop, active: epicBoss.isActive(current) }
+      : null;
+    const announce = shouldAnnounceEpicBossStart(
+      adopted, { adopted: adoptedEpicBossState, announced: announcedEpicRuns }
+    );
+    adoptedEpicBossState = true;
+    if (!current) return;
+    // Remember the run either way. On the bootstrap adoption that is what suppresses a
+    // popup for an event that was already under way when the game loaded.
+    announcedEpicRuns.add(current.runId);
+    if (announce) announceEpicBossStart(current.bossId, current.startedCrop ?? null);
+  };
+  /** Offline twin of the Worker's lure roll. Single-player, so the client is the only
+   *  authority there is. Assigned in both modes and gated by its one caller, which
+   *  skips it whenever `state.onFarm` is set — that hook exists only online, and online
+   *  the Worker owns this roll (server/src/v3/engine.ts maybeLureEpicBoss). */
+  lureEpicBossOffline = (cropKey, growMs) => {
+    if (epicBoss.isActive(state.epicBossRun)) return;
+    const bossId = bossForFavoriteCrop(cropKey);
+    const def = bossId ? epicBossById(bossId) : null;
+    if (!def || state.level < epicBossUnlockLevel(def) || !luresEpicBoss(growMs)) return;
+    selectEpicBoss(def.id); // point the manager at THIS boss before it activates one
+    const run = { ...epicBoss.activate(crypto.randomUUID()), startedCrop: cropKey };
+    state.setEpicBossRun(run);
+    announcedEpicRuns.add(run.runId);
+    // Same order as the bought activation below: the run is live before syncEpicBossUi
+    // marks it active, and the quest rail reopens only after that.
+    syncEpicBossUi();
+    quests.reopenEpicQuests(def.questIds);
+    saveManager.flush();
+    audio.play("buy");
+    announceEpicBossStart(def.id, cropKey);
   };
   hud.onActivateEpicBoss = async (bossId) => {
     if (epicBoss.isActive(state.epicBossRun)) return false;
@@ -3686,6 +3785,11 @@ async function main() {
         syncEpicBossUi();
         saveManager.flush();
         audio.play("buy");
+        // Claim the announcement here rather than letting the settle handler find it: a
+        // bought run carries no `startedCrop`, so that path would ignore it anyway, and
+        // marking it announced keeps the two routes from ever racing over one event.
+        if (activatedRun) announcedEpicRuns.add(activatedRun.runId);
+        announceEpicBossStart(def.id, null);
         return true;
       } catch (error) {
         const code = errCode(error);
@@ -3697,7 +3801,8 @@ async function main() {
       }
     }
     if (!state.spendBrains(def.costBrains, "epic_boss_activate")) return false;
-    state.setEpicBossRun(epicBoss.activate(crypto.randomUUID()));
+    const bought = epicBoss.activate(crypto.randomUUID());
+    state.setEpicBossRun(bought);
     // Offline twin of the Worker's reopen (v3/epicBoss.activate): a new run puts this
     // boss's finished quests back on the rail so they pay out again. After
     // setEpicBossRun, so syncEpicBossUi's setEpicBossActive can surface them.
@@ -3705,6 +3810,8 @@ async function main() {
     quests.reopenEpicQuests(def.questIds);
     saveManager.flush();
     audio.play("buy");
+    announcedEpicRuns.add(bought.runId);
+    announceEpicBossStart(def.id, null);
     return true;
   };
   hud.onEndEpicBoss = async () => {

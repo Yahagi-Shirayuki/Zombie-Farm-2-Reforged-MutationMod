@@ -26,6 +26,8 @@ export interface RunRow {
   run_id: string; boss_id: string; activated_at: number; expires_at: number;
   level: number; max_hp: number; current_hp: number; encounter_started_at: number;
   retry_ready_at: number; token_count: number; completed_at: number; attack_order_json: string;
+  /** Crop key that lured this boss, or '' when the event was bought (migration 0054). */
+  started_crop?: string;
 }
 interface SessionRow {
   id: string; run_id: string; level: number; starting_hp: number; roster_json: string;
@@ -82,6 +84,9 @@ export const projectRun = (row: RunRow | null): EpicBossProjection | null => row
   tokenCount: row.completed_at || row.expires_at <= Date.now() ? 0 : Math.max(0, row.token_count ?? 0),
   completedAt: row.completed_at,
   attackOrder: parse<string[]>(row.attack_order_json, []),
+  // Omitted rather than sent empty, so "bought" is the absence of a crop on the wire
+  // exactly as it is in the client's type.
+  ...(row.started_crop ? { startedCrop: row.started_crop } : {}),
 }) : null;
 
 export async function readRun(db: D1Database, accountId: string): Promise<EpicBossProjection | null> {
@@ -129,7 +134,7 @@ export async function activate(
       run_id=excluded.run_id,boss_id=excluded.boss_id,activated_at=excluded.activated_at,
       expires_at=excluded.expires_at,level=excluded.level,max_hp=excluded.max_hp,
       current_hp=excluded.current_hp,encounter_started_at=0,retry_ready_at=0,
-      token_count=0,completed_at=0,attack_order_json='[]'
+      token_count=0,completed_at=0,attack_order_json='[]',started_crop=''
       WHERE epic_boss_runs_v3.completed_at != 0 OR epic_boss_runs_v3.expires_at <= ?`)
       .bind(accountId, activationId, def.id, now, expiresAt, 1, hp, hp, now),
     db.prepare(`UPDATE balances SET brains = brains - ? WHERE account_id = ? AND brains >= ?

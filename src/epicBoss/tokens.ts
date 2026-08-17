@@ -80,6 +80,19 @@ export const SUPPLY_SCALE = 0.25;
  *  player sees. */
 export const EFFECTIVE_MAX_TOKEN_CHANCE = MAX_TOKEN_CHANCE * SUPPLY_SCALE;
 
+/** What the running boss's FAVOURITE crop adds to its own token chance
+ *  (epicBoss/favoriteCrops.ts). A quarter more tokens is a reason to keep that crop in
+ *  the ground during the event without being a reason to tear up everything else: at
+ *  this size the favourite is worth roughly one extra attempt per two days of dedicated
+ *  farming, which reads as a perk rather than a tax on planting anything you like.
+ *
+ *  Applied AFTER the ceiling clamp, alongside SUPPLY_SCALE and for the same reason. The
+ *  clamp binds on the whole 24-hour band, and three of the eight favourites are 24-hour
+ *  crops — folding the bonus in before it would have been silently eaten on exactly the
+ *  crops most likely to be planted for it. Applied outside, +25% is +25% for every
+ *  favourite, and the curve's shape underneath is untouched. */
+export const FAVORITE_CROP_TOKEN_BONUS = 0.25;
+
 /**
  * Chance that a ripe vegetable crop yields an active-event fight token.
  *
@@ -87,26 +100,34 @@ export const EFFECTIVE_MAX_TOKEN_CHANCE = MAX_TOKEN_CHANCE * SUPPLY_SCALE;
  * ever a dead roll, clamped to the recovered ceiling — then scaled by SUPPLY_SCALE.
  * Everything from 8 hours up sits at or near the effective ceiling; the 24-hour band is
  * pinned to it, so harvest value stops separating those crops.
+ *
+ * `favorite` is set when the harvested crop is the RUNNING boss's favourite — not merely
+ * some boss's favourite. Deciding that is the caller's job (isFavoriteCrop), which keeps
+ * this file free of the pairing table and the cycle that would come with it.
  */
-export function epicBossTokenChance(growMs: number, harvestValue: number): number {
+export function epicBossTokenChance(growMs: number, harvestValue: number, favorite = false): number {
   if (!Number.isFinite(growMs) || !Number.isFinite(harvestValue) || growMs <= 0 || harvestValue <= 0) return 0;
   const hours = growMs / 3_600_000;
   const ratePerDay = PEAK_RATE * Math.pow(harvestValue / 200, VALUE_EXP) * (humpRaw(hours) / HUMP_PEAK);
-  return SUPPLY_SCALE * Math.min(MAX_TOKEN_CHANCE, (ratePerDay * hours) / 24 + FLAT_BONUS);
+  const bonus = favorite ? 1 + FAVORITE_CROP_TOKEN_BONUS : 1;
+  return SUPPLY_SCALE * bonus * Math.min(MAX_TOKEN_CHANCE, (ratePerDay * hours) / 24 + FLAT_BONUS);
 }
 
 /** Expected tokens per plot-day if the crop is replanted the instant it is harvested.
  *  This is the quantity the curve above is actually tuned against, so balance work
  *  and tests should reason in these units rather than per-harvest chance. */
-export function epicBossTokenRatePerPlotDay(growMs: number, harvestValue: number): number {
+export function epicBossTokenRatePerPlotDay(
+  growMs: number, harvestValue: number, favorite = false
+): number {
   if (!Number.isFinite(growMs) || growMs <= 0) return 0;
-  return epicBossTokenChance(growMs, harvestValue) * (86_400_000 / growMs);
+  return epicBossTokenChance(growMs, harvestValue, favorite) * (86_400_000 / growMs);
 }
 
 export function dropsEpicBossToken(
   growMs: number,
   harvestValue: number,
-  random: () => number = Math.random
+  random: () => number = Math.random,
+  favorite = false
 ): boolean {
-  return random() < epicBossTokenChance(growMs, harvestValue);
+  return random() < epicBossTokenChance(growMs, harvestValue, favorite);
 }

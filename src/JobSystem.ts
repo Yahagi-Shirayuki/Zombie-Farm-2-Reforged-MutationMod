@@ -93,7 +93,13 @@ export class JobSystem {
     private onPlotPlowed: (oc: number, or: number) => void = () => {},
     // Epic Boss token roll, performed HERE in both modes and returning whether this
     // crop yielded one. Online it is reported to the server rather than checked by it.
-    private onCropHarvested: (growMs: number, value: number, x: number, y: number) => boolean = () => false,
+    // The crop KEY rides along because the running boss's favourite crop rolls at a
+    // better rate (epicBoss/favoriteCrops.ts); `name` is display text and cannot be
+    // matched on. The rarer favourite-crop event LURE is not reported back here — it
+    // announces itself with a modal rather than a float over the plot.
+    private onCropHarvested: (
+      crop: { key: string; growMs: number; value: number }, x: number, y: number
+    ) => boolean = () => false,
     // Immediate affordability feedback. Queue validation used to fail silently,
     // making a valid plot look unresponsive when the player lacked currency.
     private onInsufficientFunds: (currency: JobCurrency, needed: number) => void = () => {},
@@ -627,7 +633,8 @@ export class JobSystem {
         }
         // Always report veggie harvests: the Boss Token roll happens now, in both
         // modes, so the token pops out of the crop that produced it.
-        const bossToken = !r.isZombie && this.onCropHarvested(r.growMs, r.sell, job.cx, job.cy);
+        const bossToken = !r.isZombie
+          && this.onCropHarvested({ key: r.key, growMs: r.growMs, value: r.sell }, job.cx, job.cy);
         // Zombie crops pay no gold — they yield an owned zombie unit instead.
         if (r.zombieKey) {
           this.float(job.cx, job.cy, `+${xp}xp`);

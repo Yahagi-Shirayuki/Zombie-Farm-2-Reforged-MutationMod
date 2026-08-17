@@ -469,6 +469,41 @@ export async function applyBatch(
       WHERE account_id=? AND run_id=? AND ${guard}`)
       .bind(engine.state.epicBoss.tokenCount, accountId, engine.state.epicBoss.runId, accountId, body.batchId));
   }
+  // A run the batch INVENTED: harvesting a boss's favourite crop lured it onto the farm
+  // (engine.ts maybeLureEpicBoss). This is the only path that can create an epic-boss
+  // row outside /epic-boss/activate, and it charges nothing, so there is no balance
+  // statement to pair with it — the quest reopen it performs rides along in the ordinary
+  // quest-document write, which `questChanged` has already noticed.
+  //
+  // The DO UPDATE carries the SAME liveness condition /epic-boss/activate puts on its
+  // own upsert, and it is not redundant with the engine's check. The engine tested the
+  // state this batch was READ from, and the batch writer lock does not cover
+  // /epic-boss/activate — that route touches this table without ever taking
+  // account_runtime_v3. So a purchase committing between our read and our write would,
+  // unguarded, be silently replaced here by a free level-1 run for some other boss,
+  // with the brains already spent and no way to notice. A paid event outranks a lucky
+  // one, always; on that interleaving the lure is simply lost, which costs the player
+  // nothing they paid for.
+  //
+  // The response was serialized before this point and still describes the lured run, so
+  // a refusal leaves it optimistic for one round trip. That is the accepted cost and it
+  // self-heals: the client adopts whatever the next projection carries (readRun ->
+  // onEpicBossState), and an event it never gets is not one it can spend anything on.
+  if (engine.state.epicBoss && engine.state.epicBoss.runId !== before.epicBoss?.runId) {
+    const lured = engine.state.epicBoss;
+    statements.push(db.prepare(`INSERT INTO epic_boss_runs_v3
+      (account_id,run_id,boss_id,activated_at,expires_at,level,max_hp,current_hp,started_crop)
+      SELECT ?,?,?,?,?,?,?,?,? WHERE ${guard}
+      ON CONFLICT(account_id) DO UPDATE SET
+      run_id=excluded.run_id,boss_id=excluded.boss_id,activated_at=excluded.activated_at,
+      expires_at=excluded.expires_at,level=excluded.level,max_hp=excluded.max_hp,
+      current_hp=excluded.current_hp,encounter_started_at=0,retry_ready_at=0,
+      token_count=0,completed_at=0,attack_order_json='[]',started_crop=excluded.started_crop
+      WHERE epic_boss_runs_v3.completed_at != 0 OR epic_boss_runs_v3.expires_at <= ?`)
+      .bind(accountId, lured.runId, lured.bossId, lured.activatedAt, lured.expiresAt,
+        lured.level, lured.maxHp, lured.currentHp, lured.startedCrop ?? "", accountId, body.batchId,
+        now));
+  }
 
   const oldRoster = new Map(before.roster.map((u) => [u.id, u]));
   const newRoster = new Map(engine.state.roster.map((u) => [u.id, u]));

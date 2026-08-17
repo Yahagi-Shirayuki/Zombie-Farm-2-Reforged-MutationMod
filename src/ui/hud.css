@@ -1394,6 +1394,14 @@
   align-items: center; flex-wrap: wrap; gap: 8px; }
 #hud .epic-market-action { min-width: 210px; }
 #hud .epic-market-action img { width: 20px; height: 20px; vertical-align: middle; }
+#hud .epic-market-favorite { margin: 6px 0 0; }
+#hud .epic-market-favorite b { color: #5c286e; }
+
+/* Event-start announcement (ui/panels/epicBossStart.ts). */
+#hud .epic-start-panel { width: min(430px, 90vw); text-align: center; }
+#hud .epic-start-portrait { width: min(220px, 60%); max-height: 210px; object-fit: contain;
+  margin: 4px auto 10px; display: block; image-rendering: pixelated; }
+#hud .epic-start-lede { font-weight: 800; color: #5c286e; margin: 0 0 8px; }
 
 /* ---- Social hub + asynchronous Black Market ---- */
 #hud .social-hub { width: min(470px, 90vw); text-align: center; }

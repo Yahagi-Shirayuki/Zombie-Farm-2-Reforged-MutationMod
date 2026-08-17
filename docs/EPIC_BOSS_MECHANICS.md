@@ -226,6 +226,98 @@ now only records what the client reports (`epicBoss.token`, pinned to the runnin
 Tokens. That is an accepted trade: a token buys one attempt, the drop is common, and the
 alternative price is a single brain.
 
+### Favourite crops
+
+Each boss names one **favourite crop** (`src/epicBoss/favoriteCrops.ts`), shown on its
+market card: Dr. Groundhog/potato, Bully Frog/venus_flytrap, Rocky Rhino/broccoli,
+General Larvaelus/garlic, Mystical Mamba/lima_beans, Foul Owl/dragon_fruit,
+Skunkarella/pumpking, Loco Locust/corpse_flower. It does two things, and never both at
+once, because the second only applies when no event is running.
+
+**While its own boss's event is active**, that crop's Boss Token chance is multiplied by
+`1 + FAVORITE_CROP_TOKEN_BONUS` (**+25%**). The multiplier is applied *outside* the
+ceiling clamp, alongside `SUPPLY_SCALE` and for the same reason: three of the eight
+favourites are 24-hour crops and that whole band is pinned to the ceiling, so folding the
+bonus in before the clamp would delete it on exactly the crops planted for it. It keys off
+the *running* event, not merely off being somebody's favourite.
+
+**While no event is running**, the same harvest can instead **lure that boss onto the farm
+and start its event for free**, if the account has reached the boss's unlock level. The
+rate is `EPIC_BOSS_START_RATE_PER_PLOT_DAY` = **0.006 events per plot-day** for a 24-hour
+crop, tilted mildly down for shorter grow times (`EPIC_BOSS_START_TIME_TILT` = 0.15, so a
+4-hour crop earns 76% of that daily rate), and spread back over one grow cycle to give the
+per-harvest chance. Calibrated against 75 plots at 75% uptime drawing one event per ~3
+days, with a casual 8-plot patch at half uptime waiting about six weeks.
+
+75 plots is a dedicated patch, not a ceiling. The farm upgrades 30→40→50→60→70
+(`SIZE_TIERS`) and the server caps plots at `MAX_FARM_PLOTS` = `floor(70/4)²` = **289**.
+That cap is derived and exact; the **~200** quoted below as what a real farm is left with
+after buildings, the zombie patch and walking room is an *estimate* that has never been
+checked against an actual maxed layout, so read it as an order of magnitude rather than a
+calibration target. The rate is linear in plot count and nothing else damps it:
+
+| plots | uptime | days to a lure | share of time an event is running |
+|---|---|---|---|
+| 8 | 50% | 41.7 | 25% |
+| 40 | 75% | 5.6 | 72% |
+| 75 | 75% | 3.0 | 83% |
+| 200 | 75% | 1.1 | 93% |
+
+The gate bounds *frequency* — a lure rolls only with no event running, and an event runs
+14 days, so no farm can draw more than one per 14 days. It does not bound *uptime*, which
+is the right-hand column: a large farm is rarely eligible to roll and equally rarely
+without an event.
+
+The figure that decides whether any of this is felt is the plot count at which the
+expected wait falls below the 14 days an event lasts — below it the lure is noise, above
+it events run back to back. That is about **a dozen plots** of one favourite (11.9 for a
+24-hour crop, 15.6 for Broccoli's 4-hour one), and it saturates by thirty. The feature
+switches on across a narrow band.
+
+The high-uptime end is accepted rather than damped — but **not** for the reason
+originally given here, which its own arithmetic contradicts. That argument was that a
+running event is a ten-rung grind whose real gate is **token supply**, so a farm large
+enough to keep an event permanently live spends most of it unable to afford attempts. A
+ladder costs an ordinary army ~45 attempts, and a favourite crop pays 0.11–0.33 tokens
+per plot-day, so 45 attempts' worth of tokens arrives inside a single 14-day event at
+~10 plots of Pumpking, ~12 of Garlic, ~29 of Potato:
+
+| favourite | tokens / plot-day | plots for ~45 attempts in one event |
+|---|---|---|
+| Potato, Lima Beans, Dragon Fruit (24 h) | 0.109 | 29 |
+| Garlic (8 h) | 0.250 | 13 |
+| Venus Flytrap (6 h) | 0.291 | 11 |
+| Broccoli (4 h) | 0.325 | 10 |
+| Pumpking (8 h) | 0.328 | 10 |
+| Corpse Flower (6 h) | 0.333 | 10 |
+
+That is the same band the lure turns on in. Token supply stops binding at roughly the
+farm size where events begin to overlap, so it cannot be the thing that makes the overlap
+harmless. What is actually accepted is the overlap itself, on the judgement that a
+permanently available grind is a fair return for a farm given over to one crop. If a
+playtest contradicts *that*, a cooldown after an event *ends* is the lever which caps
+uptime at any farm size; scaling the rate down is the wrong one, since it hits the casual
+patch hardest and the large farm least.
+
+Three invariants hold the pairings (`favoriteCrops.test.ts`): a favourite crop never
+unlocks *after* its boss, no crop is two bosses' favourite, and every favourite grows for
+at least four hours — a flat per-plot-day rate would otherwise force a 15-minute crop to a
+~1-in-50,000 per-harvest chance, which is arithmetically right and invisible in play.
+
+The pairings are surfaced in two places: the boss's own card in Market → Epic Boss (which
+switches its wording between the lure and the token bonus depending on whether that event
+is running), and the Farmer's Guide's Combat page. Not in the Zombie Almanac — that is a
+species collection, and a boss is not a species.
+
+Unlike the token roll, **the lure is the server's** (`maybeLureEpicBoss` in
+`server/src/v3/engine.ts`), rolled while the Worker replays the harvest it already
+grow-gates. A token is worth one brain; a lure is worth the boss's whole activation price
+and reopens its prize quest chain, which is not something to hand an edited client. An
+Insta-Harvest rolls every plot it pulls but can start at most one event. The luring crop
+is stored in `epic_boss_runs_v3.started_crop` (migration `0054`) and projected as
+`startedCrop`; a bought run leaves it empty, which is how the client tells the two apart
+when it opens the start announcement (`src/ui/panels/epicBossStart.ts`).
+
 Tokens can be
 hoarded during the run, but expire when that boss event ends. Damage survives an escape.
 If two hours elapse from the first attempt at the current level, that level returns to

@@ -603,7 +603,10 @@ CREATE TABLE IF NOT EXISTS epic_boss_runs_v3 (
   level INTEGER NOT NULL, max_hp INTEGER NOT NULL, current_hp INTEGER NOT NULL,
   encounter_started_at INTEGER NOT NULL DEFAULT 0, retry_ready_at INTEGER NOT NULL DEFAULT 0,
   token_count INTEGER NOT NULL DEFAULT 0,
-  completed_at INTEGER NOT NULL DEFAULT 0, attack_order_json TEXT NOT NULL DEFAULT '[]'
+  completed_at INTEGER NOT NULL DEFAULT 0, attack_order_json TEXT NOT NULL DEFAULT '[]',
+  -- '' when the event was bought; a plants.json crop key when a harvest lured the boss
+  -- (migration 0054, src/epicBoss/favoriteCrops.ts).
+  started_crop TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS epic_boss_sessions_v3 (
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,

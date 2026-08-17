@@ -196,6 +196,10 @@ export interface EpicBossProjection {
   tokenCount: number;
   completedAt: number;
   attackOrder: string[];
+  /** The favourite crop whose harvest lured this boss, or absent when the event was
+   *  bought with brains. Set only by the server's own roll (v3/engine.ts), so it doubles
+   *  as the "this event arrived unasked" flag the client announces on. */
+  startedCrop?: string;
 }
 
 export interface RosterUnitProjection {

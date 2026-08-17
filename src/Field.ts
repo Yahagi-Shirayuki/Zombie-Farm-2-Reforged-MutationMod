@@ -166,6 +166,9 @@ export interface HarvestResult {
   sell: number;
   xp: number;
   growMs: number;
+  /** The plants.json crop key. `name` is the display string and is not stable enough to
+   *  match on — the Epic Boss favourite-crop pairings key off this. */
+  key: string;
   name: string;
   isZombie: boolean;
   fertilized: boolean;
@@ -1083,7 +1086,7 @@ export class Field {
     p.crop = undefined;
     p.state = cfg.isZombie ? "hole" : "dirt";
     this.fit(p.soil, this.assets.soil[cfg.isZombie ? HOLE_FILE : DIRT_FILE], oc, or, PLOT);
-    return { sell, xp: cfg.xp, growMs: cfg.growMs, name: cfg.name, isZombie: !!cfg.isZombie,
+    return { sell, xp: cfg.xp, growMs: cfg.growMs, key: cfg.key, name: cfg.name, isZombie: !!cfg.isZombie,
       fertilized, icon: cfg.harvestIcon ?? cfg.stages[cfg.stages.length - 1],
       zombieKey: cfg.isZombie ? cfg.key : undefined, mutationContext };
   }
