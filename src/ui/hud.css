@@ -2137,6 +2137,15 @@
 #hud .alm-detail h2 { margin: 2px 0 0; font-size: 20px; }
 #hud .alm-detail-por { width: 96px; height: 96px; }
 #hud .alm-detail-por .zr-por-img { max-width: 72px; max-height: 72px; }
+/* Mutation Almanac (third tab). Same tiles as the species grid, plus the stat line
+   that is the whole reason to open it. */
+#hud .mut-note { margin: 0 0 8px; }
+#hud .mut-card .zr-por-img { image-rendering: pixelated; }
+#hud .mut-stats { font-size: 11px; font-weight: 700; color: #b6f36a; line-height: 1.2;
+  margin: 1px 2px 0; }
+#hud .mut-detail-cls { margin-top: 4px; }
+#hud .mut-detail-stats { text-align: center; font-size: 15px; font-weight: 800;
+  color: #b6f36a; margin: 8px 0 0; }
 /* Field notes: the three system explainers above the collection grid. */
 #hud .alm-notes { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
 #hud .alm-notes-label { font-size: 14px; font-weight: 800; letter-spacing: .06em;

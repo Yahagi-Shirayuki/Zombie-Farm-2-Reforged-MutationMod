@@ -55,6 +55,19 @@ export type MutationRef = MutationKey | number;
  *  lists the stats a mutation actually moves). */
 export type MutationStats = Partial<Record<Stat, number>>;
 
+/** A mutation's rank, 1-4, as ZF2 authored it: the market mutant that carries each
+ *  mutation names its own tier in its actor key (`…Tier1Tomatoes`, `…Tier4Eyebiscus`),
+ *  and MUTATION_CATALOG_CORRECTED.md tabulates the full set.
+ *
+ *  Presentation only — nothing in combat or the Pot reads it. It exists so the
+ *  Mutation Almanac can draw each mutation on a zombie of matching rank (Green for
+ *  tier 1 through Silver for tier 4, see classForTier) rather than picking one body
+ *  arbitrarily. Note it is NOT the `tier` baked onto a mutant ZombieDef in
+ *  zombies.json: that one was re-derived by the Reforged rebalance from unlock level
+ *  and runs 1/3/4 with no tier 2 at all, which would leave a colour missing from the
+ *  ladder. This is the source's own number. */
+export type MutationTier = 1 | 2 | 3 | 4;
+
 /** One mutation as authored. The bit is assigned from catalog position, not written
  *  by hand — see CATALOG and PINNED_ORDER. */
 export interface MutationSpec {
@@ -62,6 +75,7 @@ export interface MutationSpec {
   name: string; // display name of the resulting zombie
   slot: Slot;
   stats: MutationStats; // e.g. { con: 8, dex: -2 }
+  tier: MutationTier;
 }
 
 export interface MutationDef extends MutationSpec {
@@ -96,22 +110,22 @@ const STAT_ORDER: Stat[] = ["str", "dex", "con"];
 // Penalties apply to the RAW stat and are floored where the stat becomes combat
 // behaviour, not here — see MIN_COMBAT_STAT in raid/CombatEngine.
 const CATALOG: readonly MutationSpec[] = [
-  { key: "tomato", name: "Tomatohead", slot: "head", stats: { str: 1 } },
-  { key: "onion", name: "Onionhead", slot: "head", stats: { con: 1 } },
-  { key: "carrot", name: "Carrot-eyed", slot: "hair_eye", stats: { dex: 1 } },
-  { key: "turnip", name: "Turnip-Arm", slot: "arm", stats: { str: 2 } },
-  { key: "potato", name: "Potatohead", slot: "head", stats: { con: 2 } },
-  { key: "coffee", name: "Coffeehead", slot: "head", stats: { dex: 2 } },
-  { key: "celery", name: "Celery-arms", slot: "arm", stats: { str: 3 } },
-  { key: "broccoli", name: "Broccohair", slot: "hair_eye", stats: { con: 3 } },
-  { key: "garlic", name: "Garlichead", slot: "head", stats: { str: 3 } },
+  { key: "tomato", name: "Tomatohead", slot: "head", stats: { str: 1 }, tier: 1 },
+  { key: "onion", name: "Onionhead", slot: "head", stats: { con: 1 }, tier: 1 },
+  { key: "carrot", name: "Carrot-eyed", slot: "hair_eye", stats: { dex: 1 }, tier: 1 },
+  { key: "turnip", name: "Turnip-Arm", slot: "arm", stats: { str: 2 }, tier: 1 },
+  { key: "potato", name: "Potatohead", slot: "head", stats: { con: 2 }, tier: 1 },
+  { key: "coffee", name: "Coffeehead", slot: "head", stats: { dex: 2 }, tier: 1 },
+  { key: "celery", name: "Celery-arms", slot: "arm", stats: { str: 3 }, tier: 2 },
+  { key: "broccoli", name: "Broccohair", slot: "hair_eye", stats: { con: 3 }, tier: 2 },
+  { key: "garlic", name: "Garlichead", slot: "head", stats: { str: 3 }, tier: 2 },
   // +4, not the +3 it shipped with. Cauliflower is a level-29 crop and Broccoli a
   // level-23 one; while both paid +3 con in the same slot, the dearer, later crop
   // granted nothing the earlier one didn't, and lost every Pot conflict to nothing.
-  { key: "cauli", name: "Cauli-hair", slot: "hair_eye", stats: { con: 4 } },
-  { key: "limabean", name: "Lima Bean", slot: "body", stats: { con: 3 } },
-  { key: "flytrap", name: "Flytrap", slot: "neck", stats: { con: 4 } },
-  { key: "dragon", name: "Dragon-arm", slot: "arm", stats: { str: 4 } },
+  { key: "cauli", name: "Cauli-hair", slot: "hair_eye", stats: { con: 4 }, tier: 2 },
+  { key: "limabean", name: "Lima Bean", slot: "body", stats: { con: 3 }, tier: 2 },
+  { key: "flytrap", name: "Flytrap", slot: "neck", stats: { con: 4 }, tier: 3 },
+  { key: "dragon", name: "Dragon-arm", slot: "arm", stats: { str: 4 }, tier: 3 },
   // The headless family's own head (see HEADLESS_HEAD_MASK). Pumpking never had a
   // MutationIcons entry or a market mutant in ZF2 — it shipped as a crop-adjacency-only
   // mutation and the one head exception the headless family could wear
@@ -123,7 +137,12 @@ const CATALOG: readonly MutationSpec[] = [
   // Regular inherits in the Pot worth nothing over the Garlichead it evicts. +4 makes
   // it the best head in the game, which is what a capstone should be, and is the
   // headless family's compensation for being locked out of two slots entirely.
-  { key: "pumpking", name: "Pumpking", slot: "head", stats: { str: 4 } },
+  //
+  // Its `tier` is ours for the same reason — with no market mutant there is no authored
+  // `TierN` to read it off. Tier 4, to sit with the two Tier-4 variants: it grows from
+  // the level-39 capstone crop and pays what the sentence above says it pays, so filing
+  // it among the Tier-1 heads it out-values fourfold would be the misleading choice.
+  { key: "pumpking", name: "Pumpking", slot: "head", stats: { str: 4 }, tier: 4 },
   // The two Tier-4 crops. They USED to ride carrot's and cauli's bits — a Tier-4 crop
   // that cost several times as much and grew for a day granted exactly the Tier-1
   // mutation, so there was never a reason to plant one. ZF2 itself disagreed with that:
@@ -135,8 +154,8 @@ const CATALOG: readonly MutationSpec[] = [
   // is NOT: heartichokeBody `replaces: "body"` exactly as limaBeanBody does, so it sits
   // in the BODY slot with Lima Bean — the slot the art always drew it in, and the one a
   // player reported it filing itself under wrongly while it wore Cauli-hair's bit.
-  { key: "eyebiscus", name: "Eyebiscus", slot: "hair_eye", stats: { str: 1, dex: 2 } },
-  { key: "heartichoke", name: "Heartichoke", slot: "body", stats: { con: 5 } },
+  { key: "eyebiscus", name: "Eyebiscus", slot: "hair_eye", stats: { str: 1, dex: 2 }, tier: 4 },
+  { key: "heartichoke", name: "Heartichoke", slot: "body", stats: { con: 5 }, tier: 4 },
 ];
 
 // The order that has already shipped. A row inserted, removed, or moved in CATALOG

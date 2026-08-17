@@ -190,7 +190,7 @@ describe("a mutation that trades one stat for another", () => {
   // mutationEntries uses once the defs are resolved.
   const CORNHEAD: MutationDef = {
     bit: 1 << 20, key: "cornhead", name: "Cornhead", slot: "head",
-    stats: { con: 8, dex: -2 },
+    stats: { con: 8, dex: -2 }, tier: 2,
   };
   // A plain Regular tier-1's unmutated stats.
   const base = { str: 2, dex: 2, con: 3 };

@@ -12,6 +12,7 @@ import {
 } from "./farmer";
 import type { EpicBossRun } from "./epicBoss/types";
 import { parseReceivedZombie } from "./zombie/receivedReward";
+import { mutationsOf } from "./zombie/mutations";
 import { releasedToGraveyard, trimFallen, type FallenZombie } from "./zombie/memorial";
 import type { ZombieTeam } from "./zombie/teams";
 
@@ -41,6 +42,12 @@ export class GameState {
   // path (grow, Pot, reward, Black Market, gift); never decremented — selling or
   // losing a zombie does not un-discover its species.
   zombieDiscovered: Record<string, number> = {};
+  // ---- Mutation Almanac: lifetime count per mutation key ----
+  // The same collection, one level down: a zombie arriving with a mask counts every
+  // mutation on it, so one Tomatohead Zyborg discovers Tomatohead. Kept beside the
+  // species map and written by the same call, because every path that creates a unit
+  // already reports that unit — and a mutation has no creation path of its own.
+  mutationDiscovered: Record<string, number> = {};
   // ---- the graveyard: zombies lost in an invasion and not revived ----
   // Purely a memento list — a Memorial Statue is the only thing that can consume
   // one, and enshrining moves the snapshot onto the statue. Nothing here can ever
@@ -384,9 +391,18 @@ export class GameState {
     this.emit();
   }
 
-  /** Record one obtained zombie of `key` in the Almanac's lifetime counter. */
-  recordZombieDiscovered(key: string) {
+  /** Record one obtained zombie of `key` in the Almanac's lifetime counter, along with
+   *  every mutation it arrived wearing.
+   *
+   *  `mutation` is optional so a caller that genuinely has no mask (a test, a legacy
+   *  path) still counts the species — a missing mask must never be read as "and it had
+   *  no mutations", which would be indistinguishable from a plain zombie and silently
+   *  correct. Callers that own a unit pass `unit.mutation`. */
+  recordZombieDiscovered(key: string, mutation = 0) {
     this.zombieDiscovered[key] = (this.zombieDiscovered[key] ?? 0) + 1;
+    for (const def of mutationsOf(mutation)) {
+      this.mutationDiscovered[def.key] = (this.mutationDiscovered[def.key] ?? 0) + 1;
+    }
     this.emit();
   }
 

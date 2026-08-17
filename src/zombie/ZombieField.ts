@@ -262,7 +262,7 @@ export class ZombieField {
     // omitted, a market mutant grows in with its guaranteed bit.
     const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutation);
     const unit = this.addUnit(data);
-    this.state.recordZombieDiscovered(data.key);
+    this.state.recordZombieDiscovered(data.key, data.mutation);
     this.syncCount();
     return unit;
   }
@@ -282,7 +282,7 @@ export class ZombieField {
       if (!def) return null;
       const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutation);
       this.stored.push(data);
-      this.state.recordZombieDiscovered(data.key);
+      this.state.recordZombieDiscovered(data.key, data.mutation);
       return data;
     } finally {
       this.harvesting = false;
@@ -535,7 +535,7 @@ export class ZombieField {
       // preserve the earned zombie in the Mausoleum instead of dropping the reward.
       if (serverStored !== true && this.canAdd()) { this.addUnit(data); this.syncCount(); }
       else this.stored.push(data);
-      if (opts.recordDiscovery !== false) this.state.recordZombieDiscovered(data.key);
+      if (opts.recordDiscovery !== false) this.state.recordZombieDiscovered(data.key, data.mutation);
     } finally { this.harvesting = false; }
     return data;
   }
@@ -596,7 +596,7 @@ export class ZombieField {
     this.combining = true;
     if (toCrypt) this.stored.push(data);
     else this.addUnit(data);
-    this.state.recordZombieDiscovered(data.key);
+    this.state.recordZombieDiscovered(data.key, data.mutation);
     this.syncCount();
     this.combining = false;
     if (this.rosterLive) {
@@ -978,7 +978,7 @@ export class ZombieField {
         // this player escrowed on a Black Market listing they then cancelled. It
         // carries a fresh unit id but it is the same zombie they already own, so
         // crediting it would let list/cancel cycles farm the lifetime count.
-        if (this.rosterLive && !source && !save.restored) this.state.recordZombieDiscovered(data.key);
+        if (this.rosterLive && !source && !save.restored) this.state.recordZombieDiscovered(data.key, data.mutation);
       }
     } finally {
       this.harvesting = false;

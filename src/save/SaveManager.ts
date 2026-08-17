@@ -17,6 +17,7 @@ import { GAMEPLAY_PROTOCOL } from "../net/protocol";
 import { epicBossRunToClient, serverTimestampToClient } from "../net/clock";
 import { reconcileTutorialCompletion } from "../tutorial/steps";
 import { backfillDiscovered, sanitizeDiscovered } from "../zombie/almanac";
+import { backfillMutationDiscovered, sanitizeMutationDiscovered } from "../zombie/mutationAlmanac";
 import { sanitizeFallen, sanitizeFallenUncapped } from "../zombie/memorial";
 import { sanitizeTeams } from "../zombie/teams";
 import type { PlayMode } from "../playMode";
@@ -222,7 +223,7 @@ export class SaveManager {
       epicBoss: this.state.epicBossRun ?? undefined,
       social: { friends: this.state.friends },
       tutorial: this.state.tutorial,
-      almanac: { discovered: this.state.zombieDiscovered },
+      almanac: { discovered: this.state.zombieDiscovered, mutations: this.state.mutationDiscovered },
       fallen: this.state.fallenZombies,
       teams: this.state.zombieTeams,
       ...(farmJobs ? { farmJobs } : {}),
@@ -668,6 +669,13 @@ export class SaveManager {
     this.state.zombieDiscovered = Object.keys(discovered).length
       ? discovered
       : backfillDiscovered(data.ownedZombies ?? []);
+    // The same for mutations, seeded independently: a save from between the two tabs
+    // shipping has species counts and no mutation ones, so an emptiness test on the
+    // species map would wrongly conclude this one needs no backfill either.
+    const mutations = sanitizeMutationDiscovered(data.almanac?.mutations);
+    this.state.mutationDiscovered = Object.keys(mutations).length
+      ? mutations
+      : backfillMutationDiscovered(data.ownedZombies ?? []);
     // `received` was assigned straight onto the state above, so the reward zombies
     // parked in it have not been through receiveItem/syncStorage yet. Owned is owned:
     // count them here too, or an unclaimed prize opens the Almanac as a silhouette.

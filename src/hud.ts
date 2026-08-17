@@ -37,6 +37,7 @@ import { marketPageSize } from "./marketPageSize";
 import { veterancy } from "./zombie/traits";
 import { COMBINE_SPECIAL_LEVEL } from "./zombie/combineSpecies";
 import type { AlmanacGuideTopic } from "./zombie/almanacGuide";
+import type { MutationAlmanacEntry } from "./zombie/mutationAlmanac";
 import { BASE } from "./base";
 import { compareCropMarketOrder, compareItemMarketOrder } from "./marketOrder";
 import { decorAvailable, themeLabel, themeOf } from "./decorThemes";
@@ -1437,6 +1438,8 @@ export class Hud {
    *  (the Zombie Pot, Brain Tickets, the Epic Boss events). Catalog prices and the
    *  event lineup are folded in by main, so the panel just renders what it gets. */
   getAlmanacGuide: (() => AlmanacGuideTopic[]) | null = null;
+  /** The Mutation Almanac's entry list: every mutation + its discovery count. */
+  getMutationAlmanac: (() => MutationAlmanacEntry[]) | null = null;
   /** Portrait image URL for a zombie type key (per-type composite). */
   zombiePortraitOf: ((key: string) => string) | null = null;
   /** Render one owned zombie with its complete individual mutation mask. `wanted`
@@ -1448,6 +1451,9 @@ export class Hud {
     mutation: number,
     color?: [number, number, number],
     wanted?: () => boolean,
+    /** Draw the mask even when the player has mutations hidden — the Mutation
+     *  Almanac only, where suppressing them would empty the catalog. */
+    forceMutation?: boolean,
   ) => Promise<string>) | null = null;
   /** One zombie's look changed on this device (its card hid or restored a
    *  mutation). Nothing about the unit itself moved, so the host only has to

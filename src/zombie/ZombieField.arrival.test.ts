@@ -80,7 +80,19 @@ describe("where a server-granted zombie turns up", () => {
     zombies.reconcileServerRoster([purchase]);
 
     expect((zombies as never as { state: { recordZombieDiscovered: ReturnType<typeof vi.fn> } })
-      .state.recordZombieDiscovered).toHaveBeenCalledWith(DEF.key);
+      .state.recordZombieDiscovered).toHaveBeenCalledWith(DEF.key, purchase.mutation);
+  });
+
+  // The mask rides along so the Mutation Almanac is credited by the same call. A
+  // server-granted mutant is the case that has no other route: nothing on this client
+  // spawned it, so nothing else would ever see what it is wearing.
+  it("credits the mutations a server-granted zombie arrives wearing", () => {
+    const zombies = subject(fieldStub([]), () => ({ col: 12, row: 9 }));
+
+    zombies.reconcileServerRoster([{ ...purchase, mutation: 5 }]);
+
+    expect((zombies as never as { state: { recordZombieDiscovered: ReturnType<typeof vi.fn> } })
+      .state.recordZombieDiscovered).toHaveBeenCalledWith(DEF.key, 5);
   });
 
   it("does not credit the Almanac for a zombie returned by a cancelled sale", () => {

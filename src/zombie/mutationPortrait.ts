@@ -201,16 +201,28 @@ export class MutationPortraits {
    * test is checked at the moment the request reaches the head of the queue, so work
    * already started still finishes.
    */
+  /**
+   * @param forceMutation draw the mask as given, ignoring the "show mutations" display
+   *  pref. Only the Mutation Almanac passes this, and it has to: that pref is a
+   *  cosmetic choice about the player's own army, but a catalog entry FOR a mutation
+   *  with the mutation switched off is a picture of a plain zombie, sixteen times over.
+   *  Safe against the cache because the key is built from the mask that will actually
+   *  be drawn — a forced portrait and a suppressed one land on different entries, and
+   *  when the pref is on they land on the same one, which is correct: same picture.
+   */
   get(
     key: string,
     mutation: number,
     color?: [number, number, number],
     wanted?: () => boolean,
+    forceMutation = false,
   ): Promise<string> {
     // Normalize through the display prefs BEFORE the cache key is formed: a portrait
     // is cached by what it will look like, so flipping "show mutations" or the body
     // colour mode addresses a different entry instead of returning a stale one.
-    ({ mutation, color } = displayedAppearance(mutation, color));
+    const shown = displayedAppearance(mutation, color);
+    color = shown.color;
+    if (!forceMutation) mutation = shown.mutation;
     const cacheKey = `${key}|${mutation}|${color?.join(",") ?? "default"}`;
     const existing = this.cache.get(cacheKey);
     if (existing) {

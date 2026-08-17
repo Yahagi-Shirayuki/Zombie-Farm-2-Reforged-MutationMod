@@ -24,6 +24,8 @@ import {
 import { statBreakdown } from "../../zombie/statDisplay";
 import { classTierRank } from "../../zombie/taxonomy";
 import type { AlmanacGuideTopic } from "../../zombie/almanacGuide";
+import { statEffectText, type MutationAlmanacEntry } from "../../zombie/mutationAlmanac";
+import { SLOTS } from "../../zombie/mutations";
 import { ZOMBIE_SORTS, isZombieSort, sortZombies, type ZombieSort } from "../../zombie/rosterSort";
 import { getZombieSort, setZombieSort } from "../../prefs";
 import { keepScroll, recallOneOf, remember } from "../viewState";
@@ -508,7 +510,7 @@ export function buildRosterCard(hud: Hud, z: RosterEntry, onClick: () => void): 
   return card;
 }
 
-export type ZombiesPanelTab = "roster" | "almanac";
+export type ZombiesPanelTab = "roster" | "almanac" | "mutations";
 
 // The "Zombies" tab (right bar): "My Zombies" lists every owned zombie as its
 // full inspect card (the same one shown when tapping a zombie); the "Zombie
@@ -537,6 +539,7 @@ export function openZombiesPanel(hud: Hud, initialTab?: ZombiesPanelTab) {
     body.innerHTML = "";
     remember("zombies.tab", tab);
     if (tab === "roster") renderRoster();
+    else if (tab === "mutations") renderMutations();
     else renderAlmanac();
     // Both lists are long, and both are rebuilt by ordinary actions (a sale, a
     // deploy, opening an Almanac entry), so each keeps its own place.
@@ -552,6 +555,7 @@ export function openZombiesPanel(hud: Hud, initialTab?: ZombiesPanelTab) {
   };
   mkTab("roster", "My Zombies");
   mkTab("almanac", "Zombie Almanac");
+  mkTab("mutations", "Mutations");
 
   let rosterSort: ZombieSort = getZombieSort();
 
@@ -680,7 +684,47 @@ export function openZombiesPanel(hud: Hud, initialTab?: ZombiesPanelTab) {
     }
   };
 
-  show(initialTab ?? recallOneOf("zombies.tab", ["roster", "almanac"] as const, "roster"));
+  // The third tab: the same collection one level down. A mutation is not a creature,
+  // so an entry is a mutation drawn ON a zombie — the base Regular of its own tier, so
+  // the grid runs Green through Silver exactly as the species one does.
+  const renderMutations = () => {
+    const entries = hud.getMutationAlmanac ? hud.getMutationAlmanac() : [];
+    const found = entries.filter((entry) => entry.obtained > 0).length;
+    head.innerHTML = "";
+    const title = document.createElement("h2");
+    title.textContent = "Mutations";
+    const cnt = document.createElement("span");
+    cnt.className = "zr-total";
+    cnt.textContent = `${found} / ${entries.length} discovered`;
+    head.append(title, cnt);
+
+    const note = document.createElement("div");
+    note.className = "alm-notes-label mut-note";
+    note.textContent = "Grown by planting a crop beside a zombie crop";
+    body.appendChild(note);
+
+    const grid = document.createElement("div");
+    grid.className = "zr-grid alm-grid";
+    body.appendChild(grid);
+    // Grouped by SLOT rather than tier: one mutation per slot is the rule the whole
+    // system turns on, so seeing the five ladders side by side is what tells a player
+    // which of two mutations they are actually choosing between.
+    let lastSlot = "";
+    for (const entry of entries.slice().sort(
+      (a, b) => SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot) || a.tier - b.tier
+    )) {
+      if (entry.slot !== lastSlot) {
+        lastSlot = entry.slot;
+        const header = document.createElement("div");
+        header.className = "alm-section";
+        header.textContent = entry.slotLabel;
+        grid.appendChild(header);
+      }
+      grid.appendChild(buildMutationCard(hud, entry));
+    }
+  };
+
+  show(initialTab ?? recallOneOf("zombies.tab", ["roster", "almanac", "mutations"] as const, "roster"));
 }
 
 // Undiscovered portraits must not expose the real art: a CSS filter only blacks
@@ -803,6 +847,129 @@ function openAlmanacEntry(hud: Hud, entry: AlmanacEntryView) {
   hint.textContent = entry.hint;
   wrap.append(por, title, status, hint);
   panel.appendChild(wrap);
+}
+
+/** Paint a mutation portrait into `por`, blacked out when undiscovered.
+ *
+ *  Extraction blocks the main thread for ~30ms and there are sixteen of these, so the
+ *  work is deferred until the tile scrolls into view and abandoned if it leaves before
+ *  its turn comes up (the `wanted` test). `forceMutation` is what makes the entry show
+ *  the mutation even for a player who has mutations hidden on their own army.
+ *
+ *  An undiscovered entry is silhouetted from the SAME extraction rather than a species
+ *  portrait: the shape of the thing is the clue, and a plain zombie outline sixteen
+ *  times over would tell nobody anything. */
+function paintMutationPortrait(hud: Hud, por: HTMLElement, entry: MutationAlmanacEntry): void {
+  const img = document.createElement("img");
+  img.className = "zr-por-img";
+  img.alt = "";
+  por.appendChild(img);
+  if (!hud.zombieMutationPortraitOf) return;
+  onFirstVisible(por, () => {
+    void hud.zombieMutationPortraitOf!(
+      entry.portraitZombieKey, entry.bit, undefined, () => por.isConnected, true,
+    )
+      .then(async (portrait) => {
+        if (!por.isConnected) return;
+        img.src = entry.obtained ? portrait : await silhouetteOf(portrait);
+        // Same marker the species tiles carry. The pixels are already black, so the
+        // class's filter is a no-op here — it is on for consistency, and because the
+        // hover-reveal rule keyed off it must find nothing to reveal either way.
+        if (!entry.obtained) img.classList.add("alm-sil");
+      })
+      .catch(() => { /* an entry with no art is still readable from its text */ });
+  });
+}
+
+/** One Mutation Almanac tile: the mutation worn by the tier-appropriate zombie, its
+ *  name, and its stat changes — silhouetted, and stats withheld, until discovered. */
+function buildMutationCard(hud: Hud, entry: MutationAlmanacEntry): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "zr-card alm-card mut-card";
+  const por = document.createElement("div");
+  por.className = "zr-por";
+  paintMutationPortrait(hud, por, entry);
+  if (entry.obtained) {
+    const count = document.createElement("span");
+    count.className = "alm-count";
+    count.textContent = `×${entry.obtained}`;
+    por.appendChild(count);
+  }
+  const name = document.createElement("div");
+  name.className = "zr-name";
+  name.textContent = entry.obtained ? entry.name : "???";
+  card.append(por, name);
+  if (entry.obtained) {
+    const stats = document.createElement("div");
+    stats.className = "mut-stats";
+    stats.textContent = entry.statEffects.map(statEffectText).join(", ");
+    card.appendChild(stats);
+  }
+  const chip = document.createElement("span");
+  chip.className = entry.obtained ? "zr-cls" : "zr-cls alm-unknown";
+  chip.textContent = entry.obtained ? entry.className : "Not found";
+  if (entry.obtained) chip.style.background = entry.classColor;
+  card.appendChild(chip);
+  card.onclick = () => openMutationEntry(hud, entry);
+  return card;
+}
+
+/** The mutation detail modal. Discovered: the portrait, the slot it fills, and every
+ *  stat it moves. Undiscovered: the silhouette and the obtain hint, nothing else —
+ *  same bargain the species entries strike. */
+function openMutationEntry(hud: Hud, entry: MutationAlmanacEntry) {
+  const { panel } = openModal({
+    host: hud.el, panelClass: "zpanel", bgClass: "alm-bg", replaceSelector: ".alm-bg",
+  });
+  const wrap = document.createElement("div");
+  wrap.className = "alm-detail";
+  const por = document.createElement("div");
+  por.className = "zr-por alm-detail-por";
+  paintMutationPortrait(hud, por, entry);
+  const title = document.createElement("h2");
+  title.textContent = entry.obtained ? entry.name : "Undiscovered mutation";
+  wrap.append(por, title);
+
+  if (!entry.obtained) {
+    const status = document.createElement("div");
+    status.className = "alm-meta";
+    status.textContent = "Not yet obtained";
+    const hint = document.createElement("p");
+    hint.className = "alm-hint";
+    hint.textContent = entry.hint;
+    wrap.append(status, hint);
+    panel.appendChild(wrap);
+    return;
+  }
+
+  const cls = document.createElement("span");
+  cls.className = "zr-cls mut-detail-cls";
+  cls.textContent = `${entry.className} · Tier ${entry.tier}`;
+  cls.style.background = entry.classColor;
+  wrap.appendChild(cls);
+  panel.appendChild(wrap);
+
+  const meta = document.createElement("div");
+  meta.className = "alm-meta";
+  meta.innerHTML = `<b>Slot: ${entry.slotLabel}</b>`;
+  panel.appendChild(meta);
+
+  const stats = document.createElement("p");
+  stats.className = "mut-detail-stats";
+  stats.textContent = entry.statEffects.map(statEffectText).join("   ");
+  panel.appendChild(stats);
+
+  const slotNote = document.createElement("p");
+  slotNote.className = "alm-hint";
+  slotNote.textContent = `A zombie wears one mutation per slot, so this competes with `
+    + `every other ${entry.slotLabel} mutation — growing or combining a second one `
+    + `replaces it.`;
+  panel.appendChild(slotNote);
+
+  const found = document.createElement("div");
+  found.className = "alm-meta";
+  found.textContent = `Lifetime obtained: ${entry.obtained}`;
+  panel.appendChild(found);
 }
 
 /** One field-note page: the topic's title over its paragraphs. Text only — these

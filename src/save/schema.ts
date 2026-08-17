@@ -133,6 +133,10 @@ export interface FallenZombieSave {
 /** Zombie Almanac collection progress (cosmetic; counts never decrease). */
 export interface AlmanacSave {
   discovered: Record<string, number>;
+  /** Mutation Almanac: lifetime count per mutation key. Absent in saves written before
+   *  that tab existed — backfilled from the owned roster's masks on load, which is
+   *  lossy only for mutations the player owned and has since sold. */
+  mutations?: Record<string, number>;
 }
 
 export interface FarmJobSave {

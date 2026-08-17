@@ -18,6 +18,7 @@ import { ZombieField } from "./zombie/ZombieField";
 import { makeOwned, type OwnedZombie } from "./zombie/types";
 import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
 import { almanacEntries, isEpicZombie, obtainHint } from "./zombie/almanac";
+import { mutationAlmanacEntries } from "./zombie/mutationAlmanac";
 import { almanacGuide } from "./zombie/almanacGuide";
 import { RAID_ZOMBIE_DROPS } from "./raid/zombieDrops";
 import { fallenToInfo, snapshotFallen } from "./zombie/memorial";
@@ -219,8 +220,8 @@ async function main() {
   const hud = new Hud(state, audio, playMode);
   hud.setPlayStatus(playMode, playMode === "online" ? "reconnecting" : "synced");
   const mutationPortraits = new MutationPortraits(app.renderer, assets);
-  hud.zombieMutationPortraitOf = (key, mutation, color, wanted) =>
-    mutationPortraits.get(key, mutation, color, wanted);
+  hud.zombieMutationPortraitOf = (key, mutation, color, wanted, forceMutation) =>
+    mutationPortraits.get(key, mutation, color, wanted, forceMutation);
   hud.setFarmerCatalog(assets.farmer);
   hud.setPetCatalog(assets.pets);
   // Give Android/browser Back an in-app dismissal layer. One guard entry keeps the
@@ -1655,9 +1656,10 @@ async function main() {
     if (!onlineFarm) {
       // Earned is earned: the Almanac counts the species here rather than waiting for
       // the claim, so the collection never differentiates by which bucket holds a unit.
-      state.recordZombieDiscovered(key);
+      const mutation = zombieDefs.get(key)?.mutation ?? 0;
+      state.recordZombieDiscovered(key, mutation);
       state.receiveItem(encodeReceivedZombie({
-        id: crypto.randomUUID(), key, mutation: zombieDefs.get(key)?.mutation ?? 0, invasions: 0,
+        id: crypto.randomUUID(), key, mutation, invasions: 0,
       }));
     }
     return null;
@@ -1670,9 +1672,13 @@ async function main() {
    *  Also counts the species for the Almanac when it went to Received: nothing
    *  claims it into the roster, so no other path would. */
   const rewardZombieDrop = (
-    unit: { key: string; stored: boolean; received?: boolean }
+    unit: { key: string; stored: boolean; received?: boolean; mutation?: number }
   ): LootDrop => {
-    if (unit.received) state.recordZombieDiscovered(unit.key);
+    // A Received prize keeps the mask the server minted it with; falling back to the
+    // species default covers a prize the caller described without one.
+    if (unit.received) {
+      state.recordZombieDiscovered(unit.key, unit.mutation ?? zombieDefs.get(unit.key)?.mutation ?? 0);
+    }
     return {
       name: zombieDefs.get(unit.key)?.name ?? "Reward zombie",
       icon: zombiePortrait(unit.key),
@@ -3387,6 +3393,12 @@ async function main() {
         .filter((name): name is string => !!name),
       speciesName: (key) => zombieName.get(key),
     });
+  };
+  // The Mutation Almanac's entries. Crop names come from the plant catalog, which is
+  // where the obtain hint ("Grow a zombie crop beside Tomatoes") gets its wording.
+  hud.getMutationAlmanac = () => {
+    const cropName = new Map(assets.plants.map((plant) => [plant.key, plant.name]));
+    return mutationAlmanacEntries(state.mutationDiscovered, { cropName: (key) => cropName.get(key) });
   };
   hud.zombiePortraitOf = (key) => zombiePortrait(key);
   hud.getMausoleumCap = () => zombies.mausoleumCap;
