@@ -156,10 +156,11 @@ export interface SurroundingsTheme {
    */
   filler: number;
   /**
-   * The backdrop's own top-row colour, used to continue its sky upward past the top of
-   * the art. Every shipped backdrop is 2800x560 with a perfectly flat top row, so a band
-   * of this colour above it is indistinguishable from more sky — which is what lets the
-   * camera zoom out further than the art is tall (see SKY_EXTENSION in main.ts).
+   * The backdrop's own top-row colour, used to close the seam at the top of the art.
+   * Every shipped backdrop is 2800x560 with a perfectly flat top row, so a band of this
+   * colour above it is indistinguishable from more sky — and the art is scaled by a
+   * fractional factor to span the farm, so without one its top edge lands half a pixel
+   * short and draws a filler-coloured line across the sky (see SKY_EXTENSION in main.ts).
    */
   sky: number;
   /**

@@ -437,21 +437,17 @@ async function main() {
   // never overlapping the field. It lives at the back of the world so it pans and
   // zooms with the farm.
   const BG_GAP_TILES = 3; // hill bases stay this many tiles above the top tile
-  // SKY_EXTENSION. A flat band of the backdrop's own top-row colour, sitting directly on
-  // top of the art and stretching far above it.
+  // SKY_EXTENSION. A short band of the backdrop's own top-row colour, sitting directly
+  // on top of the art.
   //
-  // The backdrop is 2800x560, and the camera used to be forbidden from zooming out past
-  // the point where the view is taller than the world box (`minSceneZoom`) — because
-  // beyond the top of that art there is nothing but the renderer's green filler, and
-  // green above the horizon reads as a hole. On a landscape screen that limit is slack.
-  // In PORTRAIT it is the binding one: the viewport is tall and narrow, so the height
-  // term pinned a phone to roughly 0.6 zoom while the same farm on a desktop reached
-  // 0.25. Players could not get the farm on screen.
-  //
-  // Every shipped backdrop has a perfectly uniform top row, so more of that colour IS
-  // more sky. With the band there, the height limit has nothing left to protect and is
-  // dropped (see minSceneZoom) — the camera simply centres the world box and lets the
-  // extra height be sky above and ground below.
+  // The backdrop is 2800x560 and beyond the top of that art there is nothing but the
+  // renderer's filler colour, which above a horizon reads as a hole. The camera is
+  // therefore capped at the top edge of the drawn art (see cameraFloor) and this band
+  // never has to be somewhere players can GO — it only has to cover the seam. The art
+  // is scaled by a fractional factor to span the farm, so its top edge lands on a
+  // fraction of a pixel, and coming up half a pixel short is a filler-coloured line
+  // across the sky. Every shipped backdrop has a perfectly uniform top row, so a few
+  // tiles of that colour overlapping the edge closes it invisibly.
   const skyExtension = new Sprite(Texture.WHITE);
   skyExtension.anchor.set(0.5, 1);
   world.addChild(skyExtension);
@@ -497,6 +493,20 @@ async function main() {
   // depth-sorts correctly in front of / behind trees.
   world.addChild(field.entityLayer);
 
+  /** Scenery on the land BELOW the camera's box — the deep strip a zoomed-out portrait
+   *  phone sees past `boundB` (see cameraFloor). Drawn straight over the entity layer
+   *  rather than inside it, and correct because everything here is strictly SOUTH of
+   *  everything in that layer: a point south of every farm tile, object, actor and
+   *  near-ring tree is in front of all of them by the isometric rule, so there is
+   *  nothing here to interleave.
+   *
+   *  That is worth a whole layer because the entity layer's topological sort is O(n²)
+   *  and reruns whenever an actor crosses a tile. Filling this strip from the same
+   *  lattice quadrupled its child count — 3.8ms a sort on a desktop, for scenery no
+   *  one can ever walk behind. Paint order in here is settled by key, not by the sort. */
+  const farScenery = new Container();
+  world.addChild(farScenery);
+
   // Plant/harvest job diamonds draw above entities so tall ripe crops do not clip
   // them. Plow markers live beside plotLayer inside Field, under actors/crops.
   world.addChild(field.highlightLayer);
@@ -518,6 +528,48 @@ async function main() {
   // grass keeps the temperate trees/shrubs, the sandy skin gets palms and a
   // shipwrecked pirate's cargo, and so on.
   let foliage: Sprite[] = [];
+  /** The far strip's pieces, held with the depth key that orders them, so a later
+   *  growth can splice new rows into the paint order without disturbing the ones
+   *  already standing. */
+  let farPieces: { key: number; sp: Sprite }[] = [];
+  /** The first lattice row the far sweep has NOT emitted yet. Growth resumes here. */
+  let farNextV = 0;
+  /** Extend the far strip down to a world y, emitting only the rows below what is
+   *  already built.
+   *
+   *  The strip grows because `reachB` is viewport-shaped, and the whole point is that
+   *  growing it must not touch the near band above it — that band is what the player
+   *  is looking at, and rebuilding a forest on screen to add trees underneath it is
+   *  work for nothing. This used to be a full `buildFoliage()` off the resize handler,
+   *  which destroyed and recreated every scenery sprite in the world; since a window
+   *  dragged taller grows `reachB` a few pixels at a time, that ran on essentially
+   *  every resize event for the length of the drag.
+   *
+   *  Replaced by every buildFoliage, which owns the theme context the sweep needs, so
+   *  it is a no-op until the first one has run. */
+  let growFarScenery: (toY: number) => void = () => {};
+  // Box the camera into the world: the view can pan/zoom to reveal the sky down to the
+  // farm and the decorated grass ring around it, but no further into empty green void
+  // and never above the top of the drawn backdrop. Recomputed by computeBounds()
+  // whenever the farm grows OR the viewport changes shape; the reach matches the
+  // foliage band so all scenery stays reachable.
+  //
+  // DECLARED HERE, hundreds of lines above the computeBounds() that fills them in and
+  // the camera clamp that consumes them, because the scatter and the road builders
+  // just below READ them. `let` has a temporal dead zone: left down beside their own
+  // code, any call into buildFoliage/buildRoad that ever lands earlier in the startup
+  // sequence throws `ReferenceError: reachB is not defined` — an error that names a
+  // variable rather than the ordering mistake, thrown with nothing on screen to
+  // explain it, and one TypeScript does not catch. The same trap is documented on
+  // dressBackdrop below, which is a hoisted `function` for exactly this reason.
+  // Zero is a safe reading for every one of them: it means "no room yet", so a build
+  // that somehow runs this early scatters nothing instead of crashing, and the
+  // syncWorldToFarm() at startup rebuilds it against real bounds moments later.
+  let boundL = 0, boundR = 0, boundT = 0, boundB = 0;
+  /** The lowest world y the camera can ever reach on THIS viewport: as far below the
+   *  box as a fully zoomed-out view is tall (see cameraFloor). Not a pan limit — a
+   *  coverage target, for the scatter and the road that have to fill down to it. */
+  let reachB = 0;
   /** Night lights cast by the surroundings' own lamps. A sibling of the placed
    *  objects' `field.objectLights` under the night layer, and world-positioned the
    *  same way — separate only because these belong to the ring and have to be torn
@@ -603,18 +655,20 @@ async function main() {
     // Same art MIRRORED: a horizontal flip of an iso diamond swaps the two axes, so
     // the lane markings turn with the road instead of running across it.
     // Run it past everything the camera can REVEAL, which is not the same as its pan
-    // box. minSceneZoom has a width term and deliberately no height one, so a tall
-    // viewport zoomed right out ends up taller than the box and clampAxis centres it,
-    // showing world above and below boundT/boundB. Measured worst case over both
-    // orientations, since a rotate does not rebuild the ring.
+    // box: minSceneZoom has a width term and deliberately no height one, so a tall
+    // viewport zoomed right out ends up taller than the box and the whole surplus is
+    // let down BELOW it (see cameraFloor). `reachB` is that floor, and the street has
+    // to reach the same place the scatter does or it stops in mid-air.
+    //
+    // Laid once, unlike the scatter, which can be grown a row at a time afterwards.
+    // It can afford to be: `reachB` is measured worst-case over both orientations, so
+    // the only thing that outgrows a built road is a desktop window being dragged
+    // taller — and a window wide enough to be a desktop is width-bound at a zoom that
+    // never reveals past boundB in the first place.
     //
     // The main road needs no such margin: the width term means the view is never
     // WIDER than the box, so its two tiles of overshoot always clear the screen.
-    const shortSide = Math.min(app.screen.width, app.screen.height);
-    const longSide = Math.max(app.screen.width, app.screen.height);
-    const viewH = longSide / Math.max(MIN_ZOOM, shortSide / (boundR - boundL));
-    const reveal = Math.max(0, (viewH - (boundB - boundT)) / 2);
-    const branchEnd = Math.ceil((boundB + reveal + TILE_H) / HH) - crossCol + 4;
+    const branchEnd = Math.ceil((reachB + TILE_H) / HH) - crossCol + 4;
     for (let row = roadRow + 2; row <= branchEnd; row += 2) {
       paveTo(lay({ file: def.sprite, flip: true }, surface, crossCol, row, 2, 2,
         objScale, kerbDy));
@@ -819,8 +873,12 @@ async function main() {
 
   const buildFoliage = () => {
     const generation = ++foliageGeneration;
+    // Far pieces are in `foliage` too, so this destroys them; the strip's own
+    // bookkeeping has to be wound back with it or growth would resume mid-air.
     for (const s of foliage) { s.parent?.removeChild(s); s.destroy(); }
     foliage = [];
+    farPieces = [];
+    farNextV = 0;
     for (const l of sceneryLights.removeChildren()) l.destroy();
     // Theme pieces are ordinary object art, which loads lazily. Draw with whatever
     // is already resident, and rebuild once the rest of this theme's art arrives.
@@ -852,6 +910,20 @@ async function main() {
     // that ring is why the far screen corners used to sit on bare grass when fully
     // zoomed out. We sweep the rotated (u,v) lattice (u = col-row, v = col+row),
     // which maps straight onto that rect:  worldX = u*HW,  worldY = v*HH + HH.
+    //
+    // This NEAR band stops at the pan bound `boundB`, and so depends only on the farm
+    // and the skin — never on the viewport. The land past boundB, which only a view
+    // taller than the world box can see, is the far strip: same lattice, same stream,
+    // swept separately by `growFarScenery` so a viewport that grows extends it instead
+    // of rebuilding everything above it. Springs and trails stay in the near band —
+    // their counts are authored, and spreading a fixed dozen ponds over three times
+    // the area just thins out the ring nobody has to zoom out to see.
+    //
+    // Everything past boundB goes to `farScenery` instead of the depth-sorted entity
+    // layer, paint-ordered by the same depth key the sort would give it. For a POINT
+    // footprint that key is just `col + row`, which is `jv` — and among points,
+    // ascending key IS a valid topological order (a lower c+r means a lower c or a
+    // lower r, which is the separating rule), so this is not an approximation.
     const treeTop = treeTopY();
     const uMin = Math.floor(boundL / HW) - 2, uMax = Math.ceil(boundR / HW) + 2;
     const vMin = Math.floor((treeTop - HH) / HH) - 2;
@@ -911,50 +983,105 @@ async function main() {
     const accept = 0.34 * FARM_BG_DENSITY[displayedFarmBackground] *
       (surroundings.density ?? 1);
     const treeShare = surroundings.treeShare ?? 0.5;
-    for (let v = vMin; v <= vMax; v += STEP) {
+    /** One lattice point's piece, or null where the gates reject it.
+     *
+     *  Shared by both sweeps so a tree cannot change species or size depending on
+     *  which pass laid it down, and — because every path through here draws exactly
+     *  five numbers before it can bail — so that the stream stays in step whichever
+     *  pass walks a row. That is what lets the far strip be grown a few rows at a
+     *  time and still land the layout one single sweep would have produced.
+     *
+     *  There is no bottom bound in here: each sweep owns its own, and the far one's
+     *  is a lattice row rather than a world y. */
+    const scatterAt = (u: number, v: number) => {
+      const ju = u + (rnd() - 0.5) * STEP * 1.3; // jitter off the lattice
+      const jv = v + (rnd() - 0.5) * STEP * 1.3;
+      const wx = ju * HW, wy = jv * HH + HH;
+      const col = (ju + jv) / 2, row = (jv - ju) / 2;
+      const d = distOutside(col, row);
+      const r1 = rnd(), r2 = rnd(), r3 = rnd(); // consume RNG evenly (stable layout)
+      // Gate: inside the reachable rect (slight overshoot so edges fully cover) and
+      // off the farm + its clearing margin.
+      if (wx < boundL - HW || wx > boundR + HW || wy < treeTop) return null;
+      if (d < MARGIN) return null;
+      // the street dresses its own carriageway, verges and branch
+      if (onRoad(col, row)) return null;
+      // A spring is meant to be somewhere the wood stops, so nothing fills it in.
+      if (clearings.some((c) => Math.hypot(c.x - wx, c.y - wy) < c.r)) return null;
+      // Woodland fill: the far band is `treeShare` trees and the rest props, and
+      // everything nearer the clearing edge is a prop. `accept` sets how much of
+      // the lattice is populated at all.
+      if (r1 >= accept) return null;
+      const isTree = d >= 4.5 && r2 < treeShare;
+      // Piece choice is hashed off the lattice point, not drawn from `rnd`: the
+      // draws left also set the SIZE, so sharing one would tie every big piece to
+      // the same object. Sizes are multiples of the piece's NATIVE object scale,
+      // so a scenery palm matches a placed one exactly.
+      const piece = pickPiece(isTree ? surroundings.trees : surroundings.props, u, v);
+      const tex = pieceTexture(piece);
+      if (!tex) return null; // theme art still loading — the rebuild above fills it in
+      const s = objScale * (piece.scale ?? 1) *
+        (isTree ? 0.85 + r3 * 0.30 : 0.80 + r3 * 0.35);
+      const sp = new Sprite(tex);
+      sp.anchor.set(0.5, 1);
+      // A flipped piece mirrors about its own vertical axis. The anchor is already
+      // horizontally centred, so a negative x scale turns the art in place — it
+      // does not shift off its ground point (see SceneryPiece.flip).
+      sp.scale.set(piece.flip ? -s : s, s);
+      sp.position.set(wx, wy);
+      foliage.push(sp);
+      return { key: jv, wy, col, row, sp };
+    };
+
+    /** Put a piece in the depth-sorted layer, on a point footprint so it sorts with
+     *  trees and actors. */
+    const placeNear = (hit: { col: number; row: number; sp: Sprite }) => {
+      const fc = Math.round(hit.col), fr = Math.round(hit.row);
+      setFootprint(hit.sp, fc, fr, fc, fr);
+      field.entityLayer.addChild(hit.sp);
+    };
+    /** Child order is paint order in `farScenery`, so lay the strip down back to
+     *  front. The lattice is walked v-major, but the jitter is wider than the step,
+     *  so rows interleave and emission order alone would leave a tree behind its
+     *  neighbour — and they interleave ACROSS a growth boundary too, which is why the
+     *  whole strip is re-ordered rather than the new rows simply appended. Reordering
+     *  moves children that already exist; it does not rebuild any of them. */
+    const sortFar = () => {
+      farPieces.sort((a, b) => a.key - b.key);
+      for (const f of farPieces) farScenery.addChild(f.sp);
+    };
+
+    // The near band. Its overshoot rows run a little past boundB, and whatever lands
+    // there is already far-strip material — handing it straight over keeps the two
+    // sweeps contiguous, with no seam of bare ground along the join.
+    let nextV = vMin;
+    for (; nextV <= vMax; nextV += STEP) {
       for (let u = uMin; u <= uMax; u += STEP) {
-        const ju = u + (rnd() - 0.5) * STEP * 1.3; // jitter off the lattice
-        const jv = v + (rnd() - 0.5) * STEP * 1.3;
-        const wx = ju * HW, wy = jv * HH + HH;
-        const col = (ju + jv) / 2, row = (jv - ju) / 2;
-        const d = distOutside(col, row);
-        const r1 = rnd(), r2 = rnd(), r3 = rnd(); // consume RNG evenly (stable layout)
-        // Gate: inside the reachable rect (slight overshoot so edges fully cover) and
-        // off the farm + its clearing margin.
-        if (wx < boundL - HW || wx > boundR + HW || wy < treeTop || wy > boundB + HH) continue;
-        if (d < MARGIN) continue;
-        // the street dresses its own carriageway, verges and branch
-        if (onRoad(col, row)) continue;
-        // A spring is meant to be somewhere the wood stops, so nothing fills it in.
-        if (clearings.some((c) => Math.hypot(c.x - wx, c.y - wy) < c.r)) continue;
-        // Woodland fill: the far band is `treeShare` trees and the rest props, and
-        // everything nearer the clearing edge is a prop. `accept` sets how much of
-        // the lattice is populated at all.
-        if (r1 >= accept) continue;
-        const isTree = d >= 4.5 && r2 < treeShare;
-        // Piece choice is hashed off the lattice point, not drawn from `rnd`: the
-        // draws left also set the SIZE, so sharing one would tie every big piece to
-        // the same object. Sizes are multiples of the piece's NATIVE object scale,
-        // so a scenery palm matches a placed one exactly.
-        const piece = pickPiece(isTree ? surroundings.trees : surroundings.props, u, v);
-        const tex = pieceTexture(piece);
-        if (!tex) continue; // theme art still loading — the rebuild above fills it in
-        const s = objScale * (piece.scale ?? 1) *
-          (isTree ? 0.85 + r3 * 0.30 : 0.80 + r3 * 0.35);
-        const sp = new Sprite(tex);
-        sp.anchor.set(0.5, 1);
-        // A flipped piece mirrors about its own vertical axis. The anchor is already
-        // horizontally centred, so a negative x scale turns the art in place — it
-        // does not shift off its ground point (see SceneryPiece.flip).
-        sp.scale.set(piece.flip ? -s : s, s);
-        sp.position.set(wx, wy);
-        // Point footprint on its tile so it depth-sorts with trees/actors.
-        const fc = Math.round(col), fr = Math.round(row);
-        setFootprint(sp, fc, fr, fc, fr);
-        field.entityLayer.addChild(sp);
-        foliage.push(sp);
+        const hit = scatterAt(u, nextV);
+        if (!hit) continue;
+        if (hit.wy > boundB + HH) farPieces.push({ key: hit.key, sp: hit.sp });
+        else placeNear(hit);
       }
     }
+    farNextV = nextV;
+    sortFar();
+
+    growFarScenery = (toY: number) => {
+      const toV = Math.ceil((toY - HH) / HH) + 2;
+      if (toV < farNextV) return; // already grown past there
+      let v = farNextV;
+      for (; v <= toV; v += STEP) {
+        for (let u = uMin; u <= uMax; u += STEP) {
+          const hit = scatterAt(u, v);
+          // Everything down here is south of boundB by construction, so it is all
+          // far-strip material — there is no near/far test left to make.
+          if (hit) farPieces.push({ key: hit.key, sp: hit.sp });
+        }
+      }
+      farNextV = v;
+      sortFar();
+    };
+    growFarScenery(reachB);
   };
 
   const actor = new Actor(assets);
@@ -1168,16 +1295,19 @@ async function main() {
     fitSkyExtension();
   };
 
-  /** Size the sky band to cover anything the camera can reveal above the backdrop.
+  /** Size the sky band sitting on the backdrop's top edge.
    *
-   *  Height is the full viewport measured at MIN_ZOOM — the most world-space the screen
-   *  can ever show — which is generous by design: it is one solid-colour quad, and being
-   *  short by a pixel is a green line across the sky. It overlaps the backdrop's top edge
-   *  by a tile to hide any seam from fractional scaling. */
+   *  It used to be a full viewport tall, measured at MIN_ZOOM, because the camera was
+   *  allowed to rise above the art and needed something up there to look at. It is not
+   *  any more — `cameraFloor` pins the top of the view to the top of the drawn art — so
+   *  the band is down to what the SEAM needs: the backdrop is scaled by a fractional
+   *  factor to span the farm, and being half a pixel short at its top edge is a
+   *  filler-coloured line across the sky. A few tiles, overlapping the art by one. */
+  const SKY_SEAM_TILES = 4;
   const fitSkyExtension = () => {
     const top = background.position.y - background.height;
     skyExtension.width = background.width;
-    skyExtension.height = app.screen.height / MIN_ZOOM + TILE_H;
+    skyExtension.height = SKY_SEAM_TILES * TILE_H;
     skyExtension.position.set(background.position.x, top + TILE_H);
     fitGroundFill();
   };
@@ -1211,11 +1341,18 @@ async function main() {
     }
   };
 
-  // Box the camera into the world: the view can pan/zoom to reveal the full sky
-  // (top), the farm, and the decorated grass ring around it, but no further into
-  // empty green void or above the sky. Recomputed whenever the farm grows; the reach
-  // matches the foliage band so all scenery stays reachable.
-  let boundL = 0, boundR = 0, boundT = 0, boundB = 0;
+  // How far out the camera may zoom. The WIDTH term stands: the world box is bounded
+  // left and right by the backdrop, and past its edges there is only filler colour with
+  // no sky over it, so a view wider than the box would show hills against green.
+  //
+  // There is deliberately no HEIGHT term. That term was the whole reason a portrait
+  // phone could not zoom out: a tall, narrow viewport divided by the world's modest
+  // height pinned it around 0.6 while a desktop reached 0.25 on the same farm. A view
+  // taller than the box is the CLAMP's problem instead, and it solves it downward — see
+  // cameraFloor.
+  const minSceneZoom = () => Math.max(MIN_ZOOM, app.screen.width / (boundR - boundL));
+
+  // The camera box itself is declared far above, with the scatter that reads it.
   const computeBounds = () => {
     const skyTopY = background.y - background.height; // world y of the sky's top edge
     const grassBoundL = -((field.w - 1 + 2 * REACH) * HW) - 90;
@@ -1223,6 +1360,16 @@ async function main() {
     boundR = Math.min(-grassBoundL, background.width / 2);
     boundT = skyTopY;
     boundB = (field.w - 1 + REACH + (field.h - 1 + REACH)) * HH + 60;
+    // The coverage target, measured worst case over BOTH orientations rather than off
+    // the viewport as it stands: the tallest view this screen can produce is its long
+    // side, at the zoom its short side permits. A phone that rotates therefore needs no
+    // new scenery at all — which is the point, because a rotate cannot grow the strip
+    // and so cannot stall on one. What is left that can still move it is a desktop
+    // window genuinely changing size, and there the width term keeps the strip empty.
+    const shortSide = Math.min(app.screen.width, app.screen.height);
+    const longSide = Math.max(app.screen.width, app.screen.height);
+    const outZoom = Math.max(MIN_ZOOM, shortSide / (boundR - boundL));
+    reachB = Math.max(boundB, boundT + longSide / outZoom);
   };
 
   // Re-fit the backdrop, foliage ring, and camera bounds to the current farm size.
@@ -1295,19 +1442,6 @@ async function main() {
   field.onClimateChange = applySurroundings;
   applySurroundings(field.climate);
 
-  // How far out the camera may zoom. The WIDTH term stands: the world box is bounded
-  // left and right by the backdrop, and past its edges there is only filler colour with
-  // no sky over it, so a view wider than the box would show hills against green.
-  //
-  // There is deliberately no HEIGHT term. Above the box is the sky band (SKY_EXTENSION)
-  // and below it is the same flat green the ground is already drawn on, so a view taller
-  // than the box shows more of both and nothing wrong. `clampAxis` centres the box on
-  // whichever axis overflows, so the farm stays put in the middle.
-  //
-  // That term was the whole reason a portrait phone could not zoom out: a tall, narrow
-  // viewport divided by the world's modest height pinned it around 0.6 while a desktop
-  // reached 0.25 on the same farm.
-  const minSceneZoom = () => Math.max(MIN_ZOOM, app.screen.width / (boundR - boundL));
   const clampZoom = () => {
     const s = Math.max(minSceneZoom(), Math.min(MAX_ZOOM, world.scale.x));
     world.scale.set(s);
@@ -1322,15 +1456,36 @@ async function main() {
     const lower = screen - s * (hi - pivot); // keeps the far (right/bottom) edge <= hi
     return Math.min(upper, Math.max(lower, pos));
   };
+  /** The camera's floor: the bottom of the world box, or as far below `boundT` as the
+   *  view is tall — whichever is lower.
+   *
+   *  A fully zoomed-out view on a tall screen is TALLER than the box, and that surplus
+   *  has to go somewhere. It all goes DOWN. Above `boundT` is the top edge of the drawn
+   *  backdrop and there is nothing beyond it but flat colour, which is what a portrait
+   *  phone used to be shown: `clampAxis` centres a box smaller than the view, so half
+   *  the surplus went up and players could see over the sky. Below the box is more of
+   *  the same land the farm sits on, which the ring is grown to cover (`reachB`).
+   *
+   *  Handing `clampAxis` a box exactly as tall as the view makes its centring branch
+   *  work out to precisely that top pin, so the clamp needs no special case for it. */
+  const cameraFloor = () => Math.max(boundB, boundT + app.screen.height / world.scale.y);
   const clampCamera = () => {
     clampZoom();
     world.position.x = clampAxis(world.position.x, world.pivot.x, app.screen.width, boundL, boundR);
-    world.position.y = clampAxis(world.position.y, world.pivot.y, app.screen.height, boundT, boundB);
+    world.position.y = clampAxis(world.position.y, world.pivot.y, app.screen.height,
+      boundT, cameraFloor());
   };
   const recenter = () => {
-    // The sky band is sized off the viewport, so a rotate into portrait — which is the
-    // orientation that needs it — has to re-cut it before the camera re-clamps.
+    // The sky band is sized off the backdrop, but the ground fill under it is sized off
+    // the viewport, so a rotate into portrait — the orientation that needs it — has to
+    // re-cut them before the camera re-clamps.
     fitSkyExtension();
+    // The camera floor is viewport-shaped, so a resize can reveal land the far strip
+    // was not grown for. Extend it downward — never rebuild. Both calls are cheap and
+    // idempotent, which they have to be: this runs on every resize event, and a desktop
+    // window drag fires one per frame.
+    computeBounds();
+    growFarScenery(reachB);
     world.position.set(app.screen.width / 2, app.screen.height / 2);
     clampCamera();
   };

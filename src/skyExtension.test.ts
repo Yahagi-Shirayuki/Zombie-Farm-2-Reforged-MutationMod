@@ -1,9 +1,10 @@
 // The sky band has to be the SAME blue as the backdrop it sits on.
 //
-// main.ts extends each backdrop upward with a flat quad tinted `theme.sky`, which is what
-// lets a portrait phone zoom out past the height of the art (see SKY_EXTENSION). The band
-// is invisible only while that colour matches the backdrop's own top row — one shade off
-// and there is a hard line across the sky at exactly the zoom level players reach for.
+// main.ts caps the band of flat colour tinted `theme.sky` onto the top edge of each
+// backdrop, to close the seam left by scaling the art by a fractional factor (see
+// SKY_EXTENSION). The band is invisible only while that colour matches the backdrop's own
+// top row — one shade off and there is a hard line across the sky at exactly the zoom
+// level players reach for.
 //
 // Nothing else checks this. Re-exporting a backdrop, or adding a theme by copying an
 // existing one and swapping the image, would leave the colour stale with no other symptom
