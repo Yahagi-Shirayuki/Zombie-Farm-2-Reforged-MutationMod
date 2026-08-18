@@ -312,12 +312,14 @@ export class GameState {
     this.zombieCount = Math.max(0, n);
     this.emit();
   }
-  // Placing a storage shed raises the item capacity to its tier (never lowers it).
-  upgradeStorage(cap: number) {
-    if (cap > this.storageItemCap) {
-      this.storageItemCap = cap;
-      this.emit();
-    }
+  /** Adopt a freshly DERIVED shed capacity (the placed shed's tier). Like the army
+   *  cap this is never nudged in place — see shedCapacity.ts for the saves that
+   *  disagreed with the farm when it was. */
+  syncShedCapacity(itemCap: number) {
+    const next = Math.max(0, itemCap);
+    if (next === this.storageItemCap) return;
+    this.storageItemCap = next;
+    this.emit();
   }
 
   // ---- item storage (the shed's Items tab) ----

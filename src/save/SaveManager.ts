@@ -10,6 +10,7 @@ import {
   type FallenZombieSave,
 } from "./schema";
 import { activeSaveKey, migrateLegacyProfileSaves } from "./profiles";
+import { shedCapacityOf } from "../shedCapacity";
 import * as api from "../net/api";
 import { getFarmBackground } from "../prefs";
 import { epicBossById } from "../epicBoss/catalog";
@@ -578,7 +579,14 @@ export class SaveManager {
       zombiePots: Object.keys(pots).length ? pots : undefined,
       zombiePot: pot,
       storage: {
-        itemCap: 8,
+        // The server derives shed capacity from the placed shed rather than storing it,
+        // so it is derived here too. This used to be a flat 8, corrected only later by
+        // the object reconcile — and anything serialised before that reconcile carried
+        // the 8: the closedown export-only handoff exports at boot, and Local Farm's
+        // Import takes the file at its word, so a farm with a big shed was imported
+        // with eight slots (see shedCapacity.ts).
+        itemCap: shedCapacityOf(objects.map((object) => object.key),
+          (key) => this.placeCatalog.get(key)?.storageSlots),
         items: Object.entries(boot.gameplay.storage.stored).map(([key, count]) => ({ key, count })),
         received: Object.entries(boot.gameplay.storage.received).flatMap(([key, count]) => Array(count).fill(key)),
       },

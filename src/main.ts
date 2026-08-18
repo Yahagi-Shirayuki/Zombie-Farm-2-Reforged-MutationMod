@@ -10,6 +10,7 @@ import { pickPiece, type PathSpec, type RoadSpec, type SceneryPiece, type Skylin
 import { MAX_ZOMBIE_POTS, noRoomForAnother } from "./placementLimit";
 import { armingSurvives } from "./placementArming";
 import { armyCapacityOf, BASE_ARMY_MAX } from "./armyCapacity";
+import { shedCapacityOf } from "./shedCapacity";
 import { Field, CARROT, CropConfig, objectFootprint, PLOT } from "./Field";
 import { Actor } from "./Actor";
 import { PetActor } from "./PetActor";
@@ -486,6 +487,15 @@ async function main() {
       serverArmyBase,
       field.placedKeys(),
       (key) => placeCatalog.get(key)?.armyMax,
+    ));
+  };
+  /** The same for the shed: re-derive its capacity from the shed actually standing on
+   *  the farm rather than trusting the number the save carries (see shedCapacity.ts).
+   *  Idempotent, so every path that can change which shed is placed just calls it. */
+  const refreshShedCap = () => {
+    state.syncShedCapacity(shedCapacityOf(
+      field.placedKeys(),
+      (key) => placeCatalog.get(key)?.storageSlots,
     ));
   };
 
@@ -2355,6 +2365,11 @@ async function main() {
     // counted — comes back wrong and stays wrong. Deriving it here settles it once,
     // and every placement path keeps it settled from then on.
     refreshArmyCap();
+    // Same repair for the shed. Its capacity used to be carried in the save and only
+    // ever raised, so any farm whose file understates it — an imported Online Farm
+    // export above all, since the bootstrap projection had no capacity to project —
+    // came back showing eight slots with a McDonnell's Barn standing on it.
+    refreshShedCap();
     saveManager.enableAutosave();
     // Backfill newly-added presentation fields (such as woodland density) even
     // when an existing player does not immediately change another farm value.
@@ -2651,10 +2666,9 @@ async function main() {
       // account whose base the server later changes agree on what the objects add to.
       serverArmyBase = baseZombieMax;
       const placed = [...field.placedKeys()];
-      const itemCap = placed.reduce((cap, key) => Math.max(cap, placeCatalog.get(key)?.storageSlots ?? 0), 8);
       state.syncCapacities(
         armyCapacityOf(serverArmyBase, placed, (key) => placeCatalog.get(key)?.armyMax),
-        itemCap,
+        shedCapacityOf(placed, (key) => placeCatalog.get(key)?.storageSlots),
       );
       return true; // aliases consumed — EconomyClient may drop them
     };
@@ -3449,7 +3463,7 @@ async function main() {
     }
     audio.play("buy");
     field.replaceObjectDef(id, def);
-    if (def.storageSlots) state.upgradeStorage(def.storageSlots);
+    if (def.storageSlots) refreshShedCap(); // the shed IS the capacity — derived, so read it back
     saveManager.save();
     const o = field.objectOriginOf(id);
     if (o) {
@@ -5428,7 +5442,7 @@ async function main() {
     }
     audio.play("place");
     refreshArmyCap(); // functional effect — no-ops when the placement did not land
-    if (def.storageSlots && placedId) state.upgradeStorage(def.storageSlots); // shed capacity
+    if (def.storageSlots && placedId) refreshShedCap(); // shed capacity
     const c = tileCenter(col, row);
     floatText(c.x, c.y, `-${cost}${useBrains ? "b" : "g"}`);
     showPurchaseXp(xp, c);
