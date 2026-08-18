@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 import plants from "../../public/assets/plants.json";
 import zombies from "../../public/assets/zombies.json";
+import { MUTATION_ICON } from "./mutationDisplay";
 import { MUTATION_LIST, SLOTS, mutationsOf } from "./mutations";
 import { CLASS_COLOR } from "./taxonomy";
 import {
   SLOT_LABELS, TIER_PORTRAIT_ZOMBIE,
   backfillMutationDiscovered, mutationAlmanacEntries, sanitizeMutationDiscovered, statEffectText,
 } from "./mutationAlmanac";
+
+// The icon files that actually ship, enumerated off the asset tree at build time: a
+// path pointing at nothing is the same blank tile as no path at all.
+const SHIPPED_ICONS = new Set(
+  Object.keys(import.meta.glob("../../public/assets/ui/mutation/*.png"))
+    .map((path) => path.slice(path.lastIndexOf("/") + 1))
+);
 
 const CROP_NAMES = new Map((plants as { key: string; name: string }[]).map((p) => [p.key, p.name]));
 const sources = { cropName: (key: string) => CROP_NAMES.get(key) };
@@ -45,6 +53,16 @@ describe("mutation almanac entries", () => {
     for (const key of Object.values(TIER_PORTRAIT_ZOMBIE)) expect(keys.has(key)).toBe(true);
     for (const entry of entries()) {
       expect(entry.portraitZombieKey).toBe(TIER_PORTRAIT_ZOMBIE[entry.tier]);
+    }
+  });
+
+  // The tile paints this icon before it asks the renderer for anything, and keeps it if
+  // the extraction never arrives — so an entry without one is a frame that can end up
+  // empty on a device whose renderer will not read pixels back.
+  it("gives every entry an authored icon that ships", () => {
+    for (const entry of entries()) {
+      expect(entry.icon).toBe(MUTATION_ICON[entry.key]);
+      expect(SHIPPED_ICONS.has(entry.icon.slice(entry.icon.lastIndexOf("/") + 1))).toBe(true);
     }
   });
 

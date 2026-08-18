@@ -18,6 +18,7 @@
 // Pure data — no DOM, no Pixi. The panel renders it (ui/panels/zombies.ts) and the
 // portrait extraction happens there, one tile at a time.
 import { CROP_MUTATIONS } from "./cropMutations";
+import { MUTATION_ICON } from "./mutationDisplay";
 import {
   MUTATION_LIST, mutationsOf, statEffectsOf,
   type MutationDef, type MutationKey, type MutationTier, type Slot, type Stat,
@@ -62,6 +63,10 @@ export interface MutationAlmanacEntry {
   classColor: string;
   /** Catalog key of the zombie its portrait is drawn on. */
   portraitZombieKey: string;
+  /** ZF2's own 40x40 icon for this mutation — the vegetable in its lab flask, the
+   *  same one the zombie card's mutation rows use. It is a plain file, so it is what
+   *  the tile can show without the renderer: see the panel's paintMutationPortrait. */
+  icon: string;
   /** The stats it moves, in a fixed order, skipping the ones it leaves alone. */
   statEffects: { stat: Stat; amount: number }[];
   /** Lifetime count of owned zombies discovered wearing it. 0 = silhouette. */
@@ -130,6 +135,7 @@ export function mutationAlmanacEntries(
       className,
       classColor: CLASS_COLOR[className],
       portraitZombieKey: TIER_PORTRAIT_ZOMBIE[def.tier],
+      icon: MUTATION_ICON[def.key] ?? "",
       statEffects: statEffectsOf(def),
       obtained: Math.max(0, Math.floor(discovered[def.key] ?? 0)),
       hint: mutationObtainHint(def, sources),

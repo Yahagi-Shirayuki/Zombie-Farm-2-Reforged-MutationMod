@@ -858,26 +858,54 @@ function openAlmanacEntry(hud: Hud, entry: AlmanacEntryView) {
  *
  *  An undiscovered entry is silhouetted from the SAME extraction rather than a species
  *  portrait: the shape of the thing is the clue, and a plain zombie outline sixteen
- *  times over would tell nobody anything. */
+ *  times over would tell nobody anything.
+ *
+ *  THE AUTHORED ICON PAINTS FIRST, and it is not decoration. Every other portrait tile
+ *  in the HUD sets the static species PNG before asking for the mutation-aware render,
+ *  and keeps it when that render never arrives; this tab was the only one with nothing
+ *  underneath, so anything that stopped the extraction — a device whose renderer will
+ *  not read pixels back, an observer that never fires — emptied all sixteen frames,
+ *  which is exactly what got reported. The flask icon is a plain file: no renderer, no
+ *  intersection test, no queue. It says WHICH mutation the entry is, which is more than
+ *  a blank frame and more than an unmutated zombie would. */
 function paintMutationPortrait(hud: Hud, por: HTMLElement, entry: MutationAlmanacEntry): void {
   const img = document.createElement("img");
   img.className = "zr-por-img";
   img.alt = "";
+  // Same marker the species tiles carry. On a baked silhouette the filter is a no-op
+  // — it is on for consistency, because the hover-reveal rule keyed off it must find
+  // nothing to reveal either way, and because it is what blacks out the icon below if
+  // this device cannot bake one.
+  if (!entry.obtained) img.classList.add("alm-sil");
   por.appendChild(img);
+  // The extracted portrait always wins, whenever it lands: the icon is a floor, not a
+  // race. Without this an icon silhouette baked slowly could overwrite the real one.
+  let extracted = false;
+  // Deliberately NOT gated on por.isConnected: the card is assembled before it is
+  // appended, so the icon below is painted into a tile that is not in the document
+  // yet. An <img> takes its src just as well detached, and the liveness test that
+  // does matter — the one that stops a queued extraction nobody is waiting for — is
+  // passed to the portrait call instead.
+  const show = (url: string, isPortrait: boolean) => {
+    if (!url || (!isPortrait && extracted)) return;
+    if (isPortrait) extracted = true;
+    if (entry.obtained) { img.src = url; return; }
+    void silhouetteOf(url)
+      .then((black) => { if (isPortrait || !extracted) img.src = black; })
+      // Baking black needs a canvas the device may not give us. Falling back to the
+      // art under alm-sil's brightness(0) shows the same black shape; only "save
+      // image" would reach the real pixels, and for a 40x40 icon the tile already
+      // carries elsewhere that is a far better trade than an empty frame.
+      .catch(() => { if (isPortrait || !extracted) img.src = url; });
+  };
+  show(entry.icon, false);
   if (!hud.zombieMutationPortraitOf) return;
   onFirstVisible(por, () => {
     void hud.zombieMutationPortraitOf!(
       entry.portraitZombieKey, entry.bit, undefined, () => por.isConnected, true,
     )
-      .then(async (portrait) => {
-        if (!por.isConnected) return;
-        img.src = entry.obtained ? portrait : await silhouetteOf(portrait);
-        // Same marker the species tiles carry. The pixels are already black, so the
-        // class's filter is a no-op here — it is on for consistency, and because the
-        // hover-reveal rule keyed off it must find nothing to reveal either way.
-        if (!entry.obtained) img.classList.add("alm-sil");
-      })
-      .catch(() => { /* an entry with no art is still readable from its text */ });
+      .then((portrait) => show(portrait, true))
+      .catch(() => { /* the authored icon painted above stands in for it */ });
   });
 }
 
