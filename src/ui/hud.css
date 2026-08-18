@@ -210,18 +210,9 @@
 #hud .prof-btn:disabled { opacity: .4; cursor: not-allowed; filter: none; }
 #hud .prof-input { flex: 1 1 auto; min-width: 0; padding: 6px 9px; border-radius: 7px; border: 2px solid #1e1207;
   background: #2a1c0c; color: #ffe9a8; font: 700 14px system-ui, sans-serif; }
-/* friends panel */
-/* This panel grows with the friend list and the gift inbox, so it has to scroll on
-   EVERY screen. The generic panel-scroll rule is inside the touch/narrow media query,
-   which left a tall panel centred with its top — close button, inbox header and all —
-   stranded above the viewport on a desktop mouse. Bounded here, scoped to this panel
-   rather than changing every panel in the game. */
-#hud .fr-bg { box-sizing: border-box; padding: 12px; }
-#hud .fr-bg > .panel { max-height: 100%; overflow-y: auto; overscroll-behavior: contain; }
-/* A scroll container can't have a visible overflow axis, so the close button's usual
-   16px overhang past the corner would be clipped. Tuck it inside instead — the same
-   thing the touch layout already does for exactly this reason. */
-#hud .fr-bg > .panel > .panelclose { top: 2px; right: 2px; z-index: 3; }
+/* friends panel. It grows with the friend list and the gift inbox, so it has to
+   scroll on EVERY screen, and it used to carry its own copy of the bound-and-scroll
+   rule for that reason; `#hud .panelbg > .panel` now does that for the whole layer. */
 #hud .fr-note { margin-top: 6px; font-size: 12px; line-height: 1.4; color: #c9b98f; }
 #hud .fr-empty { padding: 10px 4px; font-size: 13px; color: #b6a986; font-style: italic; }
 #hud .prof-badge.fr-gifts { background: #7a4bc9; color: #f0e8ff; }
@@ -360,7 +351,6 @@
   min-width: 0; padding: 0; overflow: hidden; display: flex; flex-direction: column;
   background: linear-gradient(105deg, #724822 0 29%, #f0dfb5 29.2% 100%);
   color: #3b2918; text-shadow: none; border-color: #2c180a; }
-#hud .guide-panel > .panelclose { top: 8px; right: 8px; z-index: 2; }
 #hud .guide-header { flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
   min-height: 76px; padding: 10px 64px 10px 20px; box-sizing: border-box;
   color: #fff6d9; text-shadow: 0 2px 2px #2d170b;
@@ -538,7 +528,8 @@
   text-shadow: 0 1px 2px #000; white-space: nowrap; box-shadow: 0 2px 5px rgba(0,0,0,.4); }
 
 /* modal panel with an X close in the top-right (used by all closeable menus) */
-#hud .panelbg { position: fixed; inset: 0; pointer-events: auto; z-index: 20;
+#hud .panelbg { position: fixed; inset: 0; pointer-events: auto; z-index: 20; box-sizing: border-box;
+  padding: 12px;
   background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
 #hud .army-bg { z-index: 25; }
 #hud .game-confirm-bg { z-index: 26; }
@@ -569,11 +560,40 @@
   text-shadow: 0 1px 2px #000; }
 #hud .panel h2 { margin: 0 0 8px; font-size: 20px; }
 #hud .panel p { margin: 0; font-size: 14px; opacity: .92; }
-#hud .settings-panel { box-sizing: border-box; max-height: calc(100dvh - 24px);
-  overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-#hud .settings-panel > .panelclose { top: 4px; right: 4px; z-index: 1; }
-#hud .panelclose { position: absolute; top: -16px; right: -16px; width: 42px; height: 42px;
-  border: none; background: none; cursor: pointer; padding: 0;
+/* Every shared modal is bounded by the screen and scrolls inside itself when its
+   composition is taller. This used to live only in the touch layout, so a short
+   DESKTOP window (a laptop in landscape, a half-height browser) centred a tall
+   panel with its whole top — heading, close button and all — stranded above the
+   viewport, which looks exactly like a cropped X. Settings and the friends list
+   each grew their own copy of this rule as that turned up; one rule on the layer
+   they share covers those two and everything else on it.
+   `.raid-bg > .panel` and `.guide-panel` deliberately keep their own bounds and
+   scroll an inner column instead — both are fixed-height compositions. */
+#hud .panelbg > .panel { max-height: 100%; overflow-y: auto; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch; }
+/* Stated at the same weight as the rule above, and after it, so the exemption does
+   not rest on source order alone: both are fixed-height compositions that scroll an
+   inner column, and letting the frame itself scroll slides the whole book/board. */
+#hud .panelbg > .guide-panel, #hud .raid-bg > .panel { overflow: hidden; }
+/* The shared modal X sits INSIDE the panel's top-right corner, on every screen.
+   It used to hang 16px past that corner, which reads well on a plain box but is
+   sliced in half the moment the panel becomes a scroll container — and the rule
+   directly above makes a scroll container of EVERY panel on this layer that grows
+   past the screen. Settings, the friends list, raid select, the Farmer's Guide and
+   the Almanac's field-note pages each hit that on their own, and each was patched
+   with its own "tuck it back in" override as the clipping was spotted, one panel
+   at a time; the Almanac page shipped with a cropped X because it was simply the
+   one nobody thought to patch. Inside by DEFAULT makes the whole class of bug
+   impossible rather than merely catchable.
+   The z-index belongs to that default too: the button is the panel's first
+   child, so anything drawn after it paints over the corner (the storage panel's
+   `.st-close` needed exactly this).
+   The four market-parchment panels (`.mkt`, `.st`, `.info-box`, `.pm`) keep the
+   authentic overhanging X. They are fixed-size flex columns whose INNER lists
+   scroll, so they never clip their own corner — see ui/closeButtonFit.test.ts,
+   which fails if one of them grows an overflow. */
+#hud .panelclose { position: absolute; top: 4px; right: 4px; width: 42px; height: 42px;
+  border: none; background: none; cursor: pointer; padding: 0; z-index: 3;
   filter: drop-shadow(0 2px 3px rgba(0,0,0,.6)); }
 #hud .panelclose img { width: 100%; height: 100%; }
 /* settings rows: label + on/off toggle */
@@ -785,8 +805,11 @@
 
 /* ---- Zombie roster (Zombies menu) ---- */
 #hud .zroster { display: flex; flex-direction: column; gap: 10px; width: min(560px, 88vw); }
+/* `space-between` parks the roster count in the panel's top-right corner, which is
+   where the close button now lives — so reserve its width. Same for the combiner's
+   timer and the army screen's slot count. */
 #hud .zr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
-  flex-wrap: wrap; }
+  flex-wrap: wrap; padding-right: 44px; }
 #hud .zr-head h2 { margin: 0; font-size: 20px; }
 #hud .zr-total { font-size: 15px; font-weight: 800; color: #b6f36a; }
 #hud .zr-total .zr-sub { color: #9fd3e8; font-weight: 700; }
@@ -849,7 +872,8 @@
 /* ---- Zombie Pot (combiner) ---- */
 #hud .cmb { display: flex; flex-direction: column; gap: 12px; width: min(560px, 90vw);
   max-width: 100%; min-width: 0; }
-#hud .cmb-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+#hud .cmb-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding-right: 44px; }
 #hud .cmb-head h2 { margin: 0; font-size: 20px; }
 #hud .cmb-time { font-size: 13px; font-weight: 800; color: #b6f36a; }
 #hud .cmb-head > * { min-width: 0; overflow-wrap: anywhere; }
@@ -1026,11 +1050,10 @@
   overflow: hidden; }
 #hud .raid-bg .raidsel { max-height: calc(100dvh - 70px); min-height: 0; }
 #hud .raid-bg .rd-detail { overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
-#hud .raid-bg .panelclose { top: 4px; right: 4px; z-index: 2; }
 /* army select */
 #hud .army-wrap { display: flex; flex-direction: column; gap: 10px; width: min(600px, 90vw); }
 #hud .army-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
-  flex-wrap: wrap; }
+  flex-wrap: wrap; padding-right: 44px; }
 #hud .army-head h2 { margin: 0; font-size: 19px; min-width: 0; overflow-wrap: anywhere; }
 #hud .army-count { font-size: 14px; font-weight: 800; color: #b6f36a; flex: 0 0 auto; white-space: nowrap; }
 #hud .army-count.short { color: #ffb0a0; }
@@ -1744,14 +1767,20 @@
   #hud .zcard { width: 100%; max-width: 220px; margin: 0 auto; }
   #hud .zright { min-width: 0; }
 
-  /* Every shared modal must fit the visible viewport. Individual panels can
-     scroll internally when their desktop composition is taller than a phone. */
-  #hud .panelbg { box-sizing: border-box; padding: max(8px, env(safe-area-inset-top))
+  /* Bounding the modal to the viewport is the shared rule's job now; what is left
+     here is the phone-only part of it: keep clear of the notch and the home bar,
+     and let a panel that was sized for a desktop shrink to a narrow screen. */
+  #hud .panelbg { padding: max(8px, env(safe-area-inset-top))
     max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
     max(8px, env(safe-area-inset-left)); }
-  #hud .panelbg > .panel { min-width: 0; max-width: 100%; max-height: 100%; overflow-y: auto;
-    overscroll-behavior: contain; }
-  #hud .panelbg > .panel > .panelclose { top: 2px; right: 2px; z-index: 3; }
+  #hud .panelbg > .panel { min-width: 0; max-width: 100%; }
+  /* Nothing inside a modal may be wider than the modal. Several panels hold a
+     body sized straight off the viewport (`.zroster` is 88vw, `.army-wrap` 90vw)
+     which on a phone comes out WIDER than the panel's own content box, so the
+     panel scrolled sideways and its top-right counter slid under the close
+     button. Clamping here rather than in each body's own rule keeps a desktop
+     panel — which is sized BY that body — exactly as it was. */
+  #hud .panelbg > .panel > * { max-width: 100%; }
 
   #hud .st-bg { box-sizing: border-box; padding: max(8px, env(safe-area-inset-top))
     max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
