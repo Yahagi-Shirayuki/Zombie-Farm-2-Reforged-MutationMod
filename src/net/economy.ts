@@ -1078,14 +1078,39 @@ export class EconomyClient {
       return bootstrap;
     }
     if (pending?.sessionId === resumable.sessionId) {
-      await this.sendRaidFinish(pending);
-      this.clearPendingRaid(pending.sessionId);
+      // Every one of these throws used to propagate, and this runs inside EVERY
+      // bootstrap — boot, the recovery backoff, the CAS reload, the writer re-claim,
+      // refreshAuthoritative. A finish the server will never accept (400
+      // `bad_roster_partition`, or a persisted outcome a newer bundle validates
+      // differently) therefore failed the whole bootstrap, and because the throw jumped
+      // over `clearPendingRaid` the same transcript was still there to fail the next
+      // one. Nothing else settles the session either, so the account could not load at
+      // all until the server's own 15-minute session TTL expired it — a quarter of an
+      // hour of "reconnecting" for a fight the player had already finished.
+      try {
+        await this.sendRaidFinish(pending);
+        this.clearPendingRaid(pending.sessionId);
+      } catch (error) {
+        // Retryable means the transcript is still good and only the wire failed: keep
+        // it and let the backoff bring us back. Anything else will be refused for as
+        // long as it exists, so it is dropped — the fight's rewards are lost either
+        // way, and keeping it only spreads that loss over everything else.
+        if (this.raidFinishRetryable(error)) this.scheduleRecovery();
+        else this.clearPendingRaid(pending.sessionId);
+        return bootstrap;
+      }
     } else {
       // Second gate, independent of the caller: a session this document is fighting is
       // never abandonable, even from a boot-time bootstrap.
       if (!mayAbandon || this.liveRaidSessionId === resumable.sessionId) return bootstrap;
       if (pending) this.clearPendingRaid(pending.sessionId);
-      await api.raidFinish(resumable.sessionId, 0, [{ seq: 1, tick: 0, type: "retreat" }]);
+      // Same rule for the abandon: settling someone else's orphaned session is a
+      // courtesy, and it must not be able to stop this document from booting.
+      try {
+        await api.raidFinish(resumable.sessionId, 0, [{ seq: 1, tick: 0, type: "retreat" }]);
+      } catch {
+        return bootstrap;
+      }
     }
     return api.bootstrap(true);
   }

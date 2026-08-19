@@ -367,7 +367,19 @@ export async function applyBatch(
     // the original value would add the whole retry/offline interval to every timer.
     return { status: 200, response: { ...cached, serverTime: now } };
   }
-  if (runtime.active_batch_id) return { status: 409, error: "batch_in_progress" };
+  // An EXPIRED operation marker must not block a batch. `beginOperation` and `release`
+  // both treat one past its TTL as absent; this was the last reader that did not, and
+  // the marker is SHARED - a raid, gift, black-market or presentation request killed
+  // between `beginOperation` and `endOperation` leaves one behind. Without the expiry
+  // clause that orphan answers every subsequent batch with 409 forever: nothing sweeps
+  // it (D1 has no TTL), the only writers that clear it are the operation that owns it
+  // and a sign-out release, and the account is left holding a live lease that applies
+  // nothing - "Gameplay paused - reconnect to continue" on a farm the server thinks is
+  // perfectly healthy. The CAS below carries the same clause; relaxing only one of them
+  // just changes which 409 the player is stuck behind.
+  if (runtime.active_batch_id && runtime.active_batch_expires_at > now) {
+    return { status: 409, error: "batch_in_progress" };
+  }
   if (body.expectedAccountVersion !== runtime.account_version) {
     return { status: 409, error: "state_conflict", body: { accountVersion: runtime.account_version, writerGeneration: runtime.writer_generation } };
   }
@@ -432,9 +444,11 @@ export async function applyBatch(
       writer_device_id = COALESCE(writer_device_id, ?),
       writer_generation = CASE WHEN writer_device_id IS NULL THEN writer_generation + 1 ELSE writer_generation END,
       command_window_start = ?, command_window_count = ?, updated_at = ?
-    WHERE account_id = ? AND account_version = ? AND active_batch_id IS NULL
+    WHERE account_id = ? AND account_version = ?
+      AND (active_batch_id IS NULL OR active_batch_expires_at <= ?)
       AND (writer_device_id IS NULL OR writer_device_id = ?)`)
-    .bind(body.batchId, now + 120_000, body.deviceId, windowStart, windowCount, now, accountId, runtime.account_version, body.deviceId));
+    .bind(body.batchId, now + 120_000, body.deviceId, windowStart, windowCount, now,
+      accountId, runtime.account_version, now, body.deviceId));
   statements.push(db.prepare(`UPDATE balances SET gold = ?, brains = ?, xp = ?, claimed_level = ?
     WHERE account_id = ? AND ${guard}`)
     .bind(engine.state.balance.gold, engine.state.balance.brains, engine.state.balance.xp,

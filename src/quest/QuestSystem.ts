@@ -156,8 +156,14 @@ export class QuestSystem {
 
   private complete(id: string) {
     const def = this.defs.get(id);
-    if (!def || this.completed.has(id)) return;
+    // Retire it from the rail BEFORE the already-completed guard. Bailing out with the
+    // id still in `active` is what would turn `sweepSatisfied` into an infinite loop —
+    // it re-finds the same satisfied quest every pass, never empties `finished`, and
+    // freezes the tab outright. No path reaches that today (every writer to `active`
+    // fences on `completed`), which is exactly why it is worth making unreachable by
+    // construction rather than by audit.
     this.active.delete(id);
+    if (!def || this.completed.has(id)) return;
     this.completed.add(id);
     this.dispatchReward(def);
     this.hooks.completed(def); // celebrate with the completion popup

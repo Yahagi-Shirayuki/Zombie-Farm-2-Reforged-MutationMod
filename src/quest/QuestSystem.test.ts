@@ -328,3 +328,31 @@ describe("QuestSystem client-paced progress", () => {
     expect(system.views()[0].objectives[0].count).toBe(1);
   });
 });
+
+// `sweepSatisfied` loops until a pass finds nothing satisfied left to close, and its
+// termination rests entirely on `complete` retiring the id from the rail. If one ever
+// stayed in `active` after completing, the sweep would re-find it every pass and lock
+// the tab up solid — no error, no frame, just a dead page. Every writer to `active`
+// fences on `completed` today, so this cannot be reached through the public API; the
+// guard is here because the failure is a hard freeze and the fix is one line.
+describe("a completed quest never stays on the rail", () => {
+  it("terminates the sweep even when a completed id is forced back into active", () => {
+    const bus = new QuestBus();
+    const system = new QuestSystem(new Map([["1", quest()]]), new GameState(), bus, {
+      authoritative: false,
+      grantReward: vi.fn(), grantItem: vi.fn(), grantZombie: vi.fn(),
+      completed: vi.fn(), render: vi.fn(),
+    });
+    system.restore();
+    bus.post(QuestEvent.SoilPlowed);
+    bus.post(QuestEvent.SoilPlowed);
+    expect((system as any).completed.has("1")).toBe(true);
+    expect((system as any).active.has("1")).toBe(false);
+
+    // The state no path builds: satisfied, on the rail, and already completed.
+    (system as any).active.set("1", [2]);
+    (system as any).sweepSatisfied();
+
+    expect((system as any).active.has("1")).toBe(false);
+  });
+});

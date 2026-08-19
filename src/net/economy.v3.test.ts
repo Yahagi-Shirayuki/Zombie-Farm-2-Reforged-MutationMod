@@ -1358,3 +1358,79 @@ describe("recovery never stops", () => {
     expect(queue.size).toBe(1); // and the player's plow is still safe
   });
 });
+
+/** `recoverResumableRaid` runs inside EVERY bootstrap — boot, the recovery backoff, the
+ *  CAS reload, the iOS writer re-claim, refreshAuthoritative. A raid finish that throws
+ *  from in there takes the whole bootstrap with it, and because the throw jumps over
+ *  `clearPendingRaid` the same transcript is waiting to do it again. Nothing else settles
+ *  the session, so the account cannot load at all until the server's own 15-minute TTL
+ *  expires the fight. */
+describe("a stuck raid finish cannot brick the bootstrap", () => {
+  const PENDING = {
+    sessionId: "finished-but-refused",
+    finalTick: 300,
+    inputs: [{ seq: 1, tick: 10, type: "bubble", unitId: "zombie-1" }],
+    outcome: { win: true, rounds: 3, survivors: ["zombie-1"], losses: [], enemiesBeaten: 2, playerDamage: 100 },
+    savedAt: 10,
+  };
+
+  const withPendingRaid = (accountId: string) => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("localStorage", memoryStorage());
+    vi.spyOn(api, "getSession").mockReturnValue(SESSION);
+    localStorage.setItem(`zf2r.v3.raid-finish::${accountId}`, JSON.stringify(PENDING));
+    const economy = new EconomyClient(new GameState(), accountId);
+    vi.spyOn(economy as any, "adoptGameplay").mockImplementation(() => {});
+    return economy;
+  };
+
+  const live = () => bootstrapFixture({
+    resumableRaid: {
+      sessionId: "finished-but-refused", raidId: "1", startedAt: 1,
+      earliestFinishAt: 16_000, expiresAt: 900_000, rosterIds: ["zombie-1"],
+    },
+  });
+
+  it("drops a transcript the server will never accept and boots anyway", async () => {
+    const accountId = "refused-finish";
+    const economy = withPendingRaid(accountId);
+    vi.spyOn(api, "bootstrap").mockResolvedValue(live());
+    // 400 is not retryable: this body will be refused for as long as it exists.
+    const finish = vi.spyOn(api, "raidFinish")
+      .mockRejectedValue(new api.ApiError(400, "bad_roster_partition"));
+
+    const result = await (economy as any).recoverResumableRaid(live(), true);
+
+    expect(finish).toHaveBeenCalledOnce();
+    expect(result).toBeTruthy(); // a bootstrap came back rather than an exception
+    expect(localStorage.getItem(`zf2r.v3.raid-finish::${accountId}`)).toBeNull();
+  });
+
+  it("keeps a transcript the wire merely lost, and comes back for it", async () => {
+    vi.useFakeTimers();
+    const accountId = "offline-finish";
+    const economy = withPendingRaid(accountId);
+    vi.spyOn(api, "bootstrap").mockResolvedValue(live());
+    // Stubbed at the sendRaidFinish seam rather than the wire: its own 16-second retry
+    // ladder is long-standing behaviour and not what this covers. What is covered is
+    // what the caller does once that ladder has given up.
+    vi.spyOn(economy as any, "sendRaidFinish")
+      .mockRejectedValue(new api.ApiError(0, "offline"));
+
+    const result = await (economy as any).recoverResumableRaid(live(), true);
+
+    expect(result).toBeTruthy();
+    // The fight is still owed: the transcript survives and a retry is pending.
+    expect(localStorage.getItem(`zf2r.v3.raid-finish::${accountId}`)).not.toBeNull();
+    expect((economy as any).recoveryTimer).not.toBeNull();
+  });
+
+  it("boots past an abandon it could not post either", async () => {
+    const economy = withPendingRaid("abandon-refused");
+    localStorage.removeItem("zf2r.v3.raid-finish::abandon-refused");
+    vi.spyOn(api, "bootstrap").mockResolvedValue(live());
+    vi.spyOn(api, "raidFinish").mockRejectedValue(new api.ApiError(400, "bad_session"));
+
+    await expect((economy as any).recoverResumableRaid(live(), true)).resolves.toBeTruthy();
+  });
+});
