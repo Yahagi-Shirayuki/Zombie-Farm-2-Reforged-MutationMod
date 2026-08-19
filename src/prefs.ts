@@ -46,6 +46,7 @@ const BODY_COLOR_KEY = "zf2r.zombieBodyColor";
 const SHOW_MUTATIONS_KEY = "zf2r.showZombieMutations";
 const LANTERN_KEY = "zf2r.farmerLantern";
 const LANTERN_TAP_KEY = "zf2r.farmerLanternTap";
+const RIGHT_CLICK_KEY = "zf2r.rightClick";
 
 /** localStorage.getItem that survives a browser with storage denied (private mode,
  *  blocked third-party context). Appearance prefs are read while DRAWING, so a throw
@@ -113,6 +114,20 @@ export function getFarmerLanternTap(): boolean {
 
 export function setFarmerLanternTap(on: boolean): void {
   writePref(LANTERN_TAP_KEY, on ? "1" : "0");
+}
+
+/** What right-clicking the farm does.
+ *  • "menu"   — opens the quick-switch tool menu (the default).
+ *  • "select" — equips the Select tool, the pre-menu reflex some players kept.
+ *  Either way the browser's own context menu stays suppressed. */
+export type RightClickMode = "menu" | "select";
+
+export function getRightClickMode(): RightClickMode {
+  return readPref(RIGHT_CLICK_KEY) === "select" ? "select" : "menu";
+}
+
+export function setRightClickMode(mode: RightClickMode): void {
+  writePref(RIGHT_CLICK_KEY, mode);
 }
 
 /** Both appearance choices at once, for the render sites that apply them. */

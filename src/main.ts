@@ -67,7 +67,7 @@ import {
   DEFAULT_FARM_BACKGROUND, getFarmBackground, isFarmBackground, setFarmBackground,
   FARM_BG_DENSITY, type FarmBackground, getDayNightMode, setDayNightMode,
   isLocalNight, isLocalDusk, type DayNightMode, getFarmerLantern, setFarmerLantern,
-  getFarmerLanternTap, setFarmerLanternTap,
+  getFarmerLanternTap, setFarmerLanternTap, getRightClickMode,
   hasSeenHazardTip, markHazardTipSeen,
   hasSeenRaidTip, markRaidTipSeen,
   zombieAppearancePrefs, setZombieBodyColorMode, setShowZombieMutations,
@@ -6392,8 +6392,11 @@ async function main() {
       active: hud.mode === "walk", onPick: () => equipTool("walk") },
     { id: "move", label: "Move", icon: "button_move.png", hint: "2",
       active: hud.mode === "move", onPick: () => equipTool("move") },
+    // equipTool, not rotateCurrent: the toolbar's Rotate button is context-sensitive
+    // (while placing it spins the ghost), but a pick from this menu is a tool SWITCH —
+    // choosing Rotate mid-placement must leave placement mode, not turn the ghost.
     { id: "rotate", label: "Rotate", icon: "button_rotate.png", hint: "3",
-      active: hud.mode === "rotate", onPick: () => rotateCurrent() },
+      active: hud.mode === "rotate", onPick: () => equipTool("rotate") },
     { id: "till", label: "Plow", icon: "button_plow.png", hint: "4",
       active: hud.mode === "till", onPick: () => equipTool("till") },
     { id: "remove", label: "Remove", icon: "button_sell.png", hint: "5",
@@ -6409,6 +6412,10 @@ async function main() {
     // instead, so never let a synthesized contextmenu open the menu there.
     if (isTouchPointer(pressPointerType)) return;
     if (toolWheel) { closeToolWheel(); return; }
+    // Settings → Controls picks what right-click means: the tool menu (default) or
+    // the older reflex of jumping straight back to the Select tool. Read per event
+    // so a change in Settings applies to the very next right-click.
+    if (getRightClickMode() === "select") { equipTool("walk"); return; }
     toolWheel = openToolWheel(hud.el, {
       x: e.clientX, y: e.clientY, items: toolWheelItems(),
       onSound: () => audio.play("menuClick"),

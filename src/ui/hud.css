@@ -623,6 +623,12 @@
   background: linear-gradient(#c0553f, #9c3320); }
 #hud .set-dev-revoke:hover { filter: brightness(1.1); }
 #hud .set-dev-revoke:disabled { opacity: .5; cursor: default; }
+/* Settings is tabbed (Game / Audio / Display / Controls); pin the panel's width so
+   switching to a narrower tab doesn't shrink the panel under the cursor, and give
+   the body a floor so short tabs don't collapse the panel to its tab bar. */
+#hud .settings-panel { width: min(460px, 92vw); }
+#hud .set-tabs { margin: 2px 0 6px; }
+#hud .set-body { min-height: 240px; }
 #hud .set-row { display: flex; align-items: center; justify-content: space-between;
   gap: 24px; min-width: 240px; padding: 8px 2px; font-size: 15px; font-weight: 700; }
 #hud .set-row + .set-row { border-top: 1px solid rgba(255,255,255,.15); }

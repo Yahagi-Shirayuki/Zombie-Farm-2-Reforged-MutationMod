@@ -6,7 +6,11 @@ import type { Hud } from "../../hud";
 import { openModal } from "../Modal";
 import { BUILD_ID } from "../../version";
 import { diagnosticsReport, diagnosticsCount, clearDiagnostics } from "../../diagnostics";
-import { getSpriteSet, setSpriteSet, FARM_BACKGROUNDS } from "../../prefs";
+import {
+  getSpriteSet, setSpriteSet, FARM_BACKGROUNDS,
+  getRightClickMode, setRightClickMode,
+} from "../../prefs";
+import { recallOneOf, remember } from "../viewState";
 import { ABILITY_POOL, ABILITY_TIER, TIER_BOSS } from "../../zombie/traits";
 import { otherPlayMode, playModeDestinationLabel } from "../../playMode";
 import { updateCheckMessage, type UpdateCheckResult } from "../../updateCheck";
@@ -114,9 +118,20 @@ function relTime(ts: number): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-// Settings modal: Music / Sound Effects / Ambience toggles plus the account
-// block. The Developer section now lives in its own menu (openDevMenu), reached
-// via the invisible hotspot beside the nameplate.
+/** The Settings tabs, in display order. Grown past one screenful, the panel is
+ *  split by topic: Game (farm/save/account plumbing), Audio, Display (how things
+ *  look), Controls (what the inputs do). */
+export type SettingsTab = "game" | "audio" | "display" | "controls";
+const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: "game", label: "Game" },
+  { id: "audio", label: "Audio" },
+  { id: "display", label: "Display" },
+  { id: "controls", label: "Controls" },
+];
+
+// Settings modal, split across tabs (see SETTINGS_TABS). The Developer section
+// lives in its own menu (openDevMenu), reached via the invisible hotspot beside
+// the nameplate. Reopening returns to whichever tab was last read.
 export function openSettings(hud: Hud): void {
   // The fullscreen listener is torn down via onClose so it detaches whether the
   // panel is dismissed by the close button or a backdrop click.
@@ -293,15 +308,30 @@ export function openSettings(hud: Hud): void {
       noteEl("Off puts the lamp away and leaves the farm dark after sunset, lit only by whatever you have placed."),
     );
   }
-  // Whether the farmer himself is a lantern switch. Sits under the lantern row it
-  // governs, and only alongside it — on its own it would read as a setting for a
-  // feature that isn't there.
+  // What the inputs do, as opposed to what things look like. The right-click row is
+  // mouse-only in effect (touch long-press never opens the menu) but shown always —
+  // a tablet with a mouse attached is a real player.
+  const controlsBlock: HTMLElement[] = [
+    settingChoiceRow(
+      "Right-Click",
+      [
+        { id: "menu", label: "Tool Menu" },
+        { id: "select", label: "Select Tool" },
+      ],
+      getRightClickMode(),
+      (v) => setRightClickMode(v),
+    ),
+    noteEl("Tool Menu opens the quick-switch tool menu at the cursor. Select Tool goes straight back to the Select tool, like it used to."),
+  ];
+  // Whether the farmer himself is a lantern switch. Only offered alongside the
+  // lantern feature itself — on its own it would read as a setting for a feature
+  // that isn't there.
   if (hud.getFarmerLantern && hud.onSetFarmerLantern
       && hud.getFarmerLanternTap && hud.onSetFarmerLanternTap) {
-    ambienceBlock.push(
+    controlsBlock.push(
       settingRow("Tap Farmer for Lantern", hud.getFarmerLanternTap(),
         (v) => hud.onSetFarmerLanternTap?.(v)),
-      noteEl("On, tapping the farmer at night switches his lantern. Off, that tap goes to the ground under him instead — use the row above to switch the lantern."),
+      noteEl("On, tapping the farmer at night switches his lantern. Off, that tap goes to the ground under him instead — the Display tab's Farmer's Lantern row still switches it."),
     );
   }
   const farmMode = document.createElement("div");
@@ -474,35 +504,70 @@ export function openSettings(hud: Hud): void {
   };
   updates.append(updatesLabel, updatesButton);
 
-  panel.append(
-    farmMode,
-    farmModeNote,
-    ...localStorageControls,
-    row("All Audio", hud.audio.masterOn, (v) => hud.audio.setMaster(v)),
-    volumeRow("Master Volume", hud.audio.masterVolume, (v) => hud.audio.setMasterVolume(v)),
-    row("Music", hud.audio.musicOn, (v) => hud.audio.setMusic(v)),
-    volumeRow("Music Volume", hud.audio.musicVolume, (v) => hud.audio.setMusicVolume(v)),
-    row("Sound Effects", hud.audio.sfxOn, (v) => hud.audio.setSfx(v)),
-    volumeRow("Effects Volume", hud.audio.sfxVolume, (v) => hud.audio.setSfxVolume(v)),
-    row("Ambience", hud.audio.ambienceOn, (v) => hud.audio.setAmbience(v)),
-    volumeRow("Ambience Volume", hud.audio.ambienceVolume, (v) => hud.audio.setAmbienceVolume(v)),
-    row("Mute When Unfocused", hud.audio.muteWhenUnfocused,
-      (v) => hud.audio.setMuteWhenUnfocused(v)),
-    noteEl("Silence the game while its tab or window is in the background."),
-    fullscreenRow,
-    noteEl(canFullscreen
-      ? "Press F to toggle fullscreen. Escape also exits."
-      : "This browser doesn't support app-controlled fullscreen."),
-    ...accountBlock,
-    ...ambienceBlock,
-    ...bgBlock,
-    ...appearanceBlock,
-    spriteRow, spriteNote,
-    diagnostics,
-    noteEl("Copies this build's id, your browser, and any recorded errors. Nothing is sent anywhere — paste it into a bug report."),
-    updates,
-    updatesNote,
-  );
+  // The tab bar (the Market's screen-toggle look) and the body it swaps. Every
+  // block above is built once; showing a tab just re-parents its elements, so
+  // controls keep their state and handlers across switches.
+  const tabs = document.createElement("div");
+  tabs.className = "pm-screens set-tabs";
+  const body = document.createElement("div");
+  body.className = "set-body";
+  panel.append(tabs, body);
+
+  const tabContent: Record<SettingsTab, HTMLElement[]> = {
+    game: [
+      farmMode,
+      farmModeNote,
+      ...localStorageControls,
+      ...accountBlock,
+      diagnostics,
+      noteEl("Copies this build's id, your browser, and any recorded errors. Nothing is sent anywhere — paste it into a bug report."),
+      updates,
+      updatesNote,
+    ],
+    audio: [
+      row("All Audio", hud.audio.masterOn, (v) => hud.audio.setMaster(v)),
+      volumeRow("Master Volume", hud.audio.masterVolume, (v) => hud.audio.setMasterVolume(v)),
+      row("Music", hud.audio.musicOn, (v) => hud.audio.setMusic(v)),
+      volumeRow("Music Volume", hud.audio.musicVolume, (v) => hud.audio.setMusicVolume(v)),
+      row("Sound Effects", hud.audio.sfxOn, (v) => hud.audio.setSfx(v)),
+      volumeRow("Effects Volume", hud.audio.sfxVolume, (v) => hud.audio.setSfxVolume(v)),
+      row("Ambience", hud.audio.ambienceOn, (v) => hud.audio.setAmbience(v)),
+      volumeRow("Ambience Volume", hud.audio.ambienceVolume,
+        (v) => hud.audio.setAmbienceVolume(v)),
+      row("Mute When Unfocused", hud.audio.muteWhenUnfocused,
+        (v) => hud.audio.setMuteWhenUnfocused(v)),
+      noteEl("Silence the game while its tab or window is in the background."),
+    ],
+    display: [
+      fullscreenRow,
+      noteEl(canFullscreen
+        ? "Press F to toggle fullscreen. Escape also exits."
+        : "This browser doesn't support app-controlled fullscreen."),
+      ...ambienceBlock,
+      ...bgBlock,
+      ...appearanceBlock,
+      spriteRow, spriteNote,
+    ],
+    controls: controlsBlock,
+  };
+
+  const tabButtons: Record<SettingsTab, HTMLButtonElement> = {} as never;
+  const show = (tab: SettingsTab) => {
+    for (const t of SETTINGS_TABS) tabButtons[t.id].classList.toggle("sel", t.id === tab);
+    body.innerHTML = "";
+    body.append(...tabContent[tab]);
+    remember("settings.tab", tab);
+  };
+  for (const t of SETTINGS_TABS) {
+    const b = document.createElement("button");
+    b.className = "pm-screen";
+    b.textContent = t.label;
+    b.onclick = () => show(t.id);
+    tabButtons[t.id] = b;
+    tabs.appendChild(b);
+  }
+  show(recallOneOf("settings.tab", SETTINGS_TABS.map((t) => t.id), "game"));
+
   const version = document.createElement("div");
   version.className = "set-version";
   version.textContent = `Version ${BUILD_ID}`;
