@@ -257,7 +257,7 @@ describe("boss wall (carrotWall / junkWall)", () => {
     expect(sim.units.some((u) => u.isWall)).toBe(false);
   });
 
-  it("blocks zombies behind it, including Garden healers, but not zombies already past it", () => {
+  it("blocks zombies marching past it, but not those already past it or holding behind it", () => {
     const blocked = unit({
       id: "blocked", sourceKey: "ZombieActorRegularTier1", team: "player",
       str: 1, attackCooldownMs: 200,
@@ -307,7 +307,10 @@ describe("boss wall (carrotWall / junkWall)", () => {
     for (let t = 0; t < 1800; t += 16) sim.step(16);
 
     expect(wall.hp).toBeLessThan(wallHp);
-    expect(h.healCastSeq).toBe(0);
+    // The healer's station is far behind the wall, so the wall was never in its way: it
+    // keeps healing right through the block instead of standing idle for the whole fight.
+    expect(h.healCastSeq).toBeGreaterThan(0);
+    expect(h.x).toBeLessThan(wall.x);
     expect(enemy.hp).toBeLessThan(enemyHp);
     // The wall materialises at the support line: halfway from the staging slot to the
     // front, so it moves with ENEMY_HOLD_X rather than sitting on a fixed number.

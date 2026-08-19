@@ -1575,7 +1575,10 @@ export class BattleSim {
     for (const healer of deployed) {
       if (!this.isHealer(healer)) continue;
       if (rezCast.has(healer.id)) continue; // spent this beat's cast on the revive
-      // A lane blocker takes priority over Garden support work.
+      // A lane blocker takes priority over Garden support work. Note that `wallInWay` no
+      // longer counts a blocker a healer was never marching past (see there): at its
+      // station a Garden zombie keeps healing straight through an abductee or a wall, and
+      // this gate only trips if one ever ends up close enough to be fighting one.
       if (this.wallInWay(healer)) {
         healer.healTimerMs = Math.max(healer.healTimerMs, 250);
         continue;
@@ -1654,9 +1657,32 @@ export class BattleSim {
    *  where it lands, swings at whatever files past, and answers only to taps. */
   private wallInWay(u: SimUnit): SimUnit | null {
     if (u.passedWall) return null;
-    return this.enemies.find(
+    const blocker = this.enemies.find(
       (e) => e.alive && (e.isWall || e.isSummon) && !e.isTurned && u.x <= e.x + 0.5
     ) ?? null;
+    if (!blocker) return null;
+    // A blocker only intercepts a zombie that was going to WALK PAST it. A Garden zombie
+    // holds at GARDEN_STATION_X, a fixed station far behind the line and far behind either
+    // kind of blocker, so it never closes on one, is never in reach of one, and can never
+    // break one — yet an abductee beamed into mid-lane still counted as "in its way" and
+    // shut its healing and its revive off for as long as the abductee lived. That is the
+    // whole raid, in the raid the player has the least business being short a healer in:
+    // the alien boss re-summons the moment the last abductee dies. The healers just stood
+    // there, out of reach of a fight they had been drafted into.
+    //
+    // The test is exactly the one the march already applies below (`destinationX`): a
+    // blocker that does not move where this unit stops is not blocking it. Everything that
+    // marches to the LINE still stops short and fights — a slot beyond the blocker fails
+    // this test — so interception is unchanged for every zombie that walks into one. The
+    // carrier of a Mini Buddy is always blocked: it rams the enemy line rather than its own
+    // slot, and asking `ramTargetFor` here would recurse back through `targetEnemy`.
+    //
+    // Only a DEPLOYED zombie has a real slot — `armyOrder` places the advancing/fighting
+    // block and nobody else — so one still waiting at the back is left exactly as it was
+    // rather than being read off its staging position.
+    const deployed = u.state === "advance" || u.state === "fight";
+    if (deployed && !u.buddyId && u.slotX <= blocker.x - this.blockerGap(blocker)) return null;
+    return blocker;
   }
 
   /** How close a zombie gets to a blocker before trading blows with it. */

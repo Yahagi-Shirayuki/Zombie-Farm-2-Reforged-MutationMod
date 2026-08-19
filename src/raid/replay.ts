@@ -351,7 +351,27 @@ import type { RaidOutcome } from "./types";
 // bump", it means every session started before the deploy replays under rules it was not
 // played under, and settles as a disagreement rather than as stale_ruleset. A transcript
 // change gets its own number the moment the previous one is live, however small it is.
-export const RAID_RULESET_VERSION = 32;
+// v33 — A BLOCKER ONLY STOPS WHAT WAS WALKING PAST IT. An alien abductee is beamed into
+// the middle of the lane and treated as a roadblock: zombies short of it stop and fight it
+// (see wallInWay / SUMMON_SPAWN_X). "Short of it" was read as pure x, which swept in the
+// Garden zombies — they hold at a FIXED station (GARDEN_STATION_X) far behind the front
+// line and behind every blocker, so they were counted as blocked by something they can
+// never walk to, never reach and never break. Both their heal timers and Resurrect were
+// gated on that, so an abduction stopped the army's healing outright for as long as the
+// abductee lived, and the alien boss re-summons the moment one dies. Same for the Ninja
+// and Robot bosses' WALL, which spawns at supportX — also ahead of the station.
+//
+// The blocker now only intercepts a unit whose own destination lies beyond it, which is
+// exactly the test the march already applied when clamping `destinationX`. Every zombie
+// walking to the LINE is still stopped and still fights the blocker; only units already
+// standing still, short of it, are let alone. Measured: no ordinary formation slot falls
+// behind either blocker AND inside the combat zone, so the Garden zombies are the only
+// units whose behaviour moves.
+//
+// Transcript-changing on the alien, Ninja and Robot invasions, hence the bump. Same cost
+// as every bump: a fight in flight at deploy time settles as stale_ruleset and pays
+// nothing.
+export const RAID_RULESET_VERSION = 33;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

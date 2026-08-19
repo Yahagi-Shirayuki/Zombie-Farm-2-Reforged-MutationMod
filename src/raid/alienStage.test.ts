@@ -195,6 +195,54 @@ describe("summonBoss abducts humans", () => {
     expect(victim.hp).toBeLessThan(victim.maxHp);
   });
 
+  // The roadblock is for units WALKING PAST it. Garden zombies hold at a fixed station
+  // far behind the line — behind the scorch mark too — so they never close on an abductee,
+  // can never reach one and can never break one. Counting them as blocked by it shut the
+  // army's healing off for as long as the abductee lived, on the one raid whose boss
+  // re-summons the moment the last one dies.
+  it("does not stop the Garden zombies healing — their station is far behind it", () => {
+    const healer = unit({
+      id: "healer", sourceKey: "ZombieActorGardenTier1", team: "player",
+      str: 8, isGarden: true, abilities: ["heal"], attackCooldownMs: 200,
+      hp: 1e7, maxHp: 1e7,
+    });
+    const hurt = unit({
+      id: "hurt", sourceKey: "ZombieActorRegularTier1", team: "player",
+      str: 0, hp: 1e7, maxHp: 1e7,
+    });
+    const sim = new BattleSim(
+      [hurt, healer],
+      [
+        unit({ id: "bag", sourceKey: ALIEN_MINION_KEY, team: "enemy", str: 0, hp: 1e7, maxHp: 1e7 }),
+        unit({ id: "boss", sourceKey: "AlienStageActorBoss", team: "enemy", isBoss: true, str: 0, hp: 1e7, maxHp: 1e7 }),
+      ],
+      null, true, [{ name: "summonBoss", weight: 1, castMs: 0, cooldownMs: 100, damage: 0 }],
+      undefined, abductees()
+    );
+    for (let i = 0; i < 60 && !summoned(sim).length; i++) sim.step(50);
+    const victim = summoned(sim)[0];
+    expect(victim).toBeTruthy();
+    // Keep THIS abductee standing for the whole test, so the blocker never changes.
+    victim.hp = victim.maxHp = 1e7;
+
+    const h = sim.units.find((u) => u.id === "healer")!;
+    const w = sim.units.find((u) => u.id === "hurt")!;
+    for (let i = 0; i < 200; i++) sim.step(50); // deploy both, abductee already down
+    const wounded = w.maxHp / 2;
+    w.hp = wounded;
+    const castsBefore = h.healCastSeq;
+    for (let i = 0; i < 200; i++) sim.step(50);
+
+    expect(victim.alive).toBe(true);
+    expect(h.x).toBeLessThan(victim.x); // still behind it, and still healing anyway
+    expect(h.healCastSeq).toBeGreaterThan(castsBefore);
+    expect(w.hp).toBeGreaterThan(wounded);
+    // …while the zombie that DID march at the line is still intercepted and fighting it.
+    expect(w.x).toBeLessThan(victim.x);
+    expect(w.x).toBeGreaterThan(victim.x - 120);
+    expect(victim.hp).toBeLessThan(victim.maxHp);
+  });
+
   it("refuses a second while the first still lives, then re-arms when it dies", () => {
     const sim = summonSim();
     for (let i = 0; i < 200; i++) sim.step(50);
