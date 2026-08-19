@@ -21,6 +21,29 @@ import { shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
 import { encodeReceivedZombie } from "../../../src/zombie/receivedReward";
 
 const DEFAULT_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+/** How long an invasion session may sit open before it is treated as ABANDONED and
+ *  its roster released. That is the whole job, and the only one it can do well.
+ *
+ *  It used to void the fight as well — a finish arriving after it was answered 200 with
+ *  `{expired:true}` and nothing else, no replay, whatever the battle had done. That
+ *  predates deterministic replay and outlived its reason. Nothing about a LATE
+ *  transcript is easier to forge than a prompt one: the fight is replayed byte-for-byte
+ *  from the `config_json` pinned at /raid/start, `pacedTick` still refuses a finalTick
+ *  ahead of wall clock, and `RAID_MAX_TICKS` caps any replay at four simulated minutes
+ *  however long the session has been open. So the clock was gating rewards it was not
+ *  protecting.
+ *
+ *  Meanwhile an honest player reaches it easily, because the fight does NOT run on wall
+ *  clock — it is driven by the Pixi ticker, so a backgrounded tab or a locked phone
+ *  freezes the battle while this keeps counting. Prod bore that out: 11 sessions across
+ *  11 accounts in 8 days, 18 to 785 minutes late, one apiece. Not a client defect;
+ *  people walking away mid-fight and coming back.
+ *
+ *  Fifteen minutes is RIGHT for the job that remains, and deliberately not raised:
+ *  a player who abandoned a fight wants their zombies back promptly, and the lock is
+ *  the real correctness boundary — while it is held, nothing else can have touched
+ *  those units, which is exactly the condition under which a late settlement is safe to
+ *  pay. `finishRaid` therefore keys on the lock (`finished_at IS NULL`), not the clock. */
 const RAID_TTL_MS = 15 * 60 * 1000;
 const EARLIEST_FINISH_MS = 15_000;
 
@@ -285,16 +308,13 @@ export async function finishRaid(
     return { status: 200, body: { ...parse<Record<string, unknown>>(session.result_json, {}), serverTime: now } };
   }
   if (session.finished_at) return { status: 409, body: { error: "already_finished" } };
+  // NO expiry gate here on purpose — see RAID_TTL_MS. A session still holding its
+  // roster lock is settled on its merits however late it arrives; one whose lock has
+  // already been released by `expireLiveRaid` was caught by the `finished_at` check
+  // above and answers 409, because those units are free again and may since have fought
+  // elsewhere, which makes retroactive casualties and veterancy unsound rather than
+  // merely generous.
   const locked = parse<string[]>(session.roster_json, []);
-  if (now >= session.expires_at) {
-    const result = { expired: true, gold: 0, xp: 0, firstClear: false, loot: null };
-    await db.batch([
-      db.prepare("UPDATE raid_sessions_v3 SET finished_at = ?, result_json = ? WHERE id = ? AND finished_at IS NULL")
-        .bind(now, JSON.stringify(result), session.id),
-      db.prepare("UPDATE roster_v3 SET locked_by_raid = NULL WHERE account_id = ? AND locked_by_raid = ?").bind(accountId, session.id),
-    ]);
-    return { status: 200, body: result };
-  }
   if (session.ruleset_version !== RAID_RULESET_VERSION) {
     await closeInvalidRaid(db, accountId, session.id, now, {
       raidId: session.raid_id, error: "stale_ruleset", finalTick: body.finalTick,

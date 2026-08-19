@@ -49,6 +49,23 @@ describe("invasionExpiryMessage", () => {
   it("explains an expiry the player is already past", () => {
     expect(invasionExpiryMessage("expired", 0)).toBe(EXPIRED_MID_FIGHT_MESSAGE);
   });
+
+  // Prose IS the behaviour here, so it gets asserted like behaviour. The deadline used
+  // to void the fight and the copy said so; it no longer does (the server settles a
+  // late finish on its merits — see server/test/lateInvasionSettlement.test.ts), and
+  // copy that still told the player their win was worthless would be worse than saying
+  // nothing: they would stop playing a fight that was going to pay.
+  it("tells the player the fight is still winnable, and what would end it", () => {
+    for (const message of [invasionExpiryMessage("expired", 0), invasionExpiryMessage("expiring", 60_000)]) {
+      expect(message).toBeTruthy();
+      expect(message!.toLowerCase()).not.toMatch(/pays nothing|no longer be rewarded|cannot be rewarded/);
+      // Both name the two acts that actually end a session past its deadline, because
+      // both are things the player chooses and can avoid for another minute.
+      expect(message!.toLowerCase()).toContain("reloading");
+      expect(message!.toLowerCase()).toContain("another invasion");
+    }
+    expect(invasionExpiryMessage("expired", 0)!.toLowerCase()).toContain("paid");
+  });
 });
 
 describe("the contract main.ts's ticker check implements", () => {

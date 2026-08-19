@@ -58,7 +58,13 @@ export function isUnsettledInvasion(
  *  `isUnsettledInvasion` could never see it and the case this module was written for
  *  went out silently for weeks. Read `expired` directly rather than treating a missing
  *  outcome as suspicious: an older Worker also omits it, and accusing IT of eating a
- *  reward would be a lie. */
+ *  reward would be a lie.
+ *
+ *  A current Worker no longer sends `expired` at all — the session deadline stopped
+ *  voiding fights and now governs only the roster lock (see RAID_TTL_MS). The branch
+ *  stays because it is still exactly right for the two cases that can produce one: a
+ *  Worker older than that change, and a body already stored by one. Deleting it would
+ *  make those settle in silence, which is the failure this module exists to prevent. */
 export function invasionSettlementNotice(
   played: Pick<RaidOutcome, "win">,
   settled: { expired?: boolean; outcome?: Pick<RaidOutcome, "win"> | null }

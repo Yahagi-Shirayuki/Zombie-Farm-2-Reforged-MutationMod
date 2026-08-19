@@ -1,11 +1,18 @@
 /** The player-facing half of the server's invasion session TTL.
  *
- *  `/raid/start` stamps `expires_at = now + 15 min` on WALL clock, and `/raid/finish`
- *  zeroes anything settled after it — no replay, no rewards, whatever the fight did.
- *  The fight itself does not run on wall clock: it is driven by the Pixi ticker, so a
- *  backgrounded tab freezes it while the TTL keeps counting. That mismatch is the only
- *  way an honest win reaches the expired branch, and until now nothing on the client
- *  even read the `expiresAt` that /raid/start has always returned.
+ *  `/raid/start` stamps `expires_at = now + 15 min` on WALL clock. The fight does not
+ *  run on wall clock — it is driven by the Pixi ticker, so a backgrounded tab or a
+ *  locked phone freezes the battle while the deadline keeps counting, which is how an
+ *  honest player passes it without doing anything wrong.
+ *
+ *  Passing it no longer voids the fight: a late finish is replayed and paid like any
+ *  other, as long as the session still holds its roster lock (see RAID_TTL_MS on the
+ *  server). What the deadline now means to the player is narrower and more actionable —
+ *  from here on, anything that makes the server re-read the account releases that lock
+ *  and ends the fight for good: a reload, a resync, opening the farm on another device,
+ *  or starting a different invasion. So the warnings say "finish it, and don't reload",
+ *  which is advice they can act on, instead of "this is already worthless", which was
+ *  both defeating and — once the TTL stopped gating rewards — untrue.
  *
  *  This module is the rule alone so it stays testable without a scene or a DOM. */
 
@@ -28,8 +35,8 @@ export function invasionExpiryState(expiresAt: number | null, now: number): Inva
 }
 
 export const EXPIRED_MID_FIGHT_MESSAGE =
-  "This invasion's 15-minute session has ended, so it can no longer be rewarded. " +
-  "Your zombies are safe — invasions left running in the background time out.";
+  "This invasion has outrun its 15-minute session. You can still finish it and be paid " +
+  "in full — but reloading, or starting another invasion, will end it first.";
 
 /** What to say on entering `state`, or null if that state needs nothing said. Only
  *  called on a TRANSITION (see the caller), so an unchanged state stays silent rather
@@ -39,5 +46,5 @@ export function invasionExpiryMessage(state: InvasionExpiryState, remainingMs: n
   if (state !== "expiring") return null;
   const mins = Math.max(1, Math.ceil(remainingMs / 60_000));
   return `Finish this invasion soon — its session ends in about ${mins} minute${mins === 1 ? "" : "s"}, ` +
-    "and a fight settled after that pays nothing.";
+    "after which reloading or starting another invasion would end the fight.";
 }
