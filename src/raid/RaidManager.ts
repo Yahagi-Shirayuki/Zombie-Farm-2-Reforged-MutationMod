@@ -735,6 +735,10 @@ export class RaidManager {
     if (!serverRewards) this.zombies.removeCasualties(outcome.losses);
 
     if (!serverRewards) this.state.lastRaidAt = this.now();
+    // Lifetime tally (Statistics panel). Counted here rather than beside the win
+    // rewards below so a LOSS is counted too — and a retreat, which arrives as an
+    // ordinary un-won outcome.
+    this.state.recordRaidSettled(outcome.win);
 
     let gold = 0;
     let brains = 0;

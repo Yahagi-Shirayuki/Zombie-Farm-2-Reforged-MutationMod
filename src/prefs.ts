@@ -44,6 +44,8 @@ const HAZARD_TIP_KEY = "zf2r.seenHazardTip";
 const RAID_TIP_KEY = "zf2r.seenRaidTip."; // + raid id
 const BODY_COLOR_KEY = "zf2r.zombieBodyColor";
 const SHOW_MUTATIONS_KEY = "zf2r.showZombieMutations";
+const HEALTH_NUMBERS_KEY = "zf2r.showHealthNumbers";
+const DAMAGE_NUMBERS_KEY = "zf2r.showDamageNumbers";
 const LANTERN_KEY = "zf2r.farmerLantern";
 const LANTERN_TAP_KEY = "zf2r.farmerLanternTap";
 const RIGHT_CLICK_KEY = "zf2r.rightClick";
@@ -85,6 +87,30 @@ export function getShowZombieMutations(): boolean {
 
 export function setShowZombieMutations(on: boolean): void {
   writePref(SHOW_MUTATIONS_KEY, on ? "1" : "0");
+}
+
+/** Whether an invasion prints the numbers behind its bars: the exact HP left on a
+ *  health bar, and a floating figure for each hit as it lands.
+ *
+ *  BOTH DEFAULT OFF, deliberately. ZF2 never showed either — the battlefield reads as
+ *  a fight, not a spreadsheet, and a screen of rising numbers is the sort of thing a
+ *  player either wants badly or does not want at all. The bars themselves are unchanged
+ *  either way, and neither switch touches the simulation: the numbers are read off the
+ *  same HP the bar is drawn from, so a raid plays out identically with them on. */
+export function getShowHealthNumbers(): boolean {
+  return readPref(HEALTH_NUMBERS_KEY) === "1";
+}
+
+export function setShowHealthNumbers(on: boolean): void {
+  writePref(HEALTH_NUMBERS_KEY, on ? "1" : "0");
+}
+
+export function getShowDamageNumbers(): boolean {
+  return readPref(DAMAGE_NUMBERS_KEY) === "1";
+}
+
+export function setShowDamageNumbers(on: boolean): void {
+  writePref(DAMAGE_NUMBERS_KEY, on ? "1" : "0");
 }
 
 /** Whether the farmer carries a lit lantern at night. Defaults to on — that is what

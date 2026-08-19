@@ -5,13 +5,13 @@ import { choosePlowOrigin } from "./plowSelection";
 // blocks — no 'unsafe-eval'). Side-effect import; must run before `new Application()`.
 // pixi.js lists ./lib/unsafe-eval/init.* under "sideEffects", so it survives bundling.
 import "pixi.js/unsafe-eval";
-import { loadAssets, canMirrorObject, ensureBackgroundTexture, ensureObjectTexture, ensureObjectTextures, objectSpriteFiles, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
+import { loadAssets, canMirrorObject, turnCount, turnFlip, ensureBackgroundTexture, ensureObjectTexture, ensureObjectTextures, objectSpriteFiles, PlaceableDef, BoostDef, SEED_FILE, ZombieDef, zombiePortrait, ZOMBIE_STAGES, raidRewardImage, purchasableZombies, placeablePurchaseLimit, objectTint } from "./assets";
 import { pickPiece, type PathSpec, type RoadSpec, type SceneryPiece, type SkylineSpec, type SpringSpec, surroundingsTheme, themeObjectFiles } from "./surroundings";
 import { MAX_ZOMBIE_POTS, noRoomForAnother } from "./placementLimit";
 import { armingSurvives } from "./placementArming";
 import { armyCapacityOf, BASE_ARMY_MAX } from "./armyCapacity";
 import { shedCapacityOf } from "./shedCapacity";
-import { Field, CARROT, CropConfig, objectFootprint, PLOT } from "./Field";
+import { Field, CARROT, CropConfig, objectFootprint, PLOT, savedTurn } from "./Field";
 import { Actor } from "./Actor";
 import { PetActor } from "./PetActor";
 import { SPEED_PX, WalkController } from "./WalkController";
@@ -19,6 +19,7 @@ import { ZombieField } from "./zombie/ZombieField";
 import { makeOwned, type OwnedZombie } from "./zombie/types";
 import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
 import { almanacEntries, isEpicZombie, obtainHint } from "./zombie/almanac";
+import { buildStatsView } from "./statsView";
 import { mutationAlmanacEntries } from "./zombie/mutationAlmanac";
 import { almanacGuide } from "./zombie/almanacGuide";
 import { RAID_ZOMBIE_DROPS } from "./raid/zombieDrops";
@@ -2089,6 +2090,7 @@ async function main() {
         if (pl.isZombie && !zombies.canHarvestZombie()) continue;
         const r = field.harvestAt(pl.oc, pl.or);
         if (!r) continue;
+        state.recordHarvest(r.key, !!r.zombieKey);
         const cropCenter = field.plotCenterOf(pl.oc, pl.or);
         popHarvestIcon(r, cropCenter.x, cropCenter.y);
         // Every plot pays exactly what harvesting it by hand would (see JobSystem):
@@ -2153,6 +2155,7 @@ async function main() {
         const treeAt = field.objectWorkPoint(id);
         const baseGold = field.harvestObject(id);
         if (!treeDef || baseGold === null) continue;
+        state.recordTreeHarvest();
         const gold = state.farmerHarvestGold(baseGold);
         if (!state.onFarm) state.addGold(gold);
         powerGold += gold;
@@ -2172,6 +2175,7 @@ async function main() {
       if (plowed.length && !state.onInventory) state.addXp(xp * plowed.length);
       powerXp += xp * plowed.length;
       for (const pl of plowed) {
+        state.recordPlowed();
         questBus.post(QuestEvent.SoilPlowed, "Plow");
         questBus.post(QuestEvent.NewSoilPlowed, "Plow");
         // Same as harvest: every plot shows its own reward in this one frame.
@@ -2630,7 +2634,8 @@ async function main() {
         }
         claimedSources.add(source.id);
         field.removeObject(source.id);
-        if (!field.placeObject(def, source.oc, source.or, object.instanceId, object.readyAt, !!source.rotation)) {
+        if (!field.placeObject(def, source.oc, source.or, object.instanceId, object.readyAt,
+          savedTurn(def, source))) {
           // Its remembered tile is taken (a stale layout entry can collide with a live
           // object). Re-home it below rather than let it fall off the farm.
           orphans.push({ instanceId: object.instanceId, def, readyAt: object.readyAt });
@@ -3569,6 +3574,31 @@ async function main() {
     const cropName = new Map(assets.plants.map((plant) => [plant.key, plant.name]));
     return mutationAlmanacEntries(state.mutationDiscovered, { cropName: (key) => cropName.get(key) });
   };
+  // The Statistics panel (Account menu). Everything is resolved HERE — crop keys
+  // through the plant catalog, collection totals through the two Almanacs — so the
+  // panel itself only prints rows. Built per call: it is a snapshot of the farm at
+  // the moment it was opened, not a live view.
+  hud.getStats = () => {
+    const species = almanacEntries(assets.zombies, state.zombieDiscovered);
+    const mutations = mutationAlmanacEntries(state.mutationDiscovered, { cropName: () => undefined });
+    return buildStatsView({
+      stats: state.stats,
+      now: Date.now(),
+      name: state.name,
+      level: state.level,
+      xp: state.xp,
+      gold: state.gold,
+      brains: state.brains,
+      zombiesDeployed: zombies.count,
+      zombieMax: state.zombieMax,
+      zombiesStored: zombies.storedCount,
+      speciesDiscovered: species.filter((def) => (state.zombieDiscovered[def.key] ?? 0) > 0).length,
+      speciesTotal: species.length,
+      mutationsDiscovered: mutations.filter((entry) => entry.obtained > 0).length,
+      mutationsTotal: mutations.length,
+      cropName: (key) => catalog.get(key)?.name,
+    });
+  };
   hud.zombiePortraitOf = (key) => zombiePortrait(key);
   hud.getMausoleumCap = () => zombies.mausoleumCap;
   // The Mausoleum upgrade ladder: each tier is an ordinary catalog placeable that
@@ -3696,6 +3726,7 @@ async function main() {
     const value = zombieSellValue(def?.cost ?? 0, !!def?.brainsNeeded);
     const p = zombies.selectById(id); // deployed unit's world pos (null if stored)
     if (!zombies.sell(id)) return; // gone already; don't credit gold
+    state.recordZombieSold();
     audio.play("sell");
     // ONLINE: the server owns the roster — it prices + credits the sell (and rejects a
     // unit it doesn't own, so a fabricated zombie can't be cashed out). OFFLINE: credit
@@ -3772,7 +3803,9 @@ async function main() {
     const targetPotId = activePotId;
     const pending = zombies.potFor(targetPotId).pending;
     const combined = pending ? combinedPotSubjects(pending) : null;
-    const z = zombies.collectCombine(walk.tile.col, walk.tile.row, targetPotId, { stored });
+    // The child climbs out of the POT it was brewed in, not out of the farmer.
+    const at = zombies.objectArrivalTile(targetPotId);
+    const z = zombies.collectCombine(at.col, at.row, targetPotId, { stored });
     if (z) {
       if (combined?.subject) {
         questBus.post(QuestEvent.CombinerCombined, combined.subject, 1, combined.aliases);
@@ -5309,7 +5342,7 @@ async function main() {
 
   // The object currently being relocated by the Move tool (null = none). `flipped`
   // tracks its orientation so rotating mid-carry survives the drop.
-  let carrying: { id: string; def: PlaceableDef; flipped: boolean } | null = null;
+  let carrying: { id: string; def: PlaceableDef; turn: number } | null = null;
   // The farm plot currently in hand (Move tool). Objects and plots are both carried
   // one at a time and never together, so picking one up always drops the other.
   let carryingPlot: { oc: number; or: number } | null = null;
@@ -5320,9 +5353,11 @@ async function main() {
     field.hideCursor();
   };
 
-  // Orientation for the placement ghost (Rotate tool flips it on the vertical axis),
-  // remembered across taps so a whole fence run can be laid facing the same way.
-  let placeFlipped = false;
+  // Orientation for the placement ghost, remembered across taps so a whole fence run
+  // can be laid facing the same way. One number covers both kinds of turning: 0/1 for
+  // art that turns by mirroring, 0..3 for a piece with its own art per corner (the
+  // road bends) — see turnArt.
+  let placeTurn = 0;
 
   // The Rotate tool is context-sensitive: while placing it spins the ghost, while
   // carrying (Move) it spins the carried object, and otherwise it toggles a
@@ -5336,12 +5371,12 @@ async function main() {
   const rotateCurrent = () => {
     if (hud.mode === "place" && hud.placing) {
       if (!canMirrorObject(hud.placing)) { sayCannotRotate(hud.placing); return; }
-      placeFlipped = !placeFlipped;
-      field.setGhostFlip(placeFlipped);
+      placeTurn = (placeTurn + 1) % turnCount(hud.placing);
+      field.setGhostTurn(placeTurn);
     } else if (hud.mode === "move" && carrying) {
       if (!canMirrorObject(carrying.def)) { sayCannotRotate(carrying.def); return; }
-      carrying.flipped = !carrying.flipped;
-      field.setGhostFlip(carrying.flipped);
+      carrying.turn = (carrying.turn + 1) % turnCount(carrying.def);
+      field.setGhostTurn(carrying.turn);
     } else {
       hud.setMode("rotate");
     }
@@ -5360,8 +5395,9 @@ async function main() {
       return;
     }
     if (noRoomForAnother(def, field)) return;
-    const { oc, or } = field.resolveObjectOrigin(def, col, row, placeFlipped);
-    if (!field.canPlaceObject(oc, or, def, undefined, placeFlipped)) return;
+    const placeFlip = turnFlip(def, placeTurn);
+    const { oc, or } = field.resolveObjectOrigin(def, col, row, placeFlip);
+    if (!field.canPlaceObject(oc, or, def, undefined, placeFlip)) return;
     // Retrieving a stored item: already owned, so it's free and places just one.
     if (retrieving) {
       const selected = retrieving;
@@ -5370,7 +5406,7 @@ async function main() {
         hud.setPlacing(null);
         return;
       }
-      field.placeObject(def, oc, or, selected.instanceId, undefined, placeFlipped);
+      field.placeObject(def, oc, or, selected.instanceId, undefined, placeTurn);
       audio.play("place");
       refreshArmyCap(); // re-apply functional effect
       economy?.submitObjectStatus(selected.instanceId, "placed");
@@ -5394,7 +5430,7 @@ async function main() {
         hud.setPlacing(null);
         return;
       }
-      const placedId = field.placeObject(def, oc, or, undefined, undefined, placeFlipped);
+      const placedId = field.placeObject(def, oc, or, undefined, undefined, placeTurn);
       if (!placedId) return;
       if (economy && !economy.submitStorageClaim(itemName, { localObjectId: placedId })) {
         field.removeObject(placedId);
@@ -5426,7 +5462,7 @@ async function main() {
       state.addXp(xp);
     }
     if (def.zombiePot) state.markZombiePotBought(); // next pot is 3 brains forever
-    const placedId = field.placeObject(def, oc, or, undefined, undefined, placeFlipped);
+    const placedId = field.placeObject(def, oc, or, undefined, undefined, placeTurn);
     if (def.zombiePot && placedId) {
       objectPurchases.set(placedId, { cost, currency: useBrains ? "brains" : "gold" });
     }
@@ -5457,8 +5493,9 @@ async function main() {
   // it. Invalid drop keeps it carried; right-click / tool-switch cancels.
   const handleMoveTap = (col: number, row: number, wx: number, wy: number) => {
     if (carrying) {
-      const { oc, or } = field.resolveObjectOrigin(carrying.def, col, row, carrying.flipped);
-      if (field.moveObject(carrying.id, oc, or, carrying.flipped)) cancelCarry();
+      const { oc, or } = field.resolveObjectOrigin(
+        carrying.def, col, row, turnFlip(carrying.def, carrying.turn));
+      if (field.moveObject(carrying.id, oc, or, carrying.turn)) cancelCarry();
       return;
     }
     if (carryingPlot) {
@@ -5480,8 +5517,8 @@ async function main() {
     const id = field.objectAtPoint(wx, wy);
     const def = id ? field.objectDefOf(id) : null;
     if (id && def) {
-      carrying = { id, def, flipped: field.objectFlipOf(id) };
-      field.setObjectCursor(def, col, row, id, carrying.flipped);
+      carrying = { id, def, turn: field.objectTurnOf(id) };
+      field.setObjectCursor(def, col, row, id, carrying.turn);
       return;
     }
     const plot = field.plotOriginAt(col, row);
@@ -5636,13 +5673,13 @@ async function main() {
         : {}),
       onMove: () => {
         hud.setMode("move"); // fires onModeChange (clears carry) FIRST...
-        carrying = { id: oid, def, flipped: field.objectFlipOf(oid) }; // ...then pick up this object
+        carrying = { id: oid, def, turn: field.objectTurnOf(oid) }; // ...then pick up this object
         const o = field.objectOriginOf(oid);
         // Aim the ghost at the tile the object is already centered on, in the
         // orientation it is standing in — a turned object's footprint is transposed.
-        const fp = objectFootprint(def, carrying.flipped);
+        const fp = objectFootprint(def, turnFlip(def, carrying.turn));
         if (o) field.setObjectCursor(def, o.oc + Math.floor((fp.w - 1) / 2),
-          o.or + Math.floor((fp.h - 1) / 2), oid, carrying.flipped);
+          o.or + Math.floor((fp.h - 1) / 2), oid, carrying.turn);
       },
       onRotate: () => {
         if (!canMirrorObject(def)) { sayCannotRotate(def); return; }
@@ -5877,6 +5914,10 @@ async function main() {
       // that says the writer moved). recordPause dedupes, so tapping repeatedly on a
       // dead farm still leaves exactly one entry.
       recordPause("tap_while_paused");
+      // A tap on a dead farm is the clearest evidence a stall is live, and the worst
+      // moment to sit out the rest of a 60-second backoff. Pull the next attempt
+      // forward instead of only reporting the pause.
+      economy.nudgeRecovery();
       return;
     }
     if (touchPinch) return; // a pinch is in progress; ignore extra finger-downs
@@ -6046,11 +6087,11 @@ async function main() {
       hud.showCropHover(null);
     }
     if (hud.mode === "place" && hud.placing) {
-      field.setObjectCursor(hud.placing, col, row, undefined, placeFlipped); // ghost follows the cursor
+      field.setObjectCursor(hud.placing, col, row, undefined, placeTurn); // ghost follows the cursor
       return;
     }
     if (hud.mode === "move") {
-      if (carrying) field.setObjectCursor(carrying.def, col, row, carrying.id, carrying.flipped);
+      if (carrying) field.setObjectCursor(carrying.def, col, row, carrying.id, carrying.turn);
       else if (carryingPlot) field.setPlotMoveCursor(col, row, carryingPlot.oc, carryingPlot.or);
       return;
     }
@@ -6439,7 +6480,7 @@ async function main() {
     const armedReward = receiving === null ? undefined : receivedDef(state.received[receiving] ?? "");
     if (!armingSurvives(hud.mode, hud.placing?.key, retrieving?.key)) retrieving = null;
     if (!armingSurvives(hud.mode, hud.placing?.key, armedReward?.key)) receiving = null;
-    if (hud.mode !== "place") placeFlipped = false; // and reset the ghost orientation
+    if (hud.mode !== "place") placeTurn = 0; // and reset the ghost orientation
   };
   hud.onTemporaryPanChange = () => {
     clearPlowStroke();
@@ -6716,11 +6757,12 @@ async function main() {
     combine: (idA: string, idB: string) => {
       return zombies.combine(idA, idB);
     },
-    // Collect a finished combine onto the farmer's tile (or storage if capped).
+    // Collect a finished combine beside the Pot (or into storage if capped).
     collectCombine: () => {
       const pending = zombies.combinePot.pending;
       const combined = pending ? combinedPotSubjects(pending) : null;
-      const z = zombies.collectCombine(walk.tile.col, walk.tile.row);
+      const at = zombies.objectArrivalTile(field.zombiePotId());
+      const z = zombies.collectCombine(at.col, at.row);
       if (z) {
         if (combined?.subject) {
           questBus.post(QuestEvent.CombinerCombined, combined.subject, 1, combined.aliases);

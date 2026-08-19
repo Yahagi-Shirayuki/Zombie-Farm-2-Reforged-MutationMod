@@ -9,6 +9,8 @@ import { diagnosticsReport, diagnosticsCount, clearDiagnostics } from "../../dia
 import {
   getSpriteSet, setSpriteSet, FARM_BACKGROUNDS,
   getRightClickMode, setRightClickMode,
+  getShowHealthNumbers, setShowHealthNumbers,
+  getShowDamageNumbers, setShowDamageNumbers,
 } from "../../prefs";
 import { recallOneOf, remember } from "../viewState";
 import { ABILITY_POOL, ABILITY_TIER, TIER_BOSS } from "../../zombie/traits";
@@ -283,6 +285,16 @@ export function openSettings(hud: Hud): void {
     );
   }
 
+  // What an invasion shows on top of its health bars. Both default OFF — ZF2 printed
+  // neither, and the bars alone are the look most players expect — so this is opt-in
+  // detail for anyone who wants to see the arithmetic. Neither changes the fight.
+  const combatBlock: HTMLElement[] = [
+    settingRow("Health Bar Numbers", getShowHealthNumbers(), (v) => setShowHealthNumbers(v)),
+    noteEl("Prints the HP left over each health bar in a raid, like “27/40”."),
+    settingRow("Damage Numbers", getShowDamageNumbers(), (v) => setShowDamageNumbers(v)),
+    noteEl("Floats the damage of each hit off the unit that took it. Both apply from your next invasion, and neither changes the fight."),
+  ];
+
   const ambienceBlock: HTMLElement[] = [];
   if (hud.getDayNightMode && hud.onSetDayNightMode) {
     ambienceBlock.push(
@@ -546,6 +558,7 @@ export function openSettings(hud: Hud): void {
       ...ambienceBlock,
       ...bgBlock,
       ...appearanceBlock,
+      ...combatBlock,
       spriteRow, spriteNote,
     ],
     controls: controlsBlock,

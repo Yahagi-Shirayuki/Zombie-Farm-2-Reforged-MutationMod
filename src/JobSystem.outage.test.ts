@@ -60,6 +60,8 @@ function onlineFarm(options: { fastWork?: boolean } = {}) {
     gold: 100_000,
     spendGold: () => {},
     addXp: () => {},
+    // Lifetime tally (GameState.record*): counted on every applied job.
+    recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
     onFarm: (action: { type: string; oc: number; or: number }) => {
       sent.push(`${action.type}:${action.oc},${action.or}`);
     },
@@ -167,6 +169,7 @@ describe("queued farm work waits out a command-lane outage", () => {
     };
     const state = {
       gold: 100_000, spendGold: () => {}, addXp: () => {},
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: null, onTreeHarvest: null, canMutateOnline: null,
     };
     const jobs = new JobSystem(

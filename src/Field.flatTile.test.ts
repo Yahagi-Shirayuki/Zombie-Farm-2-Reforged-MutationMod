@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 // @ts-ignore
 import { inflateSync } from "node:zlib";
 import placeables from "../public/assets/placeables.json";
-import type { PlaceableDef } from "./assets";
+import { turnArt, turnFlip, type PlaceableDef } from "./assets";
 import { Field } from "./Field";
 import { HW, TILE_H, TILE_W, gridToScreen } from "./iso";
 
@@ -23,7 +23,7 @@ const def = (key: string) => {
 
 // The two placement internals under test, which Field keeps private.
 interface Placement {
-  flatTileOffset(d: PlaceableDef, oc: number, or: number, flipped: boolean):
+  flatTileOffset(d: PlaceableDef, oc: number, or: number, flipped: boolean, turn?: number):
     { dx: number; dy: number };
   footprintAnchor(oc: number, or: number, w: number, h: number): { x: number; y: number };
 }
@@ -141,20 +141,26 @@ describe("flat tile anchoring", () => {
     expect(flip.bottom).toBeCloseTo(base.bottom, 4);
   });
 
-  it("lands every pond piece on the same footprint, turned or not", () => {
+  it("keeps every pond piece that still takes the derived anchor interchangeable", () => {
     // The seven pond pieces are one set: six rims and a fill, laid edge to edge into
     // a single body of water, with the SE and NW rims supplied by turning the SW and
     // NE ones. That only works if a piece occupies identical pixels either way round,
-    // and if all seven agree — a piece that sits 3px off is a step in the rim.
+    // and if the pieces agree with each other — one sitting 3px off is a step in the
+    // rim.
     //
-    // The source pivots do NOT agree (pond5 0.36, pond2/pond7 0.35, the rest 0.34,
-    // and pond7 alone 0.02 vertically). Turning a 0.02 disagreement doubles it, which
-    // is why Pond 5 in particular came back 6px out. The generator replaces them with
-    // the anchor the geometry fixes; see prep_placeables.centered_flat_tile_fields.
-    const ponds = ["pond1", "pond2", "pond3", "pond4", "pond5", "pond6", "pond7"];
-    const first = drawn(def("pond1"), 3, 2);
-    for (const key of ponds) {
-      const d = def(key);
+    // The source pivots do NOT agree (pond5 0.36, pond2/pond7 0.35, the rest 0.34, and
+    // pond7 alone 0.02 vertically), and turning doubles a disagreement, which is why
+    // Pond 5 came back 6px out. centered_flat_tile_fields replaces them with the anchor
+    // the geometry fixes — which is also the mirror's own fixed point.
+    //
+    // Pieces being tuned BY HAND are outside this: an ANCHOR_OVERRIDES entry is
+    // somebody measuring a piece against its neighbours, and it outranks the
+    // derivation. The next test is what that costs.
+    const centred = ["pond1", "pond4", "pond7"].map(def)
+      .filter((d) => d.anchorX === 0.34 && d.anchorY === 0.02);
+    expect(centred.length).toBeGreaterThan(1); // else the set has been retuned wholesale
+    const first = drawn(centred[0], 3, 2);
+    for (const d of centred) {
       expect([d.tileW, d.tileH, d.nativeW, d.nativeH]).toEqual([3, 3, 150, 75]);
       const base = drawn(d, 3, 2);
       const flip = drawn(d, 3, 2, true);
@@ -171,6 +177,24 @@ describe("flat tile anchoring", () => {
     const anchor = makeField().footprintAnchor(3, 2, 3, 3);
     expect(first.left + first.right).toBeCloseTo(2 * anchor.x, 4);
     expect(first.bottom).toBeCloseTo(anchor.y + 1.5 * scale, 4);
+  });
+
+  it("shows what a hand-measured pond anchor costs when the piece is turned", () => {
+    // A measured anchor lays a better UNTURNED pond and a worse turned one, and the
+    // trade is invisible until someone rotates a rim. This does not judge the numbers
+    // — they are being tuned — it pins the RELATION, so the cost stays on the record
+    // whatever they land on: turning reflects the anchor about the front tile's centre
+    // line (`1 - anchorX - 48/w`), which leaves exactly one anchor per piece where a
+    // turned copy lands on an unturned one. Off it by anything, the piece comes back
+    // twice that far away.
+    const scale = TILE_W / 48;
+    for (const key of ["pond1", "pond2", "pond3", "pond4", "pond5", "pond6", "pond7"]) {
+      const d = def(key);
+      const fixed = (1 - 48 / d.nativeW) / 2; // 0.34 for a 150px pond piece
+      const drift = drawn(d, 3, 2, true).left - drawn(d, 3, 2).left;
+      expect({ key, drift: +drift.toFixed(6) })
+        .toEqual({ key, drift: +(2 * (d.anchorX! - fixed) * d.nativeW * scale).toFixed(6) });
+    }
   });
 
   it("ships flat-tile art with straight alpha, so overlapping pieces do not seam", () => {
@@ -202,5 +226,111 @@ describe("flat tile anchoring", () => {
     const grave = def("gravestoneNormal");
     expect(grave.flatTile).toBeUndefined();
     expect(makeField().flatTileOffset(grave, 4, 4, false)).toEqual({ dx: 0, dy: 0 });
+  });
+});
+
+// ---- Road bends: four corners, four pieces of art ---------------------------
+// Turning a placed object is a horizontal MIRROR, and in iso a mirror swaps the two
+// grid axes — so it maps a bend's arms onto each other and every corner onto ITSELF.
+// One bend art therefore cannot make four corners however it is turned, which is what
+// "the roads don't line up" was: the same corner redrawn from a mirrored pivot, a few
+// pixels out of line, with the other three corners unreachable. The source authored
+// them as separate tiles (roadBend_01/_03/_04) and the def carries them as `turns`;
+// see ROAD_TURNS in tools/prep_placeables.py.
+const BENDS = ["roadBend_01", "cobblestoneRoadBend_01"];
+
+/** Where a given turn's art lands, the same way `drawn` measures the def's own. */
+const drawnTurn = (d: PlaceableDef, oc: number, or: number, turn: number) => {
+  const art = turnArt(d, turn);
+  const field = makeField();
+  const a = field.footprintAnchor(oc, or, d.tileW, d.tileH);
+  const off = field.flatTileOffset(d, oc, or, turnFlip(d, turn), turn);
+  const w = art.nativeW! * (TILE_W / 48);
+  return { left: a.x + off.dx - w / 2, right: a.x + off.dx + w / 2, bottom: a.y + off.dy };
+};
+
+describe("road bends turn into all four corners", () => {
+  it("gives each family four turns drawing four different pieces", () => {
+    for (const key of BENDS) {
+      const d = def(key);
+      expect(d.turns?.length).toBe(4);
+      // Turn 0 restates the def's own art, so anything reading `turns[turn]` and
+      // anything reading the def agree about an unturned piece.
+      expect(d.turns![0].sprite).toBe(d.sprite);
+      expect([d.turns![0].anchorX, d.turns![0].anchorY]).toEqual([d.anchorX, d.anchorY]);
+      // Three arts and a mirror of one of them: four corners, no repeats. A repeat is
+      // the bug — it means a turn hands back a corner the player already had.
+      const corners = d.turns!.map((t) => `${t.sprite}${t.flip ? ":mirrored" : ""}`);
+      expect(new Set(corners).size).toBe(4);
+    }
+  });
+
+  it("hangs every turn off its own authored pivot", () => {
+    // Same rule as the straights: the anchor lands on the bottom-left corner of the
+    // front tile's 48x24 box. Each corner is a different size and pivot, so this is
+    // what keeps them all on one ground point instead of drifting apart.
+    const scale = TILE_W / 48;
+    for (const key of BENDS) {
+      const d = def(key);
+      d.turns!.forEach((t, turn) => {
+        if (t.flip) return; // mirrored turns are pinned by the reflection test below
+        const front = gridToScreen(2 + d.tileW - 1 + (t.dc ?? 0), 3 + d.tileH - 1 + (t.dr ?? 0));
+        const r = drawnTurn(d, 2, 3, turn);
+        expect(r.left).toBeCloseTo(front.x - HW - t.anchorX * t.nativeW * scale, 4);
+        expect(r.bottom).toBeCloseTo(front.y + TILE_H + t.anchorY * t.nativeH * scale, 4);
+      });
+    }
+  });
+
+  it("hangs the apex-south corner one whole tile north of its footprint", () => {
+    // MEASURED, not derived: that piece's art meets the straights it continues only
+    // from the ground tile one row north (24px right, 10px up — exactly (HW, -HH)),
+    // and no reading of its authored pivot accounts for it (the stone one's pivotx is
+    // a bare 0.5). Only the ART moves: the 2x2 block the player placed still blocks.
+    for (const key of BENDS) {
+      const d = def(key);
+      expect([d.turns![1].dc, d.turns![1].dr]).toEqual([undefined, -1]);
+      const hung = drawnTurn(d, 2, 3, 1);
+      const flat = { ...d, turns: d.turns!.map((t, i) => (i === 1 ? { ...t, dr: 0 } : t)) };
+      const plain = drawnTurn(flat as PlaceableDef, 2, 3, 1);
+      expect(hung.left - plain.left).toBeCloseTo(HW, 4);
+      expect(hung.bottom - plain.bottom).toBeCloseTo(-TILE_H / 2, 4);
+    }
+  });
+
+  it("mirrors the fourth corner about its own ground tile", () => {
+    // The corner the source never drew (its bends have `rotations: 3`). It is the
+    // third one mirrored, which is exact here because the reflection is the binary's
+    // own `1 - pivotx - 48/w` about the front tile's centre line — the same rule the
+    // stone bend is turned by — rather than an assumption that the art is symmetric.
+    for (const key of BENDS) {
+      const d = def(key);
+      expect(d.turns![3].sprite).toBe(d.turns![2].sprite);
+      expect(d.turns![3].flip).toBe(true);
+      const base = drawnTurn(d, 1, 1, 2);
+      const flip = drawnTurn(d, 1, 1, 3);
+      const centre = gridToScreen(1 + d.tileW - 1, 1 + d.tileH - 1).x;
+      expect(flip.left).toBeCloseTo(2 * centre - base.right, 4);
+      expect(flip.bottom).toBeCloseTo(base.bottom, 4);
+    }
+  });
+
+  it("ships every corner's art with straight alpha", () => {
+    // Same reason as the flat-tile art above (a doubled premultiply seams wherever
+    // pieces overlap) — and these four PNGs are emitted by a different code path.
+    for (const key of BENDS) {
+      for (const t of def(key).turns!) {
+        const data = decodeRgbaPng(readFileSync(`public/assets/objects/${t.sprite}`));
+        let semi = 0, overAlpha = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const a = data[i + 3];
+          if (a === 0 || a === 255) continue;
+          semi++;
+          if (Math.max(data[i], data[i + 1], data[i + 2]) > a) overAlpha++;
+        }
+        expect({ sprite: t.sprite, semi: semi > 50, overAlpha: overAlpha > 0 })
+          .toEqual({ sprite: t.sprite, semi: true, overAlpha: true });
+      }
+    }
   });
 });

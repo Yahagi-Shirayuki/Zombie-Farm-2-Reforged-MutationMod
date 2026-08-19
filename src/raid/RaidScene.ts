@@ -37,6 +37,10 @@ import {
 } from "./epicBossAnimation";
 import { PixelFire } from "./pixelFireFx";
 import { hazardTapProfile } from "./hazardTaps";
+import {
+  formatHealthNumbers, newDamageTally, tallyDamage, type DamageTally,
+} from "./combatNumbers";
+import { getShowDamageNumbers, getShowHealthNumbers } from "../prefs";
 import { isMobile } from "../platform";
 import { readSafeAreaInsets } from "../safeArea";
 import { abilityColumnStep, computeRaidHudLayout } from "./raidHudLayout";
@@ -230,6 +234,13 @@ const ZOMBIE_H = 91;
 const ZOMBIE_HP_HALF_W = 32;
 const ENEMY_H = 130;
 const BOSS_H = 195;
+// Optional battlefield numbers (Settings → Display), both off by default. A floating
+// damage figure lives this long, rises this far (in unit-space px, so it tracks the
+// stage scale), and the field holds at most this many at once — a fifty-strong brawl
+// must not turn into a Text-allocation storm on a phone.
+const DAMAGE_NUMBER_LIFE_S = 0.85;
+const DAMAGE_NUMBER_RISE = 46;
+const DAMAGE_NUMBER_MAX = 32;
 // The Beach crab hazard. It used to be mis-filed as a wave enemy and so rendered at the
 // full ENEMY_H, which read far too big for a critter that scuttles between ankles; a third
 // of that is the size the player asked for (and matches the source's 0.8-scaled 86x43 art
@@ -433,6 +444,9 @@ interface Token {
    *  the bars were sized to the 140x128 ship and have to shrink onto the 0.58 pilot. */
   pilotBars?: { base: number; hpCenterX: number; topY: number };
   hp: Graphics;
+  /** "27/40" over the health bar. Built ONLY when the player asked for the numbers,
+   *  so the default battlefield allocates no extra Text per combatant. */
+  hpText?: Text;
   charge: Graphics; // focus bar (zombies, while charging)
   base: number; // half-width for the bars
   hpCenterX: number; // visual center of the actor in token-local coordinates
@@ -560,6 +574,15 @@ export class RaidScene {
   private beamLayer = new Container(); // beam-down pillars, BEHIND the units they deliver
   private beams: { g: Graphics; t: number }[] = [];
   private fx: { g: Graphics; t: number; life: number; color: number }[] = [];
+  /** Settings → Display, read once when the scene is built: a raid does not change
+   *  what it draws halfway through, and these are consulted per unit per tick. */
+  private readonly showHealthNumbers = getShowHealthNumbers();
+  private readonly showDamageNumbers = getShowDamageNumbers();
+  /** Damage numbers: each unit's HP as of the last sim tick, and the small hits held
+   *  back since its last figure (see combatNumbers.ts). */
+  private hpWatch = new Map<string, number>();
+  private damageTallies = new Map<string, DamageTally>();
+  private damageNumbers: { text: Text; t: number; x: number; y: number }[] = [];
   private laserFx: { g: Graphics; t: number; life: number }[] = [];
   private blastFx: { g: Graphics; t: number; scale: number }[] = [];
   private shakeT = 0; // seconds left in the blast shake (0 = still)
@@ -1294,6 +1317,23 @@ export class RaidScene {
     hp.y = topY - 8;
     root.addChild(hp);
 
+    // …and its number sits just above it, when the player asked for one. Bottom-centre
+    // anchored so it grows upward off the bar rather than over the unit's head.
+    let hpText: Text | undefined;
+    if (this.showHealthNumbers) {
+      hpText = new Text({
+        text: "",
+        style: {
+          fill: 0xffffff, fontSize: 12, fontWeight: "bold",
+          stroke: { color: 0x14181f, width: 3 },
+        },
+      });
+      hpText.anchor.set(0.5, 1);
+      hpText.position.set(hpCenterX, topY - 10);
+      hpText.visible = false;
+      root.addChild(hpText);
+    }
+
     // Focus/charge bar sits below the feet; only shown while a zombie charges.
     const charge = new Graphics();
     charge.y = 8;
@@ -1335,7 +1375,7 @@ export class RaidScene {
       root, actor, enemyActor, frameActor, epicActor, epicAnim: epicActor ? epicAnim : undefined,
       ufoParts: ufoParts.length ? ufoParts : undefined,
       pilotBars,
-      hp, charge, base, hpCenterX, topY, atkCount: 0,
+      hp, hpText, charge, base, hpCenterX, topY, atkCount: 0,
       deathAnim: -1, emerged: false, hpKey: -1, chargeKey: -1,
       smashSlam: -1, wasSmashWindup: 0, actorBaseScale, actorBaseY,
       healFxSeq: 0, healCastSeq: 0, healPose: 0, laserFxSeq: 0,
@@ -1649,6 +1689,7 @@ export class RaidScene {
         if (tok.root.visible) {
           tok.root.visible = false;
           tok.hp.clear();
+          if (tok.hpText) tok.hpText.visible = false;
           tok.charge.clear();
           tok.hpKey = -1;
           tok.chargeKey = -1;
@@ -1729,6 +1770,7 @@ export class RaidScene {
             tok.topY = tok.pilotBars.topY;
             tok.hp.x = tok.hpCenterX;
             tok.hp.y = tok.topY - 8;
+            tok.hpText?.position.set(tok.hpCenterX, tok.topY - 10);
             tok.hpKey = -1; // force the bar to redraw at its new width
           }
         }
@@ -2084,6 +2126,12 @@ export class RaidScene {
       if (hpKey !== tok.hpKey) {
         tok.hpKey = hpKey;
         tok.hp.clear();
+        // The number rides the same change key as the bar: HP moves on 20 Hz sim
+        // ticks, so re-laying out the text every render frame would be pure waste.
+        if (tok.hpText) {
+          tok.hpText.visible = hpShown;
+          if (hpShown) tok.hpText.text = formatHealthNumbers(u.hp, u.maxHp);
+        }
         if (hpShown) {
           const halfW = u.team === "player" ? ZOMBIE_HP_HALF_W : tok.base;
           const w = halfW * 2;
@@ -2568,8 +2616,75 @@ export class RaidScene {
     }
   }
 
+  /** Sample one unit's HP after a simulation tick; float the drop as a number once it
+   *  is worth printing (see combatNumbers.tallyDamage). */
+  private stepDamageNumber(u: SimUnit, dtSec: number) {
+    const before = this.hpWatch.get(u.id);
+    this.hpWatch.set(u.id, u.hp);
+    if (before === undefined) return; // first sighting: nothing to compare against
+    let tally = this.damageTallies.get(u.id);
+    if (!tally) {
+      tally = newDamageTally();
+      this.damageTallies.set(u.id, tally);
+    }
+    // A heal or a Resurrect raises HP; only the drops are damage. `!u.alive` flushes
+    // whatever is still held back, because a dead unit gets no later flush.
+    const shown = tallyDamage(tally, Math.max(0, before - u.hp), dtSec, !u.alive);
+    if (shown !== null) this.spawnDamageNumber(u, shown);
+  }
+
+  /** Float "-12" off a unit that has just been hit. Enemy damage is written in the
+   *  team colours already used for the bars: the player's own losses in red, damage
+   *  the army deals in the same pale gold as its rewards. */
+  private spawnDamageNumber(u: SimUnit, amount: number) {
+    const tok = this.tokens.get(u.id);
+    if (!tok || !tok.root.visible) return; // off-field (queued, or a finished corpse)
+    const szs = this.sizeScale();
+    // The oldest float is recycled rather than letting a big brawl allocate without
+    // bound. Losing the tail end of a number that is already fading is invisible.
+    if (this.damageNumbers.length >= DAMAGE_NUMBER_MAX) {
+      this.damageNumbers.shift()?.text.destroy();
+    }
+    const text = new Text({
+      text: `-${amount}`,
+      style: {
+        fill: u.team === "player" ? 0xff8a7a : 0xffe6a2,
+        fontSize: Math.max(11, Math.round((u.isBoss ? 21 : 17) * szs)),
+        fontWeight: "bold",
+        stroke: { color: 0x14181f, width: 4 },
+      },
+    });
+    text.anchor.set(0.5, 1);
+    // Spread the floats across the body so two hits in the same second do not stack
+    // into one unreadable smudge.
+    const x = tok.root.x + (Math.random() * 2 - 1) * 14 * szs;
+    const y = tok.root.y + tok.topY * 0.75 * szs;
+    text.position.set(x, y);
+    this.fxLayer.addChild(text);
+    this.damageNumbers.push({ text, t: 0, x, y });
+  }
+
+  /** Rise and fade every live damage number, then drop the spent ones. */
+  private stepDamageNumbers(dtSec: number) {
+    if (!this.damageNumbers.length) return;
+    const rise = DAMAGE_NUMBER_RISE * this.sizeScale();
+    for (const float of this.damageNumbers) {
+      float.t += dtSec;
+      const k = Math.min(1, float.t / DAMAGE_NUMBER_LIFE_S);
+      float.text.position.set(float.x, float.y - rise * k);
+      float.text.alpha = k < 0.6 ? 1 : 1 - (k - 0.6) / 0.4;
+    }
+    if (this.damageNumbers.some((float) => float.t >= DAMAGE_NUMBER_LIFE_S)) {
+      for (const float of this.damageNumbers) {
+        if (float.t >= DAMAGE_NUMBER_LIFE_S) float.text.destroy();
+      }
+      this.damageNumbers = this.damageNumbers.filter((float) => float.t < DAMAGE_NUMBER_LIFE_S);
+    }
+  }
+
   private stepFx(dtSec: number) {
     this.stepBlasts(dtSec);
+    this.stepDamageNumbers(dtSec);
     for (const e of this.fx) {
       e.t += dtSec;
       const k = Math.min(1, e.t / e.life);
@@ -2875,6 +2990,9 @@ export class RaidScene {
         if (stepped) {
           let strike: { unit: SimUnit; attackName: string } | null = null;
           for (const u of this.sim.units) {
+            // Damage numbers are read off the HP the tick just wrote — no hook into
+            // the fight itself, so the transcript the verifier replays is untouched.
+            if (this.showDamageNumbers) this.stepDamageNumber(u, dtSec);
             if (u.struckThisTick) {
               const t = this.tokens.get(u.id);
               // Capture the move before incrementing atkCount so impact audio names

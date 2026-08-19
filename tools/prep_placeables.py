@@ -505,8 +505,24 @@ def flat_tile_fields(tile, tp, sprite_img):
     """
     if not tp.get("flatTile"):
         return {}
-    if tile in CENTERED_FLAT_TILES:
+    # A hand-measured anchor outranks everything: it is someone saying they laid the
+    # piece next to the one it has to meet and read the number off (see
+    # ANCHOR_OVERRIDES). The centred rule below is a DERIVATION, and a derivation loses
+    # to a measurement.
+    if tile in CENTERED_FLAT_TILES and tile not in ANCHOR_OVERRIDES:
         return centered_flat_tile_fields(tp, sprite_img)
+    return {"flatTile": True, **flat_tile_anchor(tp, sprite_img, tile=tile)}
+
+
+def flat_tile_anchor(tp, sprite_img, flip_y=False, tile=None):
+    """The anchor pair alone (see flat_tile_fields for the rule).
+
+    `flip_y` is for a tile whose TileProperties row carries `flipY` — cocos mirrors
+    the quad about the anchor's own horizontal line and negates the trim offset with
+    it (`-[CCSprite setTextureRect:]` flips `_unflippedOffsetPositionFromCenter`). We
+    bake the mirror into the PNG we ship, so only that negated offset has to be
+    folded in here.
+    """
     ax = float(tp.get("pivotx", 0.38))
     ay = float(tp.get("pivoty", 0.0))
     w, h = sprite_img.width, sprite_img.height
@@ -517,10 +533,123 @@ def flat_tile_fields(tile, tp, sprite_img):
         w0, h0 = pair(f["spriteSourceSize"])
         offx, offy = pair(f.get("spriteOffset", "{0,0}"))
         offx += (w0 - w) / 2
-        offy += (h0 - h) / 2
-    return {"flatTile": True,
-            "anchorX": round((ax * w0 - offx) / w, 6),
-            "anchorY": round((ay * h0 - offy) / h, 6)}
+        offy = (-offy if flip_y else offy) + (h0 - h) / 2
+    over = ANCHOR_OVERRIDES.get(tile, {})
+    return {"anchorX": round(over.get("anchorX", (ax * w0 - offx) / w), 6),
+            "anchorY": round(over.get("anchorY", (ay * h0 - offy) / h), 6)}
+
+
+# ---- Road bends: the four corners are four SPRITES, not one mirrored one --------
+# GROUND TRUTH: `rotations: 3` appears on exactly six TileProperties entries, the two
+# road-bend families, and each state is its own entry with its own frame and pivot:
+#
+#   roadBend_01 roadbend2.png            pivot .30/.17   corner E+S (apex north)
+#   roadBend_03 roadbend2.png + flipY    pivot .31/.06   corner W+N (apex south)
+#   roadBend_04 roadbend1.png            pivot .22/.12   corner E+N (apex west)
+#
+# and the same shape for cobblestoneRoadBend_01/_03/_04 (__stonebend1/2/3.png).
+#
+# That is the whole bug this table exists to fix. Turning a placed object here is a
+# horizontal MIRROR, and in iso a mirror swaps the two grid axes — so it maps a bend's
+# arms E<->S and W<->N, i.e. every corner onto ITSELF. Shipping one bend art and
+# "rotating" it therefore never produced the other three corners: it redrew the same
+# corner from a mirrored pivot, a few px out of line, which is what a road that will
+# not meet its neighbour looks like.
+#
+# The fourth corner (W+S, apex east) is the one the source never authored — `rotations`
+# is 3, not 4. It comes free by mirroring _04, whose arms E+N mirror to S+W, and it
+# lands exactly (verified against the straights, see Field.roadTurns.test.ts). That
+# extra state is a deliberate divergence: with three corners a road cannot close a
+# loop, and the mirror is exact here because the piece is re-anchored by the binary's
+# own `1 - pivotx - 48/w` rule rather than assumed symmetric.
+#
+# This table is STRUCTURE only — which art, in which order, and which state is a
+# mirror. Where a state's art has to hang is a measurement, and every measurement in
+# this file lives in ANCHOR_OVERRIDES below.
+ROAD_TURNS = {
+    "roadBend_01": [
+        {"tile": "roadBend_01"},
+        {"tile": "roadBend_03"},
+        {"tile": "roadBend_04"},
+        {"tile": "roadBend_04", "flip": True},
+    ],
+    "cobblestoneRoadBend_01": [
+        {"tile": "cobblestoneRoadBend_01"},
+        {"tile": "cobblestoneRoadBend_03"},
+        {"tile": "cobblestoneRoadBend_04"},
+        {"tile": "cobblestoneRoadBend_04", "flip": True},
+    ],
+}
+
+# ---- Anchors that had to be measured rather than read -------------------------
+# Authored in tools/tile_lab.html: lay the piece next to the one it has to meet, drag
+# its art until the kerbs line up, and paste the block the tool prints. Keyed by TILE
+# key, so an entry reaches both a def's own art and any rotation state that draws that
+# tile. `anchorX`/`anchorY` replace the authored cocos pivot (already rebased onto the
+# trimmed PNG we ship, see flat_tile_fields); `dc`/`dr` shift only where the ART hangs,
+# in whole tiles, leaving the footprint the player places and blocks alone.
+#
+# Prefer the authored pivot. An entry here is a claim that the source's own number does
+# not lay the piece where its neighbours are, so say what was measured and against what.
+ANCHOR_OVERRIDES = {
+    # The apex-south road bend of both families draws one whole tile north of its
+    # footprint's front tile — 24px right, 10px up, exactly (HW, -HH). Measured against
+    # a straight run on each arm, both families independently; no reading of the
+    # authored pivot produces it (the stone one's pivotx is a bare 0.5).
+    "roadBend_03": {"dr": -1},
+    "cobblestoneRoadBend_03": {"dr": -1},
+
+    # Pond rims, measured in the lab against their neighbours 2026-08-18. These four
+    # OUTRANK the centred anchor CENTERED_FLAT_TILES derives for the pond set (0.34,
+    # 0.02) — pond1, pond4 and pond7 still take it, so the seven no longer share one
+    # anchor. Being tuned; expect these numbers to move.
+    #
+    # Know what that costs before trusting it: 0.34 is the fixed point of the mirror
+    # `1 - pivotx - 48/w`, which is why the set was centred in the first place — it is
+    # the only anchor at which a TURNED piece occupies the same pixels as an unturned
+    # one, and the SE/NW rims are the SW/NE ones turned. Off it, a turned piece lands
+    # 2*(0.34 - anchorX)*150 px away: pond6 6.3px, pond3 4.0px, pond2 3.3px, pond5
+    # 1.2px. So these lay a better UNTURNED pond and a worse turned one.
+    "pond2": {"anchorX": 0.329, "anchorY": -0.024},
+    "pond3": {"anchorX": 0.326667, "anchorY": 0.04},
+    "pond5": {"anchorX": 0.336, "anchorY": -0.036},
+    "pond6": {"anchorX": 0.319, "anchorY": -0.024},
+}
+
+
+def turn_fields(tile, tileprops):
+    """`{}`, or `turns`: the art each rotation state of this object draws.
+
+    One catalog key keeps its identity through a turn — the shop sells one Road Bend
+    and the server counts one — so the states live on the def and a placed object
+    stores only its index. See ROAD_TURNS for what the states are and why.
+    """
+    states = ROAD_TURNS.get(tile)
+    if not states:
+        return {}
+    out = []
+    for st in states:
+        tp = tileprops[st["tile"]]
+        img = extract_from_atlas(tp["frameList"], tp["frameName"])
+        if is_blank(img):
+            raise SystemExit(f"{st['tile']}: rotation-state art is missing")
+        flip_y = bool(tp.get("flipY"))
+        if flip_y:
+            from PIL import Image
+
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+        img = unpremultiply(img)  # flat art butts against its neighbour; see unpremultiply
+        hang = ANCHOR_OVERRIDES.get(st["tile"], {})
+        out.append({
+            "sprite": emit_sprite(st["tile"], img),
+            "nativeW": img.width,
+            "nativeH": img.height,
+            **flat_tile_anchor(tp, img, flip_y, st["tile"]),
+            **({"flip": True} if st.get("flip") else {}),
+            **({"dc": hang["dc"]} if hang.get("dc") else {}),
+            **({"dr": hang["dr"]} if hang.get("dr") else {}),
+        })
+    return {"turns": out}
 
 
 # ---- Variants that need their own de-coloured sprite (authored, NOT source art) --
@@ -1009,6 +1138,9 @@ def main():
             # up seam-to-seam with its neighbours, so it is anchored by its authored
             # pivot rather than bottom-centered. See flat_tile_fields.
             **flat_tile_fields(tile, tp, sprite_img),
+            # A road bend's four corners are four separate pieces of art; Rotate
+            # picks between them instead of mirroring one. See ROAD_TURNS.
+            **turn_fields(tile, tileprops),
             # simple functional effects the game can apply on placement
             "armyMax": e.get("increaseArmyMaxBy", 0),
             "storageSlots": slots,  # >0 for storage sheds (item capacity)
@@ -1179,7 +1311,8 @@ def main():
     referenced = {c["sprite"] for c in catalog} | {
         c["growingSprite"] for c in catalog if c["growingSprite"]} | {
         c["backSprite"] for c in catalog if c.get("backSprite")} | {
-        c[field] for c in catalog for _, field in STATE_SPRITE_TILES if c.get(field)}
+        c[field] for c in catalog for _, field in STATE_SPRITE_TILES if c.get(field)} | {
+        t["sprite"] for c in catalog for t in c.get("turns", [])}
     orphans = sorted(f for f in os.listdir(OBJDIR)
                      if f.endswith(".png") and f not in referenced)
     for f in orphans:

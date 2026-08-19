@@ -517,6 +517,7 @@ export class JobSystem {
         const gold = this.state.farmerHarvestGold(baseGold);
         if (this.state.onTreeHarvest && job.objId) this.state.onTreeHarvest(job.objId, gold);
         else this.state.addGold(gold);
+        this.state.recordTreeHarvest();
         if (treeName) this.quest.post(QuestEvent.CropHarvested, treeName);
         this.float(job.cx, job.cy, `+${gold}g`);
         this.playSfx("xp");
@@ -543,6 +544,7 @@ export class JobSystem {
         this.float(job.cx, job.cy, cost > 0 ? `-${cost}g` : "Plowed!");
         if (xp) this.float(job.cx, job.cy, `+${xp}xp`, 0.42);
         this.playSfx(xp ? "xp" : "till");
+        this.state.recordPlowed();
         this.onPlotPlowed(job.oc, job.or);
         this.quest.post(QuestEvent.SoilPlowed, "Plow");
         this.quest.post(QuestEvent.NewSoilPlowed, "Plow");
@@ -590,6 +592,7 @@ export class JobSystem {
           else this.state.spendGold(cfg.cost);
           this.float(job.cx, job.cy, `-${cfg.cost}${cfg.brainsNeeded ? "b" : "g"}`);
         }
+        this.state.recordPlanted();
         this.quest.post(QuestEvent.CropPlanted, cfg.name);
         this.playSfx("place");
       }
@@ -643,6 +646,7 @@ export class JobSystem {
           if (xp) this.float(job.cx, job.cy, `+${xp}xp`, 0.42);
           if (bossToken) this.float(job.cx, job.cy, "+1 Boss Token!", xp ? 0.84 : 0.42);
         }
+        this.state.recordHarvest(r.key, !!r.zombieKey);
         // A harvested zombie "resurrects"; a plain crop gives the reward chime.
         this.playSfx(r.isZombie ? "harvestZombie" : "xp");
         this.quest.post(

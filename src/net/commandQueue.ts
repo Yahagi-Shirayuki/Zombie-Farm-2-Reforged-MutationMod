@@ -208,6 +208,13 @@ export class CommandQueue {
 
   async retry(): Promise<void> {
     if (typeof navigator !== "undefined" && !navigator.onLine) return;
+    // A lost lease is not a transport failure, and this is the one caller that clears a
+    // pause without consulting a projection. `reloadAfterConflict` retries straight
+    // after a rebase that may have just discovered the writer moved; un-pausing there
+    // fires a batch at a lease this document no longer owns, which answers 423, clears
+    // the credential and drops the player behind the takeover gate — from what was only
+    // ever a version conflict. Leave it paused and let a bootstrap decide.
+    if (this.writerLost) return;
     this.setPaused("");
     await this.flush();
   }

@@ -89,6 +89,8 @@ import {
 } from "./ui/panels/periodicQuests";
 import type { PeriodicScope, PeriodicScopeView } from "./quest/periodic/types";
 import { openFarmersGuide } from "./ui/panels/farmersGuide";
+import { openStats } from "./ui/panels/stats";
+import type { StatSection } from "./statsView";
 import { showTimNotice } from "./ui/TimNotice";
 // View-model types + the grave classifier live in hudTypes so panel modules can
 // import them without depending on the whole Hud class. Re-exported below for the
@@ -1440,6 +1442,11 @@ export class Hud {
   getAlmanacGuide: (() => AlmanacGuideTopic[]) | null = null;
   /** The Mutation Almanac's entry list: every mutation + its discovery count. */
   getMutationAlmanac: (() => MutationAlmanacEntry[]) | null = null;
+  /** The Statistics panel's rows, already resolved and formatted by main.ts (it owns
+   *  the catalogs a crop key has to be read through). Null while the game is still
+   *  booting, which is the one state in which the Account menu can be opened without
+   *  a farm behind it. */
+  getStats: (() => StatSection[]) | null = null;
   /** Portrait image URL for a zombie type key (per-type composite). */
   zombiePortraitOf: ((key: string) => string) | null = null;
   /** Render one owned zombie with its complete individual mutation mask. `wanted`
@@ -3000,6 +3007,18 @@ export class Hud {
 
     const switchActions = document.createElement("div");
     switchActions.className = "zbtns";
+    // The lifetime tally belongs to the farm this menu is about, so it opens from
+    // here rather than from Settings (which is device preferences).
+    if (this.getStats) {
+      const stats = document.createElement("button");
+      stats.className = "zbtn locate";
+      stats.textContent = "Statistics";
+      stats.onclick = () => {
+        close();
+        openStats(this.el, this.getStats!());
+      };
+      switchActions.appendChild(stats);
+    }
     const switchFarm = document.createElement("button");
     switchFarm.className = "zbtn locate";
     const destination = otherPlayMode(this.playMode);

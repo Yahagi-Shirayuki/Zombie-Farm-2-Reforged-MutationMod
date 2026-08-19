@@ -15,6 +15,7 @@ import { parseReceivedZombie } from "./zombie/receivedReward";
 import { mutationsOf } from "./zombie/mutations";
 import { releasedToGraveyard, trimFallen, type FallenZombie } from "./zombie/memorial";
 import type { ZombieTeam } from "./zombie/teams";
+import { mergeFarmStats, newFarmStats, type FarmStats } from "./stats";
 
 export const XP_THRESHOLDS = [
   0, 25, 75, 150, 250, 375, 550, 800, 1300, 1800, 2300, 2800, 3300, 3900, 4500,
@@ -113,6 +114,19 @@ export class GameState {
   // list is the offline-build fallback; gifting a brain is recorded here. See
   // social/friends.ts.
   friends: Friend[] = [];
+  // ---- lifetime statistics (the Account menu's Statistics panel) ----
+  // A kept tally: nothing here can be recovered from the save after the fact (see
+  // stats.ts). Purely cosmetic — no price, gate, reward or unlock reads it.
+  stats: FarmStats = newFarmStats(Date.now());
+  // Balances as of the last time the tally was reconciled. Gold and brains move
+  // through half a dozen paths — locally through addGold, online through the
+  // economy's optimistic apply and the server reconcile that follows it — and the
+  // ONE thing they all agree on is where the balance ends up. So earned/spent is
+  // read off the balance itself rather than hooked onto each path, which is also
+  // what keeps an online harvest from being counted twice.
+  private tallyGold = this.gold;
+  private tallyBrains = this.brains;
+
   // ---- first-run guided tutorial (Tim Buckwheat) ----
   // Progress {done, step, target}; undefined = never started. The
   // TutorialController reads/writes this via setTutorial() so autosave (which
@@ -158,6 +172,7 @@ export class GameState {
     this.brains = brains;
     this.xp = xp;
     const after = this.level;
+    this.accrueCurrencyStats();
     // Reconciliation still needs to restore a missed level-up presentation notification.
     if (after > before) this.onLevelUpCb?.(before, after);
     this.emit();
@@ -247,12 +262,14 @@ export class GameState {
   addGold(n: number, reason = "misc") {
     this.gold += n;
     this.onMoney?.("gold", n, reason);
+    this.accrueCurrencyStats();
     this.emit();
   }
   spendGold(n: number, reason = "purchase"): boolean {
     if (this.gold < n) return false;
     this.gold -= n;
     this.onMoney?.("gold", -n, reason);
+    this.accrueCurrencyStats();
     this.emit();
     return true;
   }
@@ -260,6 +277,7 @@ export class GameState {
     if (this.brains < n) return false;
     this.brains -= n;
     this.onMoney?.("brains", -n, reason);
+    this.accrueCurrencyStats();
     this.emit();
     return true;
   }
@@ -291,7 +309,66 @@ export class GameState {
   addBrains(n: number, reason = "misc") {
     this.brains += n;
     this.onMoney?.("brains", n, reason);
+    this.accrueCurrencyStats();
     this.emit();
+  }
+
+  /** Fold the movement since the last check into the lifetime earned/spent totals.
+   *  Called from every writer of gold/brains, INCLUDING the server reconcile: a
+   *  correction that takes gold back reads as spending, which is the honest answer
+   *  when the optimistic credit that preceded it was already counted as earnings. */
+  private accrueCurrencyStats() {
+    const gold = this.gold - this.tallyGold;
+    if (gold > 0) this.stats.goldEarned += gold;
+    else if (gold < 0) this.stats.goldSpent -= gold;
+    const brains = this.brains - this.tallyBrains;
+    if (brains > 0) this.stats.brainsEarned += brains;
+    else if (brains < 0) this.stats.brainsSpent -= brains;
+    this.tallyGold = this.gold;
+    this.tallyBrains = this.brains;
+  }
+
+  /** Adopt a balance WITHOUT counting it as earned or spent. Loading a save, or
+   *  importing one, is not a windfall — without this an account with 50,000 gold
+   *  would book that much in earnings every time it signed in. */
+  private rebaseCurrencyStats() {
+    this.tallyGold = this.gold;
+    this.tallyBrains = this.brains;
+  }
+
+  // ---- lifetime statistics ----
+  /** Restore a persisted tally (save load). Rebases the currency baseline with it,
+   *  because the balance arrives in the same breath. */
+  restoreStats(stats: FarmStats) {
+    this.stats = stats;
+    this.rebaseCurrencyStats();
+  }
+
+  /** Fold another copy of THIS farm's tally into the live one, keeping the higher of
+   *  each counter (see mergeFarmStats). Used when the server turns out to hold counts
+   *  this client has never seen — another device wrote while this one was away — so
+   *  that the write about to go out cannot roll the account back. Returns the merged
+   *  tally, which is what should be sent. */
+  mergeStats(incoming: FarmStats): FarmStats {
+    this.stats = mergeFarmStats(this.stats, incoming);
+    return this.stats;
+  }
+
+  /** One harvested plot. `zombieCrop` also credits the zombie it produced — the two
+   *  are the same act, and a zombie crop is still a crop for the favourite. */
+  recordHarvest(cropKey: string, zombieCrop: boolean) {
+    if (cropKey) this.stats.harvested[cropKey] = (this.stats.harvested[cropKey] ?? 0) + 1;
+    if (zombieCrop) this.stats.zombiesGrown++;
+  }
+  recordPlanted() { this.stats.planted++; }
+  recordPlowed() { this.stats.plowed++; }
+  recordTreeHarvest() { this.stats.treesHarvested++; }
+  recordZombieCombined() { this.stats.zombiesCombined++; }
+  recordZombieSold() { this.stats.zombiesSold++; }
+  /** One settled invasion. Retreats count as losses — the army came home beaten. */
+  recordRaidSettled(won: boolean) {
+    if (won) this.stats.raidsWon++;
+    else this.stats.raidsLost++;
   }
   /** Adopt a freshly DERIVED army cap (base + placed objects). The cap is never
    *  accumulated — see armyCapacity.ts for why a running total could not hold. */
@@ -356,6 +433,7 @@ export class GameState {
     const added = fallen.filter((z) => !known.has(z.id));
     if (!added.length) return;
     this.fallenZombies = trimFallen([...this.fallenZombies, ...added]);
+    this.stats.zombiesLost += added.length;
     this.emit();
   }
 
@@ -366,6 +444,9 @@ export class GameState {
     const revived = new Set(ids);
     const kept = this.fallenZombies.filter((z) => !revived.has(z.id));
     if (kept.length === this.fallenZombies.length) return;
+    // Bought back at the post-raid offer, so they were never lost after all.
+    this.stats.zombiesLost = Math.max(0, this.stats.zombiesLost -
+      (this.fallenZombies.length - kept.length));
     this.fallenZombies = kept;
     this.emit();
   }
@@ -739,6 +820,8 @@ export class GameState {
     this.xp = p.xp;
     this.zombieCount = p.zombieCount;
     this.zombieMax = p.zombieMax;
+    // A loaded balance is not income. See rebaseCurrencyStats.
+    this.rebaseCurrencyStats();
     this.emit();
   }
 }

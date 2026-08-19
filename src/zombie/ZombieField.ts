@@ -104,16 +104,34 @@ export class ZombieField {
    *  the field's top corner, usually buried under whatever is built there. */
   private arrivalTile(): { col: number; row: number } {
     const at = this.farmerTile();
-    const col = Math.round(at.col);
-    const row = Math.round(at.row);
-    // "Walkable" is not enough: a hedge tile is crossable but is no place to put a
-    // zombie down, so the search walks out to real open ground.
+    return this.openTileNear(at.col, at.row);
+  }
+
+  /** (col,row) itself when a zombie can stand there, else the nearest tile it can.
+   *  "Walkable" is not enough: a hedge tile is crossable but is no place to put a
+   *  zombie down, so the search walks out to real open ground. */
+  private openTileNear(atCol: number, atRow: number): { col: number; row: number } {
+    const col = Math.round(atCol);
+    const row = Math.round(atRow);
     const open = (c: number, r: number) => this.field.isOpenGround(c, r);
     if (open(col, row)) return { col, row };
     const out = findEscape({ col, row }, open, {
       inBounds: (c, r) => this.field.inBounds(c, r),
     });
     return out.length ? out[out.length - 1] : { col, row };
+  }
+
+  /** Where a zombie collected from a placed object turns up: beside THAT OBJECT,
+   *  not wherever the farmer happens to be standing when the panel's button is
+   *  pressed. Collecting a Zombie Pot from across the farm used to drop the child
+   *  at the player's feet, which reads as the farmer having grown it.
+   *
+   *  The object's own tiles are built on, so this steps out to the open ground
+   *  beside it. Falls back to the farmer if the object is gone (sold or reconciled
+   *  away between the panel opening and the collection landing). */
+  objectArrivalTile(instanceId: string | null | undefined): { col: number; row: number } {
+    const at = instanceId ? this.field.objectAnchorTile(instanceId) : null;
+    return at ? this.openTileNear(at.col, at.row) : this.arrivalTile();
   }
 
   /** Deployed (on-farm) unit count — what the army cap limits. */
@@ -613,6 +631,10 @@ export class ZombieField {
         this.onGrant?.({ id: data.id, key: data.key, mutation: data.mutation, invasions: data.invasions });
       }
     }
+    // Lifetime tally, counted LAST: every failure path above either returns null or
+    // goes through abandon(), so reaching here is the one place a Pot child is
+    // certainly the player's — a refused hand-off puts the job back in the Pot.
+    this.state.recordZombieCombined();
     return data;
   }
 

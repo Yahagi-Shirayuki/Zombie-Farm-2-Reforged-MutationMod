@@ -334,6 +334,11 @@ export interface PlaceableDef {
    *  already rebased onto the trimmed PNG we ship. Only present with `flatTile`. */
   anchorX?: number;
   anchorY?: number;
+  /** Orientations this object is drawn in, when turning it means swapping ART rather
+   *  than mirroring one sprite. Only the two road bends have these — see ROAD_TURNS
+   *  in tools/prep_placeables.py and `turnArt`. Index 0 always restates the def's own
+   *  sprite, so a def with `turns` and one without are read the same way. */
+  turns?: TurnState[];
   armyMax?: number; // functional: increases zombie army cap by this on placement
   storageSlots?: number; // functional: storage shed item capacity (8..64)
   petPen?: boolean; // Pet Pen: manages up to four displayed pets
@@ -359,6 +364,62 @@ export interface PlaceableDef {
   growMs?: number;
   harvestValue?: number;
   growingSprite?: string;
+}
+
+/** One orientation of an object whose corners are separate pieces of art.
+ *
+ *  Everything else on the farm turns by mirroring its one sprite, which in iso is a
+ *  quarter turn. That fails for a road bend: the mirror swaps the two grid axes, so a
+ *  bend's arms swap with each other and the corner comes back as ITSELF, redrawn a few
+ *  pixels out of line. The source authored the corners as separate tiles instead, and
+ *  this is one of them: its own art, its own anchor, and (for the apex-south piece) a
+ *  measured whole-tile render offset. See ROAD_TURNS in tools/prep_placeables.py. */
+export interface TurnState {
+  sprite: string;
+  nativeW: number;
+  nativeH: number;
+  /** Flat-tile anchor of THIS state's art (see `anchorX`/`anchorY`). */
+  anchorX: number;
+  anchorY: number;
+  /** This state is the mirror of its art — the fourth corner the source never drew. */
+  flip?: boolean;
+  /** Tile offset applied to where the art hangs, NOT to the footprint. */
+  dc?: number;
+  dr?: number;
+}
+
+/** How many orientations the Rotate tool cycles this object through: one per authored
+ *  turn state, or the plain mirrored/unmirrored pair for ordinary art. */
+export function turnCount(def: Pick<PlaceableDef, "turns">): number {
+  return def.turns?.length ?? 2;
+}
+
+/** The art (sprite + anchors + offsets) a given orientation draws. Falls back to the
+ *  def's own fields, so a caller never has to ask whether this object has turn states. */
+export function turnArt(
+  def: PlaceableDef, turn: number,
+): Pick<PlaceableDef, "sprite" | "nativeW" | "nativeH" | "anchorX" | "anchorY" | "flatTile">
+  & { dc?: number; dr?: number } {
+  const state = def.turns?.[turn];
+  return state ? { ...state, flatTile: def.flatTile } : def;
+}
+
+/** Is this orientation mirrored? For a def with turn states the answer belongs to the
+ *  state (only the fourth corner is a mirror); for everything else turn 1 IS the
+ *  mirror. Orientation is one number end to end — save, ghost, placed object — so the
+ *  flip is always derived here rather than tracked alongside it. */
+export function turnFlip(def: Pick<PlaceableDef, "turns" | "noMirror">, turn: number): boolean {
+  if (def.turns) return !!def.turns[turn]?.flip;
+  return turn === 1 && canMirrorObject(def);
+}
+
+/** The orientation an object will actually stand in: out-of-range indexes wrap, and a
+ *  mirror this art must never take (`canMirrorObject`) collapses to unturned — so a
+ *  stored turn and the flip derived from it can never disagree. */
+export function normalizeTurn(def: Pick<PlaceableDef, "turns" | "noMirror">, turn: number): number {
+  const n = turnCount(def);
+  const t = ((Math.trunc(turn) % n) + n) % n;
+  return def.turns || turnFlip(def, t) ? t : 0;
 }
 
 /** Can the Rotate tool turn this object?
@@ -897,8 +958,12 @@ export async function ensureObjectTexture(
  *  the whole list — a missing back layer would leave the pen showing only its near
  *  wall, and a missing lid would pop the pot back to idle art mid-combine. */
 export function objectSpriteFiles(def: PlaceableDef): string[] {
-  return [def.sprite, def.growingSprite, def.backSprite, def.busySprite, def.readySprite]
-    .filter((f): f is string => !!f);
+  return [...new Set(
+    [def.sprite, def.growingSprite, def.backSprite, def.busySprite, def.readySprite,
+      // Every corner of a road bend, so the Rotate tool never lands on a blank frame.
+      // Two of the four share one file, hence the dedupe.
+      ...(def.turns ?? []).map((t) => t.sprite)]
+      .filter((f): f is string => !!f))];
 }
 
 /** Preload every texture `def` needs before it can be placed on the farm. */

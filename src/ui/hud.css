@@ -690,6 +690,24 @@
 #hud .dev-btn:hover { filter: brightness(1.08); }
 #hud .dev-btn:active { filter: brightness(.92); }
 
+/* ---- Statistics panel (Account menu): the lifetime tally ---- */
+/* Fixed width so the longest row can't stretch the sheet, and the whole panel
+   scrolls as one — the close button sits inside the corner (see .panelclose), so
+   scrolling here cannot crop it. */
+#hud .stats-panel { width: min(430px, 92vw); }
+#hud .stats-body { margin-top: 4px; }
+#hud .stats-section + .stats-section { margin-top: 14px; }
+#hud .stats-heading { margin: 0 0 2px; padding-bottom: 4px; font-size: 13px; letter-spacing: .06em;
+  text-transform: uppercase; color: #d8b45e; border-bottom: 1px solid rgba(255,255,255,.15); }
+#hud .stats-row { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 18px; padding: 6px 2px; font-size: 14px; font-weight: 700; }
+#hud .stats-row + .stats-row { border-top: 1px solid rgba(255,255,255,.08); }
+#hud .stats-label { color: #f2ead0; }
+#hud .stats-figure { display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+  text-align: right; }
+#hud .stats-value { color: #ffe9a8; font-variant-numeric: tabular-nums; }
+#hud .stats-note { font-size: 11px; font-weight: 400; color: #cbe6a0; opacity: .85; }
+
 /* ---- Zombie detail page: card (left) + stats/abilities (right) ---- */
 #hud .zpanel { padding: 18px 20px; }
 #hud .zdetail { display: flex; gap: 20px; align-items: stretch; }

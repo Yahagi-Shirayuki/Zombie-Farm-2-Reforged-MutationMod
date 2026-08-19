@@ -93,6 +93,14 @@ export class EconomyClient {
   private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private recoveryAttempt = 0;
   private recoveryInFlight = false;
+  /** The takeover gate is up: another live device holds the lease and the player has
+   *  been asked what to do about it. Recovery deliberately stops there — retrying would
+   *  fight a device that is legitimately writing — so this is the ONE state in which
+   *  `ensureRecoveryArmed` may leave gameplay paused with nothing pending. */
+  private writerGated = false;
+  /** Consecutive conflict reloads with no batch applied in between. */
+  private conflictReloads = 0;
+  private conflictReloading = false;
   private ownershipTimer: ReturnType<typeof setTimeout> | null = null;
   private ownershipCheckInFlight = false;
 
@@ -161,8 +169,15 @@ export class EconomyClient {
       this.onGameplayUnavailable?.(reason);
       this.scheduleRecovery();
     };
-    this.queue.onWriterReplaced = () => this.onWriterReplaced?.();
-    this.queue.onStateConflict = () => { void this.reloadAfterConflict(); };
+    this.queue.onWriterReplaced = () => this.gateOnWriterReplaced();
+    // Arm the backoff BEFORE dispatching. A 409 pauses the queue through `setPaused`,
+    // which emits no `onUnavailable` and so schedules nothing — this handler was the
+    // only thing standing between that pause and a permanent stall, and it is one
+    // failed bootstrap away from doing nothing at all.
+    this.queue.onStateConflict = () => {
+      this.ensureRecoveryArmed();
+      void this.reloadAfterConflict();
+    };
     this.queue.onSizeChange = (size) => this.onPendingChange?.(size);
     api.setWriterRejectedHandler(() => this.handleWriterLost());
     api.setWriterConfirmedHandler(() => this.scheduleOwnershipCheck());
@@ -202,7 +217,11 @@ export class EconomyClient {
       if (this.queue.size === 0) this.onAuthoritativeSettled?.(bootstrap.serverTime);
       this.syncOwnershipPolling(bootstrap.writer.status);
       if (bootstrap.writer.status === "mine") this.onWriterAvailable?.();
-      else this.onWriterReplaced?.();
+      else this.gateOnWriterReplaced();
+      // A bootstrap that succeeds but lands paused (mutations halted, protocol floor)
+      // arms nothing on its own: `disable` is never called, so `onUnavailable` never
+      // fires. Boot is as able to strand a client as a mid-session failure is.
+      this.ensureRecoveryArmed();
     } catch {
       this.ready = false;
       this.queue.disable("bootstrap_failed");
@@ -249,7 +268,7 @@ export class EconomyClient {
     this.queue.markWriterLost();
     this.optimistic.clear();
     this.commandsBySequence.clear();
-    this.onWriterReplaced?.();
+    this.gateOnWriterReplaced();
     void this.refreshReadOnly();
   }
 
@@ -299,6 +318,7 @@ export class EconomyClient {
       this.syncOwnershipPolling(bootstrap.writer.status);
       if (this.queue.size === 0) this.onAuthoritativeSettled?.(bootstrap.serverTime);
     } catch { /* the blocking state remains until a later focus/reconnect */ }
+    finally { this.ensureRecoveryArmed(); }
   }
 
   private clearOwnershipCheck(): void {
@@ -319,6 +339,7 @@ export class EconomyClient {
 
   private syncOwnershipPolling(status: "free" | "mine" | "other"): void {
     if (status === "mine") {
+      this.writerGated = false;
       this.scheduleOwnershipCheck();
       this.onWriterOwned?.();
     } else this.clearOwnershipCheck();
@@ -355,7 +376,51 @@ export class EconomyClient {
     finally {
       this.ownershipCheckInFlight = false;
       this.scheduleOwnershipCheck();
+      // The supervisor. This poll re-arms itself for as long as the tab is visible and
+      // holds a credential, which is precisely the state a stalled client sits in — so
+      // hanging the invariant off it costs no new timer and bounds ANY stall, including
+      // one arriving down a path that does not exist yet, at one poll interval.
+      this.ensureRecoveryArmed();
     }
+  }
+
+  /** Raise the takeover gate and tell the UI. Every `onWriterReplaced` this class
+   *  emits goes through here, so the gate and the callback can never disagree. */
+  private gateOnWriterReplaced(): void {
+    this.writerGated = true;
+    this.onWriterReplaced?.();
+  }
+
+  /** THE invariant: while gameplay is unavailable, a recovery attempt is always
+   *  pending.
+   *
+   *  Every pause path used to be responsible for arming its own retry, and several of
+   *  them didn't — a 409 whose reload bootstrap threw, a recovery that lost the race to
+   *  `recoveryInFlight`, a `retry()` that returned early under `navigator.onLine`
+   *  false. Each left the queue paused with no timer, no dialog and a perfectly healthy
+   *  connection: the farm answers every tap with "Gameplay paused — reconnect to
+   *  continue" until the player reloads by hand, while the lease stays live (other
+   *  writer-protected routes keep renewing it) and the account version never moves.
+   *  That is the reported signature exactly. Enforcing the invariant in one place
+   *  retires the whole class rather than the three instances of it I could find.
+   *
+   *  Two states are deliberately excluded, because retrying fixes neither and both are
+   *  the player's to resolve: signed out, and the takeover gate. */
+  private ensureRecoveryArmed(): void {
+    if (this.available || this.writerGated || !api.getSession()) return;
+    this.scheduleRecovery();
+  }
+
+  /** A tap on a paused farm. The player pressing a dead board is the most reliable
+   *  signal that a stall is happening, and the least tolerable moment to keep waiting
+   *  out a backoff, so a refused interaction pulls the next attempt forward instead of
+   *  merely reporting the pause. */
+  nudgeRecovery(): void {
+    if (this.available || this.writerGated || this.recoveryInFlight) return;
+    if (!api.getSession()) return;
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = null;
+    void this.recover();
   }
 
   private scheduleRecovery(): void {
@@ -369,7 +434,11 @@ export class EconomyClient {
   }
 
   private async recover(): Promise<void> {
-    // A resume can race the backoff timer; one recovery attempt at a time.
+    // A resume can race the backoff timer; one recovery attempt at a time. Bailing
+    // here is safe only because the attempt already running re-arms in its own
+    // `finally` — the timer that fired to get here has already cleared itself, so
+    // while the re-arm lived on the exit paths below, losing this race quietly ended
+    // the loop.
     if (this.recoveryInFlight) return;
     this.recoveryInFlight = true;
     try {
@@ -383,28 +452,46 @@ export class EconomyClient {
       if (!this.queue.available) {
         // Another live device owns the lease: the takeover gate owns this state, so
         // stop retrying and let the player decide.
-        if (bootstrap.writer.status === "other") { this.onWriterReplaced?.(); return; }
+        if (bootstrap.writer.status === "other") { this.gateOnWriterReplaced(); return; }
         if (bootstrap.writer.status === "free" &&
             await this.reclaimFreeWriter(bootstrap.writer.generation)) return;
         // Still paused (mutations disabled server-side, protocol skew, or a lost claim
-        // race). Keep the backoff alive: nothing else re-arms this timer, and dropping
-        // it here leaves the farm frozen behind "Gameplay paused — reconnect to
-        // continue" with no retry and no dialog until the player reloads by hand.
+        // race). Widen the backoff; the `finally` keeps it armed.
         this.recoveryAttempt++;
-        this.scheduleRecovery();
         return;
       }
-      this.recoveryAttempt = 0;
       await this.queue.retry();
+      // Reset the ladder on GAMEPLAY coming back, not on the bootstrap succeeding.
+      // `retry()` can decline (offline, a lost lease) or re-pause inside the flush it
+      // starts, and a condition that answers every bootstrap cheerfully and every batch
+      // with a conflict then resets the counter on each pass — pinning recovery at its
+      // shortest delay and turning the backoff into a poll.
+      if (this.available) this.recoveryAttempt = 0;
+      else this.recoveryAttempt++;
     } catch {
       this.recoveryAttempt++;
-      this.scheduleRecovery();
     } finally {
       this.recoveryInFlight = false;
+      // The invariant, enforced on EVERY exit — including the early returns above and
+      // any added later. Nothing in this method may leave gameplay paused with no
+      // attempt pending.
+      this.ensureRecoveryArmed();
     }
   }
 
+  /** A CAS race resolves in ONE reload: bootstrap replaces the projection, the rebase
+   *  rebuilds the envelope against the new version, and the retry lands. So a conflict
+   *  that keeps coming back is not a race that can be won by trying harder — it is a
+   *  standing condition (an operation marker the server has not expired yet, another
+   *  writer mid-handoff), and retrying it immediately is a hot loop: each turn spends a
+   *  bootstrap and a batch, applies nothing, and renews the lease on the way past, so
+   *  the account looks alive from the outside while its version never moves. Past this
+   *  burst the conflict is handed to the ordinary recovery backoff. */
+  private static readonly CONFLICT_RELOAD_BURST = 3;
+
   private async reloadAfterConflict(): Promise<void> {
+    if (this.conflictReloading) return;
+    this.conflictReloading = true;
     try {
       let bootstrap = await api.bootstrap(true);
       bootstrap = await this.recoverResumableRaid(bootstrap);
@@ -413,15 +500,30 @@ export class EconomyClient {
       this.optimistic.clear();
       this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
       this.syncOwnershipPolling(bootstrap.writer.status);
+      if (++this.conflictReloads > EconomyClient.CONFLICT_RELOAD_BURST) {
+        this.recoveryAttempt++;
+        this.queue.disable("state_conflict_loop");
+        return;
+      }
       await this.queue.retry();
     } catch {
+      // This bootstrap failing is ordinary — it runs over the same network the batch
+      // just failed on. What was not ordinary is that reporting it used to be ALL that
+      // happened: the 409 had already paused the queue without emitting
+      // `onUnavailable`, so nothing was ever scheduled and the farm stayed dead until
+      // the player reloaded by hand. The `finally` now guarantees the retry.
+      this.recoveryAttempt++;
       this.onGameplayUnavailable?.("state_conflict");
+    } finally {
+      this.conflictReloading = false;
+      this.ensureRecoveryArmed();
     }
   }
 
   private enqueue(command: GameplayCommand, delta: Partial<OptimisticDelta> = {}): number | null {
     if (this.options.requireReady && !this.available) {
       this.onGameplayUnavailable?.("gameplay_unavailable");
+      this.nudgeRecovery();
       return null;
     }
     try {
@@ -443,6 +545,7 @@ export class EconomyClient {
       return sequence;
     } catch {
       this.onGameplayUnavailable?.("gameplay_unavailable");
+      this.nudgeRecovery();
       return null;
     }
   }
@@ -819,7 +922,7 @@ export class EconomyClient {
     this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
     this.syncOwnershipPolling(bootstrap.writer.status);
     if (bootstrap.writer.status !== "mine") {
-      this.onWriterReplaced?.();
+      this.gateOnWriterReplaced();
       throw new Error("writer_replaced");
     }
     // Re-check the queue state so maintenance mode, a protocol gate, or ownership
@@ -1026,6 +1129,9 @@ export class EconomyClient {
   async syncShop(_size: number, _climates: string[]): Promise<void> {}
 
   private adoptCommandResponse(response: CommandBatchResponse): void {
+    // An applied batch is the only proof the conflict cleared, so it is the only thing
+    // allowed to re-open the reload burst.
+    this.conflictReloads = 0;
     const aliases: Record<string, string> = {};
     const objectAliases: Record<string, string> = {};
     const rejectedObjectIds: string[] = [];

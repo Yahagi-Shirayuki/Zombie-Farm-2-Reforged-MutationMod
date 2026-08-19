@@ -24,6 +24,10 @@ const memoryStorage = () => {
   };
 };
 
+const SESSION = {
+  token: "session-token", accountId: "account", username: "Player", friendCode: "CODE",
+};
+
 const bootstrapFixture = (overrides: Record<string, unknown> = {}): any => ({
   protocolVersion: 3, serverTime: 1, minimumProtocolVersion: 3, raidRulesetVersion: 0,
   mutationsEnabled: true, accountVersion: 4, writerGeneration: 2,
@@ -932,6 +936,9 @@ describe("v3 raid dependency ids", () => {
   it("keeps retrying when a recovered bootstrap is still not writable", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("window", {});
+    // Recovery is for a signed-in client. Signed out there is nothing to recover into
+    // and every attempt would answer 401, so the backoff deliberately stands down.
+    vi.spyOn(api, "getSession").mockReturnValue(SESSION);
     const economy = new EconomyClient(new GameState(), "recover-still-paused");
     vi.spyOn(economy as any, "adoptGameplay").mockImplementation(() => {});
     const bootstrap = vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrapFixture({
@@ -1201,5 +1208,153 @@ describe("v3 raid dependency ids", () => {
       queue.disable("offline");
       expect(economy.unavailableReason).toBe("offline/q2/nocred");
     });
+  });
+});
+
+/** Every report of "Gameplay paused — reconnect to continue" that survived a healthy
+ *  connection has the same shape underneath: the command queue is paused and NOTHING
+ *  is scheduled to unpause it. The lease stays live, because the other writer-protected
+ *  routes keep renewing it, so from the server the account looks online while its
+ *  version never moves again. These lock down the invariant that makes that state
+ *  unreachable — while gameplay is unavailable, a recovery attempt is always pending. */
+describe("recovery never stops", () => {
+  const arm = (accountId: string) => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("localStorage", memoryStorage());
+    vi.stubGlobal("navigator", { userAgent: "node", onLine: true });
+    vi.spyOn(api, "getSession").mockReturnValue(SESSION);
+    const economy = new EconomyClient(new GameState(), accountId);
+    vi.spyOn(economy as any, "adoptGameplay").mockImplementation(() => {});
+    (economy as any).ready = true;
+    const queue = (economy as any).queue;
+    queue.adoptBootstrap(bootstrapFixture());
+    return { economy, queue };
+  };
+
+  // The hole this closes. A 409 pauses the queue through `setPaused`, which emits no
+  // `onUnavailable` and therefore schedules nothing; the reload handler was the entire
+  // recovery path, and its own bootstrap runs over the same network the batch just
+  // failed on. One unlucky pair of failures and the farm was dead until a manual reload.
+  it("keeps a retry pending when the reload after a conflict cannot reach the server", async () => {
+    vi.useFakeTimers();
+    const { economy, queue } = arm("conflict-then-offline");
+    vi.spyOn(api, "sendCommandBatch").mockRejectedValue(new api.ApiError(409, "state_conflict"));
+    const bootstrap = vi.spyOn(api, "bootstrap").mockRejectedValue(new api.ApiError(0, "offline"));
+
+    queue.enqueue({ type: "farm.plow", oc: 0, or: 0 });
+    await queue.flush();
+
+    expect(economy.available).toBe(false);
+    expect(bootstrap).toHaveBeenCalledTimes(1); // the reload, which failed
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    const afterFirstBackoff = bootstrap.mock.calls.length;
+    expect(afterFirstBackoff).toBeGreaterThan(1);
+
+    // ...and it stays alive across the whole backoff ladder rather than arming once
+    // and giving up, which is the difference between a slow reconnect and a dead farm.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(bootstrap.mock.calls.length).toBeGreaterThan(afterFirstBackoff);
+  });
+
+  // The supervisor. Whatever branch stranded the queue — including one that does not
+  // exist yet — the ownership poll re-arms the backoff, because it re-arms ITSELF for
+  // as long as the tab is visible and holds a credential, which is exactly the state a
+  // stalled client sits in.
+  it("re-arms recovery from the ownership poll when no other path did", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("document", { visibilityState: "visible", addEventListener: vi.fn() });
+    vi.spyOn(api, "hasWriterCredential").mockReturnValue(true);
+    vi.spyOn(api, "writerStatus").mockResolvedValue({
+      status: "mine", generation: 2, lastActivityAt: 1,
+    });
+    const { economy, queue } = arm("stranded-then-supervised");
+    const bootstrap = vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrapFixture());
+
+    // Paused with nothing scheduled: the state every stall report has in common.
+    queue.setPaused("stranded");
+    expect(economy.available).toBe(false);
+    expect((economy as any).recoveryTimer).toBeNull();
+
+    (economy as any).scheduleOwnershipCheck();
+    await vi.advanceTimersByTimeAsync(OWNERSHIP_POLL_IDLE_MS);
+    expect((economy as any).recoveryTimer).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(bootstrap).toHaveBeenCalled();
+    expect(economy.available).toBe(true);
+  });
+
+  it("pulls the next attempt forward when the player taps a paused farm", async () => {
+    vi.useFakeTimers();
+    const { economy, queue } = arm("tapped-while-paused");
+    const bootstrap = vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrapFixture());
+
+    queue.disable("offline");
+    expect(bootstrap).not.toHaveBeenCalled(); // the 2s backoff has not elapsed
+
+    economy.nudgeRecovery();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(bootstrap).toHaveBeenCalledTimes(1);
+    expect(economy.available).toBe(true);
+  });
+
+  // The one exclusion. A second live device holding the lease is not a fault to retry
+  // out of: the player has been asked what to do and recovery must not fight the answer.
+  it("stands down behind the takeover gate and rearms once the lease comes back", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("document", { visibilityState: "visible", addEventListener: vi.fn() });
+    const { economy } = arm("gated-then-returned");
+    const replaced = vi.fn();
+    economy.onWriterReplaced = replaced;
+    vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrapFixture({
+      writerDeviceId: "another-device",
+      writer: { status: "other", generation: 3, lastActivityAt: 1 },
+    }));
+
+    await (economy as any).recover();
+
+    expect(replaced).toHaveBeenCalled();
+    expect(economy.available).toBe(false);
+    expect((economy as any).recoveryTimer).toBeNull();
+    economy.nudgeRecovery();
+    expect((economy as any).recoveryInFlight).toBe(false);
+
+    // Regaining the lease lowers the gate, and the invariant applies again.
+    (economy as any).syncOwnershipPolling("mine");
+    (economy as any).ensureRecoveryArmed();
+    expect((economy as any).recoveryTimer).not.toBeNull();
+  });
+
+  // A conflict that will not clear used to be retried with no backoff at all: reload,
+  // rebase, resend, 409, reload... Each turn spent a bootstrap and a batch, applied
+  // nothing, and renewed the lease on its way past — a farm frozen at one version while
+  // the server saw a busy, healthy client.
+  it("hands a conflict that will not clear to the backoff instead of looping on it", async () => {
+    vi.useFakeTimers();
+    const { queue } = arm("permanent-conflict");
+    const send = vi.spyOn(api, "sendCommandBatch")
+      .mockRejectedValue(new api.ApiError(409, "batch_in_progress"));
+    const bootstrap = vi.spyOn(api, "bootstrap").mockResolvedValue(bootstrapFixture());
+
+    queue.enqueue({ type: "farm.plow", oc: 0, or: 0 });
+    await queue.flush();
+    await vi.advanceTimersByTimeAsync(1);
+
+    // The immediate burst is bounded. A genuine CAS race clears in ONE reload, so a
+    // handful is already generous before the conflict is read as standing.
+    expect(send.mock.calls.length).toBeLessThanOrEqual(5);
+    expect(bootstrap.mock.calls.length).toBeLessThanOrEqual(5);
+
+    // Two full minutes of a conflict that never clears, paced by the recovery ladder
+    // instead of spun on. Unpaced this is a bootstrap and a batch per turn, applying
+    // nothing and renewing the lease on the way past — which is precisely what an
+    // account frozen at one version looks like from the server while its client
+    // appears busy and perfectly healthy.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(send.mock.calls.length).toBeLessThan(15);
+    expect(queue.pauseReason).toBe("state_conflict_loop");
+    expect(queue.size).toBe(1); // and the player's plow is still safe
   });
 });

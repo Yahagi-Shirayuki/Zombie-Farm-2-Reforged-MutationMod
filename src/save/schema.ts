@@ -28,6 +28,7 @@ import type { FarmBackground } from "../prefs";
 import type { EpicBossRun } from "../epicBoss/types";
 import type { PeriodicQuestState } from "../quest/periodic/types";
 import type { ZombieTeam } from "../zombie/teams";
+import type { FarmStats } from "../stats";
 
 /** Bump when the shape changes in a way that needs a migration. */
 export const SAVE_VERSION = 1;
@@ -99,6 +100,11 @@ export interface SaveGame {
    *  presentation — assembling one only issues ordinary store/deploy moves.
    *  Absent = no teams (or a save written before the feature). */
   teams?: ZombieTeam[];
+  /** Lifetime statistics (the Account menu's Statistics panel). A kept tally that
+   *  cannot be recovered from a save after the fact — see stats.ts. Absent in saves
+   *  written before it existed; those start counting from the load, with the one
+   *  figure that IS derivable (invasions won) seeded from the raid progress. */
+  stats?: FarmStats;
 }
 
 /** A zombie that perished and was not revived — what a Memorial Statue remembers.
@@ -301,8 +307,12 @@ export interface PlacedObjectSave {
   /** Footprint origin tile (north corner). */
   oc: number;
   or: number;
-  /** Optional orientation for rotatable objects. */
+  /** Optional orientation for rotatable objects: 1 = mirrored on the vertical axis. */
   rotation?: number;
+  /** Orientation of an object whose corners are separate pieces of art (the road
+   *  bends): an index into the def's `turns`. Written INSTEAD of `rotation` for
+   *  those, since for them a mirror is not what turning means — see savedTurn. */
+  turn?: number;
   /** Fruit trees: epoch ms when the fruit next becomes harvestable (offline
    *  growth — fruit ripens while the game is closed). */
   readyAt?: number;

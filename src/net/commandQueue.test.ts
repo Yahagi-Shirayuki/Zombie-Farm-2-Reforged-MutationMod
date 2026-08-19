@@ -356,3 +356,25 @@ describe("protocol v3 command queue", () => {
     expect((queue as any).inFlight?.batchId).toBe(seen[0].batchId);
   });
 });
+
+// `retry()` is the one caller that clears a pause without consulting a projection.
+// `reloadAfterConflict` calls it straight after a rebase that may have just discovered
+// the writer moved, and firing a batch at a lease this document no longer owns answers
+// 423, clears the credential and drops the player behind the takeover gate — out of
+// what was only ever a version conflict.
+describe("retry and the lost lease", () => {
+  it("refuses to clear a pause the writer lost", async () => {
+    stubOnline();
+    const send = vi.spyOn(api, "sendCommandBatch").mockResolvedValue(undefined as any);
+    const queue = new CommandQueue("retry-writer-lost");
+    queue.adoptBootstrap(bootstrap);
+    queue.enqueue({ type: "farm.plow", oc: 0, or: 0 });
+    queue.markWriterLost();
+
+    await queue.retry();
+
+    expect(send).not.toHaveBeenCalled();
+    expect(queue.available).toBe(false);
+    expect(queue.pauseReason).toBe("writer_lost");
+  });
+});

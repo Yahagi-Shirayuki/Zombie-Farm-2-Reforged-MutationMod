@@ -440,6 +440,22 @@ external `ZF1_extracted` tree, not into `public/`, and is groundwork toward the 
 hands-on drag/rotate/pivot editor for hand-authoring zombie `models.json`; its
 export round-trips the same schema the runtime reads.
 
+`tools/tile_lab.html` (built by `tools/build_tile_lab.py`) is the same idea for the art
+that has to meet edge to edge — both road sets, the pond pieces, rocks, the zombie patch.
+A flat tile does not sit bottom-centred on its footprint: it hangs off an authored cocos
+pivot (`flat_tile_fields`, `Field.flatTileOffset`), and those pivots are hand-rounded 2dp
+numbers that sometimes do not lay a piece where its neighbours are, so the correction has
+to be measured. Lay pieces on the farm's own lattice, Alt-drag one until its kerb lines up
+with the piece it continues, and copy out an `ANCHOR_OVERRIDES` block to paste into
+`tools/prep_placeables.py`. An anchor belongs to the ART, so editing one moves every copy
+on the bench that draws the same tile — including a road bend's four corners, which are
+four separate sprites. Tint mode washes each piece a different hue, which is how you see
+whether two overlap, butt, or leave a gap. `--all` also bundles the standing objects
+(~6.5 MB) for checking what a road runs past. The anchor rule itself is inlined from
+`tools/tileAnchorGeometry.js`, which `src/tileLabGeometry.test.ts` drives against Field's
+own — a tool that draws a piece 3px from where the game draws it teaches you a 3px-wrong
+anchor, so the two are pinned together rather than kept in step by hand.
+
 **Zombie Review** (`npm run dev`, then <http://localhost:5173/zombie-review.html>) is the
 companion viewer: every assembled zombie in one place, with mutations to add and remove and
 the basic animations to play. Where the assembler reimplements the rig so it can be

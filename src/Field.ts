@@ -5,7 +5,7 @@
 import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import {
   canMirrorObject, DIRT_FILE, GameAssets, HOLE_FILE, multiplyObjectTint, objectTint,
-  PlaceableDef, PLOWED_FILE, SEED_FILE,
+  normalizeTurn, PlaceableDef, PLOWED_FILE, SEED_FILE, turnArt, turnCount, turnFlip,
 } from "./assets";
 import { clampPointToGrid, footprintOrigin, gridToScreen, HH, HW, screenToGrid, TILE_H, TILE_W, tileCenter } from "./iso";
 import { setFootprint, sortLayer } from "./depthSort";
@@ -43,6 +43,20 @@ export function objectFootprint(
   return flipped
     ? { w: def.tileH, h: def.tileW }
     : { w: def.tileW, h: def.tileH };
+}
+
+/** The orientation a saved object comes back in.
+ *
+ *  Two fields, because they mean different things: `rotation` is the old mirror flag
+ *  every object still writes, and `turn` is the corner index a piece with its own art
+ *  per corner writes instead (the road bends). A bend saved before those corners
+ *  existed carries `rotation: 1` — a mirror of the ONE corner it had, which was the
+ *  same corner drawn a few pixels out of line — so it restores unturned rather than
+ *  silently becoming a different corner. */
+export function savedTurn(
+  def: Pick<PlaceableDef, "turns">, s: { rotation?: number; turn?: number },
+): number {
+  return def.turns ? (s.turn ?? 0) : (s.rotation ? 1 : 0);
 }
 
 // Fertilize leaves: the CONTINUOUS effect a fertilized crop shows the whole time it
@@ -293,6 +307,10 @@ interface FarmObject {
   // TRANSPOSED — see objectFootprint. Every occupancy/anchor/depth read goes through
   // that helper, never through def.tileW/tileH directly.
   flipped: boolean;
+  // Which orientation this object is in: an index into `def.turns` for a piece whose
+  // corners are separate art (the road bends), otherwise 0 or 1 for unmirrored /
+  // mirrored. `flipped` is DERIVED from it (turnFlip) and never set independently.
+  turn: number;
   // Memorial Statue only: the zombie enshrined on it, and the stone rig drawn
   // standing on its plinth. `memorialRig` is derived — rebuilt whenever `memorial`
   // changes — so only the snapshot is ever persisted.
@@ -354,7 +372,7 @@ export class Field {
   private cursorRed = new Graphics();
   private cursorLabel!: Text;
   private objGhost = new Sprite(); // placement/move preview
-  private ghostFlipped = false; // current horizontal-flip of the placement ghost
+  private ghostTurnIndex = 0; // current orientation of the placement ghost (see turnArt)
   // What the ghost is previewing, so flipping it in place can re-derive the flat-tile
   // anchor offset (which is not symmetric about the footprint's bottom-center).
   private ghostDef: PlaceableDef | null = null;
@@ -1357,10 +1375,13 @@ export class Field {
   // is doing; a fruit tree that isn't ripe shows its growing frame. A state with no
   // art of its own falls back to the busy frame, so a pot holding a finished combine
   // keeps its lid rather than reverting to the idle pot.
-  private objectSpriteName(def: PlaceableDef, ready: boolean, work?: ObjectWork): string {
+  private objectSpriteName(
+    def: PlaceableDef, ready: boolean, work?: ObjectWork, turn = 0,
+  ): string {
     if (work === "ready" && def.readySprite) return def.readySprite;
     if (work && def.busySprite) return def.busySprite;
-    return !ready && def.growingSprite ? def.growingSprite : def.sprite;
+    if (!ready && def.growingSprite) return def.growingSprite;
+    return turnArt(def, turn).sprite; // a road bend draws the corner it is turned to
   }
   private isGroundObject(def: PlaceableDef): boolean {
     return def.zombiePatch || /road/i.test(def.key);
@@ -1378,25 +1399,29 @@ export class Field {
   // objects keep bottom-centering: their pivots are authored for art that stands up
   // off the ground, and nothing has to line up with them edge to edge.
   private flatTileOffset(
-    def: PlaceableDef, oc: number, or: number, flipped: boolean,
+    def: PlaceableDef, oc: number, or: number, flipped: boolean, turn = 0,
   ): { dx: number; dy: number } {
-    if (!def.flatTile || def.anchorX === undefined || def.anchorY === undefined) {
+    const art = turnArt(def, turn);
+    if (!art.flatTile || art.anchorX === undefined || art.anchorY === undefined) {
       return { dx: 0, dy: 0 };
     }
     const s = this.objectScale();
-    const w = def.nativeW * s, h = def.nativeH * s;
+    const w = art.nativeW * s, h = art.nativeH * s;
     const fp = objectFootprint(def, flipped);
-    const front = gridToScreen(oc + fp.w - 1, or + fp.h - 1);
+    // A turn state may hang its art off a NEIGHBOURING ground tile (the apex-south
+    // road bend does, by a measured whole tile). The footprint is untouched: only
+    // where the art hangs moves, so the block the player placed still blocks.
+    const front = gridToScreen(oc + fp.w - 1 + (art.dc ?? 0), or + fp.h - 1 + (art.dr ?? 0));
     const p = { x: front.x - HW, y: front.y + TILE_H }; // the ground tile's own position
     const a = this.footprintAnchor(oc, or, fp.w, fp.h);
     // A mirrored tile reflects about the centre line of that same ground tile, one
     // source tile to the right of `p` — the binary's `1 - pivotx - 48/width`.
     const anchorX = flipped
-      ? 1 - def.anchorX - this.assets.field.tileW / def.nativeW
-      : def.anchorX;
+      ? 1 - art.anchorX - this.assets.field.tileW / art.nativeW
+      : art.anchorX;
     return {
       dx: (p.x - a.x) + w * (0.5 - anchorX),
-      dy: (p.y - a.y) + h * def.anchorY,
+      dy: (p.y - a.y) + h * art.anchorY,
     };
   }
   /** Put a Memorial Statue's stone zombie on top of its plinth. The plinth is
@@ -1427,9 +1452,10 @@ export class Field {
 
   private fitObjectSprite(
     sp: Sprite, def: PlaceableDef, oc: number, or: number, ready = true, flipped = false,
-    extra?: { backSprite?: Sprite; frontOverlay?: Container; work?: ObjectWork },
+    extra?: { backSprite?: Sprite; frontOverlay?: Container; work?: ObjectWork; turn?: number },
   ) {
-    const name = this.objectSpriteName(def, ready, extra?.work);
+    const turn = extra?.turn ?? 0;
+    const name = this.objectSpriteName(def, ready, extra?.work, turn);
     const texture = this.assets.objects[name] ?? this.assets.objects[def.sprite] ?? Texture.EMPTY;
     const tint = objectTint(def.color);
     const s = this.objectScale();
@@ -1438,7 +1464,7 @@ export class Field {
     // actually occupies (objectFootprint), and lands over its own blocked tiles.
     const fp = objectFootprint(def, flipped);
     const a = this.footprintAnchor(oc, or, fp.w, fp.h);
-    const off = this.flatTileOffset(def, oc, or, flipped);
+    const off = this.flatTileOffset(def, oc, or, flipped, turn);
     const scaleX = flipped && canMirrorObject(def) ? -s : s;
     const c1 = oc + fp.w - 1, r1 = or + fp.h - 1;
     const lay = (sprite: Sprite, tex: Texture) => {
@@ -1592,12 +1618,13 @@ export class Field {
   // placement); a past readyAt means it's already ripe (offline growth). Returns
   // the object id, or null if the footprint isn't valid.
   placeObject(def: PlaceableDef, oc: number, or: number, id?: string, readyAt?: number,
-    flipped = false, memorial?: FallenZombie): string | null {
+    turn = 0, memorial?: FallenZombie): string | null {
     // Clamped here rather than at the call sites because this is the ONE door every
     // object comes through — a purchase, a restored save, a gift, a friend's farm. An
     // object whose art carries writing keeps its footprint AND its art unturned, so the
-    // two can never disagree, and a save that already stored `flipped` self-heals.
-    flipped = flipped && canMirrorObject(def);
+    // two can never disagree, and a save that already stored an orientation self-heals.
+    turn = normalizeTurn(def, turn);
+    const flipped = turnFlip(def, turn);
     if (!this.canPlaceObject(oc, or, def, id, flipped)) return null;
     const now = Date.now();
     const ra = def.growMs ? readyAt ?? now + def.growMs : 0;
@@ -1609,7 +1636,7 @@ export class Field {
     const frontOverlay = def.petPen ? new Container() : undefined;
     const frontMask = def.petPen ? new Graphics() : undefined;
     if (frontOverlay && frontMask) frontOverlay.mask = frontMask;
-    this.fitObjectSprite(sprite, def, oc, or, ready, flipped, { backSprite, frontOverlay });
+    this.fitObjectSprite(sprite, def, oc, or, ready, flipped, { backSprite, frontOverlay, turn });
     const layer = this.isGroundObject(def) ? this.groundObjectLayer : this.entityLayer;
     if (backSprite) layer.addChild(backSprite);
     layer.addChild(sprite);
@@ -1617,7 +1644,7 @@ export class Field {
     if (frontMask) layer.addChild(frontMask);
     const oid = id ?? this.mintId();
     const obj: FarmObject = { id: oid, def, oc, or, sprite, backSprite,
-      frontOverlay, frontMask, readyAt: ra, ready, flipped };
+      frontOverlay, frontMask, readyAt: ra, ready, flipped, turn };
     this.objects.set(oid, obj);
     this.attachObjectLight(obj);
     if (memorial) this.setMemorialOccupant(oid, memorial); // restoring an enshrined statue
@@ -1792,14 +1819,15 @@ export class Field {
   }
 
   // Relocate an existing object; false if the destination footprint is invalid.
-  // `flipped`, when given, also commits a new orientation (the Move tool lets you
-  // rotate while carrying); omitted keeps the object's current flip.
-  moveObject(id: string, oc: number, or: number, flipped?: boolean): boolean {
+  // `turn`, when given, also commits a new orientation (the Move tool lets you
+  // rotate while carrying); omitted keeps the object's current one.
+  moveObject(id: string, oc: number, or: number, turn?: number): boolean {
     const obj = this.objects.get(id);
     // The drop is validated in the orientation it lands in, not the one it was
     // picked up in — turning a hedge mid-carry changes which tiles it needs.
-    const asked = flipped ?? obj?.flipped ?? false;
-    const next = obj ? asked && canMirrorObject(obj.def) : asked;
+    const asked = turn ?? obj?.turn ?? 0;
+    const nextTurn = obj ? normalizeTurn(obj.def, asked) : asked;
+    const next = obj ? turnFlip(obj.def, nextTurn) : false;
     if (!obj || !this.canPlaceObject(oc, or, obj.def, id, next)) return false;
     const was = objectFootprint(obj.def, obj.flipped);
     this.forEachFootprint(obj.oc, obj.or, was.w, was.h, (t) => this.tileObject.delete(t));
@@ -1807,6 +1835,7 @@ export class Field {
     obj.oc = oc;
     obj.or = or;
     obj.flipped = next;
+    obj.turn = nextTurn;
     this.fitObjectSprite(obj.sprite, obj.def, oc, or, obj.ready, obj.flipped, obj);
     this.fitMemorialRig(obj);
     this.positionObjectLight(obj);
@@ -1925,22 +1954,22 @@ export class Field {
     const o = this.objects.get(id);
     return o ? { oc: o.oc, or: o.or } : null;
   }
-  // Current horizontal-flip of a placed object (for the Move tool to carry it over).
-  objectFlipOf(id: string): boolean {
-    return !!this.objects.get(id)?.flipped;
+  // Current orientation of a placed object (for the Move tool to carry it over).
+  objectTurnOf(id: string): number {
+    return this.objects.get(id)?.turn ?? 0;
   }
-  // Rotate tool: mirror a placed object on the vertical axis, in place. The mirror
-  // transposes the footprint (see objectFootprint), so unlike before this can be
-  // BLOCKED — a hedge turned across its neighbours has nowhere to go. Returns
-  // whether the object actually turned.
-  /** Turn a placed object a quarter turn (a horizontal mirror). False when it did not
-   *  turn — either the turned footprint has no room, or the object's art must never be
-   *  mirrored (`canMirrorObject`). Callers check that second case first so they can say
-   *  which it was. */
+  // Rotate tool: turn a placed object one step, in place. For most art that is a
+  // mirror on the vertical axis, which transposes the footprint (see objectFootprint)
+  // and so can be BLOCKED — a hedge turned across its neighbours has nowhere to go.
+  // A road bend instead steps to the next corner in its `turns` list.
+  /** Turn a placed object a quarter turn. False when it did not turn — either the
+   *  turned footprint has no room, or the object's art must never be mirrored
+   *  (`canMirrorObject`). Callers check that second case first so they can say which
+   *  it was. */
   flipObject(id: string): boolean {
     const o = this.objects.get(id);
     if (!o || !canMirrorObject(o.def)) return false;
-    return this.moveObject(id, o.oc, o.or, !o.flipped);
+    return this.moveObject(id, o.oc, o.or, (o.turn + 1) % turnCount(o.def));
   }
   // World point the farmer walks to in order to harvest this object (its base).
   objectWorkPoint(id: string): { x: number; y: number } | null {
@@ -1949,6 +1978,19 @@ export class Field {
     const fp = objectFootprint(o.def, o.flipped);
     const base = this.footprintAnchor(o.oc, o.or, fp.w, fp.h);
     return clampPointToGrid(base.x, base.y, this.w, this.h);
+  }
+
+  /** The front-most tile of a placed object's footprint — the one its art stands on
+   *  (see footprintAnchor, which drops half a tile below this to find the base).
+   *
+   *  It is COVERED by the object, so it is never somewhere to put a zombie down: the
+   *  caller steps out from here to the nearest open ground (see
+   *  ZombieField.objectArrivalTile). Null once the object is gone. */
+  objectAnchorTile(id: string): { col: number; row: number } | null {
+    const o = this.objects.get(id);
+    if (!o) return null;
+    const fp = objectFootprint(o.def, o.flipped);
+    return { col: o.oc + fp.w - 1, row: o.or + fp.h - 1 };
   }
 
   /** Draw a multi-plot plow preview. Invalid plots remain visible in red and are
@@ -2063,20 +2105,24 @@ export class Field {
 
   // Placement/move preview: a tinted ghost of the object at the snapped origin
   // (green tint if placeable, red if blocked). `ignoreId` = the object being moved.
-  setObjectCursor(def: PlaceableDef, col: number, row: number, ignoreId?: string, flipped = false): { oc: number; or: number; valid: boolean } {
+  setObjectCursor(def: PlaceableDef, col: number, row: number, ignoreId?: string, turn = 0): { oc: number; or: number; valid: boolean } {
+    turn = normalizeTurn(def, turn);
+    const flipped = turnFlip(def, turn);
     const { oc, or } = this.resolveObjectOrigin(def, col, row, flipped);
     const valid = this.canPlaceObject(oc, or, def, ignoreId, flipped);
     this.cursorGreen.visible = false;
     this.cursorRed.visible = false;
     this.cursorLabel.visible = false;
     this.cursor.position.set(0, 0); // ghost positions are world-space
-    this.objGhost.texture = this.assets.objects[def.sprite] ?? Texture.EMPTY;
-    this.ghostFlipped = flipped;
+    // The ghost previews the corner it would actually lay, not just a mirrored one.
+    this.objGhost.texture = this.assets.objects[turnArt(def, turn).sprite]
+      ?? this.assets.objects[def.sprite] ?? Texture.EMPTY;
+    this.ghostTurnIndex = turn;
     const s = this.objectScale();
     this.objGhost.scale.set(flipped ? -s : s, s); // preview the chosen orientation
     const fp = objectFootprint(def, flipped);
     const a = this.footprintAnchor(oc, or, fp.w, fp.h);
-    const off = this.flatTileOffset(def, oc, or, flipped);
+    const off = this.flatTileOffset(def, oc, or, flipped, turn);
     this.ghostDef = def;
     this.ghostTile = { col, row };
     this.ghostIgnoreId = ignoreId;
@@ -2090,23 +2136,23 @@ export class Field {
     this.cursor.visible = true;
     return { oc, or, valid };
   }
-  // Flip the placement ghost in place — the Rotate control uses this to spin the
+  // Turn the placement ghost in place — the Rotate control uses this to spin the
   // current preview without waiting for a pointer move. Turning an object transposes
   // its footprint, so this is a full re-resolve against the tile the ghost is
   // sitting on: where it lands, which tiles it would take, and whether it still
   // fits all change with the orientation.
-  setGhostFlip(flipped: boolean) {
-    this.ghostFlipped = flipped;
+  setGhostTurn(turn: number) {
+    this.ghostTurnIndex = turn;
     const def = this.ghostDef;
     if (!def || !this.ghostTile) {
       const s = this.objectScale();
-      this.objGhost.scale.x = flipped ? -s : s;
+      this.objGhost.scale.x = turn === 1 ? -s : s;
       return;
     }
-    this.setObjectCursor(def, this.ghostTile.col, this.ghostTile.row, this.ghostIgnoreId, flipped);
+    this.setObjectCursor(def, this.ghostTile.col, this.ghostTile.row, this.ghostIgnoreId, turn);
   }
-  get ghostFlip(): boolean {
-    return this.ghostFlipped;
+  get ghostTurn(): number {
+    return this.ghostTurnIndex;
   }
   hideObjectCursor() {
     this.objGhost.visible = false;
@@ -2251,7 +2297,12 @@ export class Field {
     for (const o of this.objects.values()) {
       const s: PlacedObjectSave = { id: o.id, key: o.def.key, oc: o.oc, or: o.or };
       if (o.def.harvestValue) s.readyAt = o.readyAt; // fruit-tree ripen timer
-      if (o.flipped) s.rotation = 1; // horizontally mirrored by the Rotate tool
+      // Orientation. Art that turns by mirroring keeps writing `rotation` (0/1); a
+      // piece with its own art per corner writes the corner index instead, so a road
+      // bend saved by an older build — where the only orientations WERE mirror or
+      // not — comes back as the corner it drew, not as a different one.
+      if (o.def.turns) { if (o.turn) s.turn = o.turn; }
+      else if (o.flipped) s.rotation = 1;
       if (o.memorial) s.memorial = o.memorial; // the zombie enshrined on this plinth
       out.push(s);
     }
@@ -2271,15 +2322,16 @@ export class Field {
   private restoreOneObject(
     def: PlaceableDef, s: PlacedObjectSave, memorial?: FallenZombie,
   ): boolean {
-    const attempt = (flipped: boolean): boolean => {
-      const fp = objectFootprint(def, flipped);
+    const attempt = (turn: number): boolean => {
+      const fp = objectFootprint(def, turnFlip(def, turn));
       // Clamp rather than reject: an origin one tile past the edge is a legal object
       // in the wrong place, not a missing one.
       const oc = Math.max(0, Math.min(s.oc, this.w - fp.w));
       const or = Math.max(0, Math.min(s.or, this.h - fp.h));
-      return !!this.placeObject(def, oc, or, s.id, s.readyAt, flipped, memorial);
+      return !!this.placeObject(def, oc, or, s.id, s.readyAt, turn, memorial);
     };
-    return attempt(!!s.rotation) || (!!s.rotation && attempt(false));
+    const saved = savedTurn(def, s);
+    return attempt(saved) || (!!saved && attempt(0));
   }
 
   // Rebuild placed objects from a save. `resolve` maps a def key to its config.

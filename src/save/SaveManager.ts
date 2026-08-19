@@ -21,6 +21,7 @@ import { backfillDiscovered, sanitizeDiscovered } from "../zombie/almanac";
 import { backfillMutationDiscovered, sanitizeMutationDiscovered } from "../zombie/mutationAlmanac";
 import { sanitizeFallen, sanitizeFallenUncapped } from "../zombie/memorial";
 import { sanitizeTeams } from "../zombie/teams";
+import { sanitizeFarmStats } from "../stats";
 import type { PlayMode } from "../playMode";
 import type { JobSystem } from "../JobSystem";
 
@@ -40,12 +41,12 @@ type PresentationData = {
     zombiePatchGathered?: boolean;
   };
   objectLayout?: { id: string; key?: string; oc: number; or: number; rotation?: number;
-    memorial?: FallenZombieSave }[];
+    turn?: number; memorial?: FallenZombieSave }[];
   rosterLayout?: { id: string; name?: string; pos?: { col: number; row: number }; stored?: boolean; color?: [number, number, number] }[];
   zombiePot?: SaveGame["zombiePot"];
   zombiePots?: SaveGame["zombiePots"];
   tutorial?: SaveGame["tutorial"];
-  ui?: { attackOrder?: string[]; teams?: unknown };
+  ui?: { attackOrder?: string[]; teams?: unknown; stats?: unknown };
   /** Zombie Almanac lifetime-discovery counts. Cosmetic and client-authored, so
    * online it rides the presentation blob rather than a server table. */
   almanac?: SaveGame["almanac"];
@@ -227,6 +228,7 @@ export class SaveManager {
       almanac: { discovered: this.state.zombieDiscovered, mutations: this.state.mutationDiscovered },
       fallen: this.state.fallenZombies,
       teams: this.state.zombieTeams,
+      stats: this.state.stats,
       ...(farmJobs ? { farmJobs } : {}),
     };
   }
@@ -239,6 +241,9 @@ export class SaveManager {
         oc: object.oc,
         or: object.or,
         rotation: object.rotation,
+        // A road bend's corner. Its own field, not `rotation`: for those pieces
+        // turning is a swap of art, not a mirror. See Field.savedTurn.
+        turn: object.turn,
       });
     }
     return {
@@ -264,7 +269,9 @@ export class SaveManager {
       // Saved line-ups ride the UI blob beside the attack order for the same
       // reason: both are lists of the account's own zombie ids that only this
       // client authors, and neither is ever read back as gameplay truth.
-      ui: { attackOrder: blob.raids?.attackOrder ?? [], teams: blob.teams ?? [] },
+      // …and the lifetime tally with them: it is counted by this client, read by
+      // nothing, and the server has no table that could reconstruct it.
+      ui: { attackOrder: blob.raids?.attackOrder ?? [], teams: blob.teams ?? [], stats: blob.stats },
       almanac: blob.almanac,
       // The graveyard and each statue's occupant are SERVER-owned (fallen_v3) — a
       // visitor renders the memorial from the authoritative projection, so a copy
@@ -393,6 +400,14 @@ export class SaveManager {
             // A genuinely newer projection won the CAS. Rebase this write onto its
             // version; preserve any newer local presentation queued while we fetched.
             this.pendingPresentation ??= data;
+            // …and take the lifetime tally with us. The blob is written WHOLESALE, so
+            // rebasing ours onto the winner's version would otherwise roll the account
+            // back to whatever this device had counted — the one situation where
+            // another device has recorded progress this one has never seen (it played
+            // while we were away, or we booted from a stale cached snapshot). The
+            // counters only climb, so folding the two by the higher of each cannot lose
+            // either side's work. See mergeFarmStats.
+            this.adoptServerStats(boot.presentation.data, this.pendingPresentation);
             this.pendingPresentationImmediate = true;
           }
         } catch (recoveryError) {
@@ -411,6 +426,18 @@ export class SaveManager {
         } else this.scheduleSave?.();
       }
     }
+  }
+
+  /** Fold the tally in an authoritative presentation blob into the live one, and patch
+   *  the queued write so it carries the merged figures rather than this device's alone.
+   *  A blob with no tally in it (written by a client older than the field) is nothing to
+   *  merge — ours already holds everything it could have contributed. */
+  private adoptServerStats(authoritative: unknown, queued: Record<string, unknown>): void {
+    const theirs = (authoritative as PresentationData | undefined)?.ui?.stats;
+    if (theirs === undefined) return;
+    const merged = this.state.mergeStats(sanitizeFarmStats(theirs, Date.now()));
+    const ui = queued.ui as { stats?: unknown } | undefined;
+    if (ui) ui.stats = merged;
   }
 
   async load(): Promise<FarmLoadResult> {
@@ -516,14 +543,15 @@ export class SaveManager {
       // reconcile treats it as an orphan and re-homes it onto a real free tile.
       if (!layout) return [];
       return [{ id: obj.instanceId, key: obj.catalogKey, oc: layout.oc, or: layout.or,
-        rotation: layout.rotation, memorial: enshrined.get(obj.instanceId), readyAt: obj.readyAt == null
+        rotation: layout.rotation, turn: layout.turn,
+        memorial: enshrined.get(obj.instanceId), readyAt: obj.readyAt == null
           ? undefined
           : serverTimestampToClient(obj.readyAt, boot.serverTime, clientTime) }];
     });
     for (const layout of objectLayout.values()) {
       if (layout.key === "storage01" && !objects.some((object) => object.id === layout.id)) {
         objects.push({ id: layout.id, key: layout.key, oc: layout.oc, or: layout.or,
-          rotation: layout.rotation, memorial: layout.memorial, readyAt: undefined });
+          rotation: layout.rotation, turn: layout.turn, memorial: layout.memorial, readyAt: undefined });
       }
     }
     const pots = Object.fromEntries(Object.entries(p.zombiePots ?? {}).filter(([, pot]) =>
@@ -603,6 +631,9 @@ export class SaveManager {
       // on their statues, which carry them (see `enshrined` above).
       fallen: graveyard,
       teams: sanitizeTeams(p.ui?.teams),
+      // Absent stays absent: applySave seeds a first-time tally, and only it can
+      // tell "no tally yet" from "a tally that happens to be all zeroes".
+      stats: p.ui?.stats ? sanitizeFarmStats(p.ui.stats, clientTime) : undefined,
       farmJobs: this.readJobJournal(),
     };
   }
@@ -688,6 +719,16 @@ export class SaveManager {
     // parked in it have not been through receiveItem/syncStorage yet. Owned is owned:
     // count them here too, or an unclaimed prize opens the Almanac as a silhouette.
     this.state.countUnclaimedZombieRewards();
+    // Lifetime statistics. A save written before the tally existed starts counting
+    // from now — with the one figure that IS recoverable seeded from the raid
+    // progress it carries, so a veteran's Statistics panel doesn't open claiming
+    // they have never won an invasion.
+    const stats = sanitizeFarmStats(data.stats, Date.now());
+    if (!data.stats) {
+      stats.raidsWon = Object.values(this.state.raidsCompleted)
+        .reduce((total, wins) => total + Math.max(0, Math.trunc(Number(wins) || 0)), 0);
+    }
+    this.state.restoreStats(stats);
     // The graveyard. Statues carry their own occupant (restoreObjects below), so
     // this is only the zombies still waiting for one.
     this.state.fallenZombies = sanitizeFallen(data.fallen);

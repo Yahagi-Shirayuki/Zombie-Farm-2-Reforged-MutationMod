@@ -92,6 +92,8 @@ describe("JobSystem elapsed-time catch-up", () => {
       gold: 100,
       spendGold: (amount: number) => { state.gold -= amount; },
       addXp: () => {},
+      // Lifetime tally (GameState.record*): counted on every applied job.
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: null,
       onTreeHarvest: null,
       canMutateOnline: null,
@@ -208,6 +210,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     };
     const state = {
       gold: 100, spendGold: (amount: number) => { state.gold -= amount; }, addXp: () => {},
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: null, onTreeHarvest: null, canMutateOnline: null,
     };
     const jobs = new JobSystem(
@@ -239,6 +242,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     };
     const state = {
       gold: 100, spendGold: () => {}, addXp: () => {},
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: null, onTreeHarvest: null, canMutateOnline: null,
     };
     const jobs = new JobSystem(
@@ -392,6 +396,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     const state = {
       gold: 100, brains: 0, level: 1,
       spendGold: (amount: number) => { state.gold -= amount; },
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: null, onTreeHarvest: null, canMutateOnline: null,
     };
     const cfg = {
@@ -427,6 +432,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     };
     const state = {
       gold: 100, brains: 0, level: 1,
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: (action: unknown) => farmActions.push(action),
       onTreeHarvest: null, canMutateOnline: () => true,
     };
@@ -484,6 +490,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     };
     const state = {
       gold: 100, spendGold: (amount: number) => { state.gold -= amount; }, addXp: () => {},
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: null, onTreeHarvest: null, canMutateOnline: null,
     };
     const first = new JobSystem(

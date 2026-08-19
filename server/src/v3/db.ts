@@ -580,6 +580,27 @@ export async function applyBatch(
   return { status: 200, response };
 }
 
+/** The presentation blob as stored, or null when the account has none yet (or it is
+ *  unreadable). Read on the ONE path that has to look at what is already there:
+ *  carrying a lifetime tally forward past a client too old to send one — see
+ *  statsToCarryForward in index.ts. Everything else writes the blob wholesale. */
+export async function readPresentationData(
+  db: D1Database,
+  accountId: string
+): Promise<Record<string, unknown> | null> {
+  const row = await db.prepare("SELECT current_json FROM presentations_v3 WHERE account_id = ?")
+    .bind(accountId).first<{ current_json: string }>();
+  if (!row?.current_json) return null;
+  try {
+    const parsed = JSON.parse(row.current_json) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function writePresentation(
   db: D1Database,
   accountId: string,

@@ -46,14 +46,14 @@ describe("objects whose art carries writing", () => {
     const field = makeField();
     const id = field.placeObject(SIGN, 2, 2)!;
     expect(field.flipObject(id)).toBe(false);
-    expect(field.objectFlipOf(id)).toBe(false);
+    expect(!!field.objectTurnOf(id)).toBe(false);
   });
 
   it("still turns everything else", () => {
     const field = makeField();
     const id = field.placeObject(HEDGE, 2, 2)!;
     expect(field.flipObject(id)).toBe(true);
-    expect(field.objectFlipOf(id)).toBe(true);
+    expect(!!field.objectTurnOf(id)).toBe(true);
   });
 
   it("drops a flip a restored save asks for, so art and footprint agree", () => {
@@ -61,16 +61,16 @@ describe("objects whose art carries writing", () => {
     // owner has an older client — comes back the right way round rather than as a
     // mirrored sign sitting on a transposed footprint.
     const field = makeField();
-    const id = field.placeObject(SIGN, 2, 2, undefined, undefined, true)!;
-    expect(field.objectFlipOf(id)).toBe(false);
-    expect(objectFootprint(SIGN, field.objectFlipOf(id))).toEqual({ w: 2, h: 1 });
+    const id = field.placeObject(SIGN, 2, 2, undefined, undefined, 1)!;
+    expect(!!field.objectTurnOf(id)).toBe(false);
+    expect(objectFootprint(SIGN, !!field.objectTurnOf(id))).toEqual({ w: 2, h: 1 });
   });
 
   it("drops a flip a Move tries to commit", () => {
     const field = makeField();
     const id = field.placeObject(SIGN, 2, 2)!;
-    expect(field.moveObject(id, 5, 5, true)).toBe(true);
-    expect(field.objectFlipOf(id)).toBe(false);
+    expect(field.moveObject(id, 5, 5, 1)).toBe(true);
+    expect(!!field.objectTurnOf(id)).toBe(false);
   });
 });
 

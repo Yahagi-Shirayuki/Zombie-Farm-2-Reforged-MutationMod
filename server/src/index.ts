@@ -725,6 +725,53 @@ function validTeamList(value: unknown): boolean {
   });
 }
 
+/** The client's lifetime statistics tally (see the client's src/stats.ts). Cosmetic
+ *  and client-authored like the Almanac: nothing on the server reads it back, and no
+ *  price, gate or reward consults it. Bounded here for the same reason the Almanac is
+ *  — a presentation blob must not be a place to park unbounded data. */
+export function validStatsBlob(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const stats = value as Record<string, unknown>;
+  const counter = (n: unknown) =>
+    n === undefined || (typeof n === "number" && Number.isSafeInteger(n) && n >= 0);
+  for (const [key, entry] of Object.entries(stats)) {
+    if (key === "harvested") continue;
+    if (!/^[A-Za-z][A-Za-z0-9]{0,31}$/.test(key) || !counter(entry)) return false;
+  }
+  const harvested = stats.harvested;
+  if (harvested === undefined) return true;
+  if (!harvested || typeof harvested !== "object" || Array.isArray(harvested)) return false;
+  const crops = Object.entries(harvested as Record<string, unknown>);
+  return crops.length <= 512 && crops.every(([key, n]) =>
+    /^[A-Za-z0-9_.-]{1,80}$/.test(key) &&
+    typeof n === "number" && Number.isSafeInteger(n) && n >= 0);
+}
+
+/**
+ * The lifetime tally to splice into an incoming presentation write, or undefined to
+ * store the write as it stands.
+ *
+ * The blob is stored WHOLESALE, and a client built before the tally existed sends a
+ * `ui` object with no `stats` in it. That write is otherwise perfectly good and must
+ * keep being accepted — but taken verbatim it erases the account's counters, and the
+ * next updated client to sign in reads the silence as a farm that has never harvested
+ * anything. So a write that says nothing about the tally leaves the stored one alone,
+ * rather than deleting it. A client that DOES send one is authoritative over it (the
+ * counters are client-authored; see the client's src/stats.ts).
+ *
+ * Only "no opinion" is protected. Nothing here can raise a counter, and nothing reads
+ * these numbers back as truth.
+ */
+export function statsToCarryForward(
+  incoming: Record<string, unknown>,
+  stored: Record<string, unknown> | null
+): unknown {
+  const sent = (incoming.ui as { stats?: unknown } | undefined)?.stats;
+  if (sent !== undefined) return undefined;
+  return (stored?.ui as { stats?: unknown } | undefined)?.stats;
+}
+
 function validFallenList(value: unknown): boolean {
   return value === undefined || (Array.isArray(value) &&
     value.length <= MAX_PRESENTATION_FALLEN && value.every(validFallenEntry));
@@ -1167,20 +1214,24 @@ app.put("/presentation", async (c) => {
   // blob, and none of these fields is ever read back as gameplay truth.
   const validFallen = validFallenList(body.data.fallen);
   // Saved farm line-ups ride the `ui` blob (see the client's SaveManager).
-  const ui = body.data.ui as { teams?: unknown } | undefined;
+  const ui = body.data.ui as { teams?: unknown; stats?: unknown } | undefined;
   const validUi = ui === undefined ||
-    (!!ui && typeof ui === "object" && !Array.isArray(ui) && validTeamList(ui.teams));
+    (!!ui && typeof ui === "object" && !Array.isArray(ui) &&
+      validTeamList(ui.teams) && validStatsBlob(ui.stats));
   const objectLayout = body.data.objectLayout as unknown;
   const validObjectLayout = objectLayout === undefined || (Array.isArray(objectLayout) &&
     objectLayout.length <= 512 && objectLayout.every((entry) => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
       const row = entry as { id?: unknown; key?: unknown; oc?: unknown; or?: unknown;
-        rotation?: unknown; memorial?: unknown };
+        rotation?: unknown; turn?: unknown; memorial?: unknown };
       return typeof row.id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(row.id) &&
         (row.key === undefined || row.key === "storage01") &&
         Number.isSafeInteger(row.oc) && Number(row.oc) >= 0 && Number(row.oc) < 128 &&
         Number.isSafeInteger(row.or) && Number(row.or) >= 0 && Number(row.or) < 128 &&
         (row.rotation === undefined || row.rotation === 0 || row.rotation === 1) &&
+        // A road bend stores which corner it is turned to instead of a mirror flag.
+        (row.turn === undefined ||
+          (Number.isSafeInteger(row.turn) && Number(row.turn) >= 0 && Number(row.turn) < 8)) &&
         // A Memorial Statue carries the one zombie carved on it.
         (row.memorial === undefined || validFallenEntry(row.memorial));
     }));
@@ -1189,9 +1240,22 @@ app.put("/presentation", async (c) => {
       !validFallen || !validUi) {
     return c.json({ error: "bad_presentation" }, 400);
   }
-  const encoded = JSON.stringify(body.data);
+  // Carry a lifetime tally past a client too old to send one. The extra read happens
+  // ONLY for such a client — an up-to-date one always sends the field, so the common
+  // path is unchanged. Not atomic with the write, and it does not need to be: the
+  // version CAS below rejects anything that landed in between, and the client retries.
+  let data = body.data;
+  if ((body.data.ui as { stats?: unknown } | undefined)?.stats === undefined) {
+    const carried = statsToCarryForward(
+      body.data, await v3.readPresentationData(c.env.DB, accountId)
+    );
+    if (carried !== undefined) {
+      data = { ...body.data, ui: { ...(body.data.ui as Record<string, unknown> ?? {}), stats: carried } };
+    }
+  }
+  const encoded = JSON.stringify(data);
   if (encoded.length > 128 * 1024) return c.json({ error: "too_large" }, 413);
-  const saved = await v3.writePresentation(c.env.DB, accountId, body.expectedVersion, body.data, Date.now());
+  const saved = await v3.writePresentation(c.env.DB, accountId, body.expectedVersion, data, Date.now());
   if (!saved) return c.json({ error: "presentation_conflict" }, 409);
   metric("presentation", accountId, started, { payloadBytes: encoded.length });
   return c.json(saved);
@@ -1683,7 +1747,8 @@ app.get("/friends/:id/save", async (c) => {
   const targetAccount = await db.accountById(c.env.DB, target);
   const p = boot.presentation.data as {
     farm?: { climate?: string; background?: string; zombiePatchGathered?: boolean };
-    objectLayout?: { id: string; key?: string; oc: number; or: number; rotation?: number }[];
+    objectLayout?: { id: string; key?: string; oc: number; or: number; rotation?: number;
+      turn?: number }[];
     rosterLayout?: { id: string; name?: string; pos?: { col: number, row: number }; color?: [number, number, number] }[];
   };
   const objectLayout = new Map((p.objectLayout ?? []).map((o) => [o.id, o]));
@@ -1724,7 +1789,7 @@ app.get("/friends/:id/save", async (c) => {
       if (obj.status !== "placed") return [];
       const layout = objectLayout.get(obj.instanceId);
       return [{ id: obj.instanceId, key: obj.catalogKey, oc: layout?.oc ?? 0, or: layout?.or ?? 0,
-        rotation: layout?.rotation, readyAt: obj.readyAt,
+        rotation: layout?.rotation, turn: layout?.turn, readyAt: obj.readyAt,
         // A visitor sees the zombie carved on each Memorial Statue. This comes from
         // the authoritative graveyard rather than the owner's presentation blob,
         // which is the reason the graveyard is server-side at all: the blob is not
@@ -1734,7 +1799,7 @@ app.get("/friends/:id/save", async (c) => {
     }).concat([...objectLayout.values()].flatMap((layout) =>
       layout.key === "storage01" && !boot.gameplay.objects.objects.some((obj) => obj.instanceId === layout.id)
         ? [{ id: layout.id, key: layout.key, oc: layout.oc, or: layout.or,
-          rotation: layout.rotation, readyAt: undefined }]
+          rotation: layout.rotation, turn: layout.turn, readyAt: undefined }]
         : [])),
     ownedZombies: boot.gameplay.roster.map((unit) => {
       const layout = rosterLayout.get(unit.id);
