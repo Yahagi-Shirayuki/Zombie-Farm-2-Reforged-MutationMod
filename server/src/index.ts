@@ -55,6 +55,7 @@ import {
   type PinnedRaidConfig,
   type RaidReplayInput,
 } from "./raidVerifier";
+import { MAX_FUNCTIONAL_OBJECTS } from "./v3/engine";
 import type { BattleSimSnapshot } from "../../src/raid/BattleSim";
 import plantCatalog from "../../public/assets/plants.json";
 import zombieCatalog from "../../public/assets/zombies.json";
@@ -1219,8 +1220,18 @@ app.put("/presentation", async (c) => {
     (!!ui && typeof ui === "object" && !Array.isArray(ui) &&
       validTeamList(ui.teams) && validStatsBlob(ui.stats));
   const objectLayout = body.data.objectLayout as unknown;
+  // Derived, NOT a literal 512, and one MORE than the object cap. A farm may hold
+  // MAX_FUNCTIONAL_OBJECTS server objects, and the layout carries one thing the object
+  // document never does: the free starter shed, which is presentation-only until it is
+  // upgraded (`adoptsFreeStarterShed`) and which `reconcileObjectLayouts` deliberately
+  // exempts from tombstone pruning for exactly that reason. So a player who fills their
+  // farm to the cap sends 513 layouts against a bound of 512, and the whole presentation
+  // write is refused — every zombie name, team, Almanac entry, camera position and
+  // lifetime counter stops saving, silently and for good, for the most decorated farms
+  // in the game. Two independently-written copies of one number is what made that
+  // possible; there is now one.
   const validObjectLayout = objectLayout === undefined || (Array.isArray(objectLayout) &&
-    objectLayout.length <= 512 && objectLayout.every((entry) => {
+    objectLayout.length <= MAX_FUNCTIONAL_OBJECTS + 1 && objectLayout.every((entry) => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
       const row = entry as { id?: unknown; key?: unknown; oc?: unknown; or?: unknown;
         rotation?: unknown; turn?: unknown; memorial?: unknown };

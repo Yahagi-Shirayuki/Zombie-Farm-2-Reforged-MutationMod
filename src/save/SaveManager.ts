@@ -6,13 +6,14 @@ import { ZombieField } from "../zombie/ZombieField";
 import { QuestSystem } from "../quest/QuestSystem";
 import type { PeriodicQuestSystem } from "../quest/periodic/PeriodicQuestSystem";
 import {
-  SaveGame, SAVE_VERSION, ONLINE_PRESENTATION_PREFIX, ONLINE_SNAPSHOT_PREFIX,
+  SaveGame, SAVE_VERSION, migrateSave, ONLINE_PRESENTATION_PREFIX, ONLINE_SNAPSHOT_PREFIX,
   type FallenZombieSave,
 } from "./schema";
 import { activeSaveKey, migrateLegacyProfileSaves } from "./profiles";
 import { shedCapacityOf } from "../shedCapacity";
 import * as api from "../net/api";
 import { getFarmBackground } from "../prefs";
+import { recordDiagnostic } from "../diagnostics";
 import { epicBossById } from "../epicBoss/catalog";
 import { GAMEPLAY_PROTOCOL } from "../net/protocol";
 import { epicBossRunToClient, serverTimestampToClient } from "../net/clock";
@@ -65,6 +66,9 @@ export class SaveManager {
   private presentationVersion = 0;
   private lastPresentation = "";
   private presentationDirty = false;
+  /** One alarm per refusal streak. A rejected presentation is refused on every retry,
+   *  and a toast per minute would be noise on top of a fault the player cannot fix. */
+  private presentationRefused = false;
   private pushing = false;
   private pendingPresentation: Record<string, unknown> | null = null;
   private pendingPresentationImmediate = false;
@@ -346,7 +350,11 @@ export class SaveManager {
     void this.push(data);
   }
 
-  private writeLocal(blob: SaveGame): void {
+  /** Returns false when nothing reached storage. `importLocal` is the caller that
+   *  must not lie about that: it used to return true regardless, so a player importing
+   *  a backup into a browser with no room was told it worked and then reloaded into the
+   *  farm they were trying to replace. */
+  private writeLocal(blob: SaveGame): boolean {
     const key = this.cacheKey();
     const temporary = `${key}.tmp`;
     const backup = `${key}.backup`;
@@ -358,6 +366,7 @@ export class SaveManager {
       if (current !== null) localStorage.setItem(backup, current);
       localStorage.setItem(key, encoded);
       localStorage.removeItem(temporary);
+      return true;
     } catch (error) {
       // Drop the scratch copy on the way out. It is a whole save's worth of quota, and
       // leaving it behind after a quota failure makes the NEXT write likelier to fail
@@ -365,6 +374,7 @@ export class SaveManager {
       try { localStorage.removeItem(temporary); } catch { /* storage already unusable */ }
       console.warn("[save] local write failed", error);
       this.onStorageError?.("Local Farm could not be saved. Check browser storage or export a backup.");
+      return false;
     }
   }
 
@@ -383,8 +393,33 @@ export class SaveManager {
       this.presentationVersion = saved.version;
       this.lastPresentation = encoded;
       this.presentationDirty = false;
+      this.presentationRefused = false;
     } catch (error) {
       this.presentationDirty = true;
+      // A REFUSED write (as opposed to a lost one) never clears by retrying: the same
+      // blob goes back every minute and is rejected every time. Nothing used to say so
+      // — no log, no diagnostic, no word to the player — while names, teams, layouts,
+      // the Almanac and the lifetime tally quietly stopped being saved at all. The
+      // player finds out by reloading, hours later, into a farm that forgot everything.
+      // 409 is excluded because it is the ordinary CAS race, handled just below.
+      if (error instanceof api.ApiError && error.status !== 409 && error.status !== 0) {
+        const detail = `${error.status} ${error.code}`;
+        console.warn(`[presentation] write refused (${detail}); farm layout is not being saved`);
+        recordDiagnostic({
+          at: Date.now(), kind: "error", where: "presentation-write",
+          message: `presentation refused: ${detail}`,
+        });
+        if (!this.presentationRefused) {
+          this.presentationRefused = true;
+          this.onStorageError?.(
+            "Your farm's layout and names have stopped saving online. Please report this — " +
+            "your farm itself is safe, and Settings › Diagnostics has the detail."
+          );
+        }
+      } else if (!(error instanceof api.ApiError) || error.status === 0) {
+        // A lost write is ordinary; if one later succeeds, allow the alarm to fire again.
+        this.presentationRefused = false;
+      }
       if (error instanceof api.ApiError && error.status === 409) {
         console.warn("[presentation] conflict; reconciling with server");
         try {
@@ -487,8 +522,8 @@ export class SaveManager {
     try {
       const raw = localStorage.getItem(key);
       if (!raw) return null;
-      const snapshot = JSON.parse(raw) as SaveGame;
-      if (snapshot.version !== SAVE_VERSION) return null;
+      const snapshot = migrateSave(JSON.parse(raw) as SaveGame);
+      if (!snapshot) return null;
       await this.applySave(snapshot, false);
       return { kind: "online-cached", savedAt: snapshot.savedAt };
     } catch {
@@ -648,8 +683,8 @@ export class SaveManager {
       const raw = values[index];
       if (!raw) continue;
       try {
-        const data = JSON.parse(raw) as SaveGame;
-        if (data.version !== SAVE_VERSION || !data.player || !data.farm) continue;
+        const data = migrateSave(JSON.parse(raw) as SaveGame);
+        if (!data) continue;
         await this.applySave(data);
         if (index === 1) {
           try { localStorage.removeItem(key); } catch { /* keep backup usable */ }
@@ -810,10 +845,10 @@ export class SaveManager {
   importLocal(raw: string): boolean {
     if (this.mode !== "local") return false;
     try {
-      const data = JSON.parse(raw) as SaveGame;
-      if (data.version !== SAVE_VERSION || !data.player || !data.farm) return false;
-      this.writeLocal(data);
-      return true;
+      const migrated = migrateSave(JSON.parse(raw) as SaveGame);
+      if (!migrated) return false;
+      // The write's own answer, not an assumption about it.
+      return this.writeLocal(migrated);
     } catch {
       return false;
     }

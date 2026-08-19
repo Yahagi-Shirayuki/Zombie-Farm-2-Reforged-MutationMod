@@ -33,6 +33,33 @@ import type { FarmStats } from "../stats";
 /** Bump when the shape changes in a way that needs a migration. */
 export const SAVE_VERSION = 1;
 
+/** Bring a save written by an older build up to `SAVE_VERSION`, or return null if it
+ *  cannot be read at all.
+ *
+ *  There is nothing to migrate yet — every field added since launch was made optional
+ *  with a default precisely so the version never had to move. That is exactly why this
+ *  exists NOW rather than later: every reader compared `version !== SAVE_VERSION` and
+ *  treated any difference as damage, so the first person to bump the constant would
+ *  have made every Local Farm in existence unreadable, and the recovery dialog those
+ *  players land on offers "Start a New Local Farm" — it deletes the save AND its
+ *  backup. A one-line constant change was one click away from wiping every offline
+ *  player, with the bytes on disk perfectly intact the whole time.
+ *
+ *  A save from the FUTURE is still refused: this build cannot know what a later one
+ *  meant, and guessing would corrupt it for the build that can read it.
+ *
+ *  To add a migration: handle the old version here, return the upgraded blob, and add
+ *  a case to schema.migrate.test.ts. `migrateSave` is the ONLY place allowed to know
+ *  what an old save looked like. */
+export function migrateSave(data: SaveGame | null | undefined): SaveGame | null {
+  if (!data || typeof data !== "object") return null;
+  const version = (data as SaveGame).version;
+  if (!Number.isInteger(version) || version > SAVE_VERSION) return null;
+  if (!data.player || !data.farm) return null;
+  // if (version === 1) { ...upgrade in place, then fall through... }
+  return version === SAVE_VERSION ? data : null;
+}
+
 /** Legacy mixed-purpose key. Retained only for safe migration. */
 export const SAVE_KEY = "zf2r.v3.presentation-cache";
 /** Local Farm profiles. These are never read by Online Farm. */
