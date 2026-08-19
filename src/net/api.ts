@@ -8,6 +8,7 @@
 import type { SaveGame } from "../save/schema";
 import type { Friend } from "../social/friends";
 import { RAID_RULESET_VERSION, type RaidReplayInput } from "../raid/replay";
+import { BUILD_TAG } from "../version";
 import type { RaidOutcome } from "../raid/types";
 import {
   CLIENT_INTEGRITY_VERSION,
@@ -271,7 +272,7 @@ async function req<T>(
   const headers: Record<string, string> = {};
   let writerCredentialAttached = false;
   headers["X-Integrity-Version"] = String(CLIENT_INTEGRITY_VERSION);
-  headers["X-Client-Build"] = import.meta.env.VITE_BUILD_ID ?? "dev";
+  headers["X-Client-Build"] = BUILD_TAG;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (auth) {
     if (!session) throw new ApiError(401, "no_session");
@@ -406,7 +407,7 @@ const releaseWriterOnUnload = (event: PageTransitionEvent): void => {
       keepalive: true,
       headers: {
         "X-Integrity-Version": String(CLIENT_INTEGRITY_VERSION),
-        "X-Client-Build": import.meta.env.VITE_BUILD_ID ?? "dev",
+        "X-Client-Build": BUILD_TAG,
         "Authorization": `Bearer ${session.token}`,
         "X-Writer-Client": writerCredential.clientId,
         "X-Writer-Generation": String(writerCredential.generation),
