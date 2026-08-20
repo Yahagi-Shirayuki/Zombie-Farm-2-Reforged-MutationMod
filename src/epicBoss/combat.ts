@@ -8,6 +8,20 @@ import { epicBossDamage, epicBossDamageTiming } from "./catalog";
 import type { EpicBossDef, EpicBossLoot, EpicBossRun } from "./types";
 import { EPIC_LOOT_DROP_CHANCE, EPIC_LOOT_ROLLS, epicLootWeight } from "./rewards";
 
+/** Prefix of the `sourceKey` an Epic Boss fights under. It names an event, not a file:
+ *  an Epic Boss draws from its own asset folder (`bossTexture` + the animation strips),
+ *  and NOTHING under `assets/raids/enemies/` will ever answer to it.
+ *
+ *  Exported because the scene loader has to know that. Asking for the file anyway cost
+ *  every Epic Boss fight a three-second stall on a 404 that cannot succeed — see
+ *  `isEpicBossKey`'s use in RaidScene. */
+export const EPIC_BOSS_KEY_PREFIX = "EpicBoss:";
+
+/** Whether a combat `sourceKey` names an Epic Boss (and so has no shared enemy art). */
+export function isEpicBossKey(sourceKey: string): boolean {
+  return sourceKey.startsWith(EPIC_BOSS_KEY_PREFIX);
+}
+
 export interface EpicBossSetup {
   raid: RaidDef;
   party: OwnedZombie[];
@@ -31,7 +45,7 @@ export function buildEpicBossSetup(
   });
   const boss: CombatUnit = {
     id: `epic:${run.runId}:${run.level}`,
-    sourceKey: `EpicBoss:${def.id}`,
+    sourceKey: `${EPIC_BOSS_KEY_PREFIX}${def.id}`,
     team: "enemy",
     name: def.name,
     // Damage compounds 5% per rung (epicBossDamage) — MUST match server/src/v3/epicBoss.ts.

@@ -433,7 +433,7 @@ export function openSettings(hud: Hud): void {
   const captured = diagnosticsCount();
   copyButton.textContent = captured ? `Copy (${captured})` : "Copy";
   copyButton.onclick = async () => {
-    const text = diagnosticsReport({ mode: hud.playMode });
+    const text = diagnosticsReport({ mode: hud.playMode, ...hud.getDiagnosticExtras?.() });
     try {
       await navigator.clipboard.writeText(text);
       hud.showToast("Diagnostics copied. Paste them into your bug report.");
@@ -532,7 +532,7 @@ export function openSettings(hud: Hud): void {
       ...localStorageControls,
       ...accountBlock,
       diagnostics,
-      noteEl("Copies this build's id, your browser, and any recorded errors. Nothing is sent anywhere — paste it into a bug report."),
+      noteEl("Copies this build's id, your browser, a short list of what the game has just been doing, and any recorded errors. No save data, no account details, nothing you have typed. Nothing is sent anywhere — paste it into a bug report."),
       updates,
       updatesNote,
     ],

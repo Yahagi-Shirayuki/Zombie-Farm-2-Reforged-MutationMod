@@ -424,6 +424,24 @@
 #hud.raiding .questcol, #hud.raiding .invade-shortcut, #hud.raiding .fab,
 #hud.raiding .touch-cancel, #hud.raiding .plant-label,
 #hud.raiding .crop-hover { display: none !important; }
+/* Shown from the moment the farm is hidden until the battle scene is on screen.
+   Deliberately NOT inside `.raiding`'s hide list: it is the only thing on screen
+   during that window, and without it the player is looking at the stage's bare
+   clear colour with no way to tell loading apart from a crash. */
+#hud .battle-loading { position: fixed; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 14px; z-index: 30;
+  pointer-events: none; color: #f3ecd2;
+  font: 700 16px/1.3 "Trebuchet MS", system-ui, sans-serif; text-shadow: 0 2px 4px #000;
+  background: rgba(12, 20, 8, .55); }
+#hud .battle-loading-spinner { width: 42px; height: 42px; border-radius: 50%;
+  border: 4px solid rgba(243, 236, 210, .25); border-top-color: #f07a1e;
+  animation: battle-spin 900ms linear infinite; }
+@keyframes battle-spin { to { transform: rotate(360deg); } }
+/* A device asking for less motion gets a pulse instead of a spin. */
+@media (prefers-reduced-motion: reduce) {
+  #hud .battle-loading-spinner { animation: battle-pulse 1.4s ease-in-out infinite; }
+  @keyframes battle-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+}
 /* "u" key: hide all farm chrome for a clean, unobstructed view of the farm. */
 #hud.ui-hidden .topbar, #hud.ui-hidden .tools, #hud.ui-hidden .menucol,
 #hud.ui-hidden .questcol, #hud.ui-hidden .invade-shortcut, #hud.ui-hidden .fab,
@@ -459,7 +477,7 @@
    Sits above the farm chrome but below every panel (.panelbg is z-index 20+), so a
    dialog can never end up underneath it. */
 #hud .tw-bg { position: fixed; inset: 0; z-index: 19; pointer-events: auto; }
-#hud .tw { position: fixed; min-width: 186px; max-height: 78vh; overflow-y: auto;
+#hud .tw { position: fixed; min-width: 186px; max-width: 280px; max-height: 78vh; overflow-y: auto;
   display: flex; flex-direction: column; gap: 2px; padding: 6px;
   background: linear-gradient(#6e4425, #492b16); border: 2px solid #2f1d0d;
   border-radius: 14px; box-shadow: 0 6px 16px rgba(0,0,0,.55); outline: none; }
@@ -471,7 +489,8 @@
   font: 700 14px system-ui,sans-serif; text-shadow: 0 1px 2px #000; }
 #hud .tw-item img { width: 30px; height: 30px; object-fit: contain; flex: 0 0 auto;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
-#hud .tw-item .tw-lbl { flex: 1 1 auto; }
+#hud .tw-item .tw-lbl { flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #hud .tw-item .tw-key { flex: 0 0 auto; min-width: 18px; padding: 1px 5px; border-radius: 6px;
   background: rgba(0,0,0,.4); border: 1px solid #2f1d0d; color: #ffe9b0;
   font: 800 11px system-ui,sans-serif; text-align: center; }
@@ -575,6 +594,18 @@
    not rest on source order alone: both are fixed-height compositions that scroll an
    inner column, and letting the frame itself scroll slides the whole book/board. */
 #hud .panelbg > .guide-panel, #hud .raid-bg > .panel { overflow: hidden; }
+/* Statistics, Settings (its Display tab is the tall one) and the quest log scroll
+   without drawing a scrollbar: these three are plain read-down lists whose whole
+   composition is the content, so the track only cuts a grey stripe through the
+   parchment. Scrolling itself is untouched — wheel, drag and keys all still work.
+   Named panels rather than the whole layer, because the panels that DO carry a
+   themed track (the market grid) are deliberate. */
+#hud .stats-panel, #hud .settings-panel, #hud .panel.questlog, #hud .qlog-list {
+  scrollbar-width: none; -ms-overflow-style: none; }
+#hud .stats-panel::-webkit-scrollbar,
+#hud .settings-panel::-webkit-scrollbar,
+#hud .panel.questlog::-webkit-scrollbar,
+#hud .qlog-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
 /* The shared modal X sits INSIDE the panel's top-right corner, on every screen.
    It used to hang 16px past that corner, which reads well on a plain box but is
    sliced in half the moment the panel becomes a scroll container — and the rule

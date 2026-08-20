@@ -11,6 +11,8 @@
 // portraits, not side-view stage actors.
 import { AnimatedSprite, Application, Assets, Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
 import { GameAssets, raidImage } from "../assets";
+import { isEpicBossKey } from "../epicBoss/combat";
+import { noteAssetFailure } from "../assetFailures";
 import { ALIEN_LASER_SPRITE, BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, EPIC_BOSS_LAND_MS, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX } from "./BattleSim";
 import { RaidActor } from "./RaidActor";
 import { EnemyActor, type EnemyAttackPose } from "./EnemyActor";
@@ -477,6 +479,11 @@ async function loadTex(url: string): Promise<Texture | null> {
   try {
     return (await Assets.load(url)) as Texture;
   } catch {
+    // Returning null is deliberate — a missing decoration must not cost the player the
+    // fight — but it must not be SILENT as well. An unloadable texture was invisible from
+    // inside the game and from the bug report alike, which is how a three-second stall on
+    // a URL that could never exist survived a whole beta. See assetFailures.ts.
+    noteAssetFailure(url);
     return null;
   }
 }
@@ -805,7 +812,21 @@ export class RaidScene {
           });
         } else if (this.assets.enemyModels[k]) {
           this.enemyStrip.set(k, await loadTex(enemyStripUrl(k)));
-        } else {
+        } else if (!isEpicBossKey(k)) {
+          // NOT for an Epic Boss. Its key names an event, so `assets/raids/enemies/
+          // EpicBoss:dr-groundhog.png` cannot exist — and asking anyway is not free:
+          // `Assets.load` spends about THREE SECONDS discovering that (it falls back
+          // from createImageBitmap to an <img> element, which has its own failure
+          // delay), the result is never cached, so every attempt pays it again, and
+          // the whole battle build is sitting on this await while it happens.
+          //
+          // Nothing was gained for the wait. An Epic Boss is drawn from its own folder
+          // — the animation strips loaded below, or `bossTexture` through the fallback
+          // — so this branch could only ever store a null. Reported as the Groundhog
+          // battle "not loading" and showing a green screen: the farm is hidden and the
+          // battle HUD is inside the scene, so until the scene lands there is nothing
+          // on screen but the stage's clear colour. On a phone on mobile data that wait
+          // is far longer than three seconds. See epicBoss/combat.isEpicBossKey.
           this.enemyTex.set(k, await loadTex(enemySprite(k)));
         }
       })

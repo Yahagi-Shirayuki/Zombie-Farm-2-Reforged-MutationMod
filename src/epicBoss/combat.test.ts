@@ -3,7 +3,11 @@ import {
   DR_GROUNDHOG, EPIC_BOSSES, epicBossById, epicBossDamage, epicBossDamageTiming,
   epicBossUnlockLevel,
 } from "./catalog";
-import { rollEpicBossDrops, rollEpicBossLoot } from "./combat";
+// Read off disk, the same way the other asset invariants do it: the app carries no
+// @types/node, so this built-in has to be imported past the typechecker.
+// @ts-ignore
+import { existsSync } from "node:fs";
+import { buildEpicBossSetup, isEpicBossKey, rollEpicBossDrops, rollEpicBossLoot } from "./combat";
 import { EPIC_LOOT_ROLLS, epicBrainTicketChance, epicLootWeight } from "./rewards";
 import { BattleSim } from "../raid/BattleSim";
 import { buildPlayerUnits } from "../raid/CombatEngine";
@@ -427,6 +431,60 @@ describe("Epic Boss damage ramp", () => {
     // not play". The Silver band's wall (Party Zombie) is a crop, so it is ungated too.
     for (const boss of EPIC_BOSSES) {
       expect(tankDied(supportedTank(epicBossUnlockLevel(boss)), bossOf(boss)), boss.name).toBe(false);
+    }
+  });
+});
+
+// Reported as the Dr. Groundhog battle "not loading" and showing a green screen. The
+// battle build was waiting on `assets/raids/enemies/EpicBoss:dr-groundhog.png` — a file
+// that names an EVENT, not a sprite, and so can never exist. `Assets.load` spends about
+// three seconds discovering that, never caches the failure, and the whole build sits on
+// that await: the farm is already hidden and the battle HUD lives inside the scene, so
+// there is nothing on screen but the stage's clear colour for the entire wait. On a
+// phone on mobile data it is far longer than three seconds.
+describe("an Epic Boss is drawn from its own folder, never the shared enemy art", () => {
+  it("recognises the source key a boss actually fights under", () => {
+    for (const boss of EPIC_BOSSES) {
+      const units = buildEpicBossSetup(
+        boss,
+        {
+          runId: "r", bossId: boss.id, level: 1, maxHp: 100, currentHp: 100,
+          activatedAt: 0, expiresAt: 1, encounterStartedAt: 0, retryReadyAt: 0,
+          tokenCount: 0, completedAt: 0, attackOrder: [],
+        },
+        [],
+        { farmer: {} } as never,
+        { level: 1, abilityUnlocked: () => true, farmerZombieStrengthMult: () => 1,
+          farmerZombieLifeMult: () => 1 } as never,
+      );
+      const bossUnit = units.enemyUnits.find((unit) => unit.isBoss)!;
+      expect(isEpicBossKey(bossUnit.sourceKey), boss.id).toBe(true);
+    }
+  });
+
+  it("does not mistake an ordinary raid enemy for one", () => {
+    // The guard SKIPS a texture request, so a false positive here would leave a real
+    // enemy undrawn — a far worse failure than the stall it removes.
+    for (const key of [
+      "FarmStageActorBoss", "PirateStageActorMinion1", "NinjaStageActorBoss",
+      "AlienStageActorMinion", "VideoGameStageActorBoss", "carrotWall", "junkWall",
+    ]) {
+      expect(isEpicBossKey(key), key).toBe(false);
+    }
+  });
+
+  it("ships every boss the art its own key cannot resolve to", () => {
+    // The other half of the same rule: skipping the shared-enemy request is only safe
+    // because each boss carries its own combat art. A boss that shipped without it would
+    // now fall through to the portrait circle instead of a three-second wait for nothing.
+    for (const boss of EPIC_BOSSES) {
+      expect(boss.bossTexture, boss.id).toBeTruthy();
+      const asset = (file: string) =>
+        new URL(`../../public/assets/epic-bosses/${boss.id}/${file}`, import.meta.url);
+      expect(existsSync(asset(boss.bossTexture)), boss.id).toBe(true);
+      for (const [name, animation] of Object.entries(boss.animations)) {
+        expect(existsSync(asset(animation.file)), `${boss.id} ${name}`).toBe(true);
+      }
     }
   });
 });

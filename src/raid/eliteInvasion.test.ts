@@ -48,10 +48,25 @@ describe("elite profile selection", () => {
     expect(ELITE_PROFILES[3].str).toBe(strongest);
   });
 
-  it("gives the Circus the fiercest projectiles — its boss is the juggler", () => {
+  it("gives the Circus the busiest projectiles — its boss is the juggler", () => {
     const profiles = Object.values(ELITE_PROFILES);
-    expect(ELITE_PROFILES[8].throwDamage).toBe(Math.max(...profiles.map((p) => p.throwDamage)));
+    // The juggling act is a RATE, and that is the half of it this raid owns outright.
     expect(ELITE_PROFILES[8].throwRate).toBe(Math.max(...profiles.map((p) => p.throwRate)));
+    // Its per-hit multiplier is deliberately NOT the table's largest any more. It used to
+    // be (x8), back when `throwDamage` multiplied an authored chip value that did nothing;
+    // since the ruleset 34 projectile re-fit it multiplies a throw already fitted to kill
+    // the healer it is aimed at, and 8 on top of that deleted the healer outright. The
+    // juggling is delivered as MANY LIGHT hits now — which is what juggling looks like.
+    expect(ELITE_PROFILES[8].throwDamage)
+      .toBeLessThan(Math.max(...profiles.map((p) => p.throwDamage)));
+    // What it keeps is the top of the projectile band overall: rate x damage — the whole
+    // step an elite Circus buys over its ordinary fight — sits with the seasonal raids at
+    // the 4x cap. Raid 6 is excluded because it has no throw table at all, so its two throw
+    // fields are inert and are left alone rather than scaled for the look of the table.
+    const step = (id: number) => ELITE_PROFILES[id].throwDamage * ELITE_PROFILES[id].throwRate;
+    const throwing = Object.keys(ELITE_PROFILES).map(Number).filter((id) => id !== 6);
+    expect(step(8)).toBeGreaterThan(3.9);
+    expect(step(8)).toBeGreaterThanOrEqual(Math.max(...throwing.map(step)) - 0.05);
   });
 
   it("only raises the wall on the two raids that summon one", () => {

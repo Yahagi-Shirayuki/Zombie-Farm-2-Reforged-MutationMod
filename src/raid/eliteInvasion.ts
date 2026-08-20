@@ -30,15 +30,18 @@
 //   Valentine's Day        0.10    0.53      between Pirates and Robots
 //   Circus                 0.10    0.62      Robots, normally
 //   Lawyers                0.27    0.65      Robots, normally
-//   Pirates                0.41    1.50   \
-//   Ninjas                 0.77    1.67    |
-//   Robots                 0.74    1.82    >  the elite RAMP (see below)
-//   Aliens                 0.97    2.04    |
-//   Video Games            1.33    2.21   /
+//   Pirates                0.43    1.58   \
+//   Ninjas                 0.77    1.72    |
+//   Robots                 0.73    1.91    >  the elite RAMP (see below)
+//   Aliens                 0.98    2.09    |
+//   Video Games            1.35    2.22   /
+//
+// (Re-measured at ruleset 35: the formation fix there lifted every rung a little, and
+// the Pirates a lot — see raid 3's entry for why, and for the re-fit that answers it.)
 //
 // THE TOP FIVE ARE A RAMP, not a band. The five late invasions are fitted to a smooth
-// climb in ladder order — 1.50 at the Pirates (rec 21) up to 2.21 at the Video Games
-// (rec 43), in even steps of roughly 0.15-0.2 — so a player working up the ladder meets a
+// climb in ladder order — 1.58 at the Pirates (rec 21) up to 2.22 at the Video Games
+// (rec 43), in even steps of roughly 0.13-0.19 — so a player working up the ladder meets a
 // Brain Ticket fight a little harder each time, and the hardest elite invasion in the
 // game is the last one they unlock.
 //
@@ -66,6 +69,51 @@
 //
 // SHAPE, not just size. Each raid spends its budget on the mechanic it is known for, so
 // an elite run feels like more of THAT invasion rather than uniform stat inflation.
+//
+// ---------------------------------------------------------------------------
+// THE PROJECTILE RE-FIT (ruleset 34) — why every `throwDamage` in this table moved.
+//
+// `throwDamage` multiplies the ORDINARY fight's throw, and until ruleset 34 that throw was
+// the authored chip value: a mechanic that had stopped being one (see
+// RaidCatalog.fightScaledThrow). So these multipliers were never fitted against anything.
+// They were fitted against nothing, and it shows — measured as damage per second against
+// the reference healer the yardstick is sized on, the elite projectile ranged from 11
+// (Lawyers, which needed 22 SECONDS to kill it) to 259 (Circus, which needed 0.8).
+//
+// Ruleset 34 makes the ordinary throw real, and it lands hardest exactly where the old
+// numbers were most inflated. Left alone, the two multiplied together: elite Circus went to
+// 343 dmg/s — a healer deleted in six tenths of a second — and elite Pirates to 74, a 4.86x
+// step on a base that had itself just gone up 4.42x. That is the whole reason this block
+// exists: a floor under the ordinary throw is not a licence to raise the elite one by the
+// same factor twice.
+//
+// So `throwDamage` is now fitted as a STEP over the rebalanced throw, and the step is what
+// each profile is documented by:
+//
+//   raid                 step   raid                 step
+//   Old McDonnell's      3.00   Summer Break         4.00
+//   Lawyers              2.00   Circus               3.99
+//   Pirates              2.00   Video Games          2.22   (unchanged — see below)
+//   Ninjas               2.20   Tree World           4.01
+//   Robots               2.00   Valentine's Day      4.01
+//
+// The band is 2x-4x and the ORDER inside it is the old table's own, compressed: the raids
+// whose ordinary throw the rebalance barely touched (Summer 1.23x, Tree 1.57x, Valentine
+// 1.60x, Circus 1.33x) keep the most elite headroom, and the raids it lifted hardest
+// (Pirates 4.42x, Lawyers 3.65x) keep the least, because their elite throw is now a step on
+// a far heavier base. In absolute terms that still leaves elite Pirates throwing 243 a hit
+// against elite Summer Break's 56 — the step is small there precisely because the base is
+// not. `throwRate` is untouched throughout: how OFTEN a boss throws is its character (the
+// Circus ringmaster still juggles at 3x), and the step is delivered through damage.
+//
+// The Video Games are the control: raid 9 is the one invasion whose ordinary throw the
+// rebalance does not touch at all (Zedzox's flat 100s already clear the floor), and its
+// profile comes out of the re-fit unchanged at 1.72. A re-fit that moved it would have been
+// re-authoring rather than accounting.
+//
+// Guarded by `projectileScale.test.ts`, which measures the step from the shipped config on
+// both sides of `eliteBossThrow` — so a profile edit and a yardstick edit both have to face
+// the same assertion.
 // ---------------------------------------------------------------------------
 
 import type { BossSpecial, BossThrowConfig, EnemyStat } from "./types";
@@ -97,7 +145,9 @@ export interface EliteProfile {
    *  everywhere: past roughly 1.6x, enemies stop reading as enemies and start reading
    *  as a strobe. */
   dex: number;
-  /** Boss projectile damage. */
+  /** Boss projectile damage — a step over the fight's REBALANCED throw
+   *  (RaidCatalog.fightScaledThrow), not over the authored chip value. See the projectile
+   *  re-fit in the header for the band these are fitted to. */
   throwDamage: number;
   /** Boss projectile RATE — 2 means twice as many throws (half the interval). */
   throwRate: number;
@@ -141,12 +191,17 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
   // a fight already multiplies the damage taken; raising str on top of it (x4 was tried)
   // turned an unmutated 16-strong roster's casualties into a total wipe. The ask was
   // tankier, so tankiness is the only thing that moved.
-  1: { str: 2.9, con: 8.75, bossCon: 6, dex: 1.6, throwDamage: 2.9, throwRate: 1.5, wallHp: 1, specialDamage: 2.9 },
+  //
+  // `throwDamage` 2.9 -> 2 in the projectile re-fit, for a step of 3.00 — the largest in
+  // the band, and deliberately so: this is the only raid whose ORDINARY throws are fitted
+  // to a DPS band (12 at the tutorial end, 20 at the top of its ladder) rather than to the
+  // flat yardstick, so an elite fight here steps off whichever rung the player is on.
+  1: { str: 2.9, con: 8.75, bossCon: 6, dex: 1.6, throwDamage: 2, throwRate: 1.5, wallHp: 1, specialDamage: 2.9 },
 
   // 2 — Zombies vs Lawyers. The Corporate boss is the ladder's speed threat: fast
   // punches and the Double Punch stun. So this is the one profile that spends most of
   // its budget on DEX, and the stun special hits hardest of all.
-  2: { str: 1.6, con: 1.8, dex: 1.85, throwDamage: 1.8, throwRate: 1.35, wallHp: 1, specialDamage: 2.1 },
+  2: { str: 1.6, con: 1.8, dex: 1.85, throwDamage: 1.48, throwRate: 1.35, wallHp: 1, specialDamage: 2.1 },
 
   // 3 — Zombies vs Pirates. Pirates hit like a cannon and their Scallywag mirrors your
   // attack speed, so speed is explicitly NOT their lever: dex stays at 1.0 and the whole
@@ -157,27 +212,51 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
   // bottom rung of the elite RAMP, fitted to p* 1.50. It comes down slightly because the
   // whole top of the ladder came down off the old shared band; see the header. Its
   // character is untouched, dex very much included.
-  3: { str: 6.03, con: 3.17, dex: 1, throwDamage: 4.86, throwRate: 1, wallHp: 1, specialDamage: 4.51 },
+  //
+  // `throwDamage` 4.86 -> 2 in the projectile re-fit (step 2.00), the biggest cut in the
+  // table after the Circus. Nothing about the elite pirate got softer: this raid's ordinary
+  // throw went up 4.42x in ruleset 34 — the largest lift of any invasion — and 4.86 on top
+  // of that was the same increase charged twice. The anchor still lands for 243.
+  //
+  // v35 RE-FIT (x0.85 on the STAT levers' distance from 1.0 — str, con, specialDamage;
+  // dex and the two throw fields untouched, the latter because they are fitted by the
+  // projectile band above rather than to a p* rung). The formation fix in ruleset 35 —
+  // an enemy no longer stands idle while the line re-forms behind a reinforcement — moved
+  // every rung UP, and it moved THIS one hardest by far: 1.50 -> 1.80, against 1.67 -> 1.72
+  // at the Ninjas above it. That is the fix landing where it should. An elite pirate
+  // one-shots the zombie it reaches, so this is the raid that spends the most of its time
+  // with a fresh zombie walking up to replace a dead one, and it was collecting the free
+  // window every time. Left alone it would have overtaken the Ninjas and inverted the
+  // bottom of the ramp. Re-fitted to p* 1.58, which restores the order and keeps the climb
+  // smooth; the shape, and the character it encodes, are untouched.
+  3: { str: 5.28, con: 2.84, dex: 1, throwDamage: 2, throwRate: 1, wallHp: 1, specialDamage: 3.98 },
 
   // 4 — Zombies vs Ninjas. Their mechanic is the carrot WALL, so the wall gets tougher
   // (more taps, and more of the army's damage spent on it) — but only to ~1.6x, see
   // `wallHp`. The rest is a broad stat lift.
   //
+  // `throwDamage` 2.74 -> 1.34 in the projectile re-fit (step 2.20); the wall, which is
+  // what this raid is actually about, is untouched.
+  //
   // v31 RE-FIT (x1.157 on every multiplier's distance from 1.0, shape untouched) — the
   // ramp's second rung, fitted to p* 1.66. Alone among the five it goes slightly UP: the
   // ramp is a straight climb in ladder order, and the Ninjas sit between a Pirates raid
   // that came down and a Robots raid that came down further.
-  4: { str: 2.97, con: 1.81, dex: 1.41, throwDamage: 2.74, throwRate: 1.64, wallHp: 1.58, specialDamage: 2.39 },
+  4: { str: 2.97, con: 1.81, dex: 1.41, throwDamage: 1.34, throwRate: 1.64, wallHp: 1.58, specialDamage: 2.39 },
 
   // 5 — Zombies vs Robots. One of each bot, a random one leading, each with its own
   // special (junk wall, telekinesis). Bots are already the tankiest wave in the game, so
   // con is held back and the budget goes into their specials and their punch.
   //
+  // `throwDamage` 2.4 -> 1.4 in the projectile re-fit (step 2.00). The BrainBot is the one
+  // boss that abandons its perch mid-fight and stops throwing at all, so the projectile was
+  // never where its danger lived; the telekinesis is (`specialDamage`, untouched).
+  //
   // v31 RE-FIT (x0.826 on every multiplier's distance from 1.0, shape untouched) — the
   // ramp's middle rung, fitted to p* 1.82. It was one of the three sharing the old top
   // band; with the Video Games' ordinary fight no longer a cliff there is room for a
   // proper climb above it, so it steps down to make that room.
-  5: { str: 2.61, con: 1.92, dex: 1.43, throwDamage: 2.4, throwRate: 1.43, wallHp: 1.54, specialDamage: 3.04 },
+  5: { str: 2.61, con: 1.92, dex: 1.43, throwDamage: 1.4, throwRate: 1.43, wallHp: 1.54, specialDamage: 3.04 },
 
   // 6 — Zombies vs Aliens. Twenty minions, a summoning boss and the laser. Their normal
   // fight is already the longest on the ladder (over two minutes), so con barely moves —
@@ -214,15 +293,37 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
 
   // 7 — Summer Break. No signature boss mechanic (the crab is a client-side hazard and
   // is deliberately left alone — see below), so it scales broadly, with heavier beach
-  // balls.
-  7: { str: 3.2, con: 3.2, dex: 1.6, throwDamage: 4, throwRate: 1.8, wallHp: 1, specialDamage: 3.2 },
+  // balls. `throwDamage` 4 -> 2.22 in the projectile re-fit, which still leaves it near the
+  // TOP of the band (step 4.00): ruleset 34 barely moved this raid's ordinary throw (1.23x,
+  // the smallest lift of any invasion that moved at all), so its elite headroom survived
+  // almost intact.
+  7: { str: 3.2, con: 3.2, dex: 1.6, throwDamage: 2.22, throwRate: 1.8, wallHp: 1, specialDamage: 3.2 },
 
-  // 8 — Zombies vs Circus. The ringmaster's juggling act is the mechanic: elite throws
-  // come three times as often and hit eight times as hard, which is by far the largest
-  // projectile multiplier in the table. The TRAPEZE ARTIST is untouched — it is grabbed
-  // zombies and frantic tapping, and multiplying a hazard multiplies manual input rather
-  // than difficulty.
-  8: { str: 2.8, con: 3, dex: 1.6, throwDamage: 8, throwRate: 3, wallHp: 1, specialDamage: 3 },
+  // 8 — Zombies vs Circus. The ringmaster's juggling act is the mechanic, and it still is:
+  // elite throws come three times as often (`throwRate` 3, untouched, and the largest in
+  // the table) and the raid sits at the top of the projectile band with the Summer and
+  // seasonal fights.
+  //
+  // `throwDamage` 8 -> 1.33 in the projectile re-fit, and that is the single largest cut in
+  // this table's history. The 8 was not a difficulty decision — it was the number needed to
+  // make a projectile matter when the ordinary throw was 14.55 of chip damage. Ruleset 34
+  // makes the ordinary throw real, and 8x on top of it measured 343 dmg/s: an elite
+  // ringmaster deleting the healer he is aimed at in six tenths of a second, from off
+  // screen, before the army had finished walking out. At 1.33 the juggling still lands
+  // FOUR times an ordinary Circus fight's projectile pressure, delivered as three lighter
+  // hits rather than one absurd one, which is what juggling ought to look like.
+  //
+  // str and con go x2 on their distance from 1.0 (2.8 -> 4.6, 3 -> 5) in the same change,
+  // and that is not a difficulty pass either — it is the same budget, moved. This is the
+  // only invasion whose boss has NO action but the throw, so the projectile was carrying a
+  // real share of the elite fight's difficulty rather than merely looking absurd: cutting it
+  // alone dropped the elite p* from 0.62 to 0.39 and took the raid clean off the rung it is
+  // fitted to (Robots, normally). At 4.6/5 it measures 0.61 again. `dex` is deliberately NOT
+  // part of the move and stays at 1.6 — see the field's own note about the strobe.
+  //
+  // The TRAPEZE ARTIST is untouched — it is grabbed zombies and frantic tapping, and
+  // multiplying a hazard multiplies manual input rather than difficulty.
+  8: { str: 4.6, con: 5, dex: 1.6, throwDamage: 1.33, throwRate: 3, wallHp: 1, specialDamage: 3 },
 
   // 9 — Zombies vs Video Games. The last invasion unlocked, the hardest ordinary fight on
   // the ladder, and now the TOP OF THE ELITE RAMP too — it spends what it has on
@@ -240,13 +341,21 @@ export const ELITE_PROFILES: Readonly<Record<number, EliteProfile>> = {
   //
   // Its multipliers are still the SMALLEST in the table by a distance, and that is right:
   // it is scaling the heaviest baseline in the game.
+  //
+  // Alone in the table it came through the ruleset 34 projectile re-fit UNCHANGED, and that
+  // is the check on the whole exercise rather than an oversight: Zedzox's authored flat 100s
+  // already cleared the yardstick, so his ordinary throw did not move, so his elite step
+  // (2.22) did not need to.
   9: { str: 1.58, con: 1.44, dex: 1.29, throwDamage: 1.72, throwRate: 1.29, wallHp: 1, specialDamage: 2.03 },
 
   // 10 / 11 — Tree World and Valentine's Day. Seasonal, no signature mechanic, and the
   // two weakest waves after McDonnell's, so they take the same broad treatment as
-  // Summer Break with a little more of it.
-  10: { str: 3.8, con: 3.8, dex: 1.6, throwDamage: 4.9, throwRate: 1.9, wallHp: 1, specialDamage: 3.8 },
-  11: { str: 3.8, con: 3.8, dex: 1.6, throwDamage: 4.9, throwRate: 1.9, wallHp: 1, specialDamage: 3.8 },
+  // Summer Break with a little more of it. `throwDamage` 4.9 -> 2.11 in the projectile
+  // re-fit; like Summer Break they keep a top-of-band step (4.01) because ruleset 34 lifted
+  // their ordinary throws only 1.57x and 1.60x. Their apple and spoon are authored duds and
+  // stay duds — an elite multiplier on zero is still zero.
+  10: { str: 3.8, con: 3.8, dex: 1.6, throwDamage: 2.11, throwRate: 1.9, wallHp: 1, specialDamage: 3.8 },
+  11: { str: 3.8, con: 3.8, dex: 1.6, throwDamage: 2.11, throwRate: 1.9, wallHp: 1, specialDamage: 3.8 },
 };
 
 /** The multipliers this fight runs under: null for an ordinary invasion (so every

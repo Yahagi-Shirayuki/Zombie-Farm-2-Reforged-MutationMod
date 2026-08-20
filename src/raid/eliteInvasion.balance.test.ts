@@ -23,7 +23,7 @@ import attacksJson from "../../public/assets/raids/attacks.json";
 import zombiesJson from "../../public/assets/zombies.json";
 import { BattleSim } from "./BattleSim";
 import { buildEnemyUnits, buildPlayerUnits } from "./CombatEngine";
-import { bossThrowIntervalSecs, fightStage, resolveStageWave, seededRandom } from "./RaidCatalog";
+import { bossThrowIntervalSecs, fightScaledThrow, fightStage, resolveStageWave, seededRandom } from "./RaidCatalog";
 import { eliteBossSpecials, eliteBossThrow, eliteProfile, eliteWallHp, ELITE_PROFILES } from "./eliteInvasion";
 import { RAID_MAX_TICKS, RAID_TICK_MS } from "./replay";
 import { summonConfigFor, waveCadenceFor } from "./alienStage";
@@ -58,7 +58,9 @@ function throwOf(raid: RaidDef, stage: RaidStage): BossThrowConfig | null {
     .map((a) => ({ damage: a.damage ?? 0, weight: a.frequency, sprite: a.sprite ?? "", spriteSize: a.spriteSize ?? 32 }))
     .filter((o) => o.sprite);
   if (!options.length) return null;
-  return { intervalMs: bossThrowIntervalSecs(raid, stage, 99) * 1000, options };
+  // Same rebalance the shipped fight gets (RaidManager.bossThrowOf) — the stick has to
+  // measure the throws the player actually eats, not the authored chip values.
+  return fightScaledThrow({ intervalMs: bossThrowIntervalSecs(raid, stage, 99) * 1000, options }, raid);
 }
 
 function specialsOf(stage: RaidStage): BossSpecial[] {

@@ -281,6 +281,10 @@ export class Hud {
   // Rotate tool tap: main handles it contextually (flip the placement ghost / the
   // carried object / enter the standalone rotate mode). Null falls back to setMode.
   onRotateTool: (() => void) | null = null;
+  /** Extra lines for the diagnostics report — the online layer's live state, which is
+   *  otherwise invisible in a paste. "Gameplay paused" and "a healthy pause" look
+   *  identical without it. Null offline: there is nothing to say. */
+  getDiagnosticExtras: (() => Record<string, string>) | null = null;
   // Public (not private) so the extracted panel modules in ui/panels/* can render
   // into the HUD root and read shared services. Treat as internal to the HUD.
   readonly el: HTMLElement;
@@ -332,6 +336,7 @@ export class Hud {
   private cropHoverX = 0;
   private cropHoverY = 0;
   private temporaryPanMode: Mode | null = null;
+  private battleLoading: HTMLElement | null = null;
   onTemporaryPanChange: (() => void) | null = null;
 
   get planting(): CropConfig | null {
@@ -1737,6 +1742,36 @@ export class Hud {
    *  can take over the screen. Raid panels stay visible. */
   setRaiding(on: boolean) {
     this.el.classList.toggle("raiding", on);
+    if (!on) this.setBattleLoading(false);
+  }
+
+  /** The screen between "the farm went away" and "the battle is on screen".
+   *
+   *  Entering a battle hides the farm and every piece of farm chrome, and the battle's
+   *  own HUD — bars, timer, Retreat — is drawn INSIDE the scene. So for as long as the
+   *  scene is loading there is nothing on screen at all: just the stage's clear colour,
+   *  which is the farm's grass green. Reported as an Epic Boss "not loading" and taking
+   *  the player to a green screen, and it was reported as a crash rather than as a wait
+   *  because a blank screen does not look like loading. It says so now. */
+  setBattleLoading(on: boolean, label = "Loading battle…") {
+    if (!on) {
+      this.battleLoading?.remove();
+      this.battleLoading = null;
+      return;
+    }
+    if (!this.battleLoading) {
+      this.battleLoading = document.createElement("div");
+      this.battleLoading.className = "battle-loading";
+      const spinner = document.createElement("div");
+      spinner.className = "battle-loading-spinner";
+      const text = document.createElement("div");
+      text.className = "battle-loading-label";
+      text.setAttribute("aria-live", "polite");
+      this.battleLoading.append(spinner, text);
+      this.el.appendChild(this.battleLoading);
+    }
+    const text = this.battleLoading.querySelector(".battle-loading-label");
+    if (text) text.textContent = label;
   }
 
   // ---- Tim Buckwheat guided tutorial seams (used by TutorialController) ----

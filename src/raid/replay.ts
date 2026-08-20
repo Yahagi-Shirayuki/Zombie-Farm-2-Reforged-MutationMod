@@ -371,7 +371,70 @@ import type { RaidOutcome } from "./types";
 // Transcript-changing on the alien, Ninja and Robot invasions, hence the bump. Same cost
 // as every bump: a fight in flight at deploy time settles as stale_ruleset and pays
 // nothing.
-export const RAID_RULESET_VERSION = 33;
+// v34 — BOSS PROJECTILES SCALE WITH THE FIGHT. The authored throw damage is flat chip
+// applied verbatim (`ZFFightPhysics throwProjectile:` — see BattleSim), and against
+// `con x 100` hit points it had stopped being a mechanic: the Pirate boss lobbed 12.5/25/50
+// once every EIGHT seconds at an army it unlocks for at level 21, and measured over a whole
+// invasion its throws took 0% off a lone Garden healer — the very unit the lob is aimed at
+// (`throwTarget` picks the rear-most zombie, which is the Garden support station). Lawyers
+// managed 1%, Ninjas 37%, Robots 47%.
+//
+// Throw damage is now re-based onto the raid's own rung (RaidCatalog.fightScaledThrow),
+// keeping every boss's authored SHAPE — the light/medium/heavy split, each option's
+// frequency, the authored duds and the raid's own cadence — and fitting only the magnitude
+// to one yardstick: FIFTEEN SECONDS of a boss holding its throws on one target must kill the
+// healer a player on that rung would actually own (the most recently PURCHASABLE Garden
+// zombie, gold ladder only), with no second healer supporting it. Measured after: nine of the
+// ten throwing invasions take that healer from full to dead, the Robots reach 99% (their boss
+// abandons the perch mid-fight and stops throwing — see projectileScale.test.ts), and no
+// fight that was winnable on the elite balance stick became unwinnable. The floor never
+// lowers an authored value, so the alien laser's flat 200 and Zedzox's flat 100s — the
+// hardest-hitting authored throw in the game — stand exactly as the binary has them.
+//
+// Two things ride the same version because they are the same change:
+//
+//   * OLD McDONNELL'S IS FITTED TO A DPS BAND, not to the flat window. His is the one raid
+//     whose throw cadence carries meaning — the ladder speeds up as it climbs, and the first
+//     two clears are eased on top of that — and a fixed time-to-kill made all nine
+//     combinations land on exactly 16.7 dmg/s, cancelling both ramps. Fitted to a band, the
+//     slowest fight the game can present (the opening armed stage, first clear, the one
+//     fight `minArmyFor` still lets a player launch with a SINGLE zombie) throws at 12 dmg/s
+//     and the fastest at 20.
+//   * THE ELITE PROFILES ARE RE-FITTED. `throwDamage` multiplies the ordinary throw, so
+//     every Brain Ticket fight would otherwise have charged the rebalance twice — elite
+//     Circus measured 343 dmg/s, deleting the healer it aims at in six tenths of a second.
+//     Each profile's throw is now a step over the REBALANCED throw, in a 2x-4x band, and the
+//     Circus (whose boss has no action but the throw, so the projectile was carrying real
+//     difficulty rather than only looking absurd) takes the budget back in str and con to
+//     hold the rung it is fitted to. See eliteInvasion.ts.
+//
+// Transcript-changing on every invasion whose boss throws (all but the Aliens), and on every
+// elite fight, hence the bump. Same cost as every bump: an invasion in flight at deploy time
+// settles as stale_ruleset and pays nothing.
+// v35 — A REINFORCEMENT NO LONGER OPENS A HOLE IN THE LINE. Reported as the enemy
+// stopping mid-fight whenever a Regular or a Headless was sent out, and staying stopped
+// until that zombie had walked all the way up and taken the front slot.
+//
+// The row hangs off its front-most member's body standoff (`assignFormation`), and it was
+// re-anchored the instant a lighter body was RELEASED rather than when it arrived. So the
+// zombie already toe-to-toe with the wave stepped 32 units backwards to make room for one
+// still three seconds of walking away — out of `engageDistance`, with nothing else in the
+// enemy's reach behind it. Measured on a two-zombie fight: 3.3 seconds of a 8-second
+// window with the enemy holding, and because an enemy with no target re-arms its attack
+// clock every idle tick, the swings lost are worse than the gap. The binary has no such
+// transient: its geometry counts the units BEHIND you (`+5*(n-1-slot)`), so joining a row
+// never moves anyone back.
+//
+// The row now anchors on the front-most member that has actually reached the line, and a
+// newcomer that outranks everyone standing walks to the line rather than past it. The
+// formation the army settles into is unchanged — the Headless still leads and the heavier
+// body still gives way — it just happens on the frame the newcomer arrives, with that
+// newcomer in contact, so there is no moment where nobody is.
+//
+// Transcript-changing on every invasion (any fight where a second zombie is released
+// while the first is engaged), hence the bump. Same cost as every bump: an invasion in
+// flight at deploy time settles as stale_ruleset and pays nothing.
+export const RAID_RULESET_VERSION = 35;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

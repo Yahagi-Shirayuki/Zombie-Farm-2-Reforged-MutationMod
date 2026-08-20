@@ -9,6 +9,9 @@
 // If a server-side reporting route is ever added, it must stay Online-Farm-only or be
 // explicitly opt-in, and both docs must be updated in the same change.
 import { BUILD_ID } from "./version";
+import { storagePersistenceLine } from "./storagePersistence";
+import { assetFailureLine } from "./assetFailures";
+import { clearCrumbs, crumbTimeline, flushCrumbs, readCrumbs } from "./breadcrumbs";
 
 const KEY = "zf2r.diagnostics.v1";
 /** Keep the tail short: this shares the localStorage budget with the save itself, and
@@ -54,6 +57,10 @@ export function recordDiagnostic(entry: DiagnosticEntry): void {
     stack: entry.stack ? String(entry.stack).slice(0, MAX_STACK_CHARS) : undefined,
   };
   write([...read(), trimmed]);
+  // An error is exactly the moment the trail describing it must become durable: the
+  // failure this pairs with hides the whole HUD, so the player cannot copy a report
+  // until they have reloaded to escape. See breadcrumbs.ts.
+  flushCrumbs();
 }
 
 function describe(reason: unknown): { message: string; stack?: string } {
@@ -113,10 +120,25 @@ export function diagnosticsReport(extra?: Record<string, string | number | boole
     `when:     ${new Date().toISOString()}`,
     `screen:   ${screen}`,
     `agent:    ${agent}`,
+    // "best-effort (evictable)" here is the answer to "my settings reset when I come
+    // back": the browser may throw this origin's whole storage bucket away, and does so
+    // silently. See storagePersistence.ts.
+    `storage:  ${storagePersistenceLine()}`,
+    // Textures that would not load. Counted rather than crumbed one by one — see
+    // assetFailures.ts. "none" here rules out a whole class of report in one glance.
+    `assets:   ${assetFailureLine()}`,
     ...Object.entries(extra ?? {}).map(([k, v]) => `${(k + ":").padEnd(9)} ${String(v)}`),
     ``,
-    entries.length ? `errors (${entries.length}, newest last):` : `errors:   none recorded`,
   ];
+  // What the session was DOING, with the gap between steps. The error buffer below can
+  // only see things that threw, and the reports that cost the most were the ones where
+  // nothing did — a stall, not a crash. See breadcrumbs.ts.
+  const trail = readCrumbs();
+  const timeline = trail.length
+    ? [`recent activity (${trail.length}, newest last):`, ...crumbTimeline(), ``]
+    : [`activity: none recorded`, ``];
+  const errorHeading =
+    entries.length ? `errors (${entries.length}, newest last):` : `errors:   none recorded`;
   const body = entries.map((e, i) => {
     const when = new Date(e.at).toISOString();
     return [
@@ -125,7 +147,7 @@ export function diagnosticsReport(extra?: Record<string, string | number | boole
       e.stack ?? "(no stack)",
     ].join("\n");
   });
-  return [...head, ...body].join("\n");
+  return [...head, ...timeline, errorHeading, ...body].join("\n");
 }
 
 /** Number of captured errors — lets the UI show a count without formatting a report. */
@@ -133,7 +155,10 @@ export function diagnosticsCount(): number {
   return read().length;
 }
 
-/** Drop the buffer (after a successful report, or from a reset). */
+/** Drop the buffer AND the activity trail (after a successful report, or from a reset).
+ *  The two are read together, so clearing one and keeping the other would leave a report
+ *  whose timeline no longer explains its errors. */
 export function clearDiagnostics(): void {
   try { localStorage.removeItem(KEY); } catch { /* storage blocked — nothing to clear */ }
+  clearCrumbs();
 }

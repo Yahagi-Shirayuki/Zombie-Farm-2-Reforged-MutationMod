@@ -8,6 +8,7 @@ import {
   fightStage,
   minArmyFor,
   bossThrowIntervalSecs,
+  fightScaledThrow,
   resolveStageWave,
   seededRandom,
   ARMY_CAP,
@@ -114,7 +115,8 @@ function bossThrowOf(
     .filter((o) => o.sprite);
   if (!options.length) return null;
   const secs = bossThrowIntervalSecs(raid, stage, priorWins);
-  return eliteBossThrow({ intervalMs: secs * 1000, options }, elite);
+  // Same order as RaidManager.bossThrowOf: rebalance onto the raid's rung, THEN elite.
+  return eliteBossThrow(fightScaledThrow({ intervalMs: secs * 1000, options }, raid), elite);
 }
 
 // Strictly the BOSS's own actions — mirrors RaidManager.bossSpecialsOf, and must stay

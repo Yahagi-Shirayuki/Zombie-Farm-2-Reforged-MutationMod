@@ -9,6 +9,7 @@ import type { SaveGame } from "../save/schema";
 import type { Friend } from "../social/friends";
 import { RAID_RULESET_VERSION, type RaidReplayInput } from "../raid/replay";
 import { BUILD_TAG } from "../version";
+import { crumb } from "../breadcrumbs";
 import type { RaidOutcome } from "../raid/types";
 import {
   CLIENT_INTEGRITY_VERSION,
@@ -154,6 +155,10 @@ export async function prepareWriterAccess(waitMs = 1_500): Promise<boolean> {
     new Promise<boolean>((resolve) => setTimeout(() => resolve(false), waitMs)),
   ]);
   if (!acquired) writerCredential = null; // suppress locally; never erase sessionStorage
+  // A timeout here is not an error and produces no log, but it decides whether this
+  // document may write for the rest of its life — and reads later only as the `nolock`
+  // fragment of `unavailableReason`, with nothing to say when or why. Crumb the answer.
+  crumb("writer:lock", acquired ? "granted" : `not granted (another tab held it ${waitMs}ms)`);
   return acquired;
 }
 
@@ -167,12 +172,45 @@ export async function prepareWriterAccess(waitMs = 1_500): Promise<boolean> {
  *  released before the v4 writer id. Because a rejected batch is retried verbatim
  *  forever, that drift is what strands a player on "Gameplay paused — reconnect to
  *  continue" with a perfectly good connection. */
-export const writerRequestClientId = (): string =>
+export const writerRequestClientId = (): string => {
   // Mirrors the condition req() attaches X-Writer-Client under, so body and header
   // are always drawn from the same credential or neither is.
-  writerCredential && writerCredential.accountId === session?.accountId
-    ? writerCredential.clientId
-    : writerClientId();
+  const fenced = writerCredential && writerCredential.accountId === session?.accountId;
+  if (fenced) noteWriterIdentity(writerCredential!.clientId);
+  return fenced ? writerCredential!.clientId : writerClientId();
+};
+
+/** Whether the credential this document writes under still agrees with the client key on
+ *  disk — "match", "DRIFTED", or "" when there is nothing to compare. Read by the
+ *  diagnostics report; see `noteWriterIdentity` for why it is worth a line of its own. */
+export const writerIdentityState = (): string => identityState;
+let identityState = "";
+
+/** THE drift described above, made visible.
+ *
+ *  When the localStorage client key is rebuilt while the sessionStorage credential
+ *  survives — an evicted key on iOS, a site-data clear with the tab still open — the two
+ *  disagree, `POST /commands` answers 400 `bad_writer_command`, and because a rejected
+ *  batch is retried verbatim the player is stranded on "Gameplay paused — reconnect to
+ *  continue" on a perfectly good connection, permanently. Nothing said so: the batch is
+ *  correctly fenced, the lease is live, and every symptom points at the network.
+ *
+ *  Only a MISMATCH is crumbed. A healthy session says nothing, which is what keeps this
+ *  useful on a hot path — and makes the crumb's presence meaningful on its own. */
+function noteWriterIdentity(credentialClientId: string): void {
+  const stored = (() => {
+    try { return localStorage.getItem(CLIENT_KEY); } catch { return null; }
+  })();
+  // No stored key at all is not drift: `writerClientId()` mints one on demand, and this
+  // document is already writing under the credential's id either way.
+  if (stored === null) return;
+  const next = stored === credentialClientId ? "match" : "DRIFTED";
+  if (next === identityState) return;
+  identityState = next;
+  if (next === "DRIFTED") {
+    crumb("writer:identity", "client key no longer matches the lease — batches will be refused");
+  }
+}
 
 export const hasLocalWriterLock = (): boolean => localWriterLockHeld;
 export const hasWriterCredential = (): boolean => localWriterLockHeld &&
@@ -304,6 +342,7 @@ async function req<T>(
       if (wasSignedIn) sessionRejectedHandler?.();
     }
     if (res.status === 423 && code === "writer_replaced") {
+      crumb("writer:replaced", "another device took the lease");
       clearWriterCredential();
       writerRejectedHandler?.();
     }
@@ -381,11 +420,15 @@ export async function acquireWriter(observedGeneration: number, takeover: boolea
     "POST", "/writer/acquire", { clientId, token, observedGeneration, takeover }
   );
   persistWriter({ accountId: session.accountId, clientId, generation: result.writerGeneration, token });
+  // Generation is a small counter, not an identifier — see the crumb contract in
+  // SECURITY.md. The clientId and token never appear here and must not.
+  crumb("writer:acquired", `generation ${result.writerGeneration}${takeover ? " (takeover)" : ""}`);
   bootstrapPromise = null;
 }
 
 export async function releaseWriter(): Promise<void> {
   if (!hasWriterCredential()) return;
+  crumb("writer:released");
   try { await req<{ ok: true }>("POST", "/writer/release"); }
   finally { clearWriterCredential(); }
 }

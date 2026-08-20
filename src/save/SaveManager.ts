@@ -14,6 +14,7 @@ import { shedCapacityOf } from "../shedCapacity";
 import * as api from "../net/api";
 import { getFarmBackground } from "../prefs";
 import { recordDiagnostic } from "../diagnostics";
+import { crumb } from "../breadcrumbs";
 import { epicBossById } from "../epicBoss/catalog";
 import { GAMEPLAY_PROTOCOL } from "../net/protocol";
 import { epicBossRunToClient, serverTimestampToClient } from "../net/clock";
@@ -366,6 +367,10 @@ export class SaveManager {
       if (current !== null) localStorage.setItem(backup, current);
       localStorage.setItem(key, encoded);
       localStorage.removeItem(temporary);
+      // Successful writes COLLAPSE in the ring (autosave runs on a timer), so this costs
+      // one line however long the session is — and the size is what a later quota failure
+      // is explained by. See breadcrumbs.crumb.
+      crumb("save:local", `${Math.round(encoded.length / 1024)}kB`);
       return true;
     } catch (error) {
       // Drop the scratch copy on the way out. It is a whole save's worth of quota, and
@@ -373,6 +378,7 @@ export class SaveManager {
       // too — the one state where the retry has least room to spare.
       try { localStorage.removeItem(temporary); } catch { /* storage already unusable */ }
       console.warn("[save] local write failed", error);
+      crumb("save:failed", error instanceof Error ? error.name : "unknown");
       this.onStorageError?.("Local Farm could not be saved. Check browser storage or export a backup.");
       return false;
     }
@@ -394,6 +400,7 @@ export class SaveManager {
       this.lastPresentation = encoded;
       this.presentationDirty = false;
       this.presentationRefused = false;
+      crumb("save:online", `${Math.round(encoded.length / 1024)}kB v${saved.version}`);
     } catch (error) {
       this.presentationDirty = true;
       // A REFUSED write (as opposed to a lost one) never clears by retrying: the same
@@ -405,6 +412,7 @@ export class SaveManager {
       if (error instanceof api.ApiError && error.status !== 409 && error.status !== 0) {
         const detail = `${error.status} ${error.code}`;
         console.warn(`[presentation] write refused (${detail}); farm layout is not being saved`);
+        crumb("save:refused", detail);
         recordDiagnostic({
           at: Date.now(), kind: "error", where: "presentation-write",
           message: `presentation refused: ${detail}`,
@@ -476,6 +484,24 @@ export class SaveManager {
   }
 
   async load(): Promise<FarmLoadResult> {
+    return this.crumbLoad(await this.loadFarm());
+  }
+
+  /** Note how the farm came back. This is the other half of a save report: "settings/farm
+   *  reset" reads completely differently depending on whether the last boot restored an
+   *  existing save, fell back to a cached snapshot, or started a NEW farm. */
+  private crumbLoad(result: FarmLoadResult): FarmLoadResult {
+    const detail =
+      result.kind === "online-cached" ? `cached from ${new Date(result.savedAt).toISOString()}`
+        : result.kind === "online-authoritative" ? (result.restored ? "restored" : "empty farm")
+          : result.kind === "local-unavailable" || result.kind === "online-unavailable"
+            ? result.reason
+            : "";
+    crumb(`load:${result.kind}`, detail || undefined);
+    return result;
+  }
+
+  private async loadFarm(): Promise<FarmLoadResult> {
     if (this.mode === "online") {
       if (!this.isOnline()) return { kind: "online-unavailable", reason: "not_configured" };
       try {

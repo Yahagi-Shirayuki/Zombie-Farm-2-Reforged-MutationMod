@@ -1,4 +1,5 @@
 import * as api from "./api";
+import { crumb } from "../breadcrumbs";
 import {
   COMMAND_BATCH_LIMIT,
   COMMAND_BATCH_WINDOW_MS,
@@ -98,6 +99,15 @@ export class CommandQueue {
   /** The single place `paused` is assigned, so no path can pause without saying why.
    *  The reason is diagnostic only — nothing branches on it. */
   private setPaused(reason: string): void {
+    // Crumb the TRANSITION, not the state: this is called on every bootstrap, and a
+    // healthy session would otherwise fill the ring with "still running". "Gameplay
+    // paused — reconnect to continue" was reported twice on connections that were
+    // demonstrably fine, and the paste could not say which of a dozen paths paused it,
+    // whether anything resumed, or how long it had been stuck. Now it can.
+    if (!!reason !== this.paused || reason !== this.pausedReason) {
+      if (reason) crumb("queue:paused", reason);
+      else if (this.paused) crumb("queue:resumed", `after ${this.pausedReason || "unknown"}`);
+    }
     this.paused = !!reason;
     this.pausedReason = reason;
   }
@@ -253,6 +263,7 @@ export class CommandQueue {
         this.persist();
         return;
       }
+      crumb("queue:applied", `${this.inFlight.commands.length} commands`);
       this.accountVersion = response.accountVersion;
       this.writerGeneration = response.writerGeneration;
       this.writerLost = false;
@@ -295,6 +306,10 @@ export class CommandQueue {
         const transient = error.status === 0 || error.status === 429 || [500, 502, 503, 504].includes(error.status);
         if (!transient) return this.dissolveAndPause(error.code);
         if (attempt === delays.length) return this.pause(error.code);
+        // A transient failure that later succeeds never reaches `setPaused`, so without
+        // this a session that spent two minutes retrying looks identical to one that
+        // never faltered. Repeats collapse, so a long retry run costs one line.
+        crumb("queue:retry", `${error.status} ${error.code}`);
         const retryAfter = Number((error.body as { retryAfterMs?: unknown } | undefined)?.retryAfterMs);
         const base = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : delays[attempt];
         await new Promise<void>((resolve) => setTimeout(resolve, Math.round(base * (0.8 + this.random() * 0.4))));

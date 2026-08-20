@@ -14,6 +14,7 @@ import { rescueHazardHp } from "./hazardTaps";
 import {
   ARMY_CAP,
   bossThrowIntervalSecs,
+  fightScaledThrow,
   CONCENTRATION_KEY,
   DICE_KEY,
   MIN_ARMY,
@@ -703,7 +704,9 @@ export class RaidManager {
     if (!options.length) return null;
     // `throwSpeed` is authored in seconds (ZFFightMan's projectile timer).
     const secs = bossThrowIntervalSecs(raid, stage, priorWins);
-    return { intervalMs: secs * 1000, options };
+    // Damage is re-based onto the raid's own rung before the elite profile multiplies it,
+    // so a Brain Ticket scales the rebalanced fight rather than the authored chip value.
+    return fightScaledThrow({ intervalMs: secs * 1000, options }, raid);
   }
 
   /** Apply the result of a played-out raid: veterancy credit, win rewards, the

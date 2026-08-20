@@ -2,8 +2,9 @@
 // selection, army-selection rules, and reward derivation. Player-facing raids run
 // the live combat sim (BattleSim); instant resolution (CombatEngine) is retained
 // only as a test/dev utility. No side effects — RaidManager applies these.
-import type { RaidDef, RaidStage } from "./types";
+import type { BossThrowConfig, RaidDef, RaidStage } from "./types";
 import { raidBoostBundle } from "./lootBundles";
+import { deriveMaxHp, levelScaleStat } from "./combatStats";
 
 /** Minimum army to launch an invasion (Help.json: "at least 8, best with 16"). */
 export const MIN_ARMY = 8;
@@ -43,6 +44,173 @@ export function bossThrowIntervalSecs(
   if (priorWins <= 0) return authoredSecs * 2;
   if (priorWins === 1) return authoredSecs * 1.5;
   return authoredSecs;
+}
+
+// ---------------------------------------------------------------------------
+// PROJECTILE (boss THROW) SCALING — a deliberate divergence from the authored data.
+//
+// The recovered values are flat chip: `ZFFightPhysics throwProjectile:` reads a bossAction's
+// authored `damage` straight into the projectile and hands it to `[zombie damage:]` with no
+// conversion (see BattleSim's note). So Old McDonnell's 6/12/18 really are 6/12/18 — and so
+// are the Pirate boss's 12.5/25/50, thrown once every EIGHT seconds, against zombies whose
+// hit points are `con x 100`. A raid the player unlocks at level 21 was therefore lobbing
+// 3.4 damage per second at an army with five figures of health between it: the projectile
+// stopped being a mechanic and became set dressing, which is not what a boss standing on a
+// roof hurling an anchor is supposed to read as.
+//
+// The fix keeps every boss's authored SHAPE — the light/medium/heavy split, each option's
+// frequency, and the raid's own throw cadence — and re-bases only the magnitude, against one
+// yardstick:
+//
+//   A boss's throws must be able to kill a level-appropriate, unmutated healer that no other
+//   healer is supporting.
+//
+// The healer is the yardstick because it is who the throw is AIMED at. `throwTarget` picks the
+// rear-most deployed zombie, which is the Garden support station once the army has walked out
+// (BattleSim GARDEN_STATION_X) — the lob goes over the tanks and lands on the back line. A
+// lone healer cannot heal itself either (Heal picks another zombie), so "the throws kill a
+// solo healer" is a property the simulation can actually settle, and the one the magnitude is
+// fitted to. See projectileScale.test.ts, which measures it in the real sim.
+//
+// The reference healer is the one a player on that rung would actually own: the most recently
+// PURCHASABLE Garden zombie at the raid's level (`GARDEN_MARKET_LADDER`), level-scaled exactly
+// as a real one would be (`levelScaleStat`). Scaling off the raid rather than off the player
+// keeps this consistent with everything else about a raid: enemy stats do not track player
+// level either, so a veteran replaying Old McDonnell still gets the tutorial's chicken, and
+// Zedzox still throws like Zedzox.
+//
+// Old McDonnell's is the one exception and reads a DPS BAND instead of the flat yardstick,
+// because it is the only raid whose throw CADENCE carries meaning — see the band below.
+
+/** The Garden zombies the MARKET sells, as (unlock level, base con), cheapest first.
+ *  Mirrors zombies.json — locked by projectileScale.test.ts, which re-derives it there so a
+ *  new healer or a re-costed one cannot drift this table silently. Kept as a literal rather
+ *  than an import so RaidCatalog stays free of the 95-entry zombie catalog.
+ *
+ *  Brain-gated SPECIALS are deliberately excluded. The Cupid Zombie is nominally on sale at
+ *  level 20 and carries con 15 — three times the whole gold ladder's top rung — so counting
+ *  it would make the reference "the best healer obtainable" rather than "the healer this
+ *  level has reached", and would quadruple the floor at a single rung. */
+export const GARDEN_MARKET_LADDER: ReadonlyArray<{ level: number; con: number }> = [
+  { level: 6, con: 1.0 },   // Garden Zombie
+  { level: 13, con: 2.5 },  // ZomBotanist
+  { level: 20, con: 4.0 },  // Flower Zombie
+  { level: 25, con: 5.5 },  // Zombee
+];
+/** Base con of the most recently purchasable Garden zombie at `level` — the healer a player
+ *  on this rung would actually be fielding. Below the first rung it is the one they are
+ *  about to be able to buy. */
+export function referenceHealerCon(level: number): number {
+  let con = GARDEN_MARKET_LADDER[0].con;
+  for (const rung of GARDEN_MARKET_LADDER) if (level >= rung.level) con = rung.con;
+  return con;
+}
+/** How long a boss must hold its throws ON one target to kill that reference healer. Fifteen
+ *  seconds is the tuning knob for the whole rebalance: raise it and every boss's throws get
+ *  lighter, lower it and they get heavier, and nothing else about a fight moves. */
+export const THROW_LETHAL_MS = 15_000;
+/** Floor/ceiling on the resulting hit count. Without them the cadence divides straight
+ *  through: the Pirate boss throws once every EIGHT seconds, so an uncapped budget would ask
+ *  for fifteen seconds' worth of damage in under two landed hits, and a half-second thrower
+ *  would be diluted to nothing. Three landed heavies is the hardest a throw is allowed to
+ *  read, and the anti-one-shot latch (BattleSim ONE_SHOT_FLOOR) makes it four in practice.
+ *  The floor BINDS on the Lawyers and the Pirates — both throw too slowly for the window —
+ *  so those two are the raids `THROW_LETHAL_MS` cannot move. */
+export const THROW_MIN_LETHAL_HITS = 3;
+export const THROW_MAX_LETHAL_HITS = 24;
+
+/** Max HP of the level-appropriate reference healer for a fight at `level`: the market's
+ *  most recent Garden zombie, level-scaled exactly as a real one would be.
+ *
+ *  This is NOT monotonic in level, and that is the ground truth rather than a bug. The
+ *  Garden Zombie's base con (1.0) sits BELOW its group's level-8 floor (2.5), so as the
+ *  ramp runs its hit points fall from the propped-up 250 toward its real 100 — a level-12
+ *  player's best healer (215) really is frailer than a level-8 player's (250). The yardstick
+ *  follows the healer. */
+export function referenceHealerHp(level: number): number {
+  return deriveMaxHp(levelScaleStat("Garden", "con", referenceHealerCon(level), level));
+}
+
+/** How many LANDED throws should kill that healer at this cadence. */
+export function throwLethalHits(intervalMs: number): number {
+  const raw = THROW_LETHAL_MS / Math.max(1, intervalMs);
+  return Math.min(THROW_MAX_LETHAL_HITS, Math.max(THROW_MIN_LETHAL_HITS, raw));
+}
+
+// ---------------------------------------------------------------------------
+// OLD McDONNELL'S IS FITTED TO A DPS BAND, not to the flat yardstick above.
+//
+// The yardstick fits damage to a fixed time-to-kill, which makes throw DPS constant
+// whatever the cadence is — and McDonnell's is the one invasion whose cadence CARRIES
+// meaning. Its ladder speeds up as the player climbs it (stage 4 throws every 2s, stage 5
+// every 1.5s, stage 6 every 1s), and `bossThrowIntervalSecs` eases the first two clears
+// on top of that (half speed, then two-thirds). Fitted flat, all nine combinations landed
+// on exactly 16.7 dmg/s: the tutorial easing bought nothing but rarer, heavier hits, and
+// the stage ladder's own escalation was flattened out of existence.
+//
+// So this raid's throws are fitted to a BAND instead. The slowest fight the game can
+// present — the opening armed stage, on a player's very first clear, when `minArmyFor`
+// still lets them launch with ONE zombie — throws at the floor. The fastest, which takes
+// both a full army's worth of levels and two clears behind them, throws at the cap. Every
+// combination in between lands in proportion to its pace, so the ladder escalates and the
+// easing eases again. The knobs are DPS because that is the language the yardstick
+// already speaks: the flat fit is `referenceHealerHp / 15s`, which at this raid's rung
+// (250 hit points) is 16.7 — a floor of 12 and a cap of 20 straddle it.
+export const MCDONNELL_THROW_DPS_FLOOR = 12;
+export const MCDONNELL_THROW_DPS_CAP = 20;
+/** The two ends of that pace. SLOWEST is stage 4's authored 2s cadence halved for a
+ *  player's first clear; FASTEST is stage 6's authored 1s at full speed. Both are read off
+ *  raids.json rather than chosen — they are simply the extremes `bossThrowIntervalSecs`
+ *  can return for this raid. */
+export const MCDONNELL_THROW_SLOWEST_MS = 4000;
+export const MCDONNELL_THROW_FASTEST_MS = 1000;
+
+/** Where a McDonnell cadence sits in that band, in damage per second. Interpolated on the
+ *  throw RATE rather than on the interval, because rate is what DPS is proportional to —
+ *  so an evenly-spaced ladder of cadences gives an evenly-spaced ladder of pressure. */
+export function mcdonnellThrowDps(intervalMs: number): number {
+  const rate = 1000 / Math.max(1, intervalMs);
+  const slowest = 1000 / MCDONNELL_THROW_SLOWEST_MS;
+  const fastest = 1000 / MCDONNELL_THROW_FASTEST_MS;
+  const t = Math.min(1, Math.max(0, (rate - slowest) / (fastest - slowest)));
+  return MCDONNELL_THROW_DPS_FLOOR + t * (MCDONNELL_THROW_DPS_CAP - MCDONNELL_THROW_DPS_FLOOR);
+}
+
+/** The per-throw damage the boss's whole throw table should AVERAGE to, weighted by each
+ *  option's authored frequency exactly as `rollAgainstFrequencyInArray:` rolls it.
+ *
+ *  Every raid but Old McDonnell's reads the flat yardstick: the reference healer's hit
+ *  points spread over `throwLethalHits` landed throws. McDonnell's reads its DPS band
+ *  instead, so its cadence keeps meaning what it was authored to mean. */
+export function targetThrowDamage(raid: RaidDef, intervalMs: number): number {
+  if (raid.id === MCDONNELL_ID) return mcdonnellThrowDps(intervalMs) * (intervalMs / 1000);
+  return referenceHealerHp(raid.unlockLevel) / throwLethalHits(intervalMs);
+}
+
+/** Re-base a boss's throw damage onto the fight's own rung, preserving the authored shape.
+ *  Takes the RaidDef rather than a bare level so a caller cannot pick the wrong one of the
+ *  two things this needs (the raid's rung, and whether it is the raid with a DPS band).
+ *
+ *  Every option is multiplied by ONE factor, so the light/medium/heavy split and the duds
+ *  (the Beach fishbone, the Tree apple and the Valentine spoon are all authored at 0) survive
+ *  untouched. The factor never drops below 1: this is a floor under a boss that throws too
+ *  softly for its rung, not a re-authoring of one that already hits hard — Zedzox's flat 100s
+ *  are left exactly as the binary has them. */
+export function fightScaledThrow(
+  config: BossThrowConfig | null,
+  raid: RaidDef
+): BossThrowConfig | null {
+  if (!config || !config.options.length) return config;
+  const weight = config.options.reduce((sum, o) => sum + Math.max(0, o.weight), 0);
+  if (weight <= 0) return config;
+  const mean = config.options.reduce((sum, o) => sum + o.damage * Math.max(0, o.weight), 0) / weight;
+  if (mean <= 0) return config; // a boss whose every throw is an authored dud stays one
+  const scale = Math.max(1, targetThrowDamage(raid, config.intervalMs) / mean);
+  if (scale === 1) return config;
+  return {
+    intervalMs: config.intervalMs,
+    options: config.options.map((o) => ({ ...o, damage: o.damage * scale })),
+  };
 }
 
 /** Real between-invasions cooldown (Help.json: "wait two hours between invasions,

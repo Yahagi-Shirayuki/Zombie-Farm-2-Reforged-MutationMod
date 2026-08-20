@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { CommandQueue } from "./commandQueue";
 import { COMMAND_BATCH_WINDOW_MS } from "./protocol";
+import { clearCrumbs, readCrumbs } from "../breadcrumbs";
 
 const bootstrap = {
   accountVersion: 0,
@@ -376,5 +377,47 @@ describe("retry and the lost lease", () => {
     expect(send).not.toHaveBeenCalled();
     expect(queue.available).toBe(false);
     expect(queue.pauseReason).toBe("writer_lost");
+  });
+});
+
+// "Gameplay paused — reconnect to continue" was reported twice on connections that were
+// demonstrably fine, and the pastes could not say which of a dozen paths paused the queue,
+// whether anything resumed, or how long it had been stuck. The trail answers all three —
+// but only if it records the TRANSITION rather than the state: `setPaused` runs on every
+// bootstrap, and a healthy session logging "still running" would crowd out everything else.
+describe("the queue's pauses are legible in a bug report", () => {
+  const stubCrumbStorage = () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    });
+  };
+
+  it("records a pause with its reason, and the resume that follows", () => {
+    stubCrumbStorage();
+    clearCrumbs();
+    const queue = new CommandQueue("crumb-pause-test");
+    queue.adoptBootstrap(bootstrap); // running
+    queue.markWriterLost();          // paused
+    expect(queue.available).toBe(false);
+    queue.adoptBootstrap({ ...bootstrap, writer: { status: "mine", generation: 1, lastActivityAt: 1 } });
+    expect(queue.available).toBe(true);
+
+    const trail = readCrumbs().filter((c) => c.tag.startsWith("queue:"));
+    expect(trail.map((c) => c.tag)).toEqual(["queue:paused", "queue:resumed"]);
+    expect(trail[0].detail).toBeTruthy();          // ...and it says WHICH pause
+    expect(trail[1].detail).toContain("after");    // ...and what it recovered from
+  });
+
+  it("says nothing while a healthy session keeps bootstrapping", () => {
+    // Every bootstrap calls setPaused(""). A crumb per call would fill the ring in a
+    // minute and push out whatever the report was actually about.
+    stubCrumbStorage();
+    clearCrumbs();
+    const queue = new CommandQueue("crumb-quiet-test");
+    for (let i = 0; i < 10; i++) queue.adoptBootstrap(bootstrap);
+    expect(readCrumbs().filter((c) => c.tag.startsWith("queue:"))).toEqual([]);
   });
 });

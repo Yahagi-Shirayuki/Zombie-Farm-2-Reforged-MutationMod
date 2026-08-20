@@ -26,7 +26,7 @@ Please give a reasonable window before disclosing publicly.
 ## Scope and status
 
 This document describes the current source tree at gameplay protocol v3 (client integrity
-version 5, raid ruleset version 33). It covers authentication, sessions, the exclusive writer
+version 5, raid ruleset version 35). It covers authentication, sessions, the exclusive writer
 lease, social features, gameplay commands, persistence, economy, farms, quests, raids, Epic
 Boss runs, the Black Market, rate limiting, and operational controls.
 
@@ -101,6 +101,21 @@ is transmitted. If a server-side reporting route is ever added it must be Online
 explicitly opt-in, or it silently breaks the no-network guarantee above — update this section and
 the README in the same change.
 
+The same report also carries a short ACTIVITY TRAIL (`src/breadcrumbs.ts`) — the last forty
+steps the session took, with the gap between them — because the errors buffer can only see
+things that threw, and the failures that cost the most were stalls rather than crashes. It is
+held to the same contract, and to one more: a crumb is a fixed tag plus a short *structural*
+detail (a catalog name, a same-origin asset path, a count). It must never carry save data, an
+account id, a session token, or anything the player typed. The player is told what the button
+copies, in the Settings note beside it; a new crumb that widens what is copied has to update
+that note too.
+
+The writer-lease crumbs are held to that rule deliberately and visibly: they carry the
+generation (a small counter), whether a claim was a takeover, and whether the client key still
+AGREES with the lease — never the clientId, the writer token, or the account id, all three of
+which are in scope at those call sites. `src/net/writerIdentity.test.ts` asserts that none of
+them reaches the trail.
+
 ### Authentication and account isolation
 
 - Google ID tokens are verified for signature, issuer, audience, expiry, and subject.
@@ -157,9 +172,9 @@ the README in the same change.
   (`buildPinnedV3Raid`): player/enemy units, boss throw/specials, summon and wall templates,
   and concentration. The pinned config and `ruleset_version` are stored on the session
   (migrations `0016`, `0017`, `0027`). The config still carries a `grabber` field, but since
-  ruleset 6 (current version 33) `raidVerifier.grabberOf` returns `null` unconditionally — hazards are client-only
+  ruleset 6 (current version 35) `raidVerifier.grabberOf` returns `null` unconditionally — hazards are client-only
   and are not simulated server-side at all.
-- `/raid/finish` requires a matching `rulesetVersion` (`RAID_RULESET_VERSION = 33`; a mismatch
+- `/raid/finish` requires a matching `rulesetVersion` (`RAID_RULESET_VERSION = 35`; a mismatch
   returns `409 stale_ruleset` and closes the session), rejects a `finalTick` beyond the paced
   elapsed real time (`future_finish`), then **replays** the pinned sim with the submitted input
   transcript and derives `win`/`survivors`/`losses`/`retreated`, subject to the one-way

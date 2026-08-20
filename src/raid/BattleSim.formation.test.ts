@@ -140,3 +140,69 @@ describe("where the army plants itself on the stage", () => {
     expect(front.x - sim.units.find((u) => u.id === "g0")!.x).toBeGreaterThan(300);
   });
 });
+
+// Reported as: sending out a Regular or a Headless makes the enemy STOP ATTACKING what
+// it was fighting, until the new zombie has walked all the way up and taken the front
+// slot. The row hangs off its front-most member's body standoff, so a lighter body
+// taking the lead shifts everyone behind it back — correct once that body is standing
+// there, and a self-inflicted hole in the line for the three seconds before it is. See
+// ROW_ANCHOR_EPS in BattleSim.ts.
+describe("a reinforcement does not open a hole in the line while it walks up", () => {
+  /** Field one zombie, let it engage, then release a second mid-fight. Reports how many
+   *  ticks the enemy spent with nothing in reach, and how far the first one gave way. */
+  function reinforce(first: CombatUnit, second: CombatUnit) {
+    const enemy = unit({
+      id: "e", sourceKey: "FarmStageActorEnemy", team: "enemy", con: 100_000, str: 1, dex: 1,
+    });
+    // concentration OFF: the focus bubble is what lets the test choose WHEN each zombie
+    // is released, which is the whole scenario.
+    const sim = new BattleSim(
+      [first, second], [enemy], null, false, [], 10 * 60 * 1000,
+      null, null, false, false, false, 60, null, null,
+    );
+    const a = sim.units.find((u) => u.id === first.id)!;
+    const b = sim.units.find((u) => u.id === second.id)!;
+    const e = sim.units.find((u) => u.id === "e")!;
+
+    for (let t = 0; t < 12_000; t += 50) {
+      sim.step(50);
+      const bubble = sim.chargingBubble();
+      if (bubble?.id === a.id) sim.popBubble(bubble.id);
+      if (a.state === "fight" && e.state === "fight") break;
+    }
+    expect(e.state, "the first zombie should be engaged before the second is sent").toBe("fight");
+    const engagedAt = a.x;
+
+    for (let t = 0; t < 4_000; t += 50) {
+      sim.step(50);
+      const bubble = sim.chargingBubble();
+      if (bubble?.id === b.id) { sim.popBubble(bubble.id); break; }
+    }
+    let idleTicks = 0;
+    let gaveGround = 0;
+    for (let t = 0; t < 8_000; t += 50) {
+      sim.step(50);
+      if (e.state !== "fight") idleTicks++;
+      gaveGround = Math.max(gaveGround, engagedAt - a.x);
+    }
+    return { idleTicks, gaveGround, a, b, e };
+  }
+
+  it("keeps the enemy in contact while a Headless crosses the field", () => {
+    const { idleTicks } = reinforce(large("l"), headless("h"));
+    expect(idleTicks).toBe(0);
+  });
+
+  it("keeps it in contact for a Regular taking the lead off a heavier body", () => {
+    expect(reinforce(large("l"), regular("r")).idleTicks).toBe(0);
+    expect(reinforce(regular("r"), headless("h")).idleTicks).toBe(0);
+  });
+
+  it("still re-forms the row once the newcomer is standing on the line", () => {
+    // The fix is a matter of TIMING, not of geometry: the Headless must still end up in
+    // front, with the heavier body stepping back behind it exactly as it always did.
+    const { gaveGround, a, b } = reinforce(large("l"), headless("h"));
+    expect(gaveGround).toBeGreaterThan(20); // the Large did give way — once, at the end
+    expect(b.x).toBeGreaterThan(a.x);       // ...and the Headless leads the row
+  });
+});

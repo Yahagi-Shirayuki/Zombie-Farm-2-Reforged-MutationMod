@@ -72,7 +72,9 @@ import {
   hasSeenHazardTip, markHazardTipSeen,
   hasSeenRaidTip, markRaidTipSeen,
   zombieAppearancePrefs, setZombieBodyColorMode, setShowZombieMutations,
+  setPrefStorageErrorHandler,
 } from "./prefs";
+import { requestPersistentStorage } from "./storagePersistence";
 import { raidTip } from "./raid/raidTips";
 import { BASE } from "./base";
 import { TutorialController } from "./tutorial/TutorialController";
@@ -80,6 +82,8 @@ import { reconcileTutorialCompletion, TutStep, TUTORIAL_ZOMBIE_KEY } from "./tut
 import { initPlatform, isMobile, isTouch } from "./platform";
 import { initPwa, promptReload, checkForUpdate } from "./pwa";
 import { initDiagnostics, recordDiagnostic } from "./diagnostics";
+import { crumb } from "./breadcrumbs";
+import { BUILD_ID } from "./version";
 import {
   captureTouchPointer, gestureMoved, isDeferredTouchMode, isOutsideFarmPanGesture, isTouchPointer,
   isSelectTapGesture, isZombieHold, plotOwnsObjectTap, shouldRecoverTouchPointerUp, TOUCH_ZOMBIE_HOLD_MS,
@@ -114,7 +118,10 @@ import {
 import { epicAsset, epicLootImage, epicLootImageByName } from "./epicBoss/lootImage";
 import { offerFullscreenPrompt } from "./ui/panels/fullscreenPrompt";
 import { shouldAnnounceEpicBossStart, showEpicBossStart } from "./ui/panels/epicBossStart";
-import { openToolWheel, type ToolWheelHandle, type ToolWheelItem } from "./ui/toolWheel";
+import {
+  openToolWheel, heldObjectName, rotateRowFor,
+  type ToolWheelHandle, type ToolWheelItem,
+} from "./ui/toolWheel";
 import {
   choosePlayMode, getPreferredPlayMode, setPreferredPlayMode, showOnlineUnavailable,
   showLocalUnavailable, usesOnlineGameplay, type PlayMode,
@@ -151,6 +158,14 @@ async function main() {
   // Capture crashes before anything else runs, so a failure during boot (asset load,
   // save decode, mode chooser) still lands in the diagnostics buffer. Local-only.
   initDiagnostics();
+  // Ask the browser to stop treating this origin as evictable. Best-effort storage is
+  // swept whole-origin under pressure — Cache Storage, localStorage and IndexedDB
+  // together — and this game runtime-caches tens of megabytes of artwork, which makes it
+  // a strong candidate for exactly that. An online player only notices the device-local
+  // half going (settings, preferences), because the farm itself comes back from the
+  // server: "my settings don't save and I never cleared anything". Fire-and-forget; the
+  // answer is recorded for the diagnostics report and nothing waits on it.
+  void requestPersistentStorage();
   // Detect device up front so <html data-platform> is set before the HUD's CSS
   // renders (drives the compact/desktop layout; re-evaluates on resize/rotate).
   initPlatform();
@@ -170,6 +185,10 @@ async function main() {
   const service = getPreferredPlayMode() === "local" ? OPEN_STATUS : await fetchServiceStatus();
   const playMode: PlayMode = await choosePlayMode(auth.isOnlineAvailable(), service);
   const onlineFarm = usesOnlineGameplay(playMode);
+  // The trail outlives a reload (see breadcrumbs.ts), so mark where each session begins —
+  // otherwise a report reads as one continuous run across the reload the player did to
+  // escape whatever they are reporting.
+  crumb("boot", `${playMode} ${BUILD_ID}`);
   // Quest restoration can synchronously pay an already-satisfied Local Farm quest.
   // Its reward hook reads this binding while SaveManager is still hydrating, so the
   // binding must exist before QuestSystem is constructed (and long before the online
@@ -2220,6 +2239,32 @@ async function main() {
   // Same treatment for the audio settings: a device that won't keep them is the one
   // thing that makes a volume change look like it worked and silently undoes it.
   audio.onStorageError = (message) => hud.showToast(message);
+  // ...and for the display/controls preferences, which are the ones a player is most
+  // likely to change and least likely to notice reverting until the next launch.
+  setPrefStorageErrorHandler((message) => hud.showToast(message));
+  // The online layer's live state, for the diagnostics report. A paused farm and a
+  // healthy one look identical in a paste without this — which is exactly what made the
+  // two "Gameplay paused — reconnect to continue" reports so expensive: the account data
+  // said the lease was live and being renewed, and nothing on the client's side of the
+  // story was recoverable at all. `recovery` answers the one question that matters, which
+  // is whether anything is still trying.
+  hud.getDiagnosticExtras = (): Record<string, string> => {
+    if (!economy) return {};
+    // `writer` is the availability chain in the order it fails: the browser lock this
+    // document holds, then the server credential it was issued, then whether that
+    // credential still agrees with the client key on disk. A drift there refuses every
+    // command batch forever while every other signal looks healthy.
+    const identity = api.writerIdentityState();
+    return {
+      gameplay: economy.available ? "available" : `unavailable (${economy.unavailableReason})`,
+      recovery: economy.recoveryState,
+      writer: [
+        api.hasLocalWriterLock() ? "lock held" : "NO LOCK (another tab?)",
+        api.hasWriterCredential() ? "credential held" : "no credential",
+        identity ? `identity ${identity}` : "identity unknown",
+      ].join(", "),
+    };
+  };
   jobs.onQueueChanged = () => saveManager.checkpointJobs();
 
   // Pixi's ticker is requestAnimationFrame-driven and may stop completely when
@@ -4505,7 +4550,38 @@ async function main() {
    *  nothing else in the session ever clears it. Online it also left the invasion
    *  session open, holding the roster locked and refusing the next fight until the
    *  15-minute TTL. A reload was the only way out. */
+  /** How long a battle scene may spend loading before the launch is called a failure.
+   *
+   *  Generous — a phone on mobile data pulling a stage it has never cached is the case
+   *  this must not punish — but finite, because the alternative is what was reported:
+   *  the farm is already hidden, every path back out lives inside the scene's own
+   *  `onFinish`, and a build that never settles leaves the player on a blank screen
+   *  with a spent attempt and only a reload to escape. Timing out routes that into the
+   *  catch below, which hands the farm back, says so, and — the part that matters for
+   *  the next report — writes the reason into the diagnostics buffer. A soft-lock that
+   *  records nothing is why the first report of this arrived saying "no errors". */
+  const BATTLE_LOAD_TIMEOUT_MS = 45_000;
+
+  /** Bound a battle-scene build in time. A build that lands after the deadline has
+   *  nobody waiting on it, so it is torn down rather than left alive off-stage. */
+  const withBattleLoadTimeout = (build: Promise<RaidScene>): Promise<RaidScene> => {
+    let timedOut = false;
+    let timer = 0;
+    const expired = new Promise<RaidScene>((_resolve, reject) => {
+      timer = window.setTimeout(() => {
+        timedOut = true;
+        reject(new Error(`battle scene did not load within ${BATTLE_LOAD_TIMEOUT_MS} ms`));
+      }, BATTLE_LOAD_TIMEOUT_MS);
+    });
+    void build.then(
+      (scene) => { window.clearTimeout(timer); if (timedOut) scene.destroy(); },
+      () => window.clearTimeout(timer),
+    );
+    return Promise.race([build, expired]);
+  };
+
   const abandonBattle = () => {
+    crumb("battle:left", raidScene ? "scene torn down" : "never loaded");
     if (raidScene) {
       app.stage.removeChild(raidScene.container);
       raidScene.destroy();
@@ -4600,8 +4676,13 @@ async function main() {
     raidActive = true;
     world.visible = false;
     hud.setRaiding(true);
+    // `.raiding` hides every piece of farm chrome and the battle's own HUD is drawn
+    // inside the scene, so from here until the scene lands there is nothing on screen
+    // at all — just the stage's clear colour. Say what is happening. See setBattleLoading.
+    hud.setBattleLoading(true, `Loading ${def.name}…`);
+    crumb("battle:launch", `${def.name} L${paidRun.level} · ${party.length} zombies · ${payment}`);
     audio.enterRaid(setup.raid.music);
-    RaidScene.create(app, {
+    withBattleLoadTimeout(RaidScene.create(app, {
       raid: setup.raid,
       assets,
       playerUnits: setup.playerUnits,
@@ -4747,7 +4828,11 @@ async function main() {
         const result = epicBoss.finish(paidRun, outcome.playerDamage, outcome.win);
         presentResult(result, []);
       },
-    }).then((scene) => {
+    })).then((scene) => {
+      hud.setBattleLoading(false);
+      // The GAP to the launch crumb above is the measurement this whole trail exists for:
+      // this step taking seconds instead of tenths is what the green-screen report was.
+      crumb("battle:ready", def.name);
       if (!raidActive) return scene.destroy();
       raidScene = scene;
       app.stage.addChild(scene.container);
@@ -4770,6 +4855,7 @@ async function main() {
         stack: error instanceof Error ? error.stack : undefined,
       });
       console.warn("[epic boss] battle scene failed to load", error);
+      crumb("battle:failed", def.name);
       abandonBattle();
       hud.showToast("The battle could not be loaded. This attempt was lost — reload and try again.", 6000);
       void economy?.refreshAuthoritative().catch(() => { /* recovered on the next sync */ });
@@ -4948,8 +5034,10 @@ async function main() {
     raidActive = true;
     world.visible = false;
     hud.setRaiding(true); // battle scene takes over the screen
+    hud.setBattleLoading(true, `Loading ${setup.raid.name}…`); // ...which is blank until it lands
+    crumb("battle:launch", `${setup.raid.name} · ${setup.playerUnits.length} zombies`);
     audio.enterRaid(setup.raid.music); // swap farm bed for this stage's battle BGM
-    RaidScene.create(app, {
+    withBattleLoadTimeout(RaidScene.create(app, {
       raid: setup.raid,
       assets,
       playerUnits: setup.playerUnits,
@@ -5153,7 +5241,9 @@ async function main() {
           }
         });
       },
-    }).then((scene) => {
+    })).then((scene) => {
+      hud.setBattleLoading(false);
+      crumb("battle:ready", setup.raid.name); // ...and the gap to the launch crumb is the load
       if (!raidActive) return scene.destroy(); // finished/aborted before load done
       raidScene = scene;
       app.stage.addChild(scene.container);
@@ -5175,6 +5265,7 @@ async function main() {
         stack: error instanceof Error ? error.stack : undefined,
       });
       console.warn("[invasion] battle scene failed to load", error);
+      crumb("battle:failed", setup.raid.name);
       abandonBattle();
       // Same drop as the gated-launch path above: the server has a session open that
       // no battle will ever settle, so clear the fence and let the next invasion's
@@ -6428,24 +6519,30 @@ async function main() {
   // Equip a tool without the toolbar's toggle behaviour: choosing the tool you are
   // already holding, from a menu, must keep it — not silently unequip it.
   const equipTool = (m: Mode) => { if (hud.mode !== m) hud.setMode(m); };
-  const toolWheelItems = (): ToolWheelItem[] => [
-    { id: "walk", label: "Select", icon: "button_multitool.png", hint: "1",
-      active: hud.mode === "walk", onPick: () => equipTool("walk") },
-    { id: "move", label: "Move", icon: "button_move.png", hint: "2",
-      active: hud.mode === "move", onPick: () => equipTool("move") },
-    // equipTool, not rotateCurrent: the toolbar's Rotate button is context-sensitive
-    // (while placing it spins the ghost), but a pick from this menu is a tool SWITCH —
-    // choosing Rotate mid-placement must leave placement mode, not turn the ghost.
-    { id: "rotate", label: "Rotate", icon: "button_rotate.png", hint: "3",
-      active: hud.mode === "rotate", onPick: () => equipTool("rotate") },
-    { id: "till", label: "Plow", icon: "button_plow.png", hint: "4",
-      active: hud.mode === "till", onPick: () => equipTool("till") },
-    { id: "remove", label: "Remove", icon: "button_sell.png", hint: "5",
-      active: hud.mode === "remove", onPick: () => equipTool("remove") },
-    { id: "plant", label: "Plant…", icon: "button_plant.png", hint: "P",
-      active: hud.mode === "plant",
-      onPick: () => hud.openPlantMenu((cfg) => hud.setPlanting(cfg)) },
-  ];
+  const toolWheelItems = (): ToolWheelItem[] => {
+    // The rotate row is context-sensitive here for the same reason the toolbar button
+    // and the 3 key are: with something in hand, all three turn THAT. See rotateRowFor.
+    const held = heldObjectName(hud.mode, hud.placing?.name, carrying?.def.name);
+    const rotate = rotateRowFor(held);
+    const rotateRow: ToolWheelItem = held
+      ? { ...rotate, icon: "button_rotate.png", hint: "3", onPick: () => rotateCurrent() }
+      : { ...rotate, icon: "button_rotate.png", hint: "3",
+          active: hud.mode === "rotate", onPick: () => equipTool("rotate") };
+    return [
+      { id: "walk", label: "Select", icon: "button_multitool.png", hint: "1",
+        active: hud.mode === "walk", onPick: () => equipTool("walk") },
+      { id: "move", label: "Move", icon: "button_move.png", hint: "2",
+        active: hud.mode === "move", onPick: () => equipTool("move") },
+      rotateRow,
+      { id: "till", label: "Plow", icon: "button_plow.png", hint: "4",
+        active: hud.mode === "till", onPick: () => equipTool("till") },
+      { id: "remove", label: "Remove", icon: "button_sell.png", hint: "5",
+        active: hud.mode === "remove", onPick: () => equipTool("remove") },
+      { id: "plant", label: "Plant…", icon: "button_plant.png", hint: "P",
+        active: hud.mode === "plant",
+        onPick: () => hud.openPlantMenu((cfg) => hud.setPlanting(cfg)) },
+    ];
+  };
   app.canvas.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     if (tutorial.active || visiting || raidActive) return;

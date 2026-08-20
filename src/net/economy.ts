@@ -1,4 +1,5 @@
 import type { GameState } from "../GameState";
+import { crumb } from "../breadcrumbs";
 import * as api from "./api";
 import { CommandQueue } from "./commandQueue";
 import {
@@ -411,6 +412,17 @@ export class EconomyClient {
     this.scheduleRecovery();
   }
 
+  /** Whether the invariant above is holding RIGHT NOW, for the diagnostics report. The
+   *  reported signature — a paused farm, a live lease, an account version that has not
+   *  moved in an hour — is indistinguishable from a healthy pause without this. */
+  get recoveryState(): string {
+    if (this.available) return "running";
+    if (this.writerGated) return "gated on another device (no retry by design)";
+    if (!api.getSession()) return "signed out (no retry by design)";
+    if (this.recoveryInFlight) return "recovering now";
+    return this.recoveryTimer ? `retry armed (attempt ${this.recoveryAttempt + 1})` : "STALLED: nothing pending";
+  }
+
   /** A tap on a paused farm. The player pressing a dead board is the most reliable
    *  signal that a stall is happening, and the least tolerable moment to keep waiting
    *  out a backoff, so a refused interaction pulls the next attempt forward instead of
@@ -427,6 +439,7 @@ export class EconomyClient {
     if (this.recoveryTimer || typeof window === "undefined") return;
     const delays = [2_000, 5_000, 10_000, 30_000, 60_000];
     const delay = delays[Math.min(this.recoveryAttempt, delays.length - 1)];
+    crumb("queue:retry-armed", `in ${Math.round(delay / 1000)}s (attempt ${this.recoveryAttempt + 1})`);
     this.recoveryTimer = setTimeout(() => {
       this.recoveryTimer = null;
       void this.recover();
@@ -441,6 +454,7 @@ export class EconomyClient {
     // the loop.
     if (this.recoveryInFlight) return;
     this.recoveryInFlight = true;
+    crumb("queue:recovering");
     try {
       let bootstrap = await api.bootstrap(true);
       bootstrap = await this.recoverResumableRaid(bootstrap);

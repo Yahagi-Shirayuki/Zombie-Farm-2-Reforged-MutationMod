@@ -185,6 +185,31 @@ const GARDEN_STATION_X = 250;
  *  relative to the field, so at 1.0 the army reads as one smear; this is the ONE knob in
  *  the block that is not ground truth. Set it to 1 for the source's exact spacing. */
 const ROW_SPREAD = 2;
+/** How close to its band's line a zombie must stand before the row is allowed to
+ *  ANCHOR on it (see assignFormation). Small: the closest two members of a row are one
+ *  slot step apart, which is several times this even after `rowXFit` compresses it, so
+ *  in practice only the member actually parked on the line qualifies.
+ *
+ *  WHY THE ROW HAS TO WAIT FOR IT. The row hangs off its front-most member's body
+ *  standoff, so the whole row shifts when a lighter body takes the lead. That is right
+ *  once the newcomer is standing there and wrong before it arrives: a Headless released
+ *  from the charge slot re-anchored the row the instant it was RELEASED, which stepped
+ *  the zombie already toe-to-toe with the wave 32 units backwards — out of
+ *  `engageDistance`, while its replacement was still three seconds of walking away. The
+ *  enemy had nothing in reach for that whole crossing and stood there being hit
+ *  (measured: 3.3 s of a 8 s window, and it re-arms its attack clock every idle tick, so
+ *  the cost is worse than the gap). Reported as the enemy stopping mid-fight whenever a
+ *  Regular or Headless was sent in.
+ *
+ *  The binary has no such transient, because its geometry is anchored at the row's REAR:
+ *  `x = attackPos - 55 - 35*band - standoff + 5*(n - 1 - slot)` counts the units BEHIND
+ *  you, so joining a row never moves anyone back. This sim re-anchors on the FRONT
+ *  instead — deliberately, because `frontX` is derived from the raid's hold position and
+ *  a rear anchor plants a Large-led row ~20 units outside a 60-unit melee reach, where
+ *  it could never be hit at all. Waiting for the arrival keeps the front anchor and
+ *  costs the transient nothing: the row re-forms on the frame its new leader reaches the
+ *  line, with that leader in contact, so there is no moment where nobody is. */
+const ROW_ANCHOR_EPS = 2;
 /** How deep behind the line a zombie can still swing from. The source has NO such band — a
  *  zombie attacks once it has ARRIVED at its computed destination, however deep — but this
  *  sim's "everyone in the combat zone attacks" rule needs a number, so there is nothing to
@@ -2356,14 +2381,24 @@ export class BattleSim {
       // contact.
       const rel = (p: SimUnit, slot: number) =>
         -(SRC_BODY_STANDOFF[this.bodyOf(p)] ?? 0) * SIM_PER_SOURCE_X + (n - 1 - slot) * SLOT_X_STEP;
-      const relMax = Math.max(...row.map(rel));
+      const bandX = this.frontX - band * BAND_GAP;
+      const rels = row.map(rel);
+      // Anchor the row on the front-most member that has actually REACHED the line —
+      // not on one still walking in from the charge slot. See ROW_ANCHOR_EPS.
+      const standing = rels.filter((_, i) => row[i].x >= bandX - ROW_ANCHOR_EPS);
+      const relMax = Math.max(...(standing.length ? standing : rels));
       row.forEach((p, slot) => {
         // A healer keeps its station EXACTLY — no band gap, no row fan. Those terms are
         // relative to a front line it is not part of, and they dragged it ~36 units off
         // the mark. Gardens share the one x and are separated by `slotY` below.
+        //
+        // The `min` only bites for a zombie still crossing that outranks everyone
+        // standing: with the row anchored behind it, its own offset comes out NEGATIVE
+        // (a slot in front of the line). It walks to the line instead, and takes the
+        // anchor with it when it gets there.
         p.slotX = p.isGarden
           ? GARDEN_STATION_X
-          : this.frontX - band * BAND_GAP - (relMax - rel(p, slot)) * this.rowXFit;
+          : Math.min(bandX, bandX - (relMax - rels[slot]) * this.rowXFit);
         // Source: y = 4*slot - 2*n + 10, whose midpoint is y=8 for ANY n. Two adjustments:
         // we hang the row off the lane centre instead of the stage's y origin (so the +10
         // becomes +2 — the formula minus its own fixed centre — and the block stays centred

@@ -6,6 +6,14 @@ import { screenToGrid, tileCenter } from "./iso";
 
 export interface PetPenBounds { oc: number; or: number; tileW: number; tileH: number }
 
+/** Depth-sort tie-break for a pet, wherever it stands. Below the zombies' 0.5 and the
+ *  farmer's 0.6 (a pet underfoot draws behind them), above a placed object's own art —
+ *  including each layer of the Pet Pen, whose near wall is put back over its occupants
+ *  by Field's masked overlay rather than by sinking the pets. ONE constant because the
+ *  pen used to carry its own: a leftover -100 from the single-sprite pen, which also
+ *  buried its occupants behind the BACK fence. */
+const PET_BIAS = 0.4;
+
 /** Cosmetic-only farm companion. It follows world coordinates and never enters
  * collision, pathfinding, combat, quest, or economy systems. */
 export class PetActor {
@@ -113,7 +121,7 @@ export class PetActor {
     this.sprite.texture = this.frames[this.animation.frames[this.frame] ?? 0];
     const grid = screenToGrid(this.container.x, this.container.y);
     const col = Math.round(grid.col), row = Math.round(grid.row);
-    setFootprint(this.container, col, row, col, row, 0.4);
+    setFootprint(this.container, col, row, col, row, PET_BIAS);
   }
 
   /** Cosmetic pen movement. Targets stay one tile inside the fence and are joined
@@ -162,10 +170,11 @@ export class PetActor {
 
     this.advanceAnimation(dt);
     const grid = screenToGrid(this.container.x, this.container.y);
-    // The pen is one transparent-center sprite. Sort occupants behind it so the
-    // near rails naturally occlude their feet while they remain visible inside.
+    // Same bias as a roaming pet: a pen occupant sorts in FRONT of both of the pen's
+    // layers — right for the far wall it stands south of, and restored for the near
+    // one by Field's masked near-wall overlay (updatePetPenOcclusion).
     setFootprint(this.container, Math.round(grid.col), Math.round(grid.row),
-      Math.round(grid.col), Math.round(grid.row), -100);
+      Math.round(grid.col), Math.round(grid.row), PET_BIAS);
   }
 
   private advanceAnimation(dt: number) {

@@ -50,9 +50,24 @@ const LANTERN_KEY = "zf2r.farmerLantern";
 const LANTERN_TAP_KEY = "zf2r.farmerLanternTap";
 const RIGHT_CLICK_KEY = "zf2r.rightClick";
 
+/** Raised the first time this device refuses to KEEP a preference, so a player whose
+ *  settings quietly reset is told why instead of re-making the same change every
+ *  launch. Wired to a HUD toast in main, exactly like SaveManager.onStorageError and
+ *  AudioManager.onStorageError — a refused write is invisible from inside the game
+ *  (the toggle moves, the setting applies, and it is gone at the next start), which is
+ *  precisely the report this exists to answer. */
+let onPrefStorageError: ((message: string) => void) | null = null;
+let storageWarned = false;
+
+export function setPrefStorageErrorHandler(fn: ((message: string) => void) | null): void {
+  onPrefStorageError = fn;
+}
+
 /** localStorage.getItem that survives a browser with storage denied (private mode,
  *  blocked third-party context). Appearance prefs are read while DRAWING, so a throw
- *  here would take the frame with it. */
+ *  here would take the frame with it — and `getFarmBackground` is read at module scope
+ *  during boot, where a throw takes the whole launch. EVERY read in this file goes
+ *  through here for that reason; none may touch `localStorage` directly. */
 function readPref(key: string): string | null {
   try {
     return localStorage.getItem(key);
@@ -61,11 +76,19 @@ function readPref(key: string): string | null {
   }
 }
 
+/** The write half of the same rule. A failure is reported once rather than swallowed:
+ *  a full quota and a blocked storage both look identical to the player otherwise. */
 function writePref(key: string, value: string): void {
   try {
     localStorage.setItem(key, value);
-  } catch {
-    /* preference is optional */
+  } catch (error) {
+    console.warn("[prefs] write failed", key, error);
+    if (storageWarned) return;
+    storageWarned = true;
+    onPrefStorageError?.(
+      "Settings can't be saved in this browser, so they'll reset when you come back. " +
+      "Private browsing or a full storage quota is the usual cause.",
+    );
   }
 }
 
@@ -163,11 +186,11 @@ export function zombieAppearancePrefs(): ZombieAppearancePrefs {
 
 /** Which sprite pack to render with. Defaults to ZF2 (the only pack wired today). */
 export function getSpriteSet(): SpriteSet {
-  return localStorage.getItem(SPRITE_KEY) === "zf1" ? "zf1" : "zf2";
+  return readPref(SPRITE_KEY) === "zf1" ? "zf1" : "zf2";
 }
 
 export function setSpriteSet(set: SpriteSet): void {
-  localStorage.setItem(SPRITE_KEY, set);
+  writePref(SPRITE_KEY, set);
 }
 
 // Foliage density per background, as a fraction of the base (Deep Forest) tree
@@ -189,44 +212,44 @@ export const FARM_BACKGROUNDS: { id: FarmBackground; label: string }[] = [
 
 /** How lush the farm's foliage ring is. Defaults to Woodland (the medium density). */
 export function getFarmBackground(): FarmBackground {
-  const v = localStorage.getItem(FARM_BG_KEY);
+  const v = readPref(FARM_BG_KEY);
   return isFarmBackground(v) ? v : DEFAULT_FARM_BACKGROUND;
 }
 
 export function setFarmBackground(bg: FarmBackground): void {
-  localStorage.setItem(FARM_BG_KEY, bg);
+  writePref(FARM_BG_KEY, bg);
 }
 
 /** Player lighting preference. Auto follows the browser/device's local clock. */
 export function getDayNightMode(): DayNightMode {
-  const value = localStorage.getItem(DAY_NIGHT_KEY);
+  const value = readPref(DAY_NIGHT_KEY);
   return value === "day" || value === "night" ? value : "auto";
 }
 
 export function setDayNightMode(mode: DayNightMode): void {
-  localStorage.setItem(DAY_NIGHT_KEY, mode);
+  writePref(DAY_NIGHT_KEY, mode);
 }
 
 /** How the friends list is ordered. Purely a display choice, so it lives here with
  *  the other view preferences rather than in the save. */
 export function getFriendSort(): FriendSort {
-  const value = localStorage.getItem(FRIEND_SORT_KEY);
+  const value = readPref(FRIEND_SORT_KEY);
   return isFriendSort(value) ? value : DEFAULT_FRIEND_SORT;
 }
 
 export function setFriendSort(sort: FriendSort): void {
-  localStorage.setItem(FRIEND_SORT_KEY, sort);
+  writePref(FRIEND_SORT_KEY, sort);
 }
 
 /** How the "My Zombies" roster is ordered. Like the friends sort this is a view
  *  preference, not progression, so it stays device-local instead of in the save. */
 export function getZombieSort(): ZombieSort {
-  const value = localStorage.getItem(ZOMBIE_SORT_KEY);
+  const value = readPref(ZOMBIE_SORT_KEY);
   return isZombieSort(value) ? value : DEFAULT_ZOMBIE_SORT;
 }
 
 export function setZombieSort(sort: ZombieSort): void {
-  localStorage.setItem(ZOMBIE_SORT_KEY, sort);
+  writePref(ZOMBIE_SORT_KEY, sort);
 }
 
 /** Whether the player has been shown the "tap/click hazards to damage them" tip,
@@ -236,19 +259,11 @@ export function setZombieSort(sort: ZombieSort): void {
  *  hint about THIS device's input, not account progression. A browser that can't
  *  write storage simply sees the tip again — cheaper than failing the launch. */
 export function hasSeenHazardTip(): boolean {
-  try {
-    return localStorage.getItem(HAZARD_TIP_KEY) === "1";
-  } catch {
-    return false;
-  }
+  return readPref(HAZARD_TIP_KEY) === "1";
 }
 
 export function markHazardTipSeen(): void {
-  try {
-    localStorage.setItem(HAZARD_TIP_KEY, "1");
-  } catch {
-    /* preference is optional */
-  }
+  writePref(HAZARD_TIP_KEY, "1");
 }
 
 /** Whether Tim's one-off briefing for a particular invasion has been given yet. Some
@@ -259,19 +274,11 @@ export function markHazardTipSeen(): void {
  *  hazard tip: it is a hint about how to play, not account progression, so a browser
  *  that cannot write storage simply hears Tim out again. */
 export function hasSeenRaidTip(raidId: number): boolean {
-  try {
-    return localStorage.getItem(RAID_TIP_KEY + raidId) === "1";
-  } catch {
-    return false;
-  }
+  return readPref(RAID_TIP_KEY + raidId) === "1";
 }
 
 export function markRaidTipSeen(raidId: number): void {
-  try {
-    localStorage.setItem(RAID_TIP_KEY + raidId, "1");
-  } catch {
-    /* preference is optional */
-  }
+  writePref(RAID_TIP_KEY + raidId, "1");
 }
 
 /** When the local-clock night window opens and closes, in the device's own

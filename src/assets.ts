@@ -8,6 +8,7 @@ import { setZombieNames } from "./zombie/names";
 import { hidesHeadMutationArt } from "./zombie/mutationVisual";
 import { BASE } from "./base";
 import { fetchJson, mapConcurrent } from "./assetLoading";
+import { noteAssetFailure } from "./assetFailures";
 import { isFencePanel } from "./pathCosts";
 import { MAX_ZOMBIE_POTS } from "./placementLimit";
 
@@ -687,6 +688,7 @@ async function loadLooseMutationParts(
         zombiePartTex[file] = (await Assets.load(url)) as Texture;
       } catch {
         console.warn(`[assets] mutation part "${file}" not found at ${url}`);
+        noteAssetFailure(url); // ...and into the report, not only the console
       }
     },
   );
