@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BattleSim, CHARGE_X, type SimUnit } from "./BattleSim";
+import { BattleSim, CHARGE_X, ENEMY_HOLD_X, type SimUnit } from "./BattleSim";
 import {
   PIXEL_FIRE_BURN_MS,
   PIXEL_FIRE_PACE_REACH,
@@ -37,8 +37,8 @@ function abducteeQueue(): SummonConfig {
   };
 }
 
-/** Mini Buddy is loaded onto a Large while it stands in the deployment slot, so every
- *  test of it has to walk the carrier out there first. Returns the ticks it took. */
+/** Step the fight until `done` (or the tick budget runs out) without asserting anything
+ *  along the way. Returns the ticks it took. */
 function stepUntil(sim: BattleSim, done: () => boolean, limit = 400): number {
   let n = 0;
   while (n < limit && !done()) { sim.step(50); n++; }
@@ -127,12 +127,11 @@ describe("Mini Buddy", () => {
     });
     // Order matters as much as the crowd does. The carrier deploys ELEVENTH, which is what
     // puts it in a rear depth band (bands are five deep) with ten zombies already parked
-    // in front of it — the real party's shape. The mini comes last so it is still waiting
-    // when the carrier reaches the charge slot.
+    // in front of it — the real party's shape. The tap lands at once (the pair is queued
+    // together at the back); the ram itself waits for the carrier's turn to deploy, which
+    // comes well past stepUntil's usual 20-second budget — hence the wide loop below.
     const sim = new BattleSim([...crowd, brute, mini], [enemy], null, true);
 
-    // Eleven zombies deploy one at a time, so the carrier's turn at the charge slot comes
-    // well past stepUntil's usual 20-second budget.
     stepUntil(sim, () => miniReady(sim) > 0, 4000);
     expect(sim.activate("attachMini")).toBe(true);
     const b = sim.units.find((u) => u.id === "brute")!;
@@ -156,11 +155,11 @@ describe("activated ability display window", () => {
   const presence = (sim: BattleSim, key: string) =>
     sim.activatedStatus().find((s) => s.key === key)?.present ?? false;
 
-  // The window is "a brute IS BEING DEPLOYED and a mini has yet to deploy" — and the
-  // button's look and the tap it accepts are the same predicate, so a lit button always
-  // means a tap will land. It used to arm from the first frame of the fight, off a Large
-  // still queued at the back, and a tap then loaded the mini onto a zombie that was
-  // nowhere near the slot.
+  // The window is "an un-mounted Large that has NOT YET DEPLOYED, with a mini still
+  // behind it" — queued at the back and out being deployed both count. The button's look
+  // and the tap it accepts are the same predicate, so a lit button always means a tap
+  // will land. (The window was narrowed to the charge slot alone for a while; that made
+  // it a few seconds per fight and easy to lose outright, so v36 restored the full span.)
   const miniSetup = () => {
     const brute = unit({
       id: "brute", sourceKey: "ZombieActorLargeTier2", team: "player",
@@ -171,43 +170,49 @@ describe("activated ability display window", () => {
     return new BattleSim([brute, mini], [enemy], null, true);
   };
 
-  it("shows Mini Buddy only once the Large has REACHED the charge slot", () => {
+  it("arms from the first frame and stays lit until the Large has deployed", () => {
     const sim = miniSetup();
     const b = sim.units.find((u) => u.id === "brute")!;
 
-    // Queued at the back — not being deployed, so no button and no tap.
+    // Queued at the back: the pair is on the field, so the move is offered.
     expect(b.state).toBe("waiting");
-    expect(presence(sim, "attachMini")).toBe(false);
-    expect(miniReady(sim)).toBe(0);
+    expect(presence(sim, "attachMini")).toBe(true);
+    expect(miniReady(sim)).toBe(1);
 
-    // Walking OUT to the slot. Still "charging", still not there: the state is entered
-    // the moment it leaves the group, and the walk is most of it.
+    // Still armed across the walk out to the slot and the focus fill.
     sim.step(50);
     expect(b.state).toBe("charging");
     expect(b.x).toBeLessThan(CHARGE_X - 2);
-    expect(presence(sim, "attachMini")).toBe(false);
-    expect(miniReady(sim)).toBe(0);
-
-    // Standing in the slot with its focus bar filling — the whole window.
-    stepUntil(sim, () => miniReady(sim) > 0);
-    expect(Math.abs(b.x - CHARGE_X)).toBeLessThanOrEqual(2);
+    expect(presence(sim, "attachMini")).toBe(true);
+    expect(miniReady(sim)).toBe(1);
+    stepUntil(sim, () => Math.abs(b.x - CHARGE_X) <= 2);
     expect(presence(sim, "attachMini")).toBe(true);
 
-    // Sent forward: too late to mount anyone.
-    expect(sim.activate("attachMini")).toBe(true);
-    for (let i = 0; i < 5000 && b.buddyId; i++) sim.step(50);
-    expect(b.buddyId).toBeNull();
+    // Deployed un-mounted: too late to mount anyone.
+    stepUntil(sim, () => b.state === "advance" || b.state === "fight");
     expect(presence(sim, "attachMini")).toBe(false);
+    expect(miniReady(sim)).toBe(0);
+    expect(sim.activate("attachMini")).toBe(false);
+    expect(b.buddyId).toBeNull();
   });
 
-  it("refuses a tap while the Large is still queued at the back", () => {
+  it("a tap while the Large is still queued mounts the mini where they stand", () => {
     const sim = miniSetup();
     const b = sim.units.find((u) => u.id === "brute")!;
     const m = sim.units.find((u) => u.id === "mini")!;
+    const e = sim.units.find((u) => u.id === "enemy")!;
 
-    expect(sim.activate("attachMini")).toBe(false);
+    expect(b.state).toBe("waiting");
+    expect(sim.activate("attachMini")).toBe(true);
+    expect(b.buddyId).toBe("mini");
+    expect(m.state).toBe("carried");
+
+    // The pair still deploys as one: the carrier walks out, charges, rams, and puts
+    // the mini down on the enemy it stunned.
+    for (let i = 0; i < 5000 && m.state === "carried"; i++) sim.step(50);
     expect(b.buddyId).toBeNull();
-    expect(m.state).toBe("waiting");
+    expect(["advance", "fight"]).toContain(m.state);
+    expect(e.stunMs).toBeGreaterThan(0);
   });
 
   it("stays dark with no Mini left to pick up, however the Large is placed", () => {
@@ -1499,6 +1504,52 @@ describe("enemy cadence and boss hazard damage (ground truth)", () => {
     // The captive comes home with the rest of the army rather than marching out short.
     sim.prepareArmyExit();
     expect(sim.units.filter((u) => u.team === "player" && u.taken)).toHaveLength(0);
+  });
+
+  it("a conversion does not leave the wave with nothing in reach — the survivors re-anchor the line", () => {
+    // Tester's report: "the enemies stop attacking when my headless zombie becomes the
+    // pixelated zombie". The converted zombie kept its formation SLOT (armyOrder never
+    // tested `taken`) — and a Headless leads its row from the front, and the front
+    // fighter is exactly the zombie `turnZombie` takes. So the survivor re-slotted
+    // behind a ghost, one body-standoff short of the wave's 60-unit reach, and the wave
+    // held with nothing in range for the rest of the fight while the army (whose combat
+    // band is 220 deep) kept hitting back.
+    const front = unit({
+      id: "front", sourceKey: "ZombieActorHeadlessTier1", team: "player",
+      isHeadless: true, hp: 1e6, maxHp: 1e6,
+    });
+    const back = unit({
+      id: "back", sourceKey: "ZombieActorRegularTier1", team: "player", hp: 1e6, maxHp: 1e6,
+    });
+    const boss = enemy({ id: "boss", isBoss: true, str: 0, hp: 1e7, maxHp: 1e7 });
+    const sim = new BattleSim(
+      [front, back], [bagMinion(), boss], null, true,
+      [{ name: "turnZombie", weight: 1, castMs: 0, cooldownMs: 1e6, damage: 0 }],
+      undefined, null, null, false, false, false, undefined, null, null, undefined,
+      pixelZombie()
+    );
+    onTheLine(sim);
+    const bag = sim.units.find((u) => u.id === "bag")!;
+    bag.x = ENEMY_HOLD_X; // onTheLine sets states, not positions — stand the wave on its mark
+    const f = sim.units.find((u) => u.id === "front")!;
+    const s = sim.units.find((u) => u.id === "back")!;
+    f.x = s.x + 50; // the Headless leads, so Zedzox takes IT — as in the report
+    for (let i = 0; i < 40 && !sim.turnedEnemies().length; i++) sim.step(50);
+    expect(f.taken).toBe(true);
+
+    // Give the wave a real swing, then let the survivor settle into its slot.
+    bag.damage = 400;
+    bag.cooldownMs = 500;
+    for (let i = 0; i < 400; i++) sim.step(50);
+
+    // The survivor stands ON the line, inside the wave's reach…
+    expect(Math.abs(bag.x - s.x)).toBeLessThanOrEqual((sim as any).engageDistance);
+    // …and the wave is actually swinging at it: ten more seconds toe-to-toe cost it
+    // hit points. (The pixel zombie stands mid-field, far behind the settled slot, so
+    // only the wave can be landing these.)
+    const settled = s.hp;
+    for (let i = 0; i < 200; i++) sim.step(50);
+    expect(s.hp).toBeLessThan(settled);
   });
 
   it("telekinesis knocks back and stuns but deals NO damage", () => {

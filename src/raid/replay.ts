@@ -434,7 +434,28 @@ import type { RaidOutcome } from "./types";
 // Transcript-changing on every invasion (any fight where a second zombie is released
 // while the first is engaged), hence the bump. Same cost as every bump: an invasion in
 // flight at deploy time settles as stale_ruleset and pays nothing.
-export const RAID_RULESET_VERSION = 35;
+// v36 — TWO CHANGES, EITHER OF WHICH FORCES THE BUMP.
+// (a) MINI BUDDY'S WINDOW IS ANY TIME BEFORE THE CARRIER HAS DEPLOYED — a Large still
+// queued at the back or out being deployed both take the mount (BattleSim.canTakeMini).
+// This deliberately reverts the charge-slot-only narrowing: that window was a few
+// seconds per fight, easy to miss outright, and a Large that deployed un-mounted had
+// spent the army's one shot at the move. A tap a v35 Worker refuses as `illegal_ability`
+// (the Large still "waiting", or walking out) a v36 client accepts, and the mount
+// changes who is standing where from that tick on.
+// (b) A CONVERTED ZOMBIE GIVES UP ITS FORMATION SLOT (BattleSim.armyOrder now tests
+// `taken`). Reported from the Video Games invasion as "the enemies stop attacking when
+// my headless zombie becomes the pixelated zombie": the victim of `turnZombie` keeps
+// whatever state it was in, so it kept its slot, and a Headless leads its row from the
+// FRONT — the ghost went on anchoring the line it was no longer standing in. The
+// survivors re-slotted behind it, one body-standoff short of the wave's 60-unit reach,
+// and an enemy with no target holds and re-arms its attack clock every idle tick, so the
+// wave stood there swinging at nothing for the rest of the fight (the army, whose combat
+// band is 220 deep, kept hitting back — a free win every time Zedzox landed the move
+// that is supposed to hurt most). Transcript-changing on every Video Games fight from
+// the first conversion onward; the crab's `taken` is client-only, so no other invasion
+// moves. Same cost as every bump: an invasion in flight at deploy time settles as
+// stale_ruleset and pays nothing.
+export const RAID_RULESET_VERSION = 36;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

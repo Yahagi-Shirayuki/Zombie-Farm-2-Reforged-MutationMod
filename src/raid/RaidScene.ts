@@ -648,7 +648,7 @@ export class RaidScene {
   //
   //  • activeAbilityStrip — the tappable moves (Bash/Smash/Explode/Mini Buddy). Big
   //    wooden buttons in a vertical column, and each one is on screen ONLY while a
-  //    zombie can actually perform it (Mini Buddy while a Large is still thinking,
+  //    zombie can actually perform it (Mini Buddy while a Large has yet to deploy,
   //    Bash/Smash/Explode once its zombie has reached the fighting line). A button
   //    the player can see is a button the player can press.
   //  • passiveAbilityStrip — small informational icons for the automatic team

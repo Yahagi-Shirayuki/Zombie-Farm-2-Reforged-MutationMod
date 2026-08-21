@@ -1175,21 +1175,19 @@ export class BattleSim {
   /** Mini Buddy's whole window, in one place because the button's look and the tap
    *  it accepts must agree exactly (they did not: see `readyToActivate`).
    *
-   *  The move is loaded onto a Large WHILE IT IS BEING DEPLOYED — standing in the
-   *  charge slot with its focus bar filling, the one moment the player is deciding
-   *  about that zombie. "charging" alone is not enough: the state is entered the
-   *  instant the zombie leaves the back group and covers its whole walk out to the
-   *  slot, so it has to have ARRIVED (the same 2-unit test the charge step itself
-   *  uses to stop walking and start focusing). */
-  private atChargeSlot(p: SimUnit): boolean {
-    return p.state === "charging" && Math.hypot(CHARGE_X - p.x, CENTER_Y - p.y) <= 2;
-  }
-
+   *  The move loads onto a Large ANY TIME BEFORE IT HAS DEPLOYED — still queued at
+   *  the back ("waiting"), or out being deployed ("charging": the walk to the slot
+   *  and the focus fill both). The window was narrowed for a while to the instant
+   *  the Large stood in the charge slot, on the theory that a tap should only land
+   *  on the zombie the player is looking at — but that made it a few seconds per
+   *  fight, easy to miss outright, and a Large that deployed un-mounted had spent
+   *  the army's one shot at the move. Deliberately reverted (v36): anywhere short
+   *  of deployed, the mount is an order the pair carries out when the carrier goes. */
   private canTakeMini(p: SimUnit): boolean {
     return (
       p.alive && this.isLarge(p) && p.abilities.includes("attachMini") &&
       !p.buddyId && !p.usedAbilities.includes("attachMini") &&
-      this.atChargeSlot(p) && !!this.availableMini()
+      (p.state === "waiting" || p.state === "charging") && !!this.availableMini()
     );
   }
 
@@ -1205,10 +1203,8 @@ export class BattleSim {
   private readyToActivate(p: SimUnit, key: string): boolean {
     if (p.usedAbilities.includes(key)) return false;
     // Mini Buddy is the one move performed OFF the field, so it does not go through
-    // the in-position test below at all — see `canTakeMini` for its window. It used
-    // to accept a Large still queued at the back ("waiting"), which armed the button
-    // from the first frame of the fight and let a tap load the mini onto a zombie
-    // nowhere near the deployment slot.
+    // the in-position test below at all — see `canTakeMini` for its window (any
+    // time before the carrier has deployed).
     if (key === "attachMini") return this.canTakeMini(p);
     // Strictly a WIDENING for suicide moves: everything that could be lit before still
     // can, plus the standing-in-position-with-nothing-to-hit case.
@@ -1246,10 +1242,10 @@ export class BattleSim {
    *  (which also demands off-cooldown and not-already-winding-up) precisely so the
    *  button stays put while its zombie charges and recharges.
    *
-   *  Mini Buddy is the exception: its window is the narrowest of all — exactly while
-   *  a Large stands in the charge slot deciding whether to go, with a Mini still
-   *  behind it — and it has no cooldown to wait out, so "on screen" and "a tap lands"
-   *  are the same instant. Same predicate as `readyToActivate`, deliberately. */
+   *  Mini Buddy is the exception: its window is "an un-mounted Large short of
+   *  deployment, with a Mini still behind it" — and it has no cooldown to wait out,
+   *  so "on screen" and "a tap lands" are the same instant. Same predicate as
+   *  `readyToActivate`, deliberately. */
   private abilityPresent(key: string): boolean {
     if (key === "attachMini") return this.players.some((p) => this.canTakeMini(p));
     return this.players.some(
@@ -2327,8 +2323,16 @@ export class BattleSim {
    *      them at the end of the DEPLOYED block (that call inserts before the first zombie
    *      still in the back group), in their existing relative order. */
   private armyOrder(): SimUnit[] {
+    // `!p.taken`: a zombie carried out of the fight (a crab's passenger, a zombie
+    // Zedzox has converted) keeps whatever state it was in, and it used to keep its
+    // SLOT too. The ghost anchored its row from the front — a Headless leads its row,
+    // and the front fighter is exactly the zombie `turnZombie` takes — so the
+    // survivors re-slotted BEHIND a unit that was no longer on the field, one
+    // body-standoff short of the wave's reach, and the enemies held with nothing in
+    // range for the rest of the fight ("the enemies stop attacking when my headless
+    // becomes the pixel zombie").
     const committed = this.players
-      .filter((p) => p.alive && (p.state === "advance" || p.state === "fight"))
+      .filter((p) => p.alive && !p.taken && (p.state === "advance" || p.state === "fight"))
       .sort((a, b) => a.formOrder - b.formOrder);
 
     const gardens = committed.filter((p) => p.isGarden);
