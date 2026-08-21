@@ -753,7 +753,7 @@ def composite(key, parts, atlas, frames):
 
 
 # The neck/shoulder pivots and a few per-part limb nudges are HAND-TUNED in the
-# sprite assembler tool (tools/sprite_assembler.html) and exported straight into
+# rig editor (tools/rig_studio.html, Rig tab) and exported straight into
 # models.json — they need human judgement the auto-layout can't supply. The strip
 # packing here is fully deterministic (identical rects every run), so we can safely
 # regenerate the parts while PRESERVING that hand-tuned pivot layer: for every part

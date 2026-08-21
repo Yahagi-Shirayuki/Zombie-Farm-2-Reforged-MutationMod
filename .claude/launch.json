@@ -4,29 +4,61 @@
     {
       "name": "zombiefarm-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 5173,
       "autoPort": true
     },
     {
       "name": "zombiefarm-offline",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "--mode", "offline"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--mode",
+        "offline"
+      ],
       "port": 5173,
       "autoPort": true
     },
     {
       "name": "zombiefarm-worker",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "server", "run", "dev", "--", "--port", "8787"],
+      "runtimeArgs": [
+        "--prefix",
+        "server",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "8787"
+      ],
       "port": 8787
     },
     {
       "name": "zombiefarm-preview",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "preview"],
+      "runtimeArgs": [
+        "run",
+        "preview"
+      ],
       "port": 4173,
       "autoPort": true
+    },
+    {
+      "name": "rig-studio",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8123",
+        "--directory",
+        "tools"
+      ],
+      "port": 8123
     }
   ]
 }

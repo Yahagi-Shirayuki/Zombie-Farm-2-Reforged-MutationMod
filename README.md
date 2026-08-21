@@ -436,9 +436,41 @@ CgBI "crushed" PNGs to portable PNGs and bucketing plists and art by category. I
 external `ZF1_extracted` tree, not into `public/`, and is groundwork toward the ZF1 art pack the
 **ZF2 Sprites** setting needs; nothing at runtime reads its output yet.
 
-`tools/sprite_assembler.html` (built by `tools/build_sprite_assembler.py`) is a
-hands-on drag/rotate/pivot editor for hand-authoring zombie `models.json`; its
-export round-trips the same schema the runtime reads.
+`tools/rig_studio.html` (built by `tools/build_rig_studio.py`) is the bench for
+everything the raid screen draws, in five tabs. It supersedes the old
+`sprite_assembler.html`, whose rig editor it contains whole — same localStorage key, so
+rig edits made there are still there.
+
+* **Rig** — the drag/rotate/pivot editor for the paper-doll rigs (zombie
+  `models.json` and `raids/enemies/models.json`); its export round-trips the same schema
+  the runtime reads.
+* **Animation** — runs and EDITS the procedural animations that pose those rigs. Every
+  rig arrives with the clips the game actually gives it, rebuilt from
+  `src/raid/EnemyActor.ts` and `src/raid/RaidActor.ts`: idle, move, one clip per named
+  attack, and — for a boss — its throw and its special. Where a rig has a hand-authored
+  ZFAttackAnims timeline (the Crazed Worker's wind-through, the Ninja's stab, BroBot's
+  arm spins) that timeline is transcribed key-for-key and marked `authored`; everything
+  else gets the generic chop/jab/slam envelope. A clip is a list of TRACKS, each posing
+  one part group on one channel (rotation in degrees, translation in rig px, scale) with
+  its own keys and its own pivot — which is what lets the arm chop about the shoulder
+  while the body holds still. Scrub the timeline and drag a part on the stage to key a
+  move (Shift+drag for a rotation); clips save to the browser and download as JSON.
+* **Epic Bosses** — the eight bosses are drawn from authored frame STRIPS rather than
+  rigs (see `src/raid/epicBossAnimation.ts`), so they get a strip player: play each
+  animation off its cell grid, retime it, re-sequence it, nudge frames, against the
+  parallax stage the boss brings with it. Exports a `catalog.json` `animations` patch.
+* **Effects** — the ability visuals at real stage scale: heal, group heal, the
+  resurrection pillar, the Explode fireball, the bash-family smash, both lasers, the
+  Mini Buddy mount, the death poof. Ports of `src/raid/Particles.ts` and the
+  `RaidScene` effect code, with the constants exposed so a change can be tried before it
+  is moved into the source.
+* **Tiles** — `tools/tile_lab.html` itself, hosted in a frame. One copy of that tool.
+
+Everything a rig or a boss stands on is a real raid stage, laid out the way `RaidScene`
+does it: the source 480x320 cocos design space, contain-fit, ground line at 0.9 of the
+stage height, units fitted to their role height. Two known gaps: the named "special"
+zombies are composed at runtime by `mergeSpecialZombieModel` and so are not in the rig
+list, and an edited CLIP has no runtime consumer yet — the export is the deliverable.
 
 `tools/tile_lab.html` (built by `tools/build_tile_lab.py`) is the same idea for the art
 that has to meet edge to edge — both road sets, the pond pieces, rocks, the zombie patch.

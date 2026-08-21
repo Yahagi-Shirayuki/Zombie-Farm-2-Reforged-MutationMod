@@ -3,7 +3,7 @@
 // Served at /zombie-review.html by the dev server; not part of the production build.
 //
 // The point of this tool is FIDELITY, so it deliberately reuses the game's own code
-// rather than reimplementing it (which is what tools/sprite_assembler.html has to do
+// rather than reimplementing it (which is what tools/rig_studio.html has to do
 // to stay double-clickable):
 //
 //   • loadAssets()  — the real atlas slicing, the real mutations.json, the real

@@ -20,3 +20,10 @@ desktop/src-tauri/gen/
 
 # Offline bundle built with `--outDir dist-offline` (see desktop/README.md).
 dist-offline/
+
+# The built Rig Studio (~11 MB: it inlines every rig, stage, Epic Boss strip and the
+# tile lab as data URIs). Unlike tile_lab.html — which is small and gets handed to
+# people who do not have the repo — this one is only ever used from a checkout, and
+# committing it would add another 11 MB blob on every art change. Rebuild it with
+#   python tools/build_rig_studio.py        (--no-epic for a ~6 MB one)
+tools/rig_studio.html
