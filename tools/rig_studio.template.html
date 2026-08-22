@@ -1762,7 +1762,12 @@ const ZF = (() => {
     document.body.appendChild(dl);
   })();
 
-  window.__onTabShow("rig", () => { resize(); });
+  window.__onTabShow("rig", () => {
+    // The Animation tab edits these same pivots (that is the point of it having its own
+    // pivot rows), so the panels here can be stale by the time you come back.
+    resize();
+    if (model) { rebuildPivotEditor(); rebuildInspector(); updateExport(); }
+  });
 
   (async function boot() {
     const names = Object.keys(ZF.RIGS);
@@ -2860,10 +2865,31 @@ const CLIPS = {
     else if (e.key === ".") { if (clip) { time = Math.min(clip.duration, time + 1 / 30); drawLanes(); render(); } }
   });
 
+  /** The rig moved under us — a pivot added or removed, a part edited. The canvas is
+   *  not the only thing that has to catch up: a new pivot has to reach the pivot LIST
+   *  and the "swings about" selects, which are built from `pivotsOf(model)`. Without
+   *  this the pivot only appeared once something else happened to rebuild them — in
+   *  practice, switching clips. */
+  function refreshRigDependentUi() {
+    rebuildPivotEditor();
+    rebuildPartInspector();
+    rebuildTrackInspector();
+  }
   window.__rigChanged = (ds, key) => {
-    if (ds === dsName && key === modelKey) { model = ZF.RIGS[ds].models[key]; render(); }
+    if (ds !== dsName || key !== modelKey) return;
+    model = ZF.RIGS[ds].models[key];
+    // Only while this tab is on screen: the Rig tab syncs on every mousemove of a part
+    // drag, and rebuilding three panels per frame for a tab nobody is looking at is
+    // waste. The tab-show handler catches up on the way in.
+    if ($("#view-anim").classList.contains("on")) refreshRigDependentUi();
+    render();
   };
-  window.__onTabShow("anim", () => { rebuildTimeline(); render(); });
+  window.__onTabShow("anim", () => {
+    // Only one tab is on screen at a time, so a Rig-tab edit always lands while this
+    // one is hidden. Re-read the rig on the way in.
+    if (modelKey && ZF.RIGS[dsName]) model = ZF.RIGS[dsName].models[modelKey] || model;
+    rebuildTimeline(); refreshRigDependentUi(); render();
+  });
 
   // ---- boot ---------------------------------------------------------------
   (async function boot() {
