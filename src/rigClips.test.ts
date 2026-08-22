@@ -191,6 +191,48 @@ describe("Rig Studio clips match the animation the game actually plays", () => {
     expect(bad.join("\n")).toBe("");
   });
 
+  // The fault the studio was built to catch, stated as a property rather than a list of
+  // rigs: a limb that the engine turns AS A UNIT must turn about ONE pivot. Rotating each
+  // part about its own anchor is what sent the Swashbuckler's cutlass off without his
+  // hand, and it is invisible in a two-minute fight — so it is asserted, not eyeballed.
+  it("no multi-part limb rotates about per-part anchors", () => {
+    const torn: string[] = [];
+    for (const key of RIG_KEYS) {
+      const model = MODELS[key];
+      const actor = new EnemyActor(Texture.EMPTY, model, key);
+      const arms = (actor as unknown as {
+        arms: { baseX: number; baseY: number; back: boolean }[];
+      }).arms;
+      const pivots = actor as unknown as {
+        shoulder: { x: number; y: number } | null;
+        backShoulder: { x: number; y: number } | null;
+      };
+      for (const back of [false, true]) {
+        const side = arms.filter((a) => a.back === back);
+        if (side.length < 2) continue; // a one-part arm turns on its own anchor, correctly
+        const pivot = back ? pivots.backShoulder : pivots.shoulder;
+        const label = `${key} arm.${back ? "back" : "front"} (${side.length} parts)`;
+        if (!pivot) { torn.push(`${label}: no pivot at all`); continue; }
+        // Turning the assembly must be RIGID: every part keeps its distance from every
+        // other. That holds if and only if they all swing about the same point.
+        const turn = (a: { baseX: number; baseY: number }, th: number) => {
+          const c = Math.cos(th), s2 = Math.sin(th);
+          const dx = a.baseX - pivot.x, dy = a.baseY - pivot.y;
+          return { x: pivot.x + dx * c - dy * s2, y: pivot.y + dx * s2 + dy * c };
+        };
+        for (let i = 0; i < side.length; i++) {
+          for (let j = i + 1; j < side.length; j++) {
+            const before = Math.hypot(side[i].baseX - side[j].baseX, side[i].baseY - side[j].baseY);
+            const a = turn(side[i], 1.7), b = turn(side[j], 1.7);
+            const after = Math.hypot(a.x - b.x, a.y - b.y);
+            if (Math.abs(before - after) > 0.01) torn.push(`${label}: parts drift ${(after - before).toFixed(1)}px apart`);
+          }
+        }
+      }
+    }
+    expect(torn.join(" | ")).toBe("");
+  });
+
   it("idle and move match the engine's resting and walking poses", () => {
     const bad: string[] = [];
     for (const key of RIG_KEYS) {

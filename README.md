@@ -453,8 +453,13 @@ rig edits made there are still there.
   else gets the generic chop/jab/slam envelope. A clip is a list of TRACKS, each posing
   one part group on one channel (rotation in degrees, translation in rig px, scale) with
   its own keys and its own pivot — which is what lets the arm chop about the shoulder
-  while the body holds still. Scrub the timeline and drag a part on the stage to key a
-  move (Shift+drag for a rotation); clips save to the browser and download as JSON.
+  while the body holds still. **Click a part on the stage** to select it: the right-hand
+  panel names its target, prints its rotation at the playhead as an editable number, and
+  says which joint it swings about; a green handle appears on that joint to drag the
+  rotation, and dragging the part itself keys a move. The rig's own pivots are listed
+  beneath and can be dragged on the stage (turn on *Rig pivots*) — moving a shoulder
+  while the attack plays is the fastest way to fix an arm that reads wrong, and it writes
+  through the same store the Rig tab uses. Clips save to the browser and download as JSON.
 * **Epic Bosses** — the eight bosses are drawn from authored frame STRIPS rather than
   rigs (see `src/raid/epicBossAnimation.ts`), so they get a strip player: play each
   animation off its cell grid, retime it, re-sequence it, nudge frames, against the

@@ -110,6 +110,19 @@ const keyframe = (t: number, frames: readonly (readonly [number, number])[]) => 
   return frames[frames.length - 1][1];
 };
 
+/** The joint a rig's arm assembly hangs from when it authors no pivot for that side:
+ *  the top-most (min py) part of the assembly, which for a shoulder-down arm is the
+ *  shoulder end. A one-part assembly returns its own anchor, i.e. no change. */
+function topOfAssembly(
+  arms: readonly { baseX: number; baseY: number; back: boolean }[],
+  back: boolean
+): { x: number; y: number } | null {
+  const side = arms.filter((a) => a.back === back);
+  if (!side.length) return null;
+  const top = side.reduce((a, b) => (b.baseY < a.baseY ? b : a));
+  return { x: top.baseX, y: top.baseY };
+}
+
 export interface EnemyAttackPose {
   atkProg: number;
   damageTiming: number;
@@ -197,12 +210,14 @@ export class EnemyActor {
     if (model.shoulder) {
       this.shoulder = { x: model.shoulder.x, y: model.shoulder.y };
     } else {
-      const front = this.arms.filter((a) => !a.back);
-      if (front.length) {
-        const top = front.reduce((a, b) => (b.baseY < a.baseY ? b : a));
-        this.shoulder = { x: top.baseX, y: top.baseY };
-      }
+      this.shoulder = topOfAssembly(this.arms, false);
     }
+    // The SAME fallback for the rear assembly. Without it a rig that authors no
+    // `back-shoulder` turned each of its back-arm parts about its own anchor, and a
+    // multi-part rear arm came apart exactly as the front ones used to — the Ninja
+    // girl's two-part back arm separated by up to 38 px mid-stab. For a one-part rear
+    // arm the top-most part IS the part, so this changes nothing at all.
+    if (!this.backShoulder) this.backShoulder = topOfAssembly(this.arms, true);
   }
 
   /** Tint the actor's body, the way `-[Actor resetColor]` walks the attachments and

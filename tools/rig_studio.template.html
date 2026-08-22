@@ -293,7 +293,7 @@
           </label>
           <span class="sep"></span>
           <label class="toggle"><input type="checkbox" id="aRest" /> Rest ghost</label>
-          <label class="toggle"><input type="checkbox" id="aPivots" /> Pivots</label>
+          <label class="toggle" title="Show the rig's neck / shoulder / back-shoulder pivots — and drag them right here to change what the arm swings about"><input type="checkbox" id="aPivots" /> Rig pivots</label>
           <label class="toggle"><input type="checkbox" id="aMirror" /> Face right</label>
           <span class="sep"></span>
           <label class="toggle"><input type="checkbox" id="aPose" checked /> Pose-to-key</label>
@@ -303,8 +303,10 @@
         <div class="stagewrap"><canvas id="aStageCanvas"></canvas></div>
         <div class="badge" id="aBadge"></div>
         <div class="overlay-tip" id="aTip">
-          Scrub the timeline, then drag a part to key a MOVE · <kbd>Shift</kbd>+drag to key a ROTATE ·
-          keys land on the whole target GROUP · <kbd>Space</kbd> play/pause · <kbd>,</kbd>/<kbd>.</kbd> step
+          <b>Click a part</b> to select it · drag it to key a MOVE · drag the
+          <b style="color:var(--accent2)">●</b> handle (or <kbd>Shift</kbd>+drag) to key a ROTATE ·
+          turn on <b>Rig pivots</b> and drag a <b style="color:var(--cyan)">✚</b> to move the joint itself ·
+          <kbd>Space</kbd> play/pause · <kbd>,</kbd>/<kbd>.</kbd> step
         </div>
         <div id="timeline">
           <div id="tlHead">
@@ -325,6 +327,10 @@
       </div>
 
       <div class="col right">
+        <h2>Selected part</h2>
+        <div class="pad" id="aPartInspector"><div class="hint">Click a part on the stage.</div></div>
+        <h2>Rig pivots <span class="hint">(shared with the Rig tab)</span></h2>
+        <div id="aPivotEditor"></div>
         <h2>Track</h2>
         <div class="pad" id="aTrackInspector"><div class="hint">No track selected.</div></div>
         <h2>Key</h2>
@@ -1720,7 +1726,7 @@ const CLIPS = {
 
   let dsName = "enemy", modelKey = null, model = null;
   let clips = {}, clipName = null, clip = null;
-  let selTrack = -1, selKey = -1;
+  let selTrack = -1, selKey = -1, selPart = -1;
   let playing = false, time = 0, freeT = 0;
   let stage = null, scrollT = 0;
   let cssW = 100, cssH = 100;
@@ -1778,6 +1784,7 @@ const CLIPS = {
   }
   function selectModel(key) {
     modelKey = key;
+    selPart = -1;
     model = ZF.RIGS[dsName].models[key];
     $("#aModelSel").value = key;
     loadClips();
@@ -1795,6 +1802,8 @@ const CLIPS = {
     rebuildTimeline();
     rebuildTrackInspector();
     rebuildKeyInspector();
+    rebuildPartInspector();
+    rebuildPivotEditor();
     updateExport();
     syncClipHeader();
   }
@@ -2045,6 +2054,105 @@ const CLIPS = {
     b.addEventListener("click", fn);
     return b;
   }
+  /** The rig's own joints, editable here rather than on the Rig tab: what the arm
+   *  swings ABOUT is the single biggest thing about how an attack reads, and it was
+   *  previously two tabs away from the animation you were judging it by. Writes to the
+   *  same models under the same key the Rig tab uses. */
+  function rebuildPivotEditor() {
+    const box = $("#aPivotEditor");
+    box.innerHTML = "";
+    if (!model) return;
+    const rows = [];
+    if (model.neck) rows.push(["neck", "#f85149", model.neck]);
+    if (model.shoulder) rows.push(["shoulder", "#39c5cf", model.shoulder]);
+    for (const pv of model.pivots || []) rows.push([pv.name || "pivot", "#d29922", pv]);
+    if (!rows.length) {
+      box.innerHTML = '<div class="pad hint">This rig authors no pivots. '
+        + 'Its arms swing about the top-most part of each assembly.</div>';
+    }
+    for (const [name, color, obj] of rows) {
+      const row = el("div", "pivotrow");
+      const dot = el("span", null, "✚"); dot.style.color = color;
+      const nm = el("span", null, name); nm.style.flex = "1";
+      const xi = document.createElement("input");
+      const yi = document.createElement("input");
+      xi.type = yi.type = "number"; xi.step = yi.step = "0.5";
+      xi.value = round(obj.x); yi.value = round(obj.y);
+      const write = () => {
+        obj.x = parseFloat(xi.value); obj.y = parseFloat(yi.value);
+        rigTouched(); render();
+      };
+      xi.addEventListener("input", write);
+      yi.addEventListener("input", write);
+      row.append(dot, nm, xi, yi);
+      box.appendChild(row);
+    }
+    if (rows.length && !model.pivots?.some((q) => q.name === "back-shoulder")
+        && ZF.resolveTarget(dsName, model, "arm.back").length > 1) {
+      const warn = el("div", "hint");
+      warn.style.padding = "6px 12px";
+      warn.style.color = "var(--warn)";
+      warn.textContent = "⚠ This rig's rear arm is more than one part and has no "
+        + "back-shoulder pivot — it falls back to the top-most part. Add one in the Rig tab "
+        + "if the arm reads wrong.";
+      box.appendChild(warn);
+    }
+  }
+  /** Persist a rig edit through the SAME store the Rig tab writes. */
+  function rigTouched() {
+    const d = ZF.RIGS[dsName];
+    if (!d.autosave) return;   // the Rig tab's Store button opts a dataset in
+    const all = {};
+    Object.keys(d.models).forEach((k) => { all[k] = d.models[k]; });
+    ZF.writeJSON(ZF.rigStoreKey(dsName), all);
+  }
+
+  function rebuildPartInspector() {
+    const box = $("#aPartInspector");
+    box.innerHTML = "";
+    if (selPart < 0 || !model || !model.parts[selPart]) {
+      box.innerHTML = '<div class="hint">Click a part on the stage. '
+        + 'Then drag it to key a move, or drag the green handle to key a rotation.</div>';
+      return;
+    }
+    const part = model.parts[selPart];
+    const meta = ZF.partMeta(ZF.RIGS[dsName].kind, part, selPart);
+    const target = preferredTarget(selPart);
+    const head = el("div", "hint");
+    head.innerHTML = "part " + selPart + " · <b style='color:var(--cyan)'>" + target + "</b>"
+      + (ZF.RIGS[dsName].kind === "zombie" ? " · " + part.file : "");
+    box.appendChild(head);
+
+    const t = clip && clip.duration > 0 ? (time / clip.duration) % 1 : 0;
+    const rotTrack = clip && clip.tracks.find((q) => q.target === target && q.channel === "rot");
+    const cur = rotTrack ? CLIPS.laneValue(rotTrack, t, clip.duration) : 0;
+    const g = el("div", "grid2"); g.style.marginTop = "8px";
+    g.appendChild(numRow("rotation at playhead (deg)", round(cur), 1, (v) => {
+      const ti = findOrCreateTrack(target, "rot", meta.group === "arm" ? "auto" : "self");
+      setKey(clip.tracks[ti], t, v);
+      selTrack = ti;
+      rebuildTimeline(); rebuildTrackInspector(); render();
+    }));
+    const pivName = rotTrack ? (rotTrack.pivot || "self") : (meta.group === "arm" ? "auto" : "self");
+    const pivots = ZF.pivotsOf(model);
+    if (pivots.indexOf(pivName) < 0) pivots.push(pivName);
+    const sel = selectRow("swings about", pivots, pivName, (v) => {
+      const ti = findOrCreateTrack(target, "rot", v);
+      clip.tracks[ti].pivot = v;
+      touch(); rebuildTimeline(); render();
+    });
+    g.appendChild(sel);
+    box.appendChild(g);
+
+    const n = ZF.resolveTarget(dsName, model, target).length;
+    const note = el("div", "hint");
+    note.style.marginTop = "6px";
+    note.textContent = n > 1
+      ? "Keys on this target move all " + n + " parts of the assembly together."
+      : "This target is a single part.";
+    box.appendChild(note);
+  }
+
   function rebuildTrackInspector() {
     const box = $("#aTrackInspector");
     box.innerHTML = "";
@@ -2179,20 +2287,24 @@ const CLIPS = {
     const bossScale = (ZF.SCENE.bossHScale || {})[modelKey] || 1;
     const targetH = role === "zombie" ? ZF.ZOMBIE_H : role === "boss" ? ZF.BOSS_H * bossScale : ZF.ENEMY_H;
     const zoomMul = parseFloat($("#aZoom").value) || 1;
+    // Enemy art faces screen-LEFT (toward the zombie line); zombie art is mirrored to
+    // face right. The checkbox flips whichever is the default for this dataset.
+    const defaultMirror = ZF.RIGS[dsName].kind === "zombie";
+    const mirror = $("#aMirror").checked ? !defaultMirror : defaultMirror;
+    const facing = mirror ? -1 : 1;
     const s = role === "rig"
       ? Math.min((cssW * 0.55) / b.w, (cssH * 0.62) / b.h) * zoomMul
       : (targetH / Math.max(1, b.h)) * r.sizeScale * zoomMul;
     // RaidScene pulls an over-wide enemy rig forward (screen-left) so it does not
     // overhang the stage; the nudge is a fraction of the RENDERED width.
     const forwardX = (ZF.SCENE.enemyForwardFX || {})[modelKey] ? (ZF.SCENE.enemyForwardFX[modelKey] * b.w * s) : 0;
-    const x = (role === "rig" ? cssW * 0.5 : ZF.laneX(r, 0.42)) - forwardX;
-    const y = role === "rig" ? cssH * 0.78 : ZF.footY(r);
-    // Enemy art faces screen-LEFT (toward the zombie line); zombie art is mirrored to
-    // face right. The checkbox flips whichever is the default for this dataset.
-    const defaultMirror = ZF.RIGS[dsName].kind === "zombie";
-    const mirror = $("#aMirror").checked ? !defaultMirror : defaultMirror;
-    const facing = mirror ? -1 : 1;
-
+    // Rig space centres the rig's BOUNDS, not its origin: an enemy rig is authored
+    // entirely in positive model x, so centring the origin hangs the whole body off the
+    // right-hand edge the moment you zoom in.
+    const x = role === "rig"
+      ? cssW * 0.5 - (b.x + b.w / 2) * s * facing
+      : ZF.laneX(r, 0.42) - forwardX;
+    const y = role === "rig" ? cssH * 0.86 : ZF.footY(r);
     const tNorm = clip && clip.duration > 0 ? (time / clip.duration) % 1 : 0;
     const pose = clip ? CLIPS.poseAt(dsName, model, clip, tNorm, freeT) : { parts: {}, root: { dx: 0, dy: 0, rot: 0, sx: 1, sy: 1 } };
     placement = { x, y, s, facing, bottom: b.y + b.h };
@@ -2219,6 +2331,7 @@ const CLIPS = {
     ZF.drawRig(ctx, dsName, modelKey, model, pose, {});
     if ($("#aPivots").checked) drawPivots(pose);
     if (selTrack >= 0 && clip && clip.tracks[selTrack]) highlightTarget(clip.tracks[selTrack], pose);
+    if (selPart >= 0 && model.parts[selPart]) drawPartHandle(pose);
     ctx.restore();
 
     if (role === "rig") drawGroundLine(y);
@@ -2247,6 +2360,44 @@ const CLIPS = {
     }
     ctx.restore();
   }
+  /** Where the selected part swings from: the pivot its rotation track names, or its
+   *  own anchor. Model space. */
+  function pivotOfSelection() {
+    if (selPart < 0 || !model.parts[selPart]) return null;
+    const meta = ZF.partMeta(ZF.RIGS[dsName].kind, model.parts[selPart], selPart);
+    const target = preferredTarget(selPart);
+    const track = (clip && clip.tracks.find((t) => t.target === target && t.channel === "rot")) || null;
+    const named = track ? track.pivot : (meta.group === "arm" ? "auto" : "self");
+    return ZF.pivotPoint(model, named, meta.back)
+      || { x: model.parts[selPart].px, y: model.parts[selPart].py };
+  }
+  const ROT_HANDLE = 34;
+  /** The green rotate handle, drawn at the joint the part actually turns about — which
+   *  is the whole point after the shoulder fix, and is invisible otherwise. */
+  function drawPartHandle(pose) {
+    const piv = pivotOfSelection();
+    if (!piv) return;
+    const d = pose.parts[selPart];
+    const k = 1 / Math.abs(placement.s);
+    const ang = (model.parts[selPart].rot || 0) + (d ? d.rot : 0);
+    const hx = piv.x + Math.sin(ang) * ROT_HANDLE * k;
+    const hy = piv.y - Math.cos(ang) * ROT_HANDLE * k;
+    ctx.save();
+    ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 1.4 * k;
+    ctx.beginPath(); ctx.moveTo(piv.x, piv.y); ctx.lineTo(hx, hy); ctx.stroke();
+    ctx.fillStyle = "#3fb950";
+    ctx.beginPath(); ctx.arc(hx, hy, 5 * k, 0, 7); ctx.fill();
+    ctx.strokeStyle = "#39c5cf"; ctx.lineWidth = 1.6 * k;
+    const r = 6 * k;
+    ctx.beginPath();
+    ctx.moveTo(piv.x - r, piv.y); ctx.lineTo(piv.x + r, piv.y);
+    ctx.moveTo(piv.x, piv.y - r); ctx.lineTo(piv.x, piv.y + r);
+    ctx.stroke();
+    ctx.restore();
+    handleScreen = { hx, hy, piv };
+  }
+  let handleScreen = null;
+
   function highlightTarget(track, pose) {
     const idx = ZF.resolveTarget(dsName, model, track.target);
     if (!idx.length) return;
@@ -2332,57 +2483,133 @@ const CLIPS = {
     return -1;
   }
   let poseDrag = null;
+  /** Screen distance, in MODEL units, that counts as grabbing a handle. */
+  const grabR = () => 9 / Math.abs((placement && placement.s) || 1);
+
   canvas.addEventListener("pointerdown", (e) => {
-    if (!$("#aPose").checked || !clip || !model) return;
+    if (!clip || !model) return;
     const m = screenToModel(e);
     if (!m) return;
-    const hit = pickPart(m);
-    if (hit < 0) return;
-    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
-    const target = preferredTarget(hit);
     const t = clip.duration > 0 ? (time / clip.duration) % 1 : 0;
-    poseDrag = {
-      m0: m, target, t, alt: e.shiftKey,
-      pivot: e.shiftKey ? (model.shoulder ? "shoulder" : "self") : null,
-      part: hit,
-      x0: CLIPS.laneValue(clip.tracks[findOrCreateTrack(target, "x")], t, clip.duration),
-      y0: CLIPS.laneValue(clip.tracks[findOrCreateTrack(target, "y")], t, clip.duration),
-      r0: 0,
-    };
-    if (e.shiftKey) {
-      const ti = findOrCreateTrack(target, "rot", model.shoulder ? "shoulder" : "self");
+
+    // 1. A rig PIVOT, when they are shown. Moving the joint an arm swings about is the
+    //    single biggest lever on how an attack reads, so it is grabbable right here.
+    if ($("#aPivots").checked) {
+      const cands = [];
+      if (model.neck) cands.push(model.neck);
+      if (model.shoulder) cands.push(model.shoulder);
+      for (const pv of model.pivots || []) cands.push(pv);
+      for (const c of cands) {
+        if (Math.hypot(m.x - c.x, m.y - c.y) < grabR()) {
+          try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+          poseDrag = { mode: "pivot", obj: c };
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+
+    // 2. The selected part's ROTATE handle.
+    if (selPart >= 0 && handleScreen
+        && Math.hypot(m.x - handleScreen.hx, m.y - handleScreen.hy) < grabR() * 1.6) {
+      const target = preferredTarget(selPart);
+      const meta = ZF.partMeta(ZF.RIGS[dsName].kind, model.parts[selPart], selPart);
+      const ti = findOrCreateTrack(target, "rot", meta.group === "arm" ? "auto" : "self");
+      const piv = handleScreen.piv;
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+      poseDrag = {
+        mode: "rotate", t, rotTrack: ti, pivotPt: piv,
+        r0: CLIPS.laneValue(clip.tracks[ti], t, clip.duration),
+        a0: Math.atan2(m.y - piv.y, m.x - piv.x),
+      };
+      selTrack = ti;
+      rebuildTimeline(); rebuildTrackInspector();
+      e.preventDefault();
+      return;
+    }
+
+    // 3. A part: select it, and (with Pose-to-key on) start keying a move.
+    const hit = pickPart(m);
+    if (hit < 0) {
+      selPart = -1; rebuildPartInspector(); render();
+      return;
+    }
+    selPart = hit;
+    rebuildPartInspector();
+    render();   // draw the rotate handle NOW rather than on the next frame
+    if (!$("#aPose").checked) return;
+    const target = preferredTarget(hit);
+    const meta = ZF.partMeta(ZF.RIGS[dsName].kind, model.parts[hit], hit);
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    // No track is created here: a CLICK selects, it does not author. The x/y tracks are
+    // made on the first actual movement (see startMove), so browsing a rig cannot litter
+    // its clip with empty tracks.
+    poseDrag = { mode: e.shiftKey ? "rotate" : "move", m0: m, target, t, part: hit, started: false };
+    if (poseDrag.mode === "rotate") {
+      const ti = findOrCreateTrack(target, "rot", meta.group === "arm" ? "auto" : "self");
+      const piv = ZF.pivotPoint(model, clip.tracks[ti].pivot, meta.back)
+        || { x: model.parts[hit].px, y: model.parts[hit].py };
       poseDrag.rotTrack = ti;
-      poseDrag.r0 = CLIPS.laneValue(clip.tracks[ti], t, clip.duration);
-      const p = model.parts[hit];
-      const piv = ZF.pivotPoint(model, clip.tracks[ti].pivot, false) || { x: p.px, y: p.py };
       poseDrag.pivotPt = piv;
+      poseDrag.r0 = CLIPS.laneValue(clip.tracks[ti], t, clip.duration);
       poseDrag.a0 = Math.atan2(m.y - piv.y, m.x - piv.x);
+      selTrack = ti;
     }
     rebuildTimeline();
     e.preventDefault();
   });
+
   canvas.addEventListener("pointermove", (e) => {
     if (!poseDrag) {
-      if ($("#aPose").checked && model && placement) {
+      if (model && placement) {
         const m = screenToModel(e);
-        canvas.style.cursor = m && pickPart(m) >= 0 ? "move" : "default";
+        let c = "default";
+        if (m) {
+          const near = (a, b) => a && Math.hypot(m.x - a.x, m.y - a.y) < b;
+          if ($("#aPivots").checked
+              && [model.neck, model.shoulder].concat(model.pivots || []).some((q) => near(q, grabR()))) {
+            c = "move";
+          } else if (selPart >= 0 && handleScreen
+              && Math.hypot(m.x - handleScreen.hx, m.y - handleScreen.hy) < grabR() * 1.6) {
+            c = "crosshair";
+          } else if (pickPart(m) >= 0) {
+            c = $("#aPose").checked ? "move" : "pointer";
+          }
+        }
+        canvas.style.cursor = c;
       }
       return;
     }
     const m = screenToModel(e);
     if (!m) return;
-    if (poseDrag.alt && poseDrag.rotTrack != null) {
+    if (poseDrag.mode === "pivot") {
+      poseDrag.obj.x = e.shiftKey ? Math.round(m.x) : round(m.x);
+      poseDrag.obj.y = e.shiftKey ? Math.round(m.y) : round(m.y);
+      rigTouched(); rebuildPivotEditor(); render();
+      return;
+    }
+    if (poseDrag.mode === "rotate") {
       const a = Math.atan2(m.y - poseDrag.pivotPt.y, m.x - poseDrag.pivotPt.x);
-      const track = clip.tracks[poseDrag.rotTrack];
-      setKey(track, poseDrag.t, poseDrag.r0 + (a - poseDrag.a0) / ZF.DEG);
+      setKey(clip.tracks[poseDrag.rotTrack], poseDrag.t, poseDrag.r0 + (a - poseDrag.a0) / ZF.DEG);
     } else {
+      if (Math.hypot(m.x - poseDrag.m0.x, m.y - poseDrag.m0.y) < 0.75) return; // a click, not a drag
+      if (!poseDrag.started) {
+        poseDrag.started = true;
+        const xi = findOrCreateTrack(poseDrag.target, "x");
+        const yi = findOrCreateTrack(poseDrag.target, "y");
+        poseDrag.x0 = CLIPS.laneValue(clip.tracks[xi], poseDrag.t, clip.duration);
+        poseDrag.y0 = CLIPS.laneValue(clip.tracks[yi], poseDrag.t, clip.duration);
+      }
       setKey(clip.tracks[findOrCreateTrack(poseDrag.target, "x")], poseDrag.t, poseDrag.x0 + (m.x - poseDrag.m0.x));
       setKey(clip.tracks[findOrCreateTrack(poseDrag.target, "y")], poseDrag.t, poseDrag.y0 + (m.y - poseDrag.m0.y));
     }
-    drawLanes(); render();
+    drawLanes(); rebuildPartInspector(); render();
   });
+
   canvas.addEventListener("pointerup", (e) => {
-    if (poseDrag) { rebuildTimeline(); rebuildTrackInspector(); rebuildKeyInspector(); }
+    if (poseDrag && poseDrag.mode !== "pivot") {
+      rebuildTimeline(); rebuildTrackInspector(); rebuildKeyInspector(); render();
+    }
     poseDrag = null;
     try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
   });
@@ -2399,6 +2626,7 @@ const CLIPS = {
         else time %= clip.duration;
       }
       drawLanes();
+      if (selPart >= 0) rebuildPartInspector();
     }
     render();
   });
@@ -2425,7 +2653,7 @@ const CLIPS = {
   $("#aRole").addEventListener("change", render);
   $("#aZoom").addEventListener("input", render);
   $("#aRest").addEventListener("change", render);
-  $("#aPivots").addEventListener("change", render);
+  $("#aPivots").addEventListener("change", () => { rebuildPivotEditor(); render(); });
   $("#aMirror").addEventListener("change", render);
   $("#aDur").addEventListener("input", (e) => {
     if (!clip) return;

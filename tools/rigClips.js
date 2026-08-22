@@ -123,13 +123,20 @@ export function pivotPoint(model, name, back) {
   if (!name || name === "self") return null;
   if (name === "origin") return { x: 0, y: 0 };
   if (name === "auto") {
-    // The assembly's authored pivot for THIS side. A rig that authors none rotates the
-    // part about its own anchor — the fallback EnemyActor.swingArm takes.
+    // The assembly's authored pivot for THIS side, or — mirroring EnemyActor's own
+    // fallback — the top-most part of the assembly, which for a shoulder-down arm is the
+    // shoulder end. A one-part assembly resolves to its own anchor, i.e. no change.
     if (back) {
       const bs = (model.pivots || []).find((q) => q.name === "back-shoulder");
-      return bs ? { x: bs.x, y: bs.y } : null;
+      if (bs) return { x: bs.x, y: bs.y };
+    } else if (model.shoulder) {
+      return { x: model.shoulder.x, y: model.shoulder.y };
     }
-    return model.shoulder ? { x: model.shoulder.x, y: model.shoulder.y } : null;
+    const side = (model.parts || []).filter(
+      (q) => (q.group || "body") === "arm" && !!q.back === back);
+    if (!side.length) return null;
+    const top = side.reduce((a, b) => (b.py < a.py ? b : a));
+    return { x: top.px, y: top.py };
   }
   if (name === "neck") return model.neck ? { x: model.neck.x, y: model.neck.y } : null;
   if (name === "shoulder") return model.shoulder ? { x: model.shoulder.x, y: model.shoulder.y } : null;
