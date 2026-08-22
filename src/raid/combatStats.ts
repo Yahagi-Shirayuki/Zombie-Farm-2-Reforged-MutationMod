@@ -179,7 +179,40 @@ export function lineupSpeedBand(index: number, bypass = false): number {
  *  against a slow one it is very slow. `opponentIntervalSec` is the opponent's CURRENT
  *  effective interval in seconds. This is why a Scallywag reads as "swings every ~4 s"
  *  in reference footage while every other enemy runs at the raw 1/dex clock. */
+/** Damage reduction the Protect aura grants ONE zombie, given how many carriers are
+ *  deployed and whether this zombie is itself one of them.
+ *
+ *  Every body type takes the aura — Headless included, and Headless is the group that
+ *  CARRIES Protect, so the tank bodies used to be the only ones it could not shield. A
+ *  Bombie holds the highest hit points in the roster and still took every blow raw.
+ *
+ *  What a carrier does not do is shield ITSELF: the aura is what a Protect zombie gives
+ *  the rest of the line. That keeps a lone carrier at zero (which is what the old
+ *  `group === "Headless" ? 0` was, clumsily, encoding) while a real Headless line
+ *  protects each of its members with every OTHER carrier's share.
+ *
+ *  Lives here, and not at either call site, because two places compute it — the
+ *  CombatEngine build and BattleSim.refreshTeamAuras, which re-runs every tick. Fixing
+ *  one and not the other silently un-does the change on the first step of the fight. */
+export const PROTECT_STEP = 0.20;
+export const PROTECT_CAP = 0.95;
+export function protectReduction(carriers: number, isCarrier: boolean): number {
+  const others = Math.max(0, carriers - (isCarrier ? 1 : 0));
+  return Math.min(PROTECT_CAP, others * PROTECT_STEP);
+}
+
 export const SCALLYWAG_KEY = "PirateStageActorScallywag";
+/** The Dread Pirate Arrrnold. He is NOT in the recovered override — the binary reaches it
+ *  through `isKindOfClass: PirateStageActorScallywag` alone — so putting him here is a
+ *  DELIBERATE DIVERGENCE. It is the raid's own stated rule: the Pirates' failure text reads
+ *  "Rumors say pirates clobber anything that moves too fast", which the source only ever
+ *  makes true of the minion. Reading it as a family trait is what this expresses, and it
+ *  gives dex a job in the one fight where hit points have none (his 5000-damage slam is
+ *  larger than the max HP of every zombie in the game, so nothing survives a second one
+ *  whatever its con). Mirroring makes a SLOW front-liner the counter-play. */
+export const PIRATE_BOSS_KEY = "PirateStageActorBoss";
+/** Enemies whose attack clock mirrors the zombie they face rather than their own dex. */
+export const MIRROR_SPEED_KEYS: ReadonlySet<string> = new Set([SCALLYWAG_KEY, PIRATE_BOSS_KEY]);
 export function mirroredAttackIntervalSec(opponentIntervalSec: number): number {
   return Math.max(0.5, (opponentIntervalSec * opponentIntervalSec) / 0.8);
 }

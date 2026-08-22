@@ -455,7 +455,49 @@ import type { RaidOutcome } from "./types";
 // the first conversion onward; the crab's `taken` is client-only, so no other invasion
 // moves. Same cost as every bump: an invasion in flight at deploy time settles as
 // stale_ruleset and pays nothing.
-export const RAID_RULESET_VERSION = 36;
+// v37 — MINI BUDDY PICKS ITS CARRIER IN DEPLOY ORDER. The mount went to whichever
+// eligible brute `outranks` put first, and `outranks` means front-most x. Every eligible
+// carrier is by definition still un-deployed, and an un-deployed zombie's x is
+// `clusterHome` scatter plus an idle shuffle that re-rolls every 2.6-4.8 s — so with more
+// than one brute in the party the mount landed on an arbitrary one, and on a DIFFERENT one
+// depending on where in the shuffle cycle the tap arrived. The carrier is now the brute
+// that will deploy next (`deployRank`), which is the pairing the player is watching when
+// they tap. The mini half already resolved to the same unit (the queue is only ever drained
+// from the front) and now says so explicitly. The window is unchanged — still any time
+// before the carrier has deployed (v36), and still nothing that has already deployed.
+// Transcript-changing on any fight with two or more eligible brutes, hence the bump. Same
+// cost as every bump: an invasion in flight at deploy time settles as stale_ruleset and
+// pays nothing.
+// v38 — TWO PIRATE-RAID CHANGES, both transcript-changing from the first contact.
+// (a) PROTECT NO LONGER SKIPS HEADLESS. The aura's damage reduction was gated
+// `group === "Headless" ? 0 : protect × 0.20` at BOTH sites that compute it
+// (CombatEngine build + BattleSim.refreshTeamAuras), so the game's TANK group was the
+// only one that could not be shielded — and Protect is a HEADLESS ability, so it skipped
+// exactly the body type that carries it. Nothing in the recovered notes justifies that.
+// Every zombie now takes the aura, with one rule kept from the old behaviour: a carrier
+// does not shield ITSELF, only the rest of the line (`combatStats.protectReduction`, now
+// the single source both sites read). So a lone carrier still sits at zero — which is
+// what the exclusion was clumsily encoding — while a real Headless line protects each of
+// its members with every other carrier's share, up to the same 0.95 cap. Measured: a
+// realistic mixed 16-party fields three Headless, so each takes 0.40 and Arrrnold's 5000
+// lands as 3000 — survivable outright by a master Bombie's 4084.
+// (b) THE DREAD PIRATE ARRRNOLD MIRRORS HIS OPPONENT'S ATTACK SPEED, as the Scallywag
+// already does (`mirroredAttackIntervalSec`, max(0.5, opponentInterval²/0.8)). The
+// binary reaches that override through the Scallywag class alone, so this half is a
+// DELIBERATE DIVERGENCE — see combatStats.PIRATE_BOSS_KEY for the reasoning. It exists
+// because his authored 5000-damage slam is larger than the max hit points of every
+// zombie in the game (best in roster: 5513), so con buys nothing against him and the
+// one-shot latch made every body die on exactly his second swing. Keying his clock to
+// the front zombie's gives the matchup a dial: a slow Headless line (1.6 s) holds him to
+// 3.2 s, slower than his authored 2.5 s, while a fast front line drives him toward the
+// 0.5 s floor. Headless already has front priority, so the counter-play is reachable.
+// Measured on a 16-strong master army at levels 21/30/45: mixed party unchanged at 15/16
+// survivors, all-Headless 11/16 → 16/16, no-Headless 12/16 → 11/16. No win/loss flipped,
+// and the epic-boss bounding rule (src/epicBoss/combat.test.ts) is untouched, because the
+// self-shield is what would have moved it.
+// Same cost as every bump: an invasion in flight at deploy time settles as stale_ruleset
+// and pays nothing.
+export const RAID_RULESET_VERSION = 38;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

@@ -104,6 +104,30 @@ describe("Mini Buddy", () => {
     expect(e.stunMs).toBeGreaterThan(0);
   });
 
+  it("mounts the brute that deploys next, not the one milling furthest forward", () => {
+    // The carrier used to be chosen by `outranks` — front-most x — but every eligible
+    // carrier is still in the back group, where x is `clusterHome` scatter (three columns,
+    // 32 px apart) plus a shuffle that re-rolls every few seconds. So the mount went to an
+    // arbitrary brute, and to a different one depending on when in the shuffle the tap
+    // landed. Roster slot 2 sits a whole column (~64 px) right of slot 0, so pre-fix the
+    // LAST brute in the queue took the mini while the first one deployed empty-handed.
+    const large = (id: string) => unit({
+      id, sourceKey: "ZombieActorLargeTier2", team: "player", abilities: ["attachMini"],
+    });
+    const mini = unit({ id: "mini", sourceKey: "ZombieActorSmallTier1", team: "player" });
+    const enemy = unit({ id: "enemy", sourceKey: "FarmStageActorFarmhand", team: "enemy" });
+    // first deploys, mini, then last — the crowd's third column, and further right.
+    const sim = new BattleSim([large("first"), mini, large("last")], [enemy], null, true);
+
+    const first = sim.units.find((u) => u.id === "first")!;
+    const last = sim.units.find((u) => u.id === "last")!;
+    expect(last.x).toBeGreaterThan(first.x); // the scatter the old rule read as "in front"
+
+    expect(sim.activate("attachMini")).toBe(true);
+    expect(first.buddyId).toBe("mini");
+    expect(last.buddyId).toBeNull();
+  });
+
   it("rams all the way to the enemy it stuns, not just to its own slot", () => {
     // The move is "the brute runs forward and stuns what it HITS". It used to charge to
     // the carrier's own formation SLOT instead, and a Large's slot is the furthest back

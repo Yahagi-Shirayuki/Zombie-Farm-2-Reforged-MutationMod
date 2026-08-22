@@ -585,9 +585,11 @@ export class RaidScene {
    *  what it draws halfway through, and these are consulted per unit per tick. */
   private readonly showHealthNumbers = getShowHealthNumbers();
   private readonly showDamageNumbers = getShowDamageNumbers();
-  /** Damage numbers: each unit's HP as of the last sim tick, and the small hits held
-   *  back since its last figure (see combatNumbers.ts). */
-  private hpWatch = new Map<string, number>();
+  /** Damage numbers: each unit's running damage-taken total as of the last sim tick, and
+   *  the small hits held back since its last figure (see combatNumbers.ts). Watching
+   *  `damageFxTaken` rather than `hp` is what makes a number read the size of the ATTACK
+   *  instead of the health that came off — see BattleSim's field comment. */
+  private damageWatch = new Map<string, number>();
   private damageTallies = new Map<string, DamageTally>();
   private damageNumbers: { text: Text; t: number; x: number; y: number }[] = [];
   private laserFx: { g: Graphics; t: number; life: number }[] = [];
@@ -2640,20 +2642,23 @@ export class RaidScene {
     }
   }
 
-  /** Sample one unit's HP after a simulation tick; float the drop as a number once it
-   *  is worth printing (see combatNumbers.tallyDamage). */
+  /** Sample one unit's damage-taken total after a simulation tick; float the increase as a
+   *  number once it is worth printing (see combatNumbers.tallyDamage). The total counts the
+   *  attack's post-mitigation damage, NOT the health removed, so overkill and the one-shot
+   *  latch no longer shrink the figure a player reads. */
   private stepDamageNumber(u: SimUnit, dtSec: number) {
-    const before = this.hpWatch.get(u.id);
-    this.hpWatch.set(u.id, u.hp);
+    const before = this.damageWatch.get(u.id);
+    this.damageWatch.set(u.id, u.damageFxTaken);
     if (before === undefined) return; // first sighting: nothing to compare against
     let tally = this.damageTallies.get(u.id);
     if (!tally) {
       tally = newDamageTally();
       this.damageTallies.set(u.id, tally);
     }
-    // A heal or a Resurrect raises HP; only the drops are damage. `!u.alive` flushes
-    // whatever is still held back, because a dead unit gets no later flush.
-    const shown = tallyDamage(tally, Math.max(0, before - u.hp), dtSec, !u.alive);
+    // The total only ever climbs, so heals and Resurrects need no guarding against here
+    // (the max is belt-and-braces against a restored checkpoint resetting it). `!u.alive`
+    // flushes whatever is still held back, because a dead unit gets no later flush.
+    const shown = tallyDamage(tally, Math.max(0, u.damageFxTaken - before), dtSec, !u.alive);
     if (shown !== null) this.spawnDamageNumber(u, shown);
   }
 

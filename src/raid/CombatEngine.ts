@@ -28,7 +28,8 @@ import {
   lineupSpeedBand,
   mirroredAttackIntervalSec,
   POWER_PER_STR,
-  SCALLYWAG_KEY,
+  MIRROR_SPEED_KEYS,
+  protectReduction,
 } from "./combatStats";
 import type {
   AttackDef,
@@ -245,7 +246,7 @@ export function buildPlayerUnits(
     u.className = z.className;
     u.mutation = z.mutation;
     u.color = z.color;
-    u.damageReduction = z.group === "Headless" ? 0 : Math.min(0.95, protect * 0.20);
+    u.damageReduction = protectReduction(protect, keys.includes("protect"));
     u.teamAuraStats = {
       baseStr: auraBaseStr + mut.str,
       baseDex: auraBaseDex + mut.dex,
@@ -407,7 +408,7 @@ export function buildUnitsForKeys(
       false,
       avgField(st.attacks, attacks, "speedMultiplier") * pace
     );
-    u.mirrorsOpponentSpeed = key === SCALLYWAG_KEY;
+    u.mirrorsOpponentSpeed = MIRROR_SPEED_KEYS.has(key);
     const fx = attackEffects(st.attacks, attacks);
     u.knockBack = fx.knockBack;
     u.knockBackChance = fx.knockBackChance;

@@ -2,10 +2,19 @@
 // "Health Bar Numbers" / "Damage Numbers"). Pixi lives in RaidScene; what is worth
 // testing is when a number is due and what it reads, so that part lives here.
 //
-// Nothing in this file may influence the fight. Every value is derived from HP the
+// Nothing in this file may influence the fight. Every value is derived from state the
 // simulation has already decided — a raid plays out tick-for-tick identically with
 // the numbers on, which is what lets them ride a deterministic, server-verified
 // replay at all (see raid/replay.ts).
+//
+// A damage number reports the ATTACK, not the health it removed. The scene feeds this
+// from `SimUnit.damageFxTaken`, the sim's running total of post-mitigation damage aimed
+// at a unit, rather than from an HP delta. The two differ wherever the fight clamps a
+// hit — a blow larger than the target's remaining health, and the one-shot protection
+// latch that snaps a doomed zombie to 1 HP — and it was the clamped figure, not the
+// blow, that a player was reading off the screen. Armor, damage reduction and attack
+// multipliers are all applied BEFORE the total is fed, so a mitigated hit still reads
+// as mitigated and a fully blocked one produces no number at all.
 
 /** A hit smaller than this is held back rather than shown as its own number. The
  *  `pixelFire` burn removes 5 % of max HP a SECOND, spread over 20 sim ticks — a

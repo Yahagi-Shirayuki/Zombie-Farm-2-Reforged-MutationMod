@@ -43,6 +43,7 @@ import {
   lineupDamageBand,
   lineupSpeedBand,
   mirroredAttackIntervalSec,
+  protectReduction,
   POWER_PER_STR,
 } from "./combatStats";
 import {
@@ -531,6 +532,15 @@ export interface SimUnit {
   buddyMountMs: number; // jump-to-carrier animation time remaining
   healTimerMs: number; // Garden support heal cadence
   healAoeTimerMs: number; // independent 20-second Heal All timer
+  /** Running total of post-mitigation damage AIMED at this unit (renderer trigger).
+   *  Presentation only — nothing in the simulation reads it. It is the damage the
+   *  attack DEALT, after armor / damage reduction / attack multipliers, and BEFORE
+   *  the two clamps that decide how much health actually came off: the remaining-HP
+   *  floor (overkill) and the one-shot protection latch. That is what the floating
+   *  damage numbers report, so a 5000 slam on a 300-HP zombie reads 5000 rather than
+   *  300, and a latched hit reads its real size rather than "maxHp - 1". A fully
+   *  mitigated hit (a Block proc) adds nothing and so shows no number at all. */
+  damageFxTaken: number;
   healFxSeq: number; // increments when this unit receives a heal (renderer trigger)
   healCastSeq: number; // increments when this Garden zombie performs a heal
   laserTimerMs: number; // automatic walking-laser cadence
@@ -785,6 +795,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     buddyMountMs: 0,
     healTimerMs: 0,
     healAoeTimerMs: abilities.includes("healAOE") ? 20_000 : 0,
+    damageFxTaken: 0,
     healFxSeq: 0,
     healCastSeq: 0,
     laserTimerMs: laserInterval(abilities, u.attackCooldownMs),
@@ -1057,6 +1068,7 @@ export class BattleSim {
       teamAuraStats: u.teamAuraStats ? { ...u.teamAuraStats } : null,
       attackMultiplier: u.attackMultiplier ?? Math.max(0.1, u.power ? u.damage / u.power : 1),
       walkingSpeedMult: u.walkingSpeedMult ?? 1,
+      damageFxTaken: u.damageFxTaken ?? 0,
       healCastSeq: u.healCastSeq ?? 0,
       healAoeTimerMs: u.healAoeTimerMs ??
         (u.abilities.includes("healAOE") ? HEAL_AOE_MS : 0),
@@ -1162,14 +1174,32 @@ export class BattleSim {
     return p.isGarden && (p.abilities.includes("heal") || p.abilities.includes("healAOE"));
   }
 
+  /** Where an un-deployed zombie sits in the queue to go out. `promote()` releases the
+   *  first "waiting" unit in roster order, so the roster index IS the deploy order — and
+   *  whoever is already "charging" is ahead of every one of them. Only meaningful for a
+   *  unit that has not deployed; the callers all filter for that first. */
+  private deployRank(p: SimUnit): number {
+    const i = this.players.indexOf(p);
+    return p.state === "charging" ? i : this.players.length + i;
+  }
+
   /** A Mini that has not deployed yet, and so is still available to be picked up.
    *  One that has been released is out on the field on its own feet — there is
-   *  nothing left to mount. */
+   *  nothing left to mount.
+   *
+   *  Picked in DEPLOY ORDER (v37). Nothing ever re-enters the queue, so it is only
+   *  ever drained from the front and deploy order and roster order coincide — this
+   *  ranks the same mini the old `find` did. It is written this way so both halves of
+   *  the pairing state the same rule, and so it stays true if anything ever does put a
+   *  zombie back in line. The CARRIER half is the one that actually moved. */
   private availableMini(): SimUnit | null {
-    return this.players.find(
-      (p) => p.alive && this.isSmall(p) && !p.buddyCarrierId &&
-        (p.state === "waiting" || p.state === "charging")
-    ) ?? null;
+    let best: SimUnit | null = null;
+    for (const p of this.players) {
+      if (!p.alive || !this.isSmall(p) || p.buddyCarrierId) continue;
+      if (p.state !== "waiting" && p.state !== "charging") continue;
+      if (!best || this.deployRank(p) < this.deployRank(best)) best = p;
+    }
+    return best;
   }
 
   /** Mini Buddy's whole window, in one place because the button's look and the tap
@@ -1374,7 +1404,7 @@ export class BattleSim {
     const fortitude = counts.get("tankHitPointsBuff") ?? 0;
     for (const p of this.players) {
       const stats = p.teamAuraStats;
-      p.damageReduction = p.group === "Headless" ? 0 : Math.min(0.95, protect * 0.20);
+      p.damageReduction = protectReduction(protect, p.abilities.includes("protect"));
       if (!stats) continue;
       const statCarriers = p.group === "Female" ? chivalry : p.group === "Regular" ? grace : 0;
       const lifeCarriers = statCarriers + (p.group === "Headless" ? fortitude : 0);
@@ -1396,8 +1426,17 @@ export class BattleSim {
   /** Which of two eligible zombies performs an activated move: the front-most, since it
    *  is nearest the enemy and already in the thick of it. There is no revived-exploder
    *  tiebreak to make — a revived zombie comes back with its one-use moves already spent
-   *  (see `resurrect`), so it never re-enters this queue at all. */
-  private outranks(candidate: SimUnit, current: SimUnit): boolean {
+   *  (see `resurrect`), so it never re-enters this queue at all.
+   *
+   *  MINI BUDDY IS THE EXCEPTION (v37). It is the one move performed OFF the field, by a
+   *  pair that has not deployed, and a waiting zombie's x is where it happens to be
+   *  milling in the back group — `clusterHome` scatter plus a shuffle that re-rolls every
+   *  few seconds. Ranking those by x hands the mount to an arbitrary Large that also
+   *  changes with the clock. Take the carrier in the order it will DEPLOY instead: the
+   *  brute going out next gets the mini going out next, which is the pairing the player
+   *  is looking at when they tap. */
+  private outranks(candidate: SimUnit, current: SimUnit, key: string): boolean {
+    if (key === "attachMini") return this.deployRank(candidate) < this.deployRank(current);
     return candidate.x > current.x;
   }
 
@@ -1410,7 +1449,7 @@ export class BattleSim {
     let pick: SimUnit | null = null;
     for (const p of this.players) {
       if (!this.readyToActivate(p, key)) continue;
-      if (!pick || this.outranks(p, pick)) pick = p;
+      if (!pick || this.outranks(p, pick, key)) pick = p;
     }
     if (!pick) return false;
     if (key === "attachMini") {
@@ -2024,6 +2063,9 @@ export class BattleSim {
   }
 
   private dealDamage(foe: SimUnit, dmg: number, fromPlayer: boolean) {
+    // Publish the hit at its full post-mitigation size BEFORE the HP subtraction clamps
+    // it. `hp` is what the fight runs on; `damageFxTaken` is what the numbers report.
+    if (dmg > 0) foe.damageFxTaken += dmg;
     foe.hp -= dmg;
     if (foe.hp > 0) return;
     foe.hp = 0;
@@ -2117,6 +2159,9 @@ export class BattleSim {
       foe.hp > 1 &&
       (foe.hp - applied) / foe.maxHp < ONE_SHOT_FLOOR
     ) {
+      // The latch spares the zombie but does not soften the blow: the number still
+      // reads the whole hit. This branch bypasses `dealDamage`, so it publishes itself.
+      foe.damageFxTaken += applied;
       foe.hp = 1;
       foe.oneShotProtectionUsed = true;
       return;
