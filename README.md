@@ -460,6 +460,9 @@ rig edits made there are still there.
   beneath and can be dragged on the stage (turn on *Rig pivots*) — moving a shoulder
   while the attack plays is the fastest way to fix an arm that reads wrong, and it writes
   through the same store the Rig tab uses. Clips save to the browser and download as JSON.
+  *Place* puts the rig where an invasion would: `auto` perches a boss on the structure its
+  stage authors (occluded by the building, as the game layers it) and stands a wave enemy
+  in the doorway it holds at, and the individual lane marks are selectable one at a time.
 * **Epic Bosses** — the eight bosses are drawn from authored frame STRIPS rather than
   rigs (see `src/raid/epicBossAnimation.ts`), so they get a strip player: play each
   animation off its cell grid, retime it, re-sequence it, nudge frames, against the

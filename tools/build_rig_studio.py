@@ -61,6 +61,27 @@ SCENE = {
     "unitGroundNudgeF": 0.22,
     "fieldInsetFX": 0.1,
     "bossHScale": {"FarmStageActorBoss": 0.8},
+    # Where a unit actually STANDS in an invasion, from src/raid/BattleSim.ts. The lane is
+    # FIELD_W wide and RaidScene.mapX insets it by fieldInsetFX at each end.
+    "fieldW": 1000,
+    "lane": {
+        "spawn": 1120,      # ENEMY_SPAWN_X — off the right edge, before emerging
+        "hold": 940,        # ENEMY_HOLD_X — standing IN the structure's doorway
+        "front": 940 - 60,  # ENEMY_HOLD_X - ENGAGE — where the wave trades blows
+        "charge": 220,      # CHARGE_X — the zombie staging slot
+        "epicHold": 600,    # EPIC_BOSS_HOLD_X
+        "bossStruct": 848,  # BOSS_STRUCT_X
+    },
+    # Boss perch, from RaidScene.computePerch. The boss stands on the tallest RIGHT-side
+    # structure the stage authors (anchor.x >= 0.9 and z >= 3), biased left of its centre
+    # and sunk below its top edge so the building occludes its legs; raids with no such
+    # structure keep the default sky perch. PERCH_TWEAK is the per-raid eyeball correction.
+    "perch": {"fx": 0.82, "fy": 0.2, "biasFX": 0.22, "sinkF": 0.14},
+    "perchTweak": {
+        "2": {"dy": 0.32}, "3": {"dy": 0.095}, "4": {"dy": 0.12}, "5": {"dy": 0.31},
+        "6": {"dx": -0.03, "dy": 0.2}, "7": {"dx": -0.18, "dy": 0.28},
+        "8": {"dx": -0.14}, "10": {"dy": 0.2}, "11": {"dy": 0.45},
+    },
     "enemyForwardFX": {
         "ValentinesDayStageActorMinion1": 0.4,
         "ValentinesDayStageActorMinion2": 0.4,
@@ -159,10 +180,14 @@ def build_stages() -> tuple:
                 keys.add(w.get("enemy"))
             if stage.get("bossKey"):
                 keys.add(stage["bossKey"])
+        boss_keys = sorted({st["bossKey"] for st in raid.get("stages", []) if st.get("bossKey")})
         stages.append({
             "id": raid["id"], "name": raid["name"], "bossName": raid.get("bossName", ""),
             "levelAssets": [a for a in assets if a.get("sprite") in images],
             "enemyKeys": sorted(k for k in keys if k),
+            # Which rigs this raid perches rather than marches — the studio uses it to put
+            # a boss on its silo and a minion in the doorway without being told.
+            "bossKeys": boss_keys,
         })
     return stages, images
 

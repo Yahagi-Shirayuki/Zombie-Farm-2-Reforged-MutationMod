@@ -104,10 +104,13 @@
   .toolbar { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line);
     align-items: center; flex-wrap: wrap; flex: 0 0 auto; }
   .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
-  .overlay-tip { position: absolute; left: 12px; bottom: 12px; background: #000a; padding: 6px 10px;
-    border-radius: 6px; color: var(--muted); font-size: 11px; pointer-events: none; max-width: 66%; }
-  .badge { position: absolute; right: 12px; top: 12px; background: #000a; padding: 6px 10px;
-    border-radius: 6px; font-size: 11px; pointer-events: none; }
+  .overlay-tip { position: absolute; left: 10px; bottom: 10px; background: #000c; padding: 6px 26px 6px 10px;
+    border-radius: 6px; color: var(--muted); font-size: 11px; max-width: 72%; z-index: 3; }
+  .overlay-tip .x { position: absolute; right: 6px; top: 4px; cursor: pointer; color: var(--muted);
+    font-size: 13px; line-height: 1; padding: 0 3px; }
+  .overlay-tip .x:hover { color: var(--ink); }
+  .badge { position: absolute; right: 10px; top: 10px; background: #000c; padding: 6px 10px;
+    border-radius: 6px; font-size: 11px; pointer-events: none; z-index: 3; }
   .mini { padding: 3px 6px; font-size: 11px; }
   .toggle { display: inline-flex; align-items: center; gap: 4px; }
   .toggle input { width: auto; }
@@ -209,12 +212,15 @@
           <input type="file" id="fileFrames" accept=".json,application/json" hidden>
           <input type="file" id="fileModels" accept=".json,application/json" hidden>
         </div>
-        <div class="stagewrap"><canvas id="stage"></canvas></div>
-        <div class="badge" id="badge"></div>
-        <div class="overlay-tip">
-          Drag part = move · Drag <b style="color:var(--warn)">◆</b> anchor = relocate pivot ·
-          Drag <b style="color:var(--accent2)">●</b> = rotate · Scroll = zoom · Space+drag = pan ·
-          Arrows nudge · <kbd>[</kbd>/<kbd>]</kbd> layer · <kbd>Del</kbd> remove · <kbd>Ctrl+Z</kbd> undo
+        <div class="stagewrap">
+          <canvas id="stage"></canvas>
+          <div class="badge" id="badge"></div>
+          <div class="overlay-tip">
+            <span class="x" title="hide">×</span>
+            Drag part = move · Drag <b style="color:var(--warn)">◆</b> anchor = relocate pivot ·
+            Drag <b style="color:var(--accent2)">●</b> = rotate · Scroll = zoom · Space+drag = pan ·
+            Arrows nudge · <kbd>[</kbd>/<kbd>]</kbd> layer · <kbd>Del</kbd> remove · <kbd>Ctrl+Z</kbd> undo
+          </div>
         </div>
       </div>
 
@@ -282,13 +288,24 @@
           <label class="toggle">Stage
             <select id="aStage" style="width:150px"></select>
           </label>
-          <label class="toggle">Role
+          <label class="toggle" title="The on-screen HEIGHT the unit is fitted to">Role
             <select id="aRole" style="width:96px">
               <option value="auto">auto</option>
               <option value="zombie">zombie 91</option>
               <option value="enemy">enemy 130</option>
               <option value="boss">boss 195</option>
               <option value="rig">rig space</option>
+            </select>
+          </label>
+          <label class="toggle" title="Where the unit STANDS. auto puts a boss on the structure it perches on and a wave enemy in the doorway it holds — the same places the invasion does.">Place
+            <select id="aPlace" style="width:118px">
+              <option value="auto">auto (in-game)</option>
+              <option value="hold">doorway hold</option>
+              <option value="front">frontline</option>
+              <option value="spawn">spawn (off-stage)</option>
+              <option value="perch">boss perch</option>
+              <option value="charge">zombie staging</option>
+              <option value="centre">centre lane</option>
             </select>
           </label>
           <span class="sep"></span>
@@ -300,13 +317,16 @@
           <span class="sep"></span>
           <label class="toggle">Zoom <input type="range" id="aZoom" min="0.4" max="6" step="0.1" value="1" style="width:74px"></label>
         </div>
-        <div class="stagewrap"><canvas id="aStageCanvas"></canvas></div>
-        <div class="badge" id="aBadge"></div>
-        <div class="overlay-tip" id="aTip">
-          <b>Click a part</b> to select it · drag it to key a MOVE · drag the
-          <b style="color:var(--accent2)">●</b> handle (or <kbd>Shift</kbd>+drag) to key a ROTATE ·
-          turn on <b>Rig pivots</b> and drag a <b style="color:var(--cyan)">✚</b> to move the joint itself ·
-          <kbd>Space</kbd> play/pause · <kbd>,</kbd>/<kbd>.</kbd> step
+        <div class="stagewrap">
+          <canvas id="aStageCanvas"></canvas>
+          <div class="badge" id="aBadge"></div>
+          <div class="overlay-tip" id="aTip">
+            <span class="x" title="hide">×</span>
+            <b>Click a part</b> to select it · drag it to key a MOVE · drag the
+            <b style="color:var(--accent2)">●</b> handle (or <kbd>Shift</kbd>+drag) to key a ROTATE ·
+            turn on <b>Rig pivots</b> and drag a <b style="color:var(--cyan)">✚</b> to move the joint itself ·
+            <kbd>Space</kbd> play/pause · <kbd>,</kbd>/<kbd>.</kbd> step
+          </div>
         </div>
         <div id="timeline">
           <div id="tlHead">
@@ -380,8 +400,10 @@
             </select>
           </label>
         </div>
-        <div class="stagewrap"><canvas id="eCanvas"></canvas></div>
-        <div class="badge" id="eBadge"></div>
+        <div class="stagewrap">
+          <canvas id="eCanvas"></canvas>
+          <div class="badge" id="eBadge"></div>
+        </div>
         <div class="timeline" style="max-height:150px">
           <div class="tlhead">
             <span class="hint">frames</span>
@@ -436,9 +458,14 @@
           <span class="sep"></span>
           <span class="hint" id="fxCount"></span>
         </div>
-        <div class="stagewrap"><canvas id="fxCanvas"></canvas></div>
-        <div class="badge" id="fxBadge"></div>
-        <div class="overlay-tip">Click a combatant to retarget · effects run at the same stage scale the game uses.</div>
+        <div class="stagewrap">
+          <canvas id="fxCanvas"></canvas>
+          <div class="badge" id="fxBadge"></div>
+          <div class="overlay-tip">
+            <span class="x" title="hide">×</span>
+            Click a combatant to retarget · effects run at the same stage scale the game uses.
+          </div>
+        </div>
       </div>
 
       <div class="col right">
@@ -785,6 +812,42 @@ const ZF = (() => {
 
   /** Sim-lane x (0..1 across the fighting inset) to a screen x. */
   const laneX = (r, f) => r.left + r.w * FIELD_INSET_FX + f * (r.w * (1 - 2 * FIELD_INSET_FX));
+  /** RaidScene.mapX: a FIELD-space x (0..FIELD_W) to a screen x. */
+  const FIELD_W = SCENE.fieldW || 1000;
+  const LANE = SCENE.lane || {};
+  const mapX = (r, sx) => laneX(r, sx / FIELD_W);
+
+  /**
+   * Where a boss stands, worked out exactly the way RaidScene.computePerch does it:
+   * the tallest RIGHT-side structure the stage authors (cocos anchor.x >= 0.9, z >= 3) —
+   * the barn, the silo, the office front, the circus car — biased left of its centre so a
+   * big boss stays on screen, and sunk below its top edge so the building occludes its
+   * legs. A stage with no such structure keeps the default up-right sky perch, which is
+   * what makes the Alien saucer and the Beach squid read as hovering.
+   */
+  function perchOf(stage, raidId) {
+    const P = SCENE.perch || { fx: 0.82, fy: 0.2, biasFX: 0.22, sinkF: 0.14 };
+    let best = null;
+    for (const a of (stage && stage.levelAssets) || []) {
+      const im = stageTex[a.sprite];
+      if (!im) continue;
+      const ax = parseVec(a.anchor)[0];
+      if (ax >= 0.9 && (a.z || 0) >= 3 && (!best || (a.z || 0) > (best.z || 0))) best = a;
+    }
+    let fx = P.fx, fy = P.fy, layer = null;
+    if (best) {
+      const im = stageTex[best.sprite];
+      const anchor = parseVec(best.anchor), pos = parseVec(best.position);
+      const centerX = pos[0] - anchor[0] * im.naturalWidth + im.naturalWidth * P.biasFX;
+      const topY = pos[1] + (1 - anchor[1]) * im.naturalHeight - P.sinkF * im.naturalHeight;
+      fx = centerX / DESIGN_W;
+      fy = (DESIGN_H - topY) / DESIGN_H;
+      layer = best;
+    }
+    const tw = (SCENE.perchTweak || {})[String(raidId)];
+    if (tw) { fx += tw.dx || 0; fy += tw.dy || 0; }
+    return { fx, fy, layer };
+  }
   /** The y a combatant's FEET stand at. */
   const footY = (r) => r.groundY + (GROUND_NUDGE + UNIT_GROUND_NUDGE) * r.sizeScale;
 
@@ -855,7 +918,8 @@ const ZF = (() => {
     partCorners, rigBounds, tintedFrame, clearTint, drawRig,
     DESIGN_W, DESIGN_H, GROUND_FY, SIZE_REF_SCALE, ZOMBIE_H, ENEMY_H, BOSS_H,
     GROUND_NUDGE, UNIT_GROUND_NUDGE, FIELD_INSET_FX,
-    STAGES, STAGE_IMG, stageTex, ensureStage, bgRect, drawStage, laneX, footY, parseVec,
+    STAGES, STAGE_IMG, stageTex, ensureStage, bgRect, drawStage, laneX, mapX, footY, parseVec,
+    perchOf, FIELD_W, LANE,
     fitCanvas, readJSON, writeJSON, download, copyText, status, onFrame,
     rigStoreKey, clipStoreKey, EPIC_STORE_KEY,
   };
@@ -878,6 +942,9 @@ const ZF = (() => {
     b.addEventListener("click", () => show(b.dataset.tab));
   });
   window.__showTab = show;
+  document.querySelectorAll(".overlay-tip .x").forEach((x) => {
+    x.addEventListener("click", () => { x.parentElement.style.display = "none"; });
+  });
 
   // Stored edits MASK a rebuild: the studio restores your saved rigs and clips over the
   // freshly-inlined ones, so re-running the builder after an art or animation change can
@@ -2263,6 +2330,47 @@ const CLIPS = {
   }
 
   // ---- rendering ----------------------------------------------------------
+  /** Is this rig one the selected raid perches rather than marches? */
+  function isStageBoss() {
+    if (!stage || ZF.RIGS[dsName].kind === "zombie") return false;
+    return (stage.bossKeys || []).indexOf(modelKey) >= 0 || /Boss/i.test(modelKey || "");
+  }
+
+  /**
+   * Where the unit stands, in the invasion's own terms.
+   *
+   * `auto` reproduces what the raid actually does with this rig: a boss goes on the
+   * structure the stage authors for it (or hovers, if the stage authors none), a wave
+   * enemy stands in the doorway it holds at, and a zombie stands on its own line. The
+   * rest are the individual lane marks, for checking one at a time.
+   */
+  function placementFor(r) {
+    const mode = $("#aPlace").value;
+    const zombie = ZF.RIGS[dsName].kind === "zombie";
+    const L = ZF.LANE;
+    const perched = () => {
+      const perch = ZF.perchOf(stage, stage ? stage.id : 0);
+      return {
+        x: r.left + perch.fx * r.w,
+        y: r.top + perch.fy * r.h,
+        perch: perch.layer,
+        label: perch.layer ? "perched on " + perch.layer.sprite : "sky perch",
+      };
+    };
+    const ground = (simX, label) => ({ x: ZF.mapX(r, simX), y: ZF.footY(r), perch: null, label });
+    switch (mode) {
+      case "perch": return perched();
+      case "hold": return ground(L.hold, "doorway hold (x " + L.hold + ")");
+      case "front": return ground(L.front, "frontline (x " + L.front + ")");
+      case "spawn": return ground(L.spawn, "spawn, off-stage (x " + L.spawn + ")");
+      case "charge": return ground(L.charge, "zombie staging (x " + L.charge + ")");
+      case "centre": return { x: ZF.laneX(r, 0.42), y: ZF.footY(r), perch: null, label: "centre lane" };
+      default:
+        if (zombie) return ground(L.charge, "zombie staging (x " + L.charge + ")");
+        return isStageBoss() ? perched() : ground(L.hold, "doorway hold (x " + L.hold + ")");
+    }
+  }
+
   function roleFor() {
     const pick = $("#aRole").value;
     if (pick !== "auto") return pick;
@@ -2301,10 +2409,11 @@ const CLIPS = {
     // Rig space centres the rig's BOUNDS, not its origin: an enemy rig is authored
     // entirely in positive model x, so centring the origin hangs the whole body off the
     // right-hand edge the moment you zoom in.
+    const spot = role === "rig" ? null : placementFor(r);
     const x = role === "rig"
       ? cssW * 0.5 - (b.x + b.w / 2) * s * facing
-      : ZF.laneX(r, 0.42) - forwardX;
-    const y = role === "rig" ? cssH * 0.86 : ZF.footY(r);
+      : spot.x - forwardX;
+    const y = role === "rig" ? cssH * 0.86 : spot.y;
     const tNorm = clip && clip.duration > 0 ? (time / clip.duration) % 1 : 0;
     const pose = clip ? CLIPS.poseAt(dsName, model, clip, tNorm, freeT) : { parts: {}, root: { dx: 0, dy: 0, rot: 0, sx: 1, sy: 1 } };
     placement = { x, y, s, facing, bottom: b.y + b.h };
@@ -2334,10 +2443,24 @@ const CLIPS = {
     if (selPart >= 0 && model.parts[selPart]) drawPartHandle(pose);
     ctx.restore();
 
+    // A perched boss renders BEHIND its structure, so the building hides its legs — the
+    // same layering RaidScene sets up when it lifts the perch layer in front of the boss.
+    if (spot && spot.perch) drawOneLayer(r, spot.perch);
     if (role === "rig") drawGroundLine(y);
-    $("#aBadge").textContent = (modelKey || "") + " · " + (clipName || "") +
-      " · " + round(time) + "s / " + (clip ? clip.duration : 0) + "s";
+    $("#aBadge").textContent = (modelKey || "") + " · " + (clipName || "")
+      + " · " + round(time) + "s / " + (clip ? clip.duration : 0) + "s"
+      + (spot ? " · " + spot.label : "");
   }
+  /** Re-draw one stage layer over the top, for the perch occlusion. */
+  function drawOneLayer(r, asset) {
+    const im = ZF.stageTex[asset.sprite];
+    if (!im) return;
+    const anchor = ZF.parseVec(asset.anchor), pos = ZF.parseVec(asset.position);
+    const dx = r.left + (pos[0] - anchor[0] * im.naturalWidth) * r.scale;
+    const dy = r.top + (ZF.DESIGN_H - pos[1] - (1 - anchor[1]) * im.naturalHeight) * r.scale;
+    ctx.drawImage(im, dx, dy, im.naturalWidth * r.scale, im.naturalHeight * r.scale);
+  }
+
   function drawGroundLine(y) {
     ctx.strokeStyle = "#2f3b2f"; ctx.setLineDash([5, 4]);
     ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(cssW, y + 0.5); ctx.stroke();
@@ -2651,6 +2774,7 @@ const CLIPS = {
     render();
   });
   $("#aRole").addEventListener("change", render);
+  $("#aPlace").addEventListener("change", render);
   $("#aZoom").addEventListener("input", render);
   $("#aRest").addEventListener("change", render);
   $("#aPivots").addEventListener("change", () => { rebuildPivotEditor(); render(); });
