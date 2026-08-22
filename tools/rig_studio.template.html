@@ -921,7 +921,23 @@ const ZF = (() => {
     e.style.color = color || "var(--muted)";
   }
 
+  /* ---- the selected rig, shared by the tabs that edit one ---------------------
+     The Rig tab and the Animation tab are two views of the SAME rig — one edits its
+     skeleton, the other edits what that skeleton does. Letting them hold separate
+     selections meant a pivot added on one was invisible on the other purely because
+     the other was pointed at a different unit, which reads exactly like a bug. A tab
+     announces what it picked with `select`; every other tab follows. */
+  const selListeners = [];
+  const selection = { ds: null, key: null };
+  function onSelect(tag, fn) { selListeners.push({ tag, fn }); }
+  function select(ds, key, from) {
+    if (selection.ds === ds && selection.key === key) return;   // stops the echo
+    selection.ds = ds; selection.key = key;
+    for (const l of selListeners) if (l.tag !== from) l.fn(ds, key);
+  }
+
   return {
+    selection, onSelect, select,
     BOOT, SCENE, $, el, clone, clamp, round, DEG, radToDeg, degToRad, smooth,
     loadImg, bakeCanvas, RIGS, TEX, ensureTextures, sourceFor, sourceCtxFor,
     partRect, partLabel, partMeta, pivotsOf, pivotPoint,
@@ -1163,6 +1179,7 @@ const ZF = (() => {
   function selectModel(k, keepSel) {
     modelKey = k; model = models[k];
     if (!model) return;
+    ZF.select(dsName, modelKey, "rig");
     model.parts = model.parts || [];
     if (kind === "zombie" && !model.neck) model.neck = { x: 0, y: 0 };
     if (kind === "enemy" && model.neck === undefined) model.neck = null;
@@ -1762,6 +1779,17 @@ const ZF = (() => {
     document.body.appendChild(dl);
   })();
 
+  ZF.onSelect("rig", async (ds, key) => {
+    if (ds !== dsName) {
+      modelKey = key;            // activateDataset keeps a key the dataset has
+      await activateDataset(ds, true);
+      $("#dsSel").value = ds;
+    }
+    if (key === modelKey || !models[key]) return;
+    ZF.clearTint();
+    $("#modelSel").value = key;
+    selectModel(key, false);
+  });
   window.__onTabShow("rig", () => {
     // The Animation tab edits these same pivots (that is the point of it having its own
     // pivot rows), so the panels here can be stale by the time you come back.
@@ -1808,7 +1836,7 @@ const CLIPS = {
   const canvas = $("#aStageCanvas");
   const ctx = canvas.getContext("2d");
 
-  let dsName = "enemy", modelKey = null, model = null;
+  let dsName = "enemy", modelKey = null, model = null, booted = false;
   let clips = {}, clipName = null, clip = null;
   let selTrack = -1, selKey = -1, selPart = -1;
   let playing = false, time = 0, freeT = 0;
@@ -1871,6 +1899,7 @@ const CLIPS = {
     selPart = -1;
     model = ZF.RIGS[dsName].models[key];
     $("#aModelSel").value = key;
+    ZF.select(dsName, key, "anim");
     loadClips();
     const names = Object.keys(clips);
     selectClip(clips[clipName] ? clipName : names[0]);
@@ -2875,6 +2904,23 @@ const CLIPS = {
     rebuildPartInspector();
     rebuildTrackInspector();
   }
+  ZF.onSelect("anim", async (ds, key) => {
+    if (!booted) return;         // boot adopts the shared selection itself
+    if (ds !== dsName) {
+      modelKey = key;            // rebuildModelList keeps a key the dataset has
+      $("#aDsSel").value = ds;
+      await selectDataset(ds);
+    }
+    if (key === modelKey) return;
+    // The rig list here is filtered; a key the filter hides has no option to select,
+    // so drop the filter rather than leaving the list pointing at nothing.
+    if (!ZF.RIGS[dsName].models[key]) return;
+    if (![...$("#aModelSel").options].some((o) => o.value === key)) {
+      $("#aFilter").value = "";
+      rebuildModelList();
+    }
+    selectModel(key);
+  });
   window.__rigChanged = (ds, key) => {
     if (ds !== dsName || key !== modelKey) return;
     model = ZF.RIGS[ds].models[key];
@@ -2899,7 +2945,9 @@ const CLIPS = {
       o.value = n; o.textContent = ZF.RIGS[n].label;
       dsSel.appendChild(o);
     });
-    dsName = ZF.RIGS.enemy ? "enemy" : Object.keys(ZF.RIGS)[0];
+    // Both tabs boot; whichever gets there second must not overwrite the shared pick.
+    dsName = ZF.selection.ds || (ZF.RIGS.enemy ? "enemy" : Object.keys(ZF.RIGS)[0]);
+    if (ZF.selection.key && ZF.RIGS[dsName].models[ZF.selection.key]) modelKey = ZF.selection.key;
     dsSel.value = dsName;
 
     const stageSel = $("#aStage");
@@ -2915,6 +2963,7 @@ const CLIPS = {
       await ZF.ensureStage(stage);
     }
     await selectDataset(dsName);
+    booted = true;   // only now can an incoming selection be acted on safely
     render();
   })();
 })();
