@@ -163,6 +163,9 @@ function genericTracks(model, key, damageTiming, uToT, uMax) {
   const strikeBack = STRIKE_BACK_ARM_KEYS.indexOf(key) >= 0;
   const env = envelope(damageTiming, heavy, model.chopSign || 1);
   const hasLegs = (model.parts || []).some((p) => p.group === "leg");
+  // Same rule as the idle/move sets: an armless rig gets the body lunge and nothing
+  // aimed at limbs it does not have. The Valentines heart-stack is three bodies.
+  const hasArms = (model.parts || []).some((p) => p.group === "arm");
   const out = [];
   // The engine's swing is a REACH plus a WIND-UP: `thrust` is piecewise smoothstep and
   // transcribes to exact keys, while `cock` is a half-sine that does not. Splitting them
@@ -180,6 +183,9 @@ function genericTracks(model, key, damageTiming, uToT, uMax) {
   out.push({ name: "body lunge", target: "root", channel: "x", ...thrustKeys(-LUNGE_PX, 0) });
   out.push({ name: "body wind-up", target: "root", channel: "x", ...cockKeys(LUNGE_PX * LUNGE_COCK) });
 
+  if (!hasArms) {
+    return out;
+  }
   if (model.slam) {
     const slam = envKeys((u) => rad(env.slam(u)), env.slamBreaks, uToT, uMax);
     out.push({ name: "front arm slam", target: "arm.front", channel: "rot", pivot: "shoulder", ...slam });
@@ -346,6 +352,11 @@ function enemyClips(key, model, combat) {
   const hasWings = (model.parts || []).some((p) => p.group === "wing");
   const hasWheels = (model.parts || []).some((p) => p.group === "wheel");
   const hasHead = (model.parts || []).some((p) => p.group === "head") && !!model.neck;
+  // A track aimed at a limb the rig does not have resolves to no parts and does
+  // nothing. It used to be emitted anyway — the Zobra, which is two wings and a body,
+  // opened with two tentacle-sway tracks that could never move anything, and reading a
+  // timeline of tracks that do nothing is how you end up mistrusting the ones that do.
+  const hasArms = (model.parts || []).some((p) => p.group === "arm");
   const isBoss = /Boss/i.test(key) || ((combat.bossActions || []).length > 0);
   const clips = {};
 
@@ -356,7 +367,7 @@ function enemyClips(key, model, combat) {
     name: hasLegs ? "breathe" : "hover", target: "root", channel: "y",
     wave: { amp: hasLegs ? BOB_IDLE : BOB_HOVER, cycles: cyclesFor(BOB_FREQ, TILT_PERIOD_IDLE), phase: 0 },
   });
-  if (!hasLegs) {
+  if (!hasLegs && hasArms) {
     idleTracks.push({ name: "front tentacle sway", target: "arm.front", channel: "rot", pivot: "auto", wave: { amp: rad(ARM_SWAY_IDLE), cycles: cyclesFor(ARM_FREQ, TILT_PERIOD_IDLE), phase: 0 } });
     idleTracks.push({ name: "back tentacle sway", target: "arm.back", channel: "rot", pivot: "auto", wave: { amp: rad(ARM_SWAY_IDLE), cycles: cyclesFor(ARM_FREQ, TILT_PERIOD_IDLE), phase: 0.5 } });
   }
@@ -389,7 +400,7 @@ function enemyClips(key, model, combat) {
     moveTracks.push({ name: "back leg stride", target: "leg.back", channel: "rot", wave: { amp: rad(STEP_ANGLE), cycles: cyc, phase: 0.5 } });
     moveTracks.push({ name: "front leg lift", target: "leg.front", channel: "y", wave: { amp: -STEP_LIFT, cycles: cyc, phase: 0, clamp: "pos" } });
     moveTracks.push({ name: "back leg lift", target: "leg.back", channel: "y", wave: { amp: -STEP_LIFT, cycles: cyc, phase: 0.5, clamp: "pos" } });
-  } else {
+  } else if (hasArms) {
     moveTracks.push({ name: "front tentacle sway", target: "arm.front", channel: "rot", pivot: "auto", wave: { amp: rad(ARM_SWAY_MOVE), cycles: cyclesFor(ARM_FREQ, TILT_PERIOD_MOVE), phase: 0 } });
     moveTracks.push({ name: "back tentacle sway", target: "arm.back", channel: "rot", pivot: "auto", wave: { amp: rad(ARM_SWAY_MOVE), cycles: cyclesFor(ARM_FREQ, TILT_PERIOD_MOVE), phase: 0.5 } });
   }

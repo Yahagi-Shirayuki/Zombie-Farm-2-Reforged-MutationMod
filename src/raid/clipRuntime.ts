@@ -26,9 +26,47 @@ export type ClipSet = Record<string, Record<string, Clip>>;
 
 const SETS: Record<RigKind, ClipSet> = { enemy: {}, zombie: {} };
 
-/** Install the authored clips for one rig dataset (see src/assets.ts). */
+/**
+ * Install the authored clips for one rig dataset (see src/assets.ts).
+ *
+ * The file is hand-authored, so it is treated as untrusted: a track carrying a
+ * non-finite keyframe evaluates to NaN, and a NaN position does not look like a bad
+ * animation — the part disappears. Drop those tracks rather than letting one typo take a
+ * limb off. src/clipData.test.ts catches the same thing at build time and names it;
+ * this is the seatbelt for a file that never went through the test.
+ */
 export function setRigClips(kind: RigKind, clips: ClipSet | null | undefined) {
-  SETS[kind] = clips && typeof clips === "object" ? clips : {};
+  SETS[kind] = clips && typeof clips === "object" ? sanitise(clips) : {};
+}
+
+function finiteKeys(track: Clip["tracks"][number]): boolean {
+  if (track.wave && !Number.isFinite(track.wave.amp)) return false;
+  if (track.spin && !Number.isFinite(track.spin.rate)) return false;
+  if (!track.keys) return true;
+  return track.keys.every(
+    (k) => Array.isArray(k) && k.length === 2 && Number.isFinite(k[0]) && Number.isFinite(k[1]),
+  );
+}
+
+function sanitise(clips: ClipSet): ClipSet {
+  const out: ClipSet = {};
+  for (const [key, set] of Object.entries(clips)) {
+    if (!set || typeof set !== "object") continue;
+    const kept: Record<string, Clip> = {};
+    for (const [name, clip] of Object.entries(set)) {
+      if (!clip || !Array.isArray(clip.tracks) || !(clip.duration > 0)) continue;
+      const tracks = clip.tracks.filter(finiteKeys);
+      if (tracks.length !== clip.tracks.length) {
+        console.warn(
+          `[clips] ${key}/${name}: dropped ${clip.tracks.length - tracks.length} track(s) `
+          + "with a non-finite keyframe",
+        );
+      }
+      kept[name] = tracks.length === clip.tracks.length ? clip : { ...clip, tracks };
+    }
+    if (Object.keys(kept).length) out[key] = kept;
+  }
+  return out;
 }
 
 /** Has anything been authored for this rig at all? Cheap enough to ask every frame,
