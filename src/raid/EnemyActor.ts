@@ -371,9 +371,10 @@ export class EnemyActor {
       } else if (a.back && genericAttack && this.hasLegs) {
         // Rear arm on a legged attacker: counter-swing with the strike (opposite the
         // front jab, smaller reach) so the back arm pumps along instead of freezing.
-        const back = -BACK_ARM_SWING * thrust + BACK_ARM_SWING * ARM_COCK * cock;
-        a.sp.position.set(a.baseX, a.baseY);
-        a.sp.rotation = a.baseRot + back;
+        // About the authored `back-shoulder` where the rig has one — a rear arm is an
+        // assembly too, and spinning it on its own anchor tears it off the same way the
+        // front one used to (see swingArm).
+        this.swingArm(a, -BACK_ARM_SWING * thrust + BACK_ARM_SWING * ARM_COCK * cock);
       } else {
         a.sp.position.set(a.baseX, a.baseY);
         a.sp.rotation = a.baseRot + sway(a);
@@ -402,6 +403,36 @@ export class EnemyActor {
     else if (robotAttack && attack) this.poseRobotAttack(attack);
 
     this.root.scale.x = this.facing;
+  }
+
+  /**
+   * Swing one arm through `theta` about the assembly's authored pivot.
+   *
+   * GROUND TRUTH ISSUE this fixes: a rig's "arm" is usually two or three parts — the
+   * upper arm and whatever it is holding — each anchored at its own top-centre, tens of
+   * pixels apart. Rotating each part about ITS OWN anchor sends them off on separate
+   * arcs: the cutlass leaves the hand, the briefcase leaves the lawyer, and the
+   * assembly comes apart in mid-swing. The slam branch already rotates about the
+   * authored `shoulder` / `back-shoulder` for exactly this reason (see the note there);
+   * the authored ZFAttackAnims poses below never did, and every one of them was
+   * dismembering the rig it posed.
+   *
+   * Falls back to the part's own anchor when the rig authors no pivot for that side,
+   * which is the old behaviour and is correct for a one-part arm.
+   */
+  private swingArm(
+    a: { sp: Sprite; baseX: number; baseY: number; baseRot: number; back: boolean },
+    theta: number
+  ) {
+    const pivot = a.back ? this.backShoulder : this.shoulder;
+    if (pivot) {
+      const cos = Math.cos(theta), sin = Math.sin(theta);
+      const dx = a.baseX - pivot.x, dy = a.baseY - pivot.y;
+      a.sp.position.set(pivot.x + dx * cos - dy * sin, pivot.y + dx * sin + dy * cos);
+    } else {
+      a.sp.position.set(a.baseX, a.baseY);
+    }
+    a.sp.rotation = a.baseRot + theta;
   }
 
   /** Rotate the cooldown so the source contact frame coincides with the sim hit. */
@@ -443,10 +474,7 @@ export class EnemyActor {
       [0, 0], [0.55, -90 * DEG], [0.8, 25 * DEG],
       [0.85, -135 * DEG], [1, -135 * DEG],
     ]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     // headHack is two relative moves: (8, 4) over .95, then (-5, 0) over .05.
     const headX = keyframe(t, [[0, 0], [0.95, -8], [1, -3]]);
     const headY = keyframe(t, [[0, 0], [0.95, -4], [1, -4]]);
@@ -468,10 +496,7 @@ export class EnemyActor {
     const back = phase <= 0.1
       ? keyframe(phase, [[0, 0], [0.1, -45 * DEG]])
       : keyframe(phase, [[0.1, -45 * DEG], [0.5, -135 * DEG]]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     // headFlail: half a second into the blow, then half a second back.
     const headFlail = t <= 0.5 ? smooth(t / 0.5) : 1 - smooth((t - 0.5) / 0.5);
     for (const head of this.headParts) {
@@ -487,10 +512,7 @@ export class EnemyActor {
   private poseLawyer(t: number) {
     const front = keyframe(t, [[0, 0], [0.5, 50 * DEG], [0.75, 0], [1, 0]]);
     const back = keyframe(t, [[0, 0], [0.5, 0], [0.75, 50 * DEG], [1, 0]]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     const step = t < 0.75 ? 1 : 1 - smooth((t - 0.75) / 0.25);
     this.root.x += -15 * this.facing * step;
     this.root.y -= 15 * step;
@@ -508,10 +530,7 @@ export class EnemyActor {
   private posePirateBoss(t: number) {
     const front = keyframe(t, [[0, 0], [0.95, 90 * DEG], [1, -135 * DEG]]);
     const back = keyframe(t, [[0, 0], [0.855, 45 * DEG], [0.9, -135 * DEG], [1, -135 * DEG]]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     const headFlail = t <= 0.5 ? smooth(t / 0.5) : 1 - smooth((t - 0.5) / 0.5);
     for (const head of this.headParts) {
       head.sp.x += -8 * this.facing * headFlail;
@@ -526,10 +545,7 @@ export class EnemyActor {
       [0, 0], [0.55, -90 * DEG], [0.8, 25 * DEG],
       [0.85, -135 * DEG], [1, -135 * DEG],
     ]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     const headX = keyframe(t, [[0, 0], [0.95, -8], [1, -3]]);
     const headY = keyframe(t, [[0, 0], [0.95, -4], [1, -4]]);
     for (const head of this.headParts) {
@@ -547,11 +563,11 @@ export class EnemyActor {
     const frontArm = keyframe(t, [[0, 0], [0.8, -20 * DEG], [1, 90 * DEG]]);
     const backArm = keyframe(t, [[0, 0], [0.2, -90 * DEG], [1, 20 * DEG]]);
     for (const arm of this.arms) {
-      const leanX = arm.back ? -5 : -10;
-      const leanY = arm.back ? 4 : 2;
-      arm.sp.x = arm.baseX + leanX * this.facing * t;
-      arm.sp.y = arm.baseY + leanY * t;
-      arm.sp.rotation = arm.baseRot + (arm.back ? backArm : frontArm);
+      // Swing about the shoulder first, THEN add the forward lean — the lean is a
+      // whole-body helper in the source, not a re-anchoring of the arm.
+      this.swingArm(arm, arm.back ? backArm : frontArm);
+      arm.sp.x += (arm.back ? -5 : -10) * this.facing * t;
+      arm.sp.y += (arm.back ? 4 : 2) * t;
     }
 
     const headAngle = keyframe(t, [
@@ -592,18 +608,14 @@ export class EnemyActor {
       [0.96, -275 * DEG], [1, 0],
     ]);
     front.forEach((arm, i) => {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (i === 0 ? primary : secondary);
+      this.swingArm(arm, i === 0 ? primary : secondary);
       const scale = i === 0
         ? keyframe(t, [[0, 1], [0.9, 1.2], [1, 1]])
         : 1;
       arm.sp.scale.set(arm.baseScaleX * scale, arm.baseScaleY * scale);
     });
     for (const arm of this.arms.filter((item) => item.back)) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + keyframe(t, [
-        [0, 0], [0.9, 10 * DEG], [1, -20 * DEG],
-      ]);
+      this.swingArm(arm, keyframe(t, [[0, 0], [0.9, 10 * DEG], [1, -20 * DEG]]));
     }
     const headX = keyframe(t, [[0, 0], [0.8, -8], [0.95, 5], [1, 0]]);
     const headY = keyframe(t, [[0, 0], [0.8, -4], [0.95, 2], [1, 0]]);
@@ -637,8 +649,7 @@ export class EnemyActor {
         [0.2, direction * 120 * DEG], [0.3, -direction * 15 * DEG],
         [0.55, direction * 10 * DEG], [1, 0],
       ]);
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + angle;
+      this.swingArm(arm, angle);
     });
     for (const wheel of this.wheels) {
       wheel.sp.rotation = wheel.baseRot + keyframe(t, [
@@ -680,10 +691,7 @@ export class EnemyActor {
     const back = keyframe(t, [
       [0, 0], [0.1, -90 * DEG], [0.5, -160 * DEG], [0.75, -40 * DEG], [1, 0],
     ]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     const flourish = keyframe(t, [[0, 0], [0.4, 1], [0.75, 0.55], [1, 0]]);
     const strike = keyframe(t, [[0, 0], [0.5, 0], [0.75, 1], [1, 0]]);
     for (const body of this.bodies) body.sp.rotation = body.baseRot - 10 * DEG * flourish;

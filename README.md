@@ -468,9 +468,22 @@ rig edits made there are still there.
 
 Everything a rig or a boss stands on is a real raid stage, laid out the way `RaidScene`
 does it: the source 480x320 cocos design space, contain-fit, ground line at 0.9 of the
-stage height, units fitted to their role height. Two known gaps: the named "special"
-zombies are composed at runtime by `mergeSpecialZombieModel` and so are not in the rig
-list, and an edited CLIP has no runtime consumer yet — the export is the deliverable.
+stage height, units fitted to their role height. (The Epic Boss stages' `isScrolling` /
+`isMoving` layers are a preview of the SOURCE data — the game draws every level asset
+statically — so that toggle is off by default.)
+
+The clip schema, its evaluator and the built-in clips live in `tools/rigClips.js`, which
+has exactly one copy: `build_rig_studio.py` inlines it into the studio, and
+`src/rigClips.test.ts` drives that same file against the real `EnemyActor` and
+`RaidActor` over a whole attack cycle, asserting every part lands where the engine puts
+it. That is the same arrangement `tools/tileAnchorGeometry.js` has with `Field`, and for
+the same reason — a bench that animates a rig differently from the game teaches you a
+wrong animation, and the mistake ships looking measured. It has already earned its keep:
+it is what caught every authored attack dismembering its own arm (see the changelog).
+
+Two known gaps: the named "special" zombies are composed at runtime by
+`mergeSpecialZombieModel` and so are not in the rig list, and an edited CLIP has no
+runtime consumer yet — the export is the deliverable.
 
 `tools/tile_lab.html` (built by `tools/build_tile_lab.py`) is the same idea for the art
 that has to meet edge to edge — both road sets, the pond pieces, rocks, the zombie patch.

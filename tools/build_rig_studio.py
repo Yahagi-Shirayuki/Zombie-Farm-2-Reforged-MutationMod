@@ -23,6 +23,10 @@ for. So every asset rides in as a data URI:
   • tiles   — tools/tile_lab.html itself, served to an iframe off a blob: URL, so the
               flat-tile bench is a tab here without a second copy of its 1200 lines
 
+It also inlines tools/rigClips.js — the clip schema, its evaluator and the built-in
+clips — with its ES exports stripped. That file has one copy on purpose:
+src/rigClips.test.ts drives it against the real EnemyActor/RaidActor, pose for pose.
+
 Re-run after art, rig, or catalog changes so the tool opens fresh (or hot-load newer
 files at runtime via the in-tool Load buttons).
 
@@ -31,12 +35,14 @@ Usage:  python tools/build_rig_studio.py [--no-epic] [--no-tiles]
 import base64
 import json
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "public" / "assets"
 TOOLS = ROOT / "tools"
 TEMPLATE = TOOLS / "rig_studio.template.html"
+RIG_CLIPS = TOOLS / "rigClips.js"
 TILE_LAB = TOOLS / "tile_lab.html"
 OUT = TOOLS / "rig_studio.html"
 
@@ -232,6 +238,15 @@ def main() -> None:
         "scene": SCENE,
     }
     html = TEMPLATE.read_text(encoding="utf-8")
+    # The clip module goes in with its ES exports stripped: the studio is one <script>
+    # in a file:// page, not a module, and src/rigClips.test.ts drives the very same
+    # file against the real EnemyActor/RaidActor. Same arrangement tools/tileAnchorGeometry.js
+    # has with Field — a bench that animates a rig differently from the game teaches you
+    # a wrong animation, and the mistake ships looking measured.
+    clips = RIG_CLIPS.read_text(encoding="utf-8")
+    clips = re.sub(r"^export (?=const |function )", "", clips, flags=re.M)
+    clips = re.sub(r'^export \{.*?\};\n', '', clips, flags=re.M | re.S)
+    html = html.replace("/* __RIG_CLIPS__ */", clips)
     # The tile lab goes in as its own literal rather than inside the boot JSON: it is a
     # whole HTML document, and burying a megabyte of markup in a JSON string doubles its
     # escaping for no gain. </script> is the only sequence that could close us early.
