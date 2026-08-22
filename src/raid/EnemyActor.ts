@@ -14,6 +14,7 @@
 //   wing  — flaps (mirrored back/front)
 import { Container, Rectangle, Sprite, Texture } from "pixi.js";
 import { EnemyModel } from "../assets";
+import { poseForFrame } from "./clipRuntime";
 
 const TILT_AMP_MOVE = 0.09;
 const TILT_AMP_IDLE = 0.045;
@@ -127,6 +128,10 @@ export interface EnemyAttackPose {
   atkProg: number;
   damageTiming: number;
   attackName?: string;
+  /** Names the authored clip outright, for a state the actor cannot infer from the
+   *  swing alone — a perched boss's "throw" or "ability". Ignored when the rig has no
+   *  authored clips, which is every rig nobody has edited in the Rig Studio. */
+  clip?: string;
 }
 
 export class EnemyActor {
@@ -162,8 +167,16 @@ export class EnemyActor {
   /** Parts that take the actor's runtime colour — everything except the rig's own
    *  `noTint` parts (the source's `setInheritColor: NO`). See applyTint. */
   private tintable: Sprite[] = [];
+  /** Every part sprite BY MODEL PART INDEX, with its rest pose. The procedural code
+   *  works in group buckets (arms, legs, head); an authored clip addresses parts by
+   *  index, so it needs this view of the same sprites. */
+  private partSprites: { sp: Sprite; px: number; py: number; rot: number; sx: number; sy: number }[] = [];
+  private readonly model: EnemyModel;
+  private readonly sourceKey: string;
 
   constructor(strip: Texture, model: EnemyModel, sourceKey = "") {
+    this.model = model;
+    this.sourceKey = sourceKey;
     this.container.addChild(this.root);
     this.root.sortableChildren = true;
     this.neck = model.neck;
@@ -185,6 +198,9 @@ export class EnemyActor {
       sp.rotation = p.rot;
       sp.zIndex = p.z;
       this.root.addChild(sp);
+      this.partSprites.push({
+        sp, px: p.px, py: p.py, rot: p.rot, sx: sp.scale.x, sy: sp.scale.y,
+      });
       if (!p.noTint) this.tintable.push(sp);
       if (p.group === "head") this.headParts.push({ sp, bx: p.px, by: p.py });
       else if (p.group === "leg")
@@ -235,6 +251,45 @@ export class EnemyActor {
   }
 
   /**
+   * Pose from an authored clip. Returns false when the rig has none for this state, in
+   * which case the caller runs the procedural pose exactly as it always has.
+   *
+   * The clip is evaluated in MODEL space and produces the same absolute part positions
+   * the procedural code writes, which is what src/rigClips.test.ts compares pose for
+   * pose. Anything the clip does not name is left at its rest pose rather than wherever
+   * the previous frame's procedural code happened to leave it.
+   */
+  private applyAuthoredClip(moving: boolean, attack: EnemyAttackPose | null): boolean {
+    const pose = poseForFrame(
+      "enemy", this.sourceKey, this.model, moving,
+      attack?.attackName, attack ? attack.atkProg : null, this.t, attack?.clip,
+    );
+    if (!pose) return false;
+    for (let i = 0; i < this.partSprites.length; i++) {
+      const base = this.partSprites[i];
+      const d = pose.parts[i];
+      if (d) {
+        base.sp.position.set(base.px + d.dx, base.py + d.dy);
+        base.sp.rotation = base.rot + d.rot;
+        base.sp.scale.set(base.sx * d.sx, base.sy * d.sy);
+      } else {
+        base.sp.position.set(base.px, base.py);
+        base.sp.rotation = base.rot;
+        base.sp.scale.set(base.sx, base.sy);
+      }
+    }
+    // The clip authors the lunge in the rig's own default facing (art faces left, so the
+    // engine's `forward` is -1 there): its root.dx IS the engine's `forward * lunge` at
+    // facing +1. Multiplying by facing re-points it when the actor has turned around,
+    // rather than negating a value that already carries the sign.
+    this.root.x = this.facing * pose.root.dx;
+    this.root.y = pose.root.dy;
+    this.root.rotation = pose.root.rot;
+    this.root.scale.set(pose.root.sx, pose.root.sy);
+    return true;
+  }
+
+  /**
    * @param attack when the enemy is trading blows, drives its strike swing:
    *   `atkProg` 0..1 fills over the attack cooldown (the sim's attack clock) and
    *   `damageTiming` is where in the swing the hit connects. Null = not attacking
@@ -242,6 +297,10 @@ export class EnemyActor {
    */
   update(dt: number, moving: boolean, attack: EnemyAttackPose | null = null) {
     this.t += dt;
+    // An authored clip, if the Rig Studio has been used on this rig, replaces the whole
+    // procedural pose below — it carries the bob and the head rock as well as the swing,
+    // so it has to be all or nothing. Rigs nobody has edited never reach this.
+    if (this.applyAuthoredClip(moving, attack)) return;
     const circusAttack = attack?.attackName === CIRCUS_BEAR_ATTACK
       || attack?.attackName === CIRCUS_STACK_ATTACK
       || attack?.attackName === CIRCUS_RINGMASTER_ATTACK;

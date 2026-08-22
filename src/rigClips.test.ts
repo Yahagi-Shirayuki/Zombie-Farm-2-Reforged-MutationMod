@@ -1,7 +1,9 @@
 // The Rig Studio's animation model, driven against the animation it claims to show.
 //
-// tools/rigClips.js is the ONE copy of the clip schema, its evaluator, and the built-in
-// clips the studio opens every rig with. Those built-ins are transcriptions of
+// src/raid/rigClips.js is the ONE copy of the clip schema and its evaluator -- the
+// RUNTIME's copy, which the actors pose themselves from when a clip has been authored
+// for the rig they draw -- and tools/rigClipsAuthored.js holds the built-in clips the
+// studio opens every rig with. Those built-ins are transcriptions of
 // src/raid/EnemyActor.ts and src/raid/RaidActor.ts, and a transcription is only worth
 // anything if something checks it: a bench that poses a rig differently from the game
 // teaches you a wrong animation, and the mistake ships looking measured. So this test
@@ -19,8 +21,10 @@ import { Texture } from "pixi.js";
 import { describe, expect, it } from "vitest";
 import type { EnemyModel } from "./assets";
 import { EnemyActor } from "./raid/EnemyActor";
+import { setRigClips } from "./raid/clipRuntime";
+import type { Clip } from "./raid/rigClips";
 // @ts-expect-error - plain ES module, deliberately untyped (it is inlined into a tool)
-import * as RigClips from "../tools/rigClips.js";
+import * as RigClips from "../tools/rigClipsAuthored.js";
 
 const json = (p: string) => JSON.parse(readFileSync(new URL(p, import.meta.url), "utf-8"));
 const MODELS: Record<string, EnemyModel> = json("../public/assets/raids/enemies/models.json");
@@ -90,13 +94,6 @@ function clipTimeFor(clip: Clip, atkProg: number) {
   return atkProg; // "cycle" clips ARE the cooldown; "free" clips ignore it
 }
 
-interface Clip {
-  duration: number; loop?: boolean; timeBase: string; damageTiming?: number;
-  attackName?: string; authored?: boolean; moving?: boolean;
-  /** How a wind-up clip's own 0..1 maps onto the sim's attack clock. */
-  simProgress?: { rest: number; span: number; uSpan: number };
-  tracks: { target: string; channel: string }[];
-}
 
 /** Largest positional / angular gap between the engine's pose and the clip's, over one
  *  whole cycle. Returns the worst offender so a failure names the part. */
@@ -246,5 +243,103 @@ describe("Rig Studio clips match the animation the game actually plays", () => {
       }
     }
     expect(bad.join("\n")).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+//  THE RUNTIME PATH
+// ---------------------------------------------------------------------------
+// Everything above compares the studio's clip to the engine. These compare the ENGINE
+// DRIVEN BY a clip to the engine computing the pose itself, which is the substitution
+// src/raid/clipRuntime.ts performs whenever someone has authored an animation for a rig.
+// Feeding it the built-in clip -- the transcription of what the procedural code does --
+// must therefore change nothing at all. That is what makes shipping an edited clip safe:
+// the mechanism is a no-op until the clip itself differs.
+
+/** Pose an actor twice at the same point in its cycle: once with the clip installed as
+ *  an authored override, once with nothing installed at all. */
+function bothWays(key: string, clip: Clip, atkProg: number, moving: boolean) {
+  const model = MODELS[key];
+  setRigClips("enemy", {});
+  const plain = poseActor(key, model, clip, atkProg);
+  setRigClips("enemy", { [key]: { [clipNameOf(clip, moving)]: clip } });
+  const driven = poseActor(key, model, clip, atkProg);
+  setRigClips("enemy", {});
+  return { plain, driven };
+}
+
+/** The name clipRuntime will look the clip up under, for the state being posed. */
+function clipNameOf(clip: Clip, moving: boolean) {
+  if (clip.timeBase === "free") return moving ? "move" : "idle";
+  return clip.attackName ? "attack:" + clip.attackName : "attack";
+}
+
+describe("authored clips drive the real actor", () => {
+  it("installing the BUILT-IN clip leaves every pose unchanged", () => {
+    const drift: string[] = [];
+    for (const key of Object.keys(MODELS)) {
+      const clips = RigClips.defaults("enemy", key, MODELS[key], combatFor(key));
+      for (const name of Object.keys(clips)) {
+        const clip: Clip = clips[name];
+        // "windup" clips (a perched boss's throw/ability) are named by RaidScene rather
+        // than inferred from the swing, so they are not on this path yet -- see the
+        // `clip` field on EnemyAttackPose.
+        if (clip.timeBase === "windup") continue;
+        const moving = name === "move";
+        for (let i = 0; i <= 6; i++) {
+          const atkProg = (i + 0.5) / 7;
+          const { plain, driven } = bothWays(key, clip, atkProg, moving);
+          // Same measure and same 0.5 threshold the comparisons above use: px for
+          // positions, radians for rotations. The residual is the transcription gap
+          // those tests already bound, not something this substitution introduces.
+          const gap = Math.max(
+            Math.abs(plain.root.x - driven.root.x),
+            Math.abs(plain.root.y - driven.root.y),
+            ...plain.sprites.map((sp, idx) => Math.max(
+              Math.abs(sp.x - driven.sprites[idx].x),
+              Math.abs(sp.y - driven.sprites[idx].y),
+              Math.abs(sp.rotation - driven.sprites[idx].rotation),
+            )),
+          );
+          if (gap >= 0.5) {
+            drift.push(`${key} ${name} @${atkProg.toFixed(2)}: ${gap.toFixed(3)}`);
+            break;
+          }
+        }
+      }
+    }
+    expect(drift.slice(0, 8).join(" | ")).toBe("");
+  });
+
+  it("an EDITED clip actually moves the rig", () => {
+    // The other half of the guarantee: the mechanism is a no-op on the built-ins, but it
+    // is not a no-op in general -- an edit has to reach the screen, or none of this does
+    // anything for the person who made it.
+    const key = "PirateStageActorSwashbuckler";
+    const model = MODELS[key];
+    const clips = RigClips.defaults("enemy", key, model, combatFor(key));
+    const name = Object.keys(clips).find((n) => n.startsWith("attack"))!;
+    const edited = RigClips.clone(clips[name]);
+    edited.tracks.push({
+      name: "test lift", target: "body", channel: "y", keys: [[0, 0], [1, -40]],
+    });
+    setRigClips("enemy", { [key]: { [name]: edited } });
+    const driven = poseActor(key, model, edited, 0.9);
+    setRigClips("enemy", {});
+    const plain = poseActor(key, model, clips[name], 0.9);
+    const moved = plain.sprites.some((sp, i) => Math.abs(sp.y - driven.sprites[i].y) > 5);
+    expect(moved).toBe(true);
+  });
+
+  it("a rig with no authored clip is left entirely alone", () => {
+    setRigClips("enemy", { SomeOtherRig: { attack: { duration: 1, tracks: [] } } });
+    const key = "PirateStageActorScallywag";
+    const clips = RigClips.defaults("enemy", key, MODELS[key], combatFor(key));
+    const name = Object.keys(clips).find((n) => n.startsWith("attack"))!;
+    const driven = poseActor(key, MODELS[key], clips[name], 0.8);
+    setRigClips("enemy", {});
+    const plain = poseActor(key, MODELS[key], clips[name], 0.8);
+    expect(driven.sprites.map((s) => Math.round(s.x * 100)))
+      .toEqual(plain.sprites.map((s) => Math.round(s.x * 100)));
   });
 });

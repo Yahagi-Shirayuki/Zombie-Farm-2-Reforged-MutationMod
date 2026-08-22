@@ -11,6 +11,8 @@ import { fetchJson, mapConcurrent } from "./assetLoading";
 import { noteAssetFailure } from "./assetFailures";
 import { isFencePanel } from "./pathCosts";
 import { MAX_ZOMBIE_POTS } from "./placementLimit";
+import { setRigClips } from "./raid/clipRuntime";
+import type { ClipSet } from "./raid/clipRuntime";
 
 export interface Tile {
   terrain: string;
@@ -848,7 +850,7 @@ export async function loadAssets(): Promise<GameAssets> {
   // Per-type zombie models: one shared atlas (ZombieSheet.png) sliced into part
   // sub-textures via frames.json, plus models.json (composition per unit type).
   const [zombieModels, zombieFrames, mutationParts, sheet, enemyModels,
-    specialModels, specialFrames, specialSheet] = await Promise.all([
+    specialModels, specialFrames, specialSheet, enemyClips, zombieClips] = await Promise.all([
     json<Record<string, ZombieModel>>(BASE + "assets/zombie/models.json"),
     json<Record<string, { x: number; y: number; w: number; h: number }>>(
       BASE + "assets/zombie/frames.json"
@@ -861,7 +863,14 @@ export async function loadAssets(): Promise<GameAssets> {
       BASE + "assets/zombie/special_frames.json"
     ),
     Assets.load(BASE + "assets/zombie/SpecialZombieSheet.png") as Promise<Texture>,
+    // Animations authored in the Rig Studio, if any have been. Optional by design: a rig
+    // with no clip keeps running the procedural pose in EnemyActor/RaidActor, so a
+    // missing file is the ordinary case rather than a failure. See raid/clipRuntime.ts.
+    json<ClipSet>(BASE + "assets/raids/enemies/clips.json").catch(() => ({})),
+    json<ClipSet>(BASE + "assets/zombie/clips.json").catch(() => ({})),
   ]);
+  setRigClips("enemy", enemyClips);
+  setRigClips("zombie", zombieClips);
   const zombiePartTex: Record<string, Texture> = {};
   for (const [name, f] of Object.entries(zombieFrames)) {
     zombiePartTex[name] = new Texture({
