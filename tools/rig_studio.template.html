@@ -1219,7 +1219,10 @@ const ZF = (() => {
     const inp = document.createElement("input");
     inp.type = "number"; inp.step = step; inp.value = round(val);
     inp.addEventListener("focus", () => pushUndo("field-" + labelText));
-    inp.addEventListener("input", () => oninput(parseFloat(inp.value)));
+    inp.addEventListener("input", () => {
+      const v = parseFloat(inp.value);      // see numRow: an empty field is not a value
+      if (Number.isFinite(v)) oninput(v);
+    });
     wrap.appendChild(inp); return wrap;
   }
   function mkBtn(txt, fn, cls) {
@@ -1312,12 +1315,30 @@ const ZF = (() => {
     const y = document.createElement("input"); y.type = "number"; y.step = "0.5"; y.value = round(getY());
     x.addEventListener("focus", () => pushUndo("pivx"));
     y.addEventListener("focus", () => pushUndo("pivy"));
-    x.addEventListener("input", () => { setX(parseFloat(x.value)); sync(); });
-    y.addEventListener("input", () => { setY(parseFloat(y.value)); sync(); });
+    x.addEventListener("input", () => { const v = parseFloat(x.value); if (Number.isFinite(v)) { setX(v); sync(); } });
+    y.addEventListener("input", () => { const v = parseFloat(y.value); if (Number.isFinite(v)) { setY(v); sync(); } });
     row.append(dot, nm, x, y);
     if (onRemove) row.appendChild(mkBtn("×", onRemove, "danger"));
     return row;
   }
+  /** Names pivotPoint would answer from somewhere else, so a rig pivot must not use one. */
+  function reservedPivotNames() {
+    const out = ["self", "origin", "auto"];
+    if (model.neck) out.push("neck");
+    if (model.shoulder) out.push("shoulder");
+    return out;
+  }
+  /** A name this rig can actually resolve — suffixed until it is free. */
+  function freePivotName(want, skipIndex) {
+    const taken = reservedPivotNames().concat(
+      (model.pivots || []).filter((_, i) => i !== skipIndex).map((q) => q.name));
+    let name = (want || "pivot").trim() || "pivot";
+    if (taken.indexOf(name) < 0) return name;
+    // "shoulder" -> "shoulder-back" reads better than "shoulder-2" for the common case.
+    if (name === "shoulder" && taken.indexOf("shoulder-back") < 0) return "shoulder-back";
+    for (let n = 2; ; n++) if (taken.indexOf(name + "-" + n) < 0) return name + "-" + n;
+  }
+
   function rebuildPivotEditor() {
     const box = $("#pivotEditor"); box.innerHTML = "";
     if (model.neck) {
@@ -1349,18 +1370,26 @@ const ZF = (() => {
       nm.type = "text"; nm.value = pv.name || ("pivot" + i); nm.style.flex = "1";
       nm.addEventListener("focus", () => pushUndo());
       nm.addEventListener("input", () => { pv.name = nm.value; sync(); });
+      // On the way out, make sure the name is one the resolver can actually return.
+      nm.addEventListener("change", () => {
+        const fixed = freePivotName(nm.value, i);
+        if (fixed === pv.name) return;
+        ZF.status("storeStatus",
+          '"' + pv.name + '" is already taken on this rig — renamed to "' + fixed + '"', "#d29922");
+        pv.name = fixed; nm.value = fixed; sync();
+      });
       const x = document.createElement("input"); x.type = "number"; x.step = "0.5"; x.value = round(pv.x);
       const y = document.createElement("input"); y.type = "number"; y.step = "0.5"; y.value = round(pv.y);
       x.addEventListener("focus", () => pushUndo()); y.addEventListener("focus", () => pushUndo());
-      x.addEventListener("input", () => { pv.x = parseFloat(x.value); sync(); });
-      y.addEventListener("input", () => { pv.y = parseFloat(y.value); sync(); });
+      x.addEventListener("input", () => { const v = parseFloat(x.value); if (Number.isFinite(v)) { pv.x = v; sync(); } });
+      y.addEventListener("input", () => { const v = parseFloat(y.value); if (Number.isFinite(v)) { pv.y = v; sync(); } });
       row.append(dot, nm, x, y, mkBtn("×", () => { pushUndo(); model.pivots.splice(i, 1); sync(); rebuildPivotEditor(); }, "danger"));
       box.appendChild(row);
     });
     const add = el("div", "pad");
     add.appendChild(mkBtn("+ named pivot", () => {
       pushUndo();
-      model.pivots.push({ name: "pivot" + model.pivots.length, x: 0, y: 0 });
+      model.pivots.push({ name: freePivotName("pivot"), x: 0, y: 0 });
       sync(); rebuildPivotEditor();
     }));
     box.appendChild(add);
@@ -2156,7 +2185,12 @@ const CLIPS = {
     const wrap = el("div", "field", "<label>" + labelText + "</label>");
     const inp = document.createElement("input");
     inp.type = "number"; inp.step = step; inp.value = value;
-    inp.addEventListener("input", () => onchange(parseFloat(inp.value)));
+    // An empty field is a person mid-edit, not a value. Committing parseFloat("") wrote
+    // NaN into the keyframe, which exports as `null` and makes the part vanish in game.
+    inp.addEventListener("input", () => {
+      const v = parseFloat(inp.value);
+      if (Number.isFinite(v)) onchange(v);
+    });
     wrap.appendChild(inp);
     return wrap;
   }
@@ -2192,7 +2226,9 @@ const CLIPS = {
       xi.type = yi.type = "number"; xi.step = yi.step = "0.5";
       xi.value = round(obj.x); yi.value = round(obj.y);
       const write = () => {
-        obj.x = parseFloat(xi.value); obj.y = parseFloat(yi.value);
+        const nx = parseFloat(xi.value), ny = parseFloat(yi.value);
+        if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;   // see numRow
+        obj.x = nx; obj.y = ny;
         rigTouched(); render();
       };
       xi.addEventListener("input", write);

@@ -2072,12 +2072,15 @@ export class RaidScene {
           const summon = this.sim.bossWallSummonProgress();
           if (summon !== null) {
             // Slow raise/hold across the full authored (~3 s) wall summon.
-            attack = { atkProg: 0.28 + 0.64 * summon, damageTiming: 0.98 };
+            // `clip` names the authored animation for this state: a perched boss's
+            // summon and throw are not swings, so EnemyActor cannot infer them from
+            // atkProg alone (see raid/clipRuntime.ts). Ignored unless the rig has one.
+            attack = { atkProg: 0.28 + 0.64 * summon, damageTiming: 0.98, clip: "ability" };
           } else {
             const sw = this.sim.bossThrowSwing(550, visualLeadMs);
             attack = sw === null
               ? null
-              : { atkProg: 0.28 + 0.72 * sw, damageTiming: 0.9 };
+              : { atkProg: 0.28 + 0.72 * sw, damageTiming: 0.9, clip: "throw" };
           }
         }
         const jumpingFromPerch = u.state === "descending" && u.sourceKey === CIRCUS_BOSS_KEY;
