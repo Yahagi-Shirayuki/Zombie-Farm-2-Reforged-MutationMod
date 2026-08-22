@@ -474,6 +474,9 @@ rig edits made there are still there.
   is moved into the source.
 * **Tiles** — `tools/tile_lab.html` itself, hosted in a frame. One copy of that tool.
 
+The side columns scroll, so a short window hides nothing: panels keep their height and
+the section headings stick to the top of the column.
+
 Everything a rig or a boss stands on is a real raid stage, laid out the way `RaidScene`
 does it: the source 480x320 cocos design space, contain-fit, ground line at 0.9 of the
 stage height, units fitted to their role height. (The Epic Boss stages' `isScrolling` /

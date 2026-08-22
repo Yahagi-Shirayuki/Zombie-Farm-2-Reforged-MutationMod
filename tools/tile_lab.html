@@ -47,6 +47,14 @@
     color: var(--muted); margin: 0; padding: 10px 12px 6px; }
   .pad { padding: 8px 12px; }
   .scroll { overflow-y: auto; flex: 1; }
+  /* A side column is a stack of panels and on a short window that stack is taller than
+     the column. Let the column scroll rather than squashing panels off the bottom; only
+     the panes with an inner scrollbar give ground, down to a floor where they still work. */
+  .col.left, .col.right { overflow-y: auto; scrollbar-gutter: stable; }
+  .col.left > *, .col.right > * { flex-shrink: 0; }
+  .col.left > .scroll, .col.right > .scroll,
+  .col.left > textarea, .col.right > textarea { flex-shrink: 1; min-height: 110px; }
+  .col.left > h2, .col.right > h2 { position: sticky; top: 0; z-index: 2; background: var(--bg); }
   label { color: var(--muted); font-size: 11px; }
   select, input, button, textarea {
     font: inherit; color: var(--ink); background: var(--panel2);
