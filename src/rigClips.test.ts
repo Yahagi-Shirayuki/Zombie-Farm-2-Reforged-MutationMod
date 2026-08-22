@@ -21,6 +21,7 @@ import { Texture } from "pixi.js";
 import { describe, expect, it } from "vitest";
 import type { EnemyModel } from "./assets";
 import { EnemyActor } from "./raid/EnemyActor";
+import { RaidActor } from "./raid/RaidActor";
 import { setRigClips } from "./raid/clipRuntime";
 import type { Clip } from "./raid/rigClips";
 // @ts-expect-error - plain ES module, deliberately untyped (it is inlined into a tool)
@@ -341,5 +342,155 @@ describe("authored clips drive the real actor", () => {
     const plain = poseActor(key, MODELS[key], clips[name], 0.8);
     expect(driven.sprites.map((s) => Math.round(s.x * 100)))
       .toEqual(plain.sprites.map((s) => Math.round(s.x * 100)));
+  });
+});
+
+// ---------------------------------------------------------------------------
+//  THE ZOMBIE RIG
+// ---------------------------------------------------------------------------
+// Everything above is the enemy rig. RaidActor is the other half of the same story and
+// had no coverage at all, which is how its transcription came to be wrong in a way
+// nobody noticed: partMeta splits a zombie's head into head/eye/jaw so a bite can open
+// the jaw and squint the eyes on their own tracks, but RaidActor hangs the whole face
+// off the neck and rocks and lunges it AS ONE. Tracks aimed at plain `head` moved the
+// skull and left the eyes and jaw behind -- 8px behind, mid-bite. Hence `head.all`.
+
+const ZMODELS: Record<string, ZModel> = json("../public/assets/zombie/models.json");
+interface ZModel { parts: { px: number; py: number; file: string; group?: string }[] }
+
+/** RaidActor only needs four things off GameAssets to build a rig, and only the models
+ *  carry any geometry -- every part resolves to the same empty texture here, because
+ *  nothing renders and only the transform is under test. */
+const ZASSETS = {
+  zombieModels: ZMODELS,
+  zombiePartTex: new Proxy({}, { get: () => Texture.EMPTY, has: () => true }),
+  mutationParts: {},
+  zombies: [],
+} as never;
+
+function zSprites(actor: RaidActor): Sprite[] {
+  return (actor as unknown as { root: { children: Sprite[] } }).root.children;
+}
+
+/** Pose a zombie at one point in its cycle, the way RaidScene drives it: update() then
+ *  poseArms(), every frame, in that order. */
+function poseZombie(key: string, name: string, atkProg: number) {
+  const a = new RaidActor(ZASSETS, key);
+  const walking = name === "move";
+  a.update(0, walking, false);
+  if (name.startsWith("attack")) {
+    a.poseArms(0, true, false, atkProg, 0, -1, 0, name.includes("scratch") ? "scratch" : "bite");
+  } else {
+    a.poseArms(0, false, walking, 0, 0, -1, 0, "");
+  }
+  return zSprites(a);
+}
+
+/** Worst gap between RaidActor's own pose and the clip's, over a whole cycle. */
+function zWorst(key: string, name: string, clip: Clip) {
+  const model = ZMODELS[key];
+  const attack = name.startsWith("attack");
+  let worst = { gap: 0, part: -1, t: 0 };
+  const samples = attack ? 16 : 1;
+  for (let i = 0; i < samples; i++) {
+    const atkProg = (i + 0.5) / (samples + 1);
+    const t = attack
+      ? sourceAttackProgress(atkProg, clip.damageTiming ?? 0.5)
+      : 0; // the free clocks are shared, and a fresh actor sits at the top of both
+    const sprites = poseZombie(key, name, atkProg);
+    const pose = RigClips.poseAt("zombie", model, clip, t, 0);
+    // Sprite order is part order only while nothing is skipped; a plain zombie with no
+    // mutation skips nothing, which is what this harness builds.
+    model.parts.forEach((part, idx) => {
+      const sp = sprites[idx];
+      if (!sp) return;
+      const d = pose.parts[idx] ?? { dx: 0, dy: 0, rot: 0 };
+      const g = Math.max(
+        Math.abs(sp.x - (part.px + d.dx)),
+        Math.abs(sp.y - (part.py + d.dy)),
+        Math.abs(sp.rotation - d.rot),
+      );
+      if (g > worst.gap) worst = { gap: g, part: idx, t };
+    });
+  }
+  return worst;
+}
+
+describe("the zombie clips match RaidActor", () => {
+  const ZKEYS = Object.keys(ZMODELS).filter((k) => ZMODELS[k]?.parts?.length);
+
+  it("idle, move, bite and scratch all land where the engine puts them", () => {
+    const bad: string[] = [];
+    for (const key of ZKEYS) {
+      const clips = RigClips.defaults("zombie", key, ZMODELS[key], {});
+      for (const name of ["idle", "move", "attack:bite", "attack:scratch"]) {
+        const clip: Clip = clips[name];
+        if (!clip) continue;
+        const worst = zWorst(key, name, clip);
+        if (worst.gap >= 0.5) {
+          bad.push(`${key}/${name}: part ${worst.part} out by ${worst.gap.toFixed(2)} at t=${worst.t.toFixed(2)}`);
+        }
+      }
+    }
+    expect(bad.slice(0, 6).join("\n")).toBe("");
+  });
+
+  it("the head rock reaches the eyes and the jaw, not just the skull", () => {
+    // The specific regression: a `head` track leaves the face behind. Guarded directly,
+    // because a rig whose eyes happen to sit near the neck would hide it in the averages.
+    const key = "ZombieActorRegularTier1";
+    const model = ZMODELS[key];
+    const clips = RigClips.defaults("zombie", key, model, {});
+    const pose = RigClips.poseAt("zombie", model, clips["attack:bite"], 0.25, 0);
+    const moved = model.parts
+      .map((part, i) => ({ file: part.file, group: part.group, d: pose.parts[i] }))
+      .filter((r) => r.group === "head");
+    expect(moved.length).toBeGreaterThan(3);
+    const still = moved.filter((r) => !r.d || (Math.abs(r.d.dx) < 0.01 && Math.abs(r.d.dy) < 0.01));
+    expect(still.map((r) => r.file).join(", ")).toBe("");
+  });
+});
+
+describe("authored clips drive the real zombie", () => {
+  it("installing the BUILT-IN clip leaves every pose unchanged", () => {
+    const drift: string[] = [];
+    for (const key of Object.keys(ZMODELS).slice(0, 12)) {
+      if (!ZMODELS[key]?.parts?.length) continue;
+      const clips = RigClips.defaults("zombie", key, ZMODELS[key], {});
+      for (const name of ["idle", "move", "attack:bite", "attack:scratch"]) {
+        const clip: Clip = clips[name];
+        if (!clip) continue;
+        for (let i = 0; i < 5; i++) {
+          const atkProg = (i + 0.5) / 6;
+          setRigClips("zombie", {});
+          const plain = poseZombie(key, name, atkProg).map((sp) => [sp.x, sp.y, sp.rotation]);
+          setRigClips("zombie", { [key]: { [name]: clip } });
+          const driven = poseZombie(key, name, atkProg).map((sp) => [sp.x, sp.y, sp.rotation]);
+          setRigClips("zombie", {});
+          const gap = Math.max(...plain.map((a, j) => Math.max(
+            Math.abs(a[0] - driven[j][0]), Math.abs(a[1] - driven[j][1]), Math.abs(a[2] - driven[j][2]),
+          )));
+          if (gap >= 0.5) {
+            drift.push(`${key}/${name} @${atkProg.toFixed(2)}: ${gap.toFixed(3)}`);
+            break;
+          }
+        }
+      }
+    }
+    expect(drift.slice(0, 6).join(" | ")).toBe("");
+  });
+
+  it("an EDITED zombie clip actually moves the rig", () => {
+    const key = "ZombieActorRegularTier1";
+    const clips = RigClips.defaults("zombie", key, ZMODELS[key], {});
+    const edited = RigClips.clone(clips.idle);
+    edited.tracks.push({
+      name: "test lift", target: "head.all", channel: "y", keys: [[0, -30], [1, -30]],
+    });
+    setRigClips("zombie", { [key]: { idle: edited } });
+    const driven = poseZombie(key, "idle", 0);
+    setRigClips("zombie", {});
+    const plain = poseZombie(key, "idle", 0);
+    expect(plain.some((sp, i) => Math.abs(sp.y - driven[i].y) > 20)).toBe(true);
   });
 });

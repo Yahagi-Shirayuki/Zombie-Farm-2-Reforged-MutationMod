@@ -23,6 +23,7 @@ import {
   zombiePartTint,
 } from "../zombie/appearance";
 import { SpecialHeadFx, specialHeadFxKind } from "../zombie/specialHeadFx";
+import { poseForFrame } from "./clipRuntime";
 
 const MODEL_BASE = 0.95;
 const TILT_AMP_MOVE = 0.1;
@@ -98,6 +99,15 @@ export class RaidActor {
   private tiltPhase = 0;
   private stepPhase = 0;
   private deathT = -1; // ≥0 once dead: seconds into the head-pop animation
+  /** Free-running clock, for a clip's idle/move phase (see raid/clipRuntime.ts). */
+  private t = 0;
+  /** Every part sprite BY MODEL PART INDEX, with its rest pose. build() SKIPS parts —
+   *  a mutation replaces the arms, a missing texture drops one — so child order is not
+   *  part order here and an authored clip, which addresses parts by index, needs this. */
+  private partSprites: { sp: Sprite; i: number; px: number; py: number; scale: number }[] = [];
+  /** The rig a clip would be authored against, and the key it is filed under. */
+  private clipModel: ZombieModel | null = null;
+  private clipKey = "";
   private specialHeadFx: SpecialHeadFx | null = null;
 
   constructor(
@@ -146,6 +156,8 @@ export class RaidActor {
   ) {
     const m: ZombieModel =
       assets.zombieModels[key] ?? assets.zombieModels["ZombieActorRegularTier1"];
+    this.clipModel = m;
+    this.clipKey = key;
     const mutationParts = mutationBitsForRendering(assets.zombies, key, mutation).flatMap((bit) => {
       const part = mutationPartFor(assets.mutationParts, m, bit);
       const texture = part ? assets.zombiePartTex[part.file] : undefined;
@@ -175,7 +187,7 @@ export class RaidActor {
     this.root.sortableChildren = true;
     this.neck = { x: m.neck.x, y: m.neck.y };
 
-    for (const p of m.parts) {
+    for (const [partIndex, p] of m.parts.entries()) {
       if (replacements.has("armF") && matchesMutationReplacement(p.file, "armF")) continue;
       if (replacements.has("body") && /Body$/i.test(p.file)) continue;
       if (
@@ -196,6 +208,7 @@ export class RaidActor {
       sp.zIndex = foreground ? MUT_BASE_FOREGROUND_Z + p.z : p.z;
       if (p.tint) sp.tint = zombiePartTint(p.file, tint, group);
       this.root.addChild(sp);
+      this.partSprites.push({ sp, i: partIndex, px: p.px, py: p.py, scale: p.scale ?? 1 });
       if (p.group === "head") {
         this.headParts.push({ sp, bx: p.px, by: p.py });
         if (/Eye[LR](?:\.png)?$/i.test(p.file)) {
@@ -288,6 +301,15 @@ export class RaidActor {
     healRaise = 0,
     attackName = ""
   ) {
+    // An authored clip replaces the whole pose — the head rock update() just applied as
+    // well as the arms — so it has to run here, after update(), where the combat state is
+    // finally known. Abilities are deliberately NOT on this path: their clips are driven
+    // by a progress value (wind-up, heal raise, slam) rather than a clock, and the
+    // transcription does not record that mapping yet, so they keep the procedural pose.
+    const ability = smashSlam >= 0 || windup > 0 || healRaise > 0;
+    if (!ability && this.deathT < 0 && this.applyAuthoredClip(attacking, walking, atkProg, attackName)) {
+      return;
+    }
     if (smashSlam >= 0) {
       // Smash SLAM: arms drive from fully overhead (1) back down (0) as the zombie
       // shrinks; continuous from the wind-up, which ended with the arms at RAISE_ANGLE.
@@ -313,6 +335,43 @@ export class RaidActor {
     } else {
       for (const arm of this.arms) arm.rotation = ARM_REST; // hang down at the sides (waiting)
     }
+  }
+
+  /**
+   * Pose from an authored clip. False when the rig has none for this state, in which
+   * case the caller runs the procedural pose exactly as it always has.
+   *
+   * Anything the clip does not name is returned to its rest pose rather than left where
+   * update() put it a moment ago — a clip is the WHOLE pose, not a layer on top.
+   */
+  private applyAuthoredClip(
+    attacking: boolean, walking: boolean, atkProg: number, attackName: string,
+  ): boolean {
+    if (!this.clipModel) return false;
+    const name = attacking
+      ? (/scratch/i.test(attackName) ? "attack:scratch" : "attack:bite")
+      : walking ? "move" : "idle";
+    const pose = poseForFrame(
+      "zombie", this.clipKey, this.clipModel, walking,
+      undefined, attacking ? atkProg : null, this.t, name,
+    );
+    if (!pose) return false;
+    for (const base of this.partSprites) {
+      const d = pose.parts[base.i];
+      if (d) {
+        base.sp.position.set(base.px + d.dx, base.py + d.dy);
+        base.sp.rotation = d.rot;
+        base.sp.scale.set(base.scale * d.sx, base.scale * d.sy);
+      } else {
+        base.sp.position.set(base.px, base.py);
+        base.sp.rotation = 0;
+        base.sp.scale.set(base.scale);
+      }
+    }
+    this.root.scale.set(
+      this.renderScale * this.facing * pose.root.sx, this.renderScale * pose.root.sy,
+    );
+    return true;
   }
 
   /** Rotate a cooldown phase so source-time `damageTiming` occurs at the sim hit.
@@ -433,6 +492,7 @@ export class RaidActor {
       return;
     }
 
+    this.t += dt;
     this.specialHeadFx?.update(dt);
     const eyeEase = Math.min(1, dt * FOCUS_EYE_EASE);
     const eyeTarget = focusing ? FOCUS_EYE_SCALE_Y : 1;

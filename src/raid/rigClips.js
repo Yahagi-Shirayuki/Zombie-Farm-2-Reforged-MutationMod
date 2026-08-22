@@ -111,6 +111,16 @@ export function resolveTarget(kind, model, target) {
   // group | group.front | group.back | group.<n> | group.front.<n> | group.back.<n>
   const bits = String(target).split(".");
   const group = bits[0];
+  // `<group>.all` addresses every part the RIG files under that group, BEFORE partMeta
+  // splits it up. It exists for the zombie head: partMeta separates the eyes and the jaw
+  // so a bite can open the jaw and squint the eyes on their own tracks, but RaidActor
+  // hangs the whole face off the neck and rocks and lunges it as one piece. A track that
+  // targets plain `head` moves the skull and leaves the eyes behind.
+  if (bits.length === 2 && bits[1] === "all") {
+    return (model.parts || [])
+      .map((p, i) => (((p.group || "body") === group) ? i : -1))
+      .filter((i) => i >= 0);
+  }
   let pool = (model.parts || []).map((p, i) => partMeta(kind, p, i)).filter((m) => m.group === group);
   let rest = bits.slice(1);
   if (rest[0] === "front") { pool = pool.filter((m) => !m.back); rest = rest.slice(1); }

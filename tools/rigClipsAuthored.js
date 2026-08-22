@@ -467,7 +467,9 @@ function enemyClips(key, model, combat) {
  *  never moves its root, so there is no whole-body bob to carry. */
 function zombiePersistent() {
   return [{
-    name: "head rock (free-running)", target: "head", channel: "rot", pivot: "neck",
+    // `head.all`, not `head`: RaidActor rocks every part it hangs off the neck, which
+    // is the eyes and the jaw as well as the skull.
+    name: "head rock (free-running)", target: "head.all", channel: "rot", pivot: "neck",
     keys: tiltKeys(Z_TILT_AMP_IDLE), free: { period: 4.0 },
   }];
 }
@@ -481,7 +483,7 @@ function zombieClips(key, model) {
     duration: 4.0, loop: true, timeBase: "free",
     note: "Waiting in the back group: arms hang at the sides.",
     tracks: [
-      { name: "head rock", target: "head", channel: "rot", pivot: "neck", keys: tiltKeys(Z_TILT_AMP_IDLE) },
+      { name: "head rock", target: "head.all", channel: "rot", pivot: "neck", keys: tiltKeys(Z_TILT_AMP_IDLE) },
       { name: "arms at rest", target: "arm", channel: "rot", pivot: "auto", keys: [[0, rad(ARM_REST)], [1, rad(ARM_REST)]] },
     ],
   };
@@ -491,7 +493,7 @@ function zombieClips(key, model) {
     duration: 2.0, loop: true, timeBase: "free",
     note: "Advancing: arms straight out in front with a faint alternating sway.",
     tracks: [
-      { name: "head rock", target: "head", channel: "rot", pivot: "neck", keys: tiltKeys(Z_TILT_AMP_MOVE) },
+      { name: "head rock", target: "head.all", channel: "rot", pivot: "neck", keys: tiltKeys(Z_TILT_AMP_MOVE) },
       { name: "front foot step", target: "footF", channel: "rot", wave: { amp: rad(Z_STEP_ANGLE), cycles: cyc, phase: 0 } },
       { name: "back foot step", target: "footB", channel: "rot", wave: { amp: rad(Z_STEP_ANGLE), cycles: cyc, phase: 0.5 } },
       { name: "front foot lift", target: "footF", channel: "y", wave: { amp: -Z_STEP_LIFT, cycles: cyc, phase: 0, clamp: "pos" } },
@@ -508,8 +510,8 @@ function zombieClips(key, model) {
     authored: true, attackName: "ZombieBite",
     note: "Authored ZFAnims bite, over the head rock the engine never stops: headBite 0.13/0.25/0.62, jawBite, eyeBiteSquint, armBite.",
     tracks: zombiePersistent().concat([
-      { name: "head lunge x", target: "head", channel: "x", keys: [[0, 0], [0.13, BITE_HEAD_X], [0.38, BITE_HEAD_X], [1, 0]] },
-      { name: "head lunge y", target: "head", channel: "y", keys: [[0, 0], [0.13, BITE_HEAD_Y], [0.38, BITE_HEAD_Y], [1, 0]] },
+      { name: "head lunge x", target: "head.all", channel: "x", keys: [[0, 0], [0.13, BITE_HEAD_X], [0.38, BITE_HEAD_X], [1, 0]] },
+      { name: "head lunge y", target: "head.all", channel: "y", keys: [[0, 0], [0.13, BITE_HEAD_Y], [0.38, BITE_HEAD_Y], [1, 0]] },
       { name: "jaw open x", target: "jaw", channel: "x", keys: [[0, 0], [0.37, BITE_JAW_X], [0.43, 0], [1, 0]] },
       { name: "jaw open y", target: "jaw", channel: "y", keys: [[0, 0], [0.37, BITE_JAW_Y], [0.43, 0], [1, 0]] },
       { name: "eye squint", target: "eye", channel: "scaleY", keys: [[0, 1], [0.12, 0.75], [0.43, 0.75], [0.49, 1], [1, 1]] },
@@ -525,8 +527,8 @@ function zombieClips(key, model) {
     authored: true, attackName: "ZombieScratch",
     note: "Authored ZFAnims scratch, over the head rock the engine never stops: headFlail + eyeFlailSquint + the asymmetric claw pair.",
     tracks: zombiePersistent().concat([
-      { name: "head thrust x", target: "head", channel: "x", keys: scaleKeys(halfSine, SCRATCH_HEAD_X) },
-      { name: "head thrust y", target: "head", channel: "y", keys: scaleKeys(halfSine, SCRATCH_HEAD_Y) },
+      { name: "head thrust x", target: "head.all", channel: "x", keys: scaleKeys(halfSine, SCRATCH_HEAD_X) },
+      { name: "head thrust y", target: "head.all", channel: "y", keys: scaleKeys(halfSine, SCRATCH_HEAD_Y) },
       { name: "eye squint", target: "eye", channel: "scaleY", keys: [[0, 1], [0.125, 0.75], [0.625, 0.75], [0.75, 1], [1, 1]] },
       { name: "claw (back arm)", target: "arm.back", channel: "rot", pivot: "auto", keys: scaleKeys(halfSine, rad(0.92)) },
       { name: "counter (front arm)", target: "arm.front", channel: "rot", pivot: "auto", keys: scaleKeys(halfSine, rad(-0.42)) },

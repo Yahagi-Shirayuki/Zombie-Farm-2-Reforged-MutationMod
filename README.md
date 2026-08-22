@@ -492,18 +492,20 @@ the same reason — a bench that animates a rig differently from the game teache
 wrong animation, and the mistake ships looking measured. It has already earned its keep:
 it is what caught every authored attack dismembering its own arm (see the changelog).
 
-**An edited clip runs in the game.** Download the Animation tab's `enemy-clips.json`,
-drop it in as `public/assets/raids/enemies/clips.json`, and `EnemyActor` poses itself
-from your clip instead of computing the pose. A rig you have not edited is untouched —
+**An edited clip runs in the game.** Download the Animation tab's `enemy-clips.json` and
+`zombie-clips.json`, drop them in as `public/assets/raids/enemies/clips.json` and
+`public/assets/zombie/clips.json`, and `EnemyActor` / `RaidActor` pose themselves from
+your clip instead of computing the pose. A rig you have not edited is untouched —
 it runs exactly the code it always ran — which is what makes this safe to ship: the
 substitution is a no-op until the clip itself differs, and `src/rigClips.test.ts` pins
 that both ways (installing the BUILT-IN clip changes nothing; an edited one moves the
 rig). `src/raid/clipRuntime.ts` is the seam.
 
 Two known gaps: the named "special" zombies are composed at runtime by
-`mergeSpecialZombieModel` and so are not in the rig list, and the runtime clip path
-covers ENEMIES only so far — `RaidActor` (the zombies) and a perched boss's
-`throw`/`ability` clips still need wiring, so those exports remain reference material.
+`mergeSpecialZombieModel` and so are not in the rig list, and the ABILITY clips are still
+reference material — a zombie's heal/smash/wind-up and a perched boss's throw/ability are
+driven by a progress value rather than a clock, and the transcription does not record
+that mapping yet, so those keep the procedural pose.
 
 `tools/tile_lab.html` (built by `tools/build_tile_lab.py`) is the same idea for the art
 that has to meet edge to edge — both road sets, the pond pieces, rocks, the zombie patch.
