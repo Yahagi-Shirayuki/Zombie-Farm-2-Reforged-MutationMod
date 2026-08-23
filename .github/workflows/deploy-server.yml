@@ -1,10 +1,13 @@
 name: Deploy server (Cloudflare Worker)
 
-# Deploys the API Worker. Manual-only for now (Run workflow button). To enable
-# auto-deploy on every server/ change, add a repo secret CLOUDFLARE_API_TOKEN
-# (Workers + D1 edit permission) and uncomment the `push:` trigger below.
-# Until then, deploy the Worker locally with `npx wrangler deploy` from server/.
-# The Worker's own secrets (SESSION_SECRET) are set via `wrangler secret put`.
+# Deploys the PRODUCTION API Worker (zombiefarm-server). Manual-only for now
+# (Run workflow button). To enable auto-deploy on every server/ change, add a
+# repo secret CLOUDFLARE_API_TOKEN (Workers + D1 edit permission) and uncomment
+# the `push:` trigger below. Until then, deploy locally from server/:
+#   npm run deploy        → staging (the wrangler.toml default)
+#   npm run deploy:prod   → checks, then production (--env production)
+# The Worker's own secrets (SESSION_SECRET) are set via `wrangler secret put
+# --env production`.
 
 on:
   workflow_dispatch:
@@ -49,3 +52,5 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: server
+          # The wrangler.toml default env is STAGING; production must be named.
+          command: deploy --env production

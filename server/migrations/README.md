@@ -1,13 +1,22 @@
 # D1 migrations — apply path
 
-Versioned migrations for the `zombiefarm` D1 database. `wrangler.toml` points
-`migrations_dir` here, so the standard Wrangler workflow applies:
+Versioned migrations for the `zombiefarm` (prod) and `zombiefarm-staging` D1
+databases. `wrangler.toml` points `migrations_dir` here for both, so the standard
+Wrangler workflow applies — but note the default environment is STAGING; prod
+needs an explicit `--env production` (without it, wrangler errors "Couldn't find
+a D1 DB … in your wrangler.toml" rather than touching anything):
 
 ```sh
-wrangler d1 migrations list  zombiefarm --remote   # what's pending
-wrangler d1 migrations apply zombiefarm --remote   # apply pending, in order
+wrangler d1 migrations list  zombiefarm-staging --remote                    # staging: what's pending
+wrangler d1 migrations apply zombiefarm-staging --remote                    # staging: apply, in order
+wrangler d1 migrations list  zombiefarm --remote --env production           # prod: what's pending
+wrangler d1 migrations apply zombiefarm --remote --env production           # prod: apply, in order
 # (use --local against the dev DB)
 ```
+
+Apply to staging first and soak-test there; remember staging was built fresh, so
+it does not rehearse the non-idempotent upgrade path below — do that against a
+prod snapshot.
 
 Wrangler records applied migrations in a `d1_migrations` table and runs only the
 pending ones, in filename order. **Testing note:** the upgrade-from-a-prod-snapshot
@@ -65,8 +74,8 @@ runs both initialization steps.
 
 ## Existing/older database (upgrade)
 
-Run `wrangler d1 migrations apply zombiefarm --remote`. It applies only the pending
-migrations in order. **Before applying, mind the non-idempotent ones** — SQLite has no
+Run `wrangler d1 migrations apply zombiefarm --remote --env production`. It applies
+only the pending migrations in order. **Before applying, mind the non-idempotent ones** — SQLite has no
 `ADD COLUMN IF NOT EXISTS`, so these error if the column already exists (e.g. a prior
 manual `schema.sql` touched the table):
 

@@ -139,6 +139,10 @@ npm run dev
 The local Worker runs at `http://127.0.0.1:8787`. In the repository root, copy
 `.env.example` to `.env.local` and run the client with `npm run dev`.
 
+`wrangler dev` binds the default (staging) D1 config, and local state is keyed by
+database id — so after the 2026-08 default-env flip an existing checkout's local
+database starts empty; run `npm run db:init:local` once to re-create it.
+
 With `DEV_AUTH=1`, the client exposes `window.zfDevSignIn(sub, name)` for automated
 local sign-in without the Google popup. **Never deploy with `DEV_AUTH=1`** — the one
 exception is the staging Worker below, which is a separate deployment with its own
@@ -156,30 +160,49 @@ npm run test:integration
 
 1. In Google Cloud, create an OAuth 2.0 Web client and add the Pages origin and local
    development origin to Authorized JavaScript origins.
-2. Create the D1 database and place its ID in `wrangler.toml`.
+2. Create the D1 database and place its ID in `wrangler.toml` under `[env.production]`.
 3. Follow `../docs/PROTOCOL_V3_ROLLOUT.md`. Protocol v3 uses a destructive reset and
    intentionally has no legacy data migration.
-4. Store `SESSION_SECRET` with `wrangler secret put SESSION_SECRET`; never commit it.
+4. Store `SESSION_SECRET` with `wrangler secret put SESSION_SECRET --env production`;
+   never commit it.
 5. Set `GOOGLE_CLIENT_ID`, `ALLOWED_ORIGIN`, `DEV_AUTH=0`, and the operational protocol
-   variables in `wrangler.toml`.
+   variables in `wrangler.toml` under `[env.production.vars]`.
 6. Deploy the Worker and client in the documented order, then perform the authenticated
    smoke checks before enabling mutations.
+
+## Deploying: staging by default, production by explicit step
+
+`wrangler.toml`'s top level IS the staging environment, so every bare wrangler
+command targets the disposable staging stack; production lives in
+`[env.production]` and is only reachable with an explicit `--env production`:
+
+```bash
+npm run deploy        # → staging Worker (zombiefarm-server-staging)
+npm run deploy:prod   # → migrations:check + typecheck + unit + integration tests,
+                      #   then the PROD Worker (zombiefarm-server)
+```
+
+A wrangler command that names a prod-only resource without the flag fails with
+"Couldn't find a D1 DB … in your wrangler.toml" rather than falling through to
+staging — the flag is the guard. (`wrangler d1 execute <name> --remote` is the
+exception: it resolves any database in the account by name, which is what keeps
+the RUNBOOK's forensic queries working unchanged.)
 
 ## Staging environment
 
 A fully separate Worker + D1 database for testing server features on real Cloudflare
-infrastructure without risking prod. Defined as `[env.staging]` in `wrangler.toml`
-(named environments inherit almost nothing — its bindings and vars are all redeclared
-there). Live at `https://zombiefarm-server-staging.zombiefarm.workers.dev`, database
+infrastructure without risking prod. It is the top-level (default) config in
+`wrangler.toml` (named environments inherit almost nothing — its bindings and vars
+and prod's are declared separately). Live at
+`https://zombiefarm-server-staging.zombiefarm.workers.dev`, database
 `zombiefarm-staging`.
 
-- Deploy: `npx wrangler deploy --env staging` (plain `npx wrangler deploy` still
-  targets prod — the top-level config is untouched).
+- Deploy: `npm run deploy` (or bare `npx wrangler deploy`).
 - Config mirrors prod except `DEV_AUTH=1` (sign in via `window.zfDevSignIn`, no
   Google) and `ALLOWED_ORIGIN=http://localhost:5173`.
 - To point a local client at it, set `VITE_API_URL` to the staging URL in `.env.local`.
-- New migrations: `npx wrangler d1 migrations apply zombiefarm-staging --remote
-  --env staging`. The database was initialized via the fresh path (`schema.sql` +
+- New migrations: `npx wrangler d1 migrations apply zombiefarm-staging --remote`.
+  The database was initialized via the fresh path (`schema.sql` +
   `scripts/baseline-migrations.sql` — see `migrations/README.md`), so only migrations
   added after the baseline apply. Because prod upgrades in place while staging was
   built fresh, always rehearse a new migration against a prod snapshot too; passing
