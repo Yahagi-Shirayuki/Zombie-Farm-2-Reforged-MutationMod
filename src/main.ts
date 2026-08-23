@@ -92,6 +92,7 @@ import {
   appendHarvestTarget, harvestTargetKey, sampleStrokeSegment, type HarvestTarget,
 } from "./harvestStroke";
 import { appendInstaGrowTarget, type InstaGrowTarget } from "./instaGrowStroke";
+import { appendCancelTarget, cancelTargetKey, type CancelTarget } from "./cancelStroke";
 import { mutationMarketDescription } from "./zombie/statDisplay";
 import {
   combineSubject, combineSubjectAliases, mutantSubjectIndex, unitQuestSubjects,
@@ -3001,6 +3002,14 @@ async function main() {
    *  off-lattice fallback: before that every target sat on one 4-tile lattice and could
    *  not overlap by construction. */
   const plowStrokeClaimed = new Set<string>();
+  // Deselect-by-drag: pressing ON a queued action arms this stroke, and dragging
+  // then un-queues every queued job it crosses (see cancelTargetAtGlobal below).
+  let cancelStrokeCandidate: CancelTarget | null = null;
+  let cancelStrokeActive = false;
+  const cancelStrokeLast = new Point();
+  const cancelStrokeTargets: CancelTarget[] = [];
+  const cancelStrokeKeys = new Set<string>();
+  const cancelStrokePreviews = new Map<string, Graphics>();
 
   const cancelZombieLongPress = () => {
     if (zombieLongPressTimer !== null) clearTimeout(zombieLongPressTimer);
@@ -3037,6 +3046,14 @@ async function main() {
     plowStrokeKeys.clear();
     plowStrokeClaimed.clear();
     plowStrokeAnchor = null;
+  };
+  const clearCancelStroke = () => {
+    for (const preview of cancelStrokePreviews.values()) preview.destroy();
+    cancelStrokePreviews.clear();
+    cancelStrokeTargets.length = 0;
+    cancelStrokeKeys.clear();
+    cancelStrokeCandidate = null;
+    cancelStrokeActive = false;
   };
   const recordTouchPlantTile = (col: number, row: number) => {
     const rawKey = tileKey(col, row);
@@ -3094,6 +3111,7 @@ async function main() {
     field.hideCursor();
     field.setObjectHighlight(null);
     clearHarvestStroke();
+    clearCancelStroke();
   };
   // Canvas-relative CSS pixels (same space wheel/zoomAt use).
   const canvasXY = (clientX: number, clientY: number) => {
@@ -3117,6 +3135,7 @@ async function main() {
       clearTouchToolStroke();
       clearInstaGrowStroke();
       clearHarvestStroke();
+      clearCancelStroke();
       lastPlot = "";
       clearPlowStroke();
       field.clearTillSelection();
@@ -3300,6 +3319,79 @@ async function main() {
     const targets = [...harvestStrokeTargets];
     clearHarvestStroke();
     for (const target of targets) enqueueHarvestTarget(target);
+  };
+
+  // ---- cancel stroke: drag across queued actions to un-queue them ----
+  // A tap on a queued plot/tree already toggles it off. Starting the press ON a
+  // queued action instead turns the whole drag into an eraser: every queued
+  // plow/plant/harvest/tree job the stroke crosses is un-queued, and anything
+  // without a pending job is passed over, so the same swipe never queues new work.
+  const cancelTargetAtGlobal = (x: number, y: number): CancelTarget | null => {
+    const worldPoint = world.toLocal(new Point(x, y));
+    const grid = screenToGrid(worldPoint.x, worldPoint.y);
+    const col = Math.round(grid.col), row = Math.round(grid.row);
+    if (tutorial?.active && !tutorial.allowsTile(col, row)) return null;
+    // Plot before object, matching the tap-cancel cascade: a queued plot keeps the
+    // press even when a tree's canopy overlaps it.
+    const plotJob = jobs.pendingPlotJobAt(col, row);
+    if (plotJob) return { kind: "plot", jobKind: plotJob.kind, oc: plotJob.oc, or: plotJob.or };
+    const objectId = field.objectAtPoint(worldPoint.x, worldPoint.y);
+    return objectId && jobs.isTreeHarvestPending(objectId)
+      ? { kind: "object", instanceId: objectId }
+      : null;
+  };
+
+  const applyCancelTarget = (target: CancelTarget): boolean => target.kind === "object"
+    ? jobs.cancelObject(target.instanceId)
+    : jobs.cancelAtTile(target.oc, target.or);
+
+  const showCancelStrokePreview = (target: CancelTarget) => {
+    const key = cancelTargetKey(target);
+    if (cancelStrokePreviews.has(key)) return;
+    const area = target.kind === "object"
+      ? field.objectHighlightArea(target.instanceId)
+      : { ...field.plotCenterOf(target.oc, target.or), tiles: PLOT };
+    if (!area) return;
+    const w = area.tiles * HW, h = area.tiles * HH;
+    const preview = new Graphics();
+    preview.moveTo(0, -h).lineTo(w, 0).lineTo(0, h).lineTo(-w, 0).lineTo(0, -h)
+      .fill({ color: 0xf25a5a, alpha: 0.28 })
+      .stroke({ width: 3, color: 0xff8f7a, alpha: 0.95 });
+    preview.position.set(area.x, area.y);
+    // Same layer as the job's own green diamond (plow jobs draw on their own layer),
+    // so the red marker always sits above the queued highlight it will remove.
+    (target.kind === "plot" && target.jobKind === "till"
+      ? field.plowHighlightLayer : field.highlightLayer).addChild(preview);
+    cancelStrokePreviews.set(key, preview);
+  };
+
+  const recordCancelStrokeTarget = (target: CancelTarget) => {
+    if (!appendCancelTarget(target, cancelStrokeTargets, cancelStrokeKeys)) return;
+    // Touch keeps the stroke pending until release, so a second finger can still
+    // convert it into a pinch without cancelling anything. Mouse un-queues as it
+    // crosses, like the other paint strokes.
+    if (isTouchPointer(pressPointerType)) showCancelStrokePreview(target);
+    else applyCancelTarget(target);
+  };
+
+  const collectCancelStrokeSegment = (x: number, y: number) => {
+    for (const point of sampleStrokeSegment(cancelStrokeLast, { x, y })) {
+      const target = cancelTargetAtGlobal(point.x, point.y);
+      if (target) recordCancelStrokeTarget(target);
+    }
+    cancelStrokeLast.set(x, y);
+  };
+
+  const beginCancelStroke = (x: number, y: number) => {
+    cancelStrokeActive = true;
+    if (cancelStrokeCandidate) recordCancelStrokeTarget(cancelStrokeCandidate);
+    collectCancelStrokeSegment(x, y);
+  };
+
+  const commitTouchCancelStroke = () => {
+    const targets = [...cancelStrokeTargets];
+    clearCancelStroke();
+    for (const target of targets) applyCancelTarget(target);
   };
 
   // Queue the active tool on a plot: Plow places/re-tills a 4x4; Plant sows the
@@ -6029,6 +6121,7 @@ async function main() {
     clearHarvestStroke();
     clearPlowStroke();
     clearInstaGrowStroke();
+    clearCancelStroke();
     pressStart.copyFrom(e.global);
     clearTouchToolStroke();
     if (visiting) {
@@ -6100,13 +6193,17 @@ async function main() {
       }
       return;
     }
-    if (!touch && jobs.cancelAtTile(col, row)) { // tapped a queued action -> un-queue it
-      dragging = false;
-      return;
-    }
-    const queuedObjId = field.objectAtPoint(wx, wy);
-    if (!touch && queuedObjId && jobs.cancelObject(queuedObjId)) {
-      dragging = false;
+    // Press on a queued action: a plain click still toggles it off (mouse cancels
+    // immediately, touch resolves the tap in endDrag), and dragging from it erases
+    // every queued job the stroke crosses instead of starting a pan/paint stroke.
+    const cancelCandidate = cancelTargetAtGlobal(e.global.x, e.global.y);
+    if (cancelCandidate) {
+      cancelStrokeCandidate = cancelCandidate;
+      cancelStrokeLast.copyFrom(e.global);
+      dragging = true;
+      moved = false;
+      last.copyFrom(e.global);
+      if (!touch) beginCancelStroke(e.global.x, e.global.y);
       return;
     }
     if (hud.mode === "till") {
@@ -6141,9 +6238,20 @@ async function main() {
       if (moved) cancelZombieLongPress();
       if (moved && !harvestStrokeActive && harvestStrokeCandidate && hud.mode === "walk" &&
           !temporaryPanGesture) beginHarvestStroke(e.global.x, e.global.y);
+      // A touch drag that began on a queued action becomes a cancel stroke once it
+      // moves (mouse strokes are already active from pointerdown).
+      if (moved && !cancelStrokeActive && cancelStrokeCandidate)
+        beginCancelStroke(e.global.x, e.global.y);
     }
     if (harvestStrokeActive) {
       collectHarvestStrokeSegment(e.global.x, e.global.y);
+      hoveredCrop = null;
+      hud.showCropHover(null);
+      field.hideCursor();
+      return;
+    }
+    if (cancelStrokeActive) {
+      collectCancelStrokeSegment(e.global.x, e.global.y);
       hoveredCrop = null;
       hud.showCropHover(null);
       field.hideCursor();
@@ -6416,6 +6524,7 @@ async function main() {
       clearTouchToolStroke();
       clearHarvestStroke();
       clearPlowStroke();
+      clearCancelStroke();
       return;
     }
     if (temporaryPanGesture) {
@@ -6424,6 +6533,22 @@ async function main() {
       moved = false;
       lastPlot = "";
       pressPointerId = -1;
+      clearHarvestStroke();
+      clearPlowStroke();
+      return;
+    }
+    if (cancelStrokeActive) {
+      collectCancelStrokeSegment(e.global.x, e.global.y);
+      if (isTouchPointer(pressPointerType)) commitTouchCancelStroke();
+      else clearCancelStroke();
+      dragging = false;
+      moved = false;
+      lastPlot = "";
+      pressPointerId = -1;
+      touchOutsideFarmPan = false;
+      touchSelectStartTile = null;
+      field.hideCursor();
+      clearTouchToolStroke();
       clearHarvestStroke();
       clearPlowStroke();
       return;
@@ -6481,6 +6606,7 @@ async function main() {
     clearHarvestStroke();
     clearPlowStroke();
     clearInstaGrowStroke();
+    clearCancelStroke();
   };
   app.stage.on("pointerup", onPointerUp);
   app.stage.on("pointerupoutside", onPointerUp);
