@@ -55,8 +55,14 @@ describe("Epic Boss market", () => {
     const notes = epicZombieRewardNotes(SKUNKARELLA, quests);
     // Diva's collection chain spreads under the pinned ordinary-prize rung; Madame is
     // the omega and sits on the ladder's top rung (see EPIC_PRIZE_RUNGS in prep_quests).
+    //
+    // Diva is advertised on rung 5 ALONE even though her quest names four ("Prize Cards"
+    // on rungs 2, 3, 4 and 5): the shop note is the completion point, not the checklist.
+    // Listing all four read as "any one of these" — the AND lives on the quest rail.
+    expect(quests["5000"].requirements.map((r) => r.notificationObject)).toEqual(
+      ["2", "3", "4", "5"]);
     expect(notes).toEqual([
-      "Levels 2, 3, 4, 5: Diva Zombie",
+      "Level 5: Diva Zombie",
       "Level 10: Madame Zombie",
     ]);
     // Every event advertises two prize zombies, one per pinned rung. Rocky Rhino's

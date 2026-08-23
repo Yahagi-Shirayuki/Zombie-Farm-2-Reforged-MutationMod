@@ -10,23 +10,47 @@ Black Market** — every one of those is `marketHidden: true` and has no plantin
 
 ## Epic Boss events (15)
 
+Every event runs a **10-rung ladder** and pays two prize zombies: the ordinary prize on
+rung 5, the omega on rung 10 (`EPIC_PRIZE_RUNGS` in `tools/prep_quests.py`). The rungs
+below are the CURRENT ladder's — ZF2 authored these quests against a 40-rung ladder and
+`rescale_epic_ladder` maps them onto 10, so the source's 5/10/15/20/40 thresholds are not
+what ships.
+
 | Event | Milestone | Zombie |
 |---|---:|---|
 | Dr. Groundhog | 5 | Dr. Zombie |
-| Dr. Groundhog | 20 | Omega Dr. Zombie |
+| Dr. Groundhog | 10 | Omega Dr. Zombie |
 | Loco Locust | 5 | Bandido Zombie |
-| Loco Locust | 40 | Vagabond Zombie |
+| Loco Locust | 10 | Vagabond Zombie |
 | Bully Frog | 5 | Captain Zombie |
-| Bully Frog | 40 | Admiral Zombie |
+| Bully Frog | 10 | Admiral Zombie |
 | Foul Owl | 5 | Christmas Ghost Zombie |
-| Foul Owl | 40 | Scrooge Zombie |
-| Skunkarella | 5/10/15/20 collection | Diva Zombie |
-| Skunkarella | 40 | Madame Zombie |
+| Foul Owl | 10 | Scrooge Zombie |
+| Skunkarella | 5 | Diva Zombie |
+| Skunkarella | 10 | Madame Zombie |
+| Rocky Rhino | 5 | Brock Coley |
 | Rocky Rhino | 10 | Brock Coley |
 | General Larvaelus | 5 | Proto Zombie |
-| General Larvaelus | 40 | Zombug |
+| General Larvaelus | 10 | Zombug |
 | Mystical Mamba | 5 | Zomdini |
-| Mystical Mamba | 40 | Zomtar |
+| Mystical Mamba | 10 | Zomtar |
+
+Sixteen milestones, **15 distinct zombies**: Rocky Rhino is the one event that pays the
+same zombie on both rungs (see `recovered_epic_rewards` in `tools/prep_quests.py` — its
+rung-10 prize is a second Brock Coley rather than an invented eighth omega).
+
+Two caveats the table cannot show:
+
+- **Skunkarella's Diva** is a collection chain — quest `5000` ("Collect Em All") needs
+  rungs **2, 3, 4 and 5**, its four "Prize Cards", not just rung 5. It is the only event
+  in the game that works this way, and it is authentic ZF2 (the source authored it on
+  rungs 5/10/15/20). Rung 5 is listed above because that is where the quest completes:
+  the ladder advances one rung per win from 1, so reaching 5 necessarily clears 2-4. The
+  per-card breakdown lives on the quest rail; the Market note is deliberately just
+  "Level 5" (`epicZombieRewardNotes`).
+- **Epic quests re-open on each activation**, so a boss already finished can be run and
+  paid out again (`reopenEpicQuests`). Progress is otherwise LIFETIME progress and
+  survives the event expiring.
 
 These are granted directly to the deployed farm roster when there is room. When the
 deployed army is full the reward is filed in **Received** instead: it is not in the

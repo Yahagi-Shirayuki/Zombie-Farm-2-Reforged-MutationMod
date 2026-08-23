@@ -15,6 +15,9 @@ import { onFirstVisible } from "../onFirstVisible";
 import type { RosterEntry } from "../../zombie/types";
 import { visibleMutations } from "../../zombie/mutationVisibility";
 import {
+  compactOrder, selectedCount, toggleSlot, type OrderSlots,
+} from "../../raid/attackOrderSlots";
+import {
   assembleReport, MAX_TEAMS, MAX_TEAM_NAME_LENGTH, nextTeamId, normalizeTeamName,
   planTeamAssembly, shortfallNotice, type ZombieTeam,
 } from "../../zombie/teams";
@@ -241,7 +244,10 @@ function openTeamEditor(hud: Hud, team: ZombieTeam | null, afterSave: () => void
   // an invisible slot in the order. It is dropped from the saved team on the next
   // save, which is the one moment the player can see what they are losing.
   const ownedIds = new Set(roster.map((z) => z.id));
-  const order: string[] = (team?.members ?? []).filter((id) => ownedIds.has(id)).slice(0, cap);
+  // Slotted, like the invasion picker: un-picking a member leaves its slot EMPTY and
+  // the next card tapped fills the lowest one, so replacing whoever leads a saved
+  // line-up doesn't renumber the rest. Saving closes the gaps (see attackOrderSlots).
+  let order: OrderSlots = (team?.members ?? []).filter((id) => ownedIds.has(id)).slice(0, cap);
 
   const title = document.createElement("h2");
   title.textContent = team ? "Edit team" : "New team";
@@ -260,15 +266,16 @@ function openTeamEditor(hud: Hud, team: ZombieTeam | null, afterSave: () => void
   markPrimary(save);
 
   const refresh = () => {
-    counter.textContent = `${order.length} / ${cap} picked`;
-    counter.classList.toggle("short", !order.length);
+    const n = selectedCount(order);
+    counter.textContent = `${n} / ${cap} picked`;
+    counter.classList.toggle("short", !n);
     for (const card of grid.querySelectorAll<HTMLElement>(".army-card")) {
       const at = order.indexOf(card.dataset.id!);
       card.classList.toggle("sel", at >= 0);
       const tick = card.querySelector<HTMLElement>(".tick");
       if (tick) tick.textContent = at >= 0 ? String(at + 1) : "";
     }
-    save.textContent = order.length ? `Save team of ${order.length}` : "Save empty team";
+    save.textContent = n ? `Save team of ${n}` : "Save empty team";
   };
 
   if (!roster.length) {
@@ -299,9 +306,7 @@ function openTeamEditor(hud: Hud, team: ZombieTeam | null, afterSave: () => void
     tick.className = "tick";
     card.append(tick, por, nm, ty, where);
     card.onclick = () => {
-      const at = order.indexOf(z.id);
-      if (at >= 0) order.splice(at, 1);
-      else if (order.length < cap) order.push(z.id);
+      order = toggleSlot(order, z.id, cap);
       refresh();
     };
     grid.appendChild(card);
@@ -313,22 +318,25 @@ function openTeamEditor(hud: Hud, team: ZombieTeam | null, afterSave: () => void
   capture.className = "raid-quick";
   capture.textContent = "Use current farm";
   capture.onclick = () => {
-    order.splice(0, order.length, ...roster.filter((z) => !z.stored).slice(0, cap).map((z) => z.id));
+    order = roster.filter((z) => !z.stored).slice(0, cap).map((z) => z.id);
     refresh();
   };
 
   const clear = document.createElement("button");
   clear.className = "raid-quick";
   clear.textContent = "Clear";
-  clear.onclick = () => { order.splice(0, order.length); refresh(); };
+  clear.onclick = () => { order = []; refresh(); };
 
   save.onclick = () => {
     const teams = hud.getTeams?.() ?? [];
     const fallback = team?.name ?? `Team ${teams.length + 1}`;
     const name = normalizeTeamName(nameInput.value) ?? fallback;
+    // A saved team is a continuous line-up: empty slots are a picking aid only, and a
+    // hole in `members` would carry straight into the raid attack order it becomes.
+    const members = compactOrder(order);
     const next: ZombieTeam = team
-      ? { ...team, name, members: [...order] }
-      : { id: nextTeamId(teams), name, members: [...order] };
+      ? { ...team, name, members }
+      : { id: nextTeamId(teams), name, members };
     hud.onTeamsChange?.(team
       ? teams.map((t) => (t.id === team.id ? next : t))
       : [...teams, next].slice(0, MAX_TEAMS));

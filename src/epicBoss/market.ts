@@ -33,7 +33,14 @@ export function epicZombieRewardNotes(
       .map((requirement) => Number(requirement.notificationObject))
       .filter((level) => Number.isFinite(level));
     if (!levels.length) return [quest.rewardItem];
-    const label = levels.length === 1 ? `Level ${levels[0]}` : `Levels ${levels.join(", ")}`;
-    return [`${label}: ${quest.rewardItem}`];
+    // The HIGHEST rung, not the list. A prize can be gated behind a collection chain of
+    // several defeat requirements — Skunkarella's Diva needs rungs 2, 3, 4 AND 5 ("Prize
+    // Cards 1-4") — and listing them read as "any one of these" when it means all of
+    // them. The ladder only ever advances one rung per win (EpicBossManager: run.level++
+    // from 1), so reaching the top requirement necessarily clears every one below it:
+    // the last rung is both the honest completion point and the only number a shopper
+    // needs. The per-card breakdown still shows on the quest rail, where each
+    // requirement has its own line and checkbox.
+    return [`Level ${Math.max(...levels)}: ${quest.rewardItem}`];
   });
 }
