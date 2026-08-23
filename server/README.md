@@ -140,7 +140,9 @@ The local Worker runs at `http://127.0.0.1:8787`. In the repository root, copy
 `.env.example` to `.env.local` and run the client with `npm run dev`.
 
 With `DEV_AUTH=1`, the client exposes `window.zfDevSignIn(sub, name)` for automated
-local sign-in without the Google popup. **Never deploy with `DEV_AUTH=1`.**
+local sign-in without the Google popup. **Never deploy with `DEV_AUTH=1`** — the one
+exception is the staging Worker below, which is a separate deployment with its own
+database and exists precisely so test accounts never touch prod.
 
 Validation commands:
 
@@ -162,6 +164,27 @@ npm run test:integration
    variables in `wrangler.toml`.
 6. Deploy the Worker and client in the documented order, then perform the authenticated
    smoke checks before enabling mutations.
+
+## Staging environment
+
+A fully separate Worker + D1 database for testing server features on real Cloudflare
+infrastructure without risking prod. Defined as `[env.staging]` in `wrangler.toml`
+(named environments inherit almost nothing — its bindings and vars are all redeclared
+there). Live at `https://zombiefarm-server-staging.zombiefarm.workers.dev`, database
+`zombiefarm-staging`.
+
+- Deploy: `npx wrangler deploy --env staging` (plain `npx wrangler deploy` still
+  targets prod — the top-level config is untouched).
+- Config mirrors prod except `DEV_AUTH=1` (sign in via `window.zfDevSignIn`, no
+  Google) and `ALLOWED_ORIGIN=http://localhost:5173`.
+- To point a local client at it, set `VITE_API_URL` to the staging URL in `.env.local`.
+- New migrations: `npx wrangler d1 migrations apply zombiefarm-staging --remote
+  --env staging`. The database was initialized via the fresh path (`schema.sql` +
+  `scripts/baseline-migrations.sql` — see `migrations/README.md`), so only migrations
+  added after the baseline apply. Because prod upgrades in place while staging was
+  built fresh, always rehearse a new migration against a prod snapshot too; passing
+  on staging alone doesn't prove the upgrade path.
+- Staging's data is disposable; there is no prod-data copy step.
 
 ## Operational notes
 

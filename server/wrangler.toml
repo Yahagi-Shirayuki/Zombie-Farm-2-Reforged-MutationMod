@@ -83,3 +83,56 @@ simple = { limit = 300, period = 60 }
 # the `scheduled` export in src/index.ts.
 [triggers]
 crons = ["17 3 * * *"]
+
+# ---- Staging environment ---------------------------------------------------
+# A fully separate Worker + D1 database for testing server features without
+# touching prod. Deploy with:        npx wrangler deploy --env staging
+# Migrations:  npx wrangler d1 migrations apply zombiefarm-staging --remote --env staging
+# Secrets:     npx wrangler secret put SESSION_SECRET --env staging
+# Publishes as zombiefarm-server-staging.<subdomain>.workers.dev. NOTE: named
+# environments inherit almost nothing — vars, d1_databases, and unsafe.bindings
+# must all be redeclared here. Anything missing is simply absent on staging.
+# Config mirrors prod except: DEV_AUTH=1 (no-Google sign-in — this flag must
+# NEVER appear in the prod [vars] above) and ALLOWED_ORIGIN=localhost:5173 so a
+# local `npm run dev` client can call it (set VITE_API_URL in .env.local).
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "zombiefarm-staging"
+database_id = "2ee97121-08c8-4f03-ad96-84295c33484b"
+migrations_dir = "migrations"
+
+[env.staging.vars]
+GOOGLE_CLIENT_ID = "249211577622-cmqa6so9re0hgh2lti4mpe40nlcm3l4k.apps.googleusercontent.com"
+ALLOWED_ORIGIN = "http://localhost:5173"
+DEV_AUTH = "1"
+MIGRATION_CUTOFF_MS = "0"
+INTEGRITY_V2_ENFORCE_AFTER_MS = "1"
+MIN_PROTOCOL_VERSION = "3"
+MUTATIONS_DISABLED = "0"
+BLACK_MARKET_ENABLED = "1"
+WRITER_LEASE_MODE = "enforce"
+
+# Distinct namespace_ids from prod (1001-1003): ratelimit namespaces are
+# account-scoped, so reusing prod's ids could share throttle buckets across envs.
+[[env.staging.unsafe.bindings]]
+name = "RL_AUTH"
+type = "ratelimit"
+namespace_id = "2001"
+simple = { limit = 60, period = 60 }
+
+[[env.staging.unsafe.bindings]]
+name = "RL_WRITE"
+type = "ratelimit"
+namespace_id = "2002"
+simple = { limit = 120, period = 60 }
+
+[[env.staging.unsafe.bindings]]
+name = "RL_READ"
+type = "ratelimit"
+namespace_id = "2003"
+simple = { limit = 300, period = 60 }
+
+# Same daily cleanup sweep as prod, on staging's own database.
+[env.staging.triggers]
+crons = ["17 3 * * *"]
