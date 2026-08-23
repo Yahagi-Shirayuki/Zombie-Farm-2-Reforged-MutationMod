@@ -24,6 +24,9 @@ declare module "node:sqlite" {
 
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: "utf8"): string;
+  /** Widened for spentFightConfig.test.ts, which reads the v3 sources back to assert a
+   *  rule about the SQL in them rather than about any one code path's behaviour. */
+  export function readdirSync(path: string): string[];
 }
 
 declare module "node:url" {

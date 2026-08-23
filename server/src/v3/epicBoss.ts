@@ -3,7 +3,7 @@ import { epicBossById, epicBossDamage, epicBossDamageTiming, epicBossHp, epicBos
 import type { EpicBossDef } from "../../../src/epicBoss/types";
 import { ownedLootCounter } from "../loot";
 import { pickByFrequency } from "../../../src/raid/combatStats";
-import { applyQuestEvents, MEMORIAL_GRAVEYARD_CAP } from "./engine";
+import { applyQuestEvents, CONFIG_SPENT, MEMORIAL_GRAVEYARD_CAP } from "./engine";
 import zombieRows from "../../../public/assets/zombies.json";
 import { buildPlayerUnits } from "../../../src/raid/CombatEngine";
 import { deriveAttackIntervalMs } from "../../../src/raid/combatStats";
@@ -167,7 +167,7 @@ export async function end(
     return { status: 200, body: { event: projectRun(run) } };
   }
   await db.batch([
-    db.prepare(`UPDATE epic_boss_sessions_v3 SET finished_at=?
+    db.prepare(`UPDATE epic_boss_sessions_v3 SET finished_at=?, config_json=${CONFIG_SPENT}
       WHERE account_id=? AND run_id=? AND finished_at IS NULL`).bind(now, accountId, runId),
     db.prepare(`UPDATE roster_v3 SET locked_by_raid=NULL WHERE account_id=? AND locked_by_raid IN
       (SELECT id FROM epic_boss_sessions_v3 WHERE account_id=? AND run_id=?)`)
@@ -186,7 +186,8 @@ export async function expireLiveEpicBoss(db: D1Database, accountId: string, now:
     .first<{ id: string; run_id: string; boss_id: string }>();
   if (!live) return;
   await db.batch([
-    db.prepare("UPDATE epic_boss_sessions_v3 SET finished_at=? WHERE id=? AND finished_at IS NULL").bind(now, live.id),
+    db.prepare(`UPDATE epic_boss_sessions_v3 SET finished_at=?, config_json=${CONFIG_SPENT}
+      WHERE id=? AND finished_at IS NULL`).bind(now, live.id),
     db.prepare("UPDATE epic_boss_runs_v3 SET retry_ready_at=0 WHERE account_id=? AND run_id=? AND completed_at=0")
       .bind(accountId, live.run_id),
     db.prepare("UPDATE roster_v3 SET locked_by_raid=NULL WHERE account_id=? AND locked_by_raid=?").bind(accountId, live.id),
@@ -302,8 +303,11 @@ export async function start(
     statements.push(db.prepare("UPDATE balances SET brains=brains-? WHERE account_id=? AND brains>=?")
       .bind(EPIC_BOSS_FIGHT_BRAIN_COST, accountId, EPIC_BOSS_FIGHT_BRAIN_COST));
   }
-  ids.forEach((id) => statements.push(db.prepare(`UPDATE roster_v3 SET locked_by_raid=?
-    WHERE account_id=? AND unit_id=? AND locked_by_raid IS NULL`).bind(sessionId, accountId, id)));
+  // One statement for the army, matching startRaid. `locked_by_raid IS NULL` still gates
+  // each row, so the rows written are unchanged.
+  statements.push(db.prepare(`UPDATE roster_v3 SET locked_by_raid=?
+    WHERE account_id=? AND locked_by_raid IS NULL
+      AND unit_id IN (${ids.map(() => "?").join(",")})`).bind(sessionId, accountId, ...ids));
   await db.batch(statements);
   if (payment === "token") row.token_count--;
   else balance.brains -= EPIC_BOSS_FIGHT_BRAIN_COST;
@@ -348,7 +352,8 @@ export async function finish(
   }
   if (config.rulesetVersion !== RAID_RULESET_VERSION) {
     await db.batch([
-      db.prepare("UPDATE epic_boss_sessions_v3 SET finished_at=? WHERE id=? AND finished_at IS NULL").bind(now, session.id),
+      db.prepare(`UPDATE epic_boss_sessions_v3 SET finished_at=?, config_json=${CONFIG_SPENT}
+        WHERE id=? AND finished_at IS NULL`).bind(now, session.id),
       db.prepare("UPDATE roster_v3 SET locked_by_raid=NULL WHERE account_id=? AND locked_by_raid=?").bind(accountId, session.id),
     ]);
     return { status: 409, body: { error: "stale_ruleset", rulesetVersion: RAID_RULESET_VERSION } };
@@ -511,7 +516,8 @@ export async function finish(
   const resultJson = JSON.stringify(result);
   const guard = "EXISTS(SELECT 1 FROM epic_boss_sessions_v3 s WHERE s.id=? AND s.result_json=?)";
   const statements: D1PreparedStatement[] = [
-    db.prepare("UPDATE epic_boss_sessions_v3 SET finished_at=?,result_json=? WHERE id=? AND finished_at IS NULL")
+    db.prepare(`UPDATE epic_boss_sessions_v3 SET finished_at=?,result_json=?, config_json=${CONFIG_SPENT}
+      WHERE id=? AND finished_at IS NULL`)
       .bind(now, resultJson, session.id),
     db.prepare(`UPDATE epic_boss_runs_v3 SET level=?,max_hp=?,current_hp=?,encounter_started_at=?,
       retry_ready_at=?,token_count=?,completed_at=? WHERE account_id=? AND run_id=? AND ${guard}`)

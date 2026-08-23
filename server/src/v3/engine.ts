@@ -62,6 +62,22 @@ const CLIENT_INSTANCE_ID = /^[A-Za-z0-9_-]{1,80}$/;
  *  cap exists to bound a list nobody is looking at, not to erase a monument.
  *  Mirrored by MAX_REMEMBERED_FALLEN on the client. */
 export const MEMORIAL_GRAVEYARD_CAP = 60;
+/** SQL literal that empties a spent fight config, for interpolation into an UPDATE
+ *  that is already setting `finished_at`. The pinned config of a raid or Epic Boss
+ *  encounter is by far the largest thing this server stores — ~14 KB a session, and
+ *  56% of the whole database at beta volume — but it is read exactly once, by the
+ *  finish path, and only while `finished_at IS NULL`: a settled session answers from
+ *  `result_json`, and an already-finished one answers 409. Neither reads it again, so
+ *  every path that finishes a session drops it in the same statement. That makes the
+ *  30-day purge a backstop rather than the only thing bounding these tables.
+ *
+ *  Clearing it can only ever race with a live read, and that fails closed: `{}` parses
+ *  but does not survive the playerUnits/enemyUnits shape check, so the session closes
+ *  as `bad_session_config` instead of settling on an empty fight.
+ *
+ *  NOT for pvp_sessions_v3 — a PvP config outlives its fight on purpose, so the
+ *  defender can re-simulate the attack on their farm (see migration 0055). */
+export const CONFIG_SPENT = "'{}'";
 export const PLOT_SIZE = 4;
 /** How many plots the LARGEST farm on the ladder holds — plots are PLOT_SIZE square
  *  and may not overlap, so a size-N farm fits floor(N / PLOT_SIZE) of them per side.

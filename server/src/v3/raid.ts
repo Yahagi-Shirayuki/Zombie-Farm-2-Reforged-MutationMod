@@ -3,7 +3,7 @@ import { XP_THRESHOLDS, levelForXp, levelUpBrains } from "../levels";
 import { ownedLootCounter, resolveLoot, rollLoot } from "../loot";
 import { raidEcon, raidUnlocked, winGold } from "../raidCatalog";
 import { invasionWinXp } from "../../../src/raid/repeatXp";
-import { applyQuestEvents, MEMORIAL_GRAVEYARD_CAP } from "./engine";
+import { applyQuestEvents, CONFIG_SPENT, MEMORIAL_GRAVEYARD_CAP } from "./engine";
 import { applyPeriodicEvents, refreshPeriodicState, xpToNextLevel } from "../../../src/quest/periodic/generate";
 import type { PeriodicQuestState } from "../../../src/quest/periodic/types";
 import type { PeriodicQuestProjection, QuestProjection } from "../../../src/net/protocol";
@@ -138,13 +138,39 @@ function legacyBrainDrop(sessionId: string, recommendedLevel: number, hasBoss: b
   });
 }
 
+/** Releases a settled invasion's roster and ticks veterancy in ONE write per zombie.
+ *
+ *  Every survivor's row used to be written TWICE per invasion — once to bump `invasions`,
+ *  once to drop the lock — which across the beta was 420k of 5.9M rows written, about 7% of
+ *  the entire D1 write bill, for nothing the unlock was not already carrying.
+ *
+ *  The CASE is load-bearing and must not be simplified into a blanket `+ 1`. By the time
+ *  this runs the casualties are already deleted, so the rows still locked by this session
+ *  are everyone who was NOT killed — a SUPERSET of `survivors`. A retreat brings zombies
+ *  home that the replay does not count as survivors, and a concession fallback empties
+ *  `survivors` outright while still releasing the whole roster. Those come home WITHOUT a
+ *  veterancy tick. Veterancy is +5% a rank, so a blanket bump would quietly inflate the
+ *  army on every retreat.
+ *
+ *  Binds in order: the survivor ids, then accountId, sessionId, and whatever `guard` takes.
+ *  Exported so raidSettlementWrites.test.ts can run this exact string against real SQLite —
+ *  the risk here is in the SQL, not in the surrounding TypeScript. */
+export function releaseRosterSql(survivors: string[], guard: string): string {
+  const veterancy = survivors.length
+    ? `invasions + CASE WHEN unit_id IN (${survivors.map(() => "?").join(",")}) THEN 1 ELSE 0 END`
+    : "invasions";
+  return `UPDATE roster_v3 SET locked_by_raid = NULL, invasions = ${veterancy}
+    WHERE account_id = ? AND locked_by_raid = ? AND ${guard}`;
+}
+
 export async function expireLiveRaid(db: D1Database, accountId: string, now: number): Promise<void> {
   const expired = await db.prepare(`SELECT id FROM raid_sessions_v3
     WHERE account_id = ? AND finished_at IS NULL AND expires_at <= ?`)
     .bind(accountId, now).first<{ id: string }>();
   if (!expired) return;
   await db.batch([
-    db.prepare("UPDATE raid_sessions_v3 SET finished_at = ? WHERE id = ? AND finished_at IS NULL").bind(now, expired.id),
+    db.prepare(`UPDATE raid_sessions_v3 SET finished_at = ?, config_json = ${CONFIG_SPENT}
+      WHERE id = ? AND finished_at IS NULL`).bind(now, expired.id),
     db.prepare("UPDATE roster_v3 SET locked_by_raid = NULL WHERE account_id = ? AND locked_by_raid = ?").bind(accountId, expired.id),
   ]);
 }
@@ -242,10 +268,14 @@ export async function startRaid(
       VALUES(?,?, 'raid_start', ?, ?)`)
       .bind(crypto.randomUUID(), accountId, JSON.stringify({ sessionId, raidId, roster: requested, dice, concentration, elite, bypassed: remaining > 0 }), now),
   ];
-  for (const id of requested) statements.push(
-    db.prepare("UPDATE roster_v3 SET locked_by_raid = ? WHERE account_id = ? AND unit_id = ? AND locked_by_raid IS NULL")
-      .bind(sessionId, accountId, id)
-  );
+  // One statement for the whole army. `locked_by_raid IS NULL` still gates each row
+  // individually, so a unit locked between the pre-check above and this write is skipped
+  // exactly as it was when this ran a statement per zombie — the set of rows written is
+  // unchanged, only the number of round trips inside the batch.
+  statements.push(db.prepare(`UPDATE roster_v3 SET locked_by_raid = ?
+    WHERE account_id = ? AND locked_by_raid IS NULL
+      AND unit_id IN (${requested.map(() => "?").join(",")})`)
+    .bind(sessionId, accountId, ...requested));
   await db.batch(statements);
   return { status: 200, body: { ok: true, sessionId, bypassed: remaining > 0, dice,
     concentration, elite, brainDrop, inventory: core.inventory, lastRaidAt: now, expiresAt, earliestFinishAt,
@@ -261,7 +291,8 @@ async function closeInvalidRaid(
   rejection?: { raidId: string; error: string; finalTick: unknown; clientWin: unknown; inputCount: number }
 ): Promise<void> {
   const statements = [
-    db.prepare("UPDATE raid_sessions_v3 SET finished_at=? WHERE id=? AND account_id=? AND finished_at IS NULL")
+    db.prepare(`UPDATE raid_sessions_v3 SET finished_at=?, config_json=${CONFIG_SPENT}
+      WHERE id=? AND account_id=? AND finished_at IS NULL`)
       .bind(now, sessionId, accountId),
     db.prepare("UPDATE roster_v3 SET locked_by_raid=NULL WHERE account_id=? AND locked_by_raid=?")
       .bind(accountId, sessionId),
@@ -639,7 +670,8 @@ export async function finishRaid(
   const resultJson = JSON.stringify(result);
   const guard = "EXISTS (SELECT 1 FROM raid_sessions_v3 s WHERE s.id = ? AND s.result_json = ?)";
   const statements: D1PreparedStatement[] = [
-    db.prepare("UPDATE raid_sessions_v3 SET finished_at = ?, result_json = ? WHERE id = ? AND finished_at IS NULL")
+    db.prepare(`UPDATE raid_sessions_v3 SET finished_at = ?, result_json = ?, config_json = ${CONFIG_SPENT}
+      WHERE id = ? AND finished_at IS NULL`)
       .bind(now, resultJson, session.id),
     db.prepare(`UPDATE balances SET gold = ?, brains = ?, xp = ?, claimed_level = ?
       WHERE account_id = ? AND ${guard}`)
@@ -693,19 +725,19 @@ export async function finishRaid(
       ORDER BY COALESCE(released_at, died_at) DESC, unit_id LIMIT ?
     ) AND ${guard}`)
     .bind(accountId, accountId, MEMORIAL_GRAVEYARD_CAP, session.id, resultJson));
-  for (const id of losses) statements.push(db.prepare(`DELETE FROM roster_v3
-    WHERE account_id = ? AND unit_id = ? AND locked_by_raid = ? AND ${guard}`)
-    .bind(accountId, id, session.id, session.id, resultJson));
-  for (const id of survivors) statements.push(db.prepare(`UPDATE roster_v3 SET invasions = invasions + 1
-    WHERE account_id = ? AND unit_id = ? AND locked_by_raid = ? AND ${guard}`)
-    .bind(accountId, id, session.id, session.id, resultJson));
+  // The casualties, in one statement rather than one apiece. Same rows deleted; the win is
+  // that a full army costs the batch one statement instead of twenty. Bounded by ARMY_CAP,
+  // like the `IN (...)` the roster pre-check at /raid/start already builds.
+  if (losses.length) statements.push(db.prepare(`DELETE FROM roster_v3
+    WHERE account_id = ? AND locked_by_raid = ?
+      AND unit_id IN (${losses.map(() => "?").join(",")}) AND ${guard}`)
+    .bind(accountId, session.id, ...losses, session.id, resultJson));
   if (newZombie && !newZombie.received) statements.push(db.prepare(`INSERT INTO roster_v3
     (account_id, unit_id, zombie_key, mutation, invasions, stored, created_at)
     SELECT ?, ?, ?, 0, 0, ?, ? WHERE ${guard}`)
     .bind(accountId, newZombie.id, newZombie.key, newZombie.stored ? 1 : 0, now, session.id, resultJson));
-  statements.push(db.prepare(`UPDATE roster_v3 SET locked_by_raid = NULL
-    WHERE account_id = ? AND locked_by_raid = ? AND ${guard}`)
-    .bind(accountId, session.id, session.id, resultJson));
+  statements.push(db.prepare(releaseRosterSql(survivors, guard))
+    .bind(...survivors, accountId, session.id, session.id, resultJson));
   const committed = await db.batch(statements);
   if ((committed[0]?.meta.changes ?? 0) !== 1) {
     const raced = await db.prepare("SELECT result_json FROM raid_sessions_v3 WHERE id = ?").bind(session.id).first<{ result_json: string | null }>();

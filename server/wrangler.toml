@@ -19,6 +19,22 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Workers Logs. Without this there is no per-route CPU attribution at all — the GraphQL
+# analytics API reports CPU per SCRIPT, so a rising cost/request (5.16 -> 9.75 CPU-ms
+# across beta) can be measured but never explained. CPU is the first allowance the $5
+# plan exhausts, so that blind spot is the one worth closing before a release.
+#
+# head_sampling_rate = 1 logs every request. That is the point during a launch; drop it
+# to ~0.1 once the picture is clear. Budget: 20M log events/month included on Workers
+# Paid, then $0.60/M. At beta volume (~2.4M requests/month) invocation logs plus the
+# existing slog() calls land well inside that; re-check if traffic passes ~5x beta.
+#
+# NOTE: repeated verbatim under [env.production.observability] below. Named environments
+# inherit almost nothing, so a block written only here does not exist in production.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 # ---- STAGING (default) -----------------------------------------------------
 # A fully separate Worker + D1 database for testing server features without
 # touching prod. Config mirrors prod except: DEV_AUTH=1 (no-Google sign-in —
@@ -46,6 +62,10 @@ INTEGRITY_V2_ENFORCE_AFTER_MS = "1"
 MIN_PROTOCOL_VERSION = "3"
 MUTATIONS_DISABLED = "0"
 BLACK_MARKET_ENABLED = "1"
+# Friend invasions: built and verified, PARKED while the interface is redesigned.
+# Flip to "1" together with PVP_UI_ENABLED (src/raid/pvp.ts) to bring it back —
+# see docs/FRIEND_INVASIONS.md.
+PVP_ENABLED = "0"
 WRITER_LEASE_MODE = "enforce"
 
 # Staging rate limiters use distinct namespace_ids from prod (1001-1003):
@@ -87,6 +107,13 @@ crons = ["17 3 * * *"]
 [env.production]
 name = "zombiefarm-server"
 
+# The twin of [observability] at the top of this file — see the reasoning there. It has
+# to be repeated because named environments do not inherit it, and the environment this
+# one matters most for is production.
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "zombiefarm"
@@ -107,6 +134,10 @@ INTEGRITY_V2_ENFORCE_AFTER_MS = "1"
 MIN_PROTOCOL_VERSION = "3"
 MUTATIONS_DISABLED = "0"
 BLACK_MARKET_ENABLED = "1"
+# Friend invasions: built and verified, PARKED while the interface is redesigned.
+# Flip to "1" together with PVP_UI_ENABLED (src/raid/pvp.ts) to bring it back —
+# see docs/FRIEND_INVASIONS.md.
+PVP_ENABLED = "0"
 WRITER_LEASE_MODE = "enforce"
 # Server-owned raid cooldown in ms. Omit to use the 2h default (see src/index.ts
 # raidCooldownMs). Prod uses the default; local dev sets a small value in .dev.vars.
