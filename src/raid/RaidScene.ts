@@ -13,7 +13,7 @@ import { AnimatedSprite, Application, Assets, Container, Graphics, Rectangle, Sp
 import { GameAssets, raidImage } from "../assets";
 import { isEpicBossKey } from "../epicBoss/combat";
 import { noteAssetFailure } from "../assetFailures";
-import { ALIEN_LASER_SPRITE, BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, EPIC_BOSS_LAND_MS, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX } from "./BattleSim";
+import { ALIEN_LASER_SPRITE, BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, EPIC_BOSS_LAND_MS, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX, THROW_WINDUP_MS } from "./BattleSim";
 import { RaidActor } from "./RaidActor";
 import { EnemyActor, type EnemyAttackPose } from "./EnemyActor";
 import { ParticleField, ParticleConfig } from "./Particles";
@@ -2079,7 +2079,7 @@ export class RaidScene {
             // atkProg alone (see raid/clipRuntime.ts). Ignored unless the rig has one.
             attack = { atkProg: 0.28 + 0.64 * summon, damageTiming: 0.98, clip: "ability" };
           } else {
-            const sw = this.sim.bossThrowSwing(550, visualLeadMs);
+            const sw = this.sim.bossThrowSwing(THROW_WINDUP_MS, visualLeadMs);
             attack = sw === null
               ? null
               : { atkProg: 0.28 + 0.72 * sw, damageTiming: 0.9, clip: "throw" };

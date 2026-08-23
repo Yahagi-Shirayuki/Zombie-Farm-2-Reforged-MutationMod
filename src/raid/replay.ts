@@ -497,7 +497,32 @@ import type { RaidOutcome } from "./types";
 // self-shield is what would have moved it.
 // Same cost as every bump: an invasion in flight at deploy time settles as stale_ruleset
 // and pays nothing.
-export const RAID_RULESET_VERSION = 38;
+// v39 — A HELD THROW WINDS UP BEFORE IT RELEASES. Player report: "sometimes bosses don't
+// play the animation for throwing objects." The throw animation is a 550 ms arm-swing the
+// renderer maps over the last THROW_WINDUP_MS of the boss's action cooldown
+// (BattleSim.bossThrowSwing) — but a throw that came due while no zombie was in the lane
+// pinned its timer at ZERO and held ("hold the slot until someone is in the lane"), so the
+// projectile launched on the very tick a target first appeared, with the swing helper
+// having returned "arm at rest" for every preceding frame. Three player-visible cases, all
+// the same tick: the FIRST throw of every fight (the action clock starts at 0, faithful to
+// `bossActionCooldownTimer`, and nobody is deployed at t=0, so the opening throw fired the
+// instant the first zombie walked out), every throw pending across a line wipe, and a
+// wind-up whose last target died mid-swing (the arm snapped back to rest, then fired
+// instantly on the next arrival).
+//
+// A waiting throw now PARKS its timer at THROW_WINDUP_MS instead of zero, re-parking every
+// tick the lane stays empty (checked before the decrement, so a lane that empties
+// mid-wind-up re-parks too). The moment a target enters the lane the timer runs the full
+// window down to release — the exact window bossThrowSwing animates over, read from the
+// same constant — so a launch with zero telegraph frames is structurally impossible.
+//
+// Transcript-changing on every throwing invasion (all but the Aliens): each held throw —
+// which is at least the first throw of every fight — releases THROW_WINDUP_MS later than
+// v38 rolled it, and every subsequent action inherits the shift. The boss's damage output
+// only ever drops (throws lost to the added delay, none gained), so no fight winnable on
+// v38 becomes unwinnable. Same cost as every bump: an invasion in flight at deploy time
+// settles as stale_ruleset and pays nothing.
+export const RAID_RULESET_VERSION = 39;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

@@ -275,6 +275,13 @@ export const TELEPORT_PX = 40;
 // actions faster, and hits ~1.5× harder (chip → threat if you stall).
 const DEFAULT_ROUND_MS = 3 * 60 * 1000; // 3:00
 const ENRAGE_THROW_MULT = 0.5; // throw interval halves
+// One full arm-swing of the perched boss's throw animation. The sim owns this value —
+// not just the renderer — because a throw held on an empty lane parks its timer HERE
+// rather than at zero (ruleset 39): the release is then always a whole wind-up after a
+// target enters the lane, so the renderer can never be asked to launch a projectile it
+// was given no frames to telegraph. bossThrowSwing() reads the same constant, keeping
+// the animation window and the guaranteed gap between lane-entry and release identical.
+export const THROW_WINDUP_MS = 550;
 const ENRAGE_SPECIAL_MULT = 0.6; // special cooldowns shorten
 const ENRAGE_DMG_MULT = 1.5; // boss melee damage grows
 
@@ -2759,7 +2766,7 @@ export class BattleSim {
    *  the last `windowMs` before the next throw releases (the arm cocks and swings), or
    *  null when the boss isn't perched-and-throwing / has no target. The projectile
    *  launches as this reaches 1, so the renderer can time the arm to the release. */
-  bossThrowSwing(windowMs = 550, visualLeadMs = 0): number | null {
+  bossThrowSwing(windowMs = THROW_WINDUP_MS, visualLeadMs = 0): number | null {
     if (!this.bossThrow || !this.boss || !this.boss.alive || this.boss.state !== "structure") {
       return null;
     }
@@ -2840,6 +2847,17 @@ export class BattleSim {
     // A cast ALREADY in flight is deliberately left to land above: the source arms those
     // through `schedule:interval:`, which fires whatever state the boss has moved on to.
     if (!this.bossCanAct()) return;
+    // A throw waiting on an empty lane parks its timer at the full wind-up instead of
+    // running out (ruleset 39). The old pin-at-zero released the projectile on the very
+    // tick a target first appeared — so the first throw of every fight, and every throw
+    // after a line wipe, fired with no arm-swing at all. Parked here, the moment a
+    // zombie enters the lane the timer runs THROW_WINDUP_MS down to release, which is
+    // exactly the window bossThrowSwing() animates over. Checked before the decrement
+    // (not at expiry) so a lane that empties mid-wind-up re-parks the timer too.
+    if (next.kind === "throw" && this.actionCd <= THROW_WINDUP_MS && !this.throwTarget()) {
+      this.actionCd = THROW_WINDUP_MS;
+      return;
+    }
     this.actionCd -= dtMs;
     if (this.actionCd > 0) return;
     // The source checks each action's `allowedTo…` gate AFTER the roll but BEFORE arming
@@ -2853,7 +2871,9 @@ export class BattleSim {
     if (next.kind === "throw") {
       const target = this.throwTarget();
       if (!target) {
-        this.actionCd = 0; // hold the slot until someone is in the lane
+        // Unreachable at the fixed 50 ms tick (the empty-lane park above catches the
+        // timer long before expiry) — kept as the same hold for safety at any dt.
+        this.actionCd = THROW_WINDUP_MS;
         return;
       }
       this.launchProjectile(target, next.option.damage, next.option.sprite, next.option.spriteSize);
