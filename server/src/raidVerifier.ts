@@ -39,6 +39,16 @@ import {
 } from "../../src/raid/eliteInvasion";
 import { levelForXp } from "./levels";
 import { activeBonusHeadId, farmerMultiplier } from "../../src/farmer";
+import {
+  PVP_ARMY_SIZE,
+  PVP_RAID_ID,
+  PVP_WAVE_CADENCE,
+  armyScore,
+  pvpTierForScore,
+  toDefenseUnits,
+  type PvpConfigInfo,
+} from "../../src/raid/pvp";
+import { parseRosterColor } from "./v3/rosterColor";
 
 export { RAID_RULESET_VERSION };
 export type { RaidReplayInput };
@@ -405,6 +415,169 @@ export async function buildPinnedV3Raid(
       grabber: grabberOf(raid),
       concentration,
       elite,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Friend invasions (PvP). The pinned config is PinnedRaidConfig-compatible — the
+// same createPinnedSim/verifyRaid settle it — plus the `pvp` block the client and
+// the reward path read. See src/raid/pvp.ts for the shared rules.
+
+export type PinnedPvpConfig = PinnedRaidConfig & { pvp: PvpConfigInfo };
+
+export type BuildPinnedPvpResult =
+  | { ok: true; config: PinnedPvpConfig }
+  | { ok: false; error: string };
+
+interface PvpRosterRow extends V3RosterRow {
+  color: string | null;
+}
+
+/** unit id -> owner-given name, harvested from an account's presentation blob. */
+async function rosterNames(db: D1Database, accountId: string): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const row = await db.prepare("SELECT current_json FROM presentations_v3 WHERE account_id = ?")
+    .bind(accountId).first<{ current_json: string }>();
+  if (!row) return names;
+  try {
+    const layout = (JSON.parse(row.current_json) as { rosterLayout?: { id?: unknown; name?: unknown }[] })
+      .rosterLayout;
+    for (const entry of Array.isArray(layout) ? layout : []) {
+      if (typeof entry?.id === "string" && typeof entry.name === "string" && entry.name) {
+        names.set(entry.id, entry.name.slice(0, 24));
+      }
+    }
+  } catch { /* names are cosmetic — a bad blob costs nothing but defaults */ }
+  return names;
+}
+
+/** One account's fight-relevant context: level, ability unlocks, farmer-head bonuses. */
+async function accountFightContext(db: D1Database, accountId: string) {
+  const [balance, raidState, coreRow] = await Promise.all([
+    db.prepare("SELECT xp FROM balances WHERE account_id = ?").bind(accountId).first<{ xp: number }>(),
+    db.prepare("SELECT progress_json FROM raid_state_v3 WHERE account_id = ?")
+      .bind(accountId).first<{ progress_json: string }>(),
+    db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?")
+      .bind(accountId).first<{ current_json: string }>(),
+  ]);
+  const level = levelForXp(balance?.xp ?? 0);
+  const wins = (() => {
+    try { return JSON.parse(raidState?.progress_json ?? "{}") as Record<string, number>; }
+    catch { return {}; }
+  })();
+  const core = (() => {
+    try {
+      return JSON.parse(coreRow?.current_json ?? "{}") as
+        { farmerHeadId?: number; farmerBonusHeadId?: number | null };
+    } catch { return {}; }
+  })();
+  const bonusHead = activeBonusHeadId(Number(core.farmerHeadId ?? 1), core.farmerBonusHeadId);
+  const abilityUnlocked = (key: string): boolean => {
+    const tier = abilityTierOf(key);
+    const pool = ABILITY_TIER[tier] ?? [];
+    const index = pool.indexOf(key);
+    return index >= 0 && index < Math.min(pool.length, wins[String(tier)] ?? 0);
+  };
+  return { level, abilityUnlocked, bonusHead };
+}
+
+/** Build a friend invasion's pinned config exclusively from D1: the attacker's chosen
+ *  eight against a snapshot of the defender's deployed roster. Neither account has to
+ *  be online, and nothing here mutates either one. */
+export async function buildPinnedPvpRaid(
+  db: D1Database,
+  attackerId: string,
+  defenderId: string,
+  orderedIds: unknown
+): Promise<BuildPinnedPvpResult> {
+  if (!Array.isArray(orderedIds) || orderedIds.length !== PVP_ARMY_SIZE) {
+    return { ok: false, error: "bad_roster" };
+  }
+  const ids = orderedIds.filter((id): id is string => typeof id === "string" && !!id);
+  if (ids.length !== orderedIds.length || new Set(ids).size !== ids.length) {
+    return { ok: false, error: "bad_roster" };
+  }
+  const placeholders = ids.map(() => "?").join(",");
+  const [attackerRows, defenderRows, defenderAccount, attacker, defender, attackerNames, defenderNames] =
+    await Promise.all([
+      db.prepare(`SELECT unit_id,zombie_key,mutation,invasions,color FROM roster_v3
+        WHERE account_id=? AND stored=0 AND locked_by_raid IS NULL AND unit_id IN (${placeholders})`)
+        .bind(attackerId, ...ids).all<PvpRosterRow>(),
+      // The defense is a SNAPSHOT: a defender zombie mid-raid elsewhere still stands
+      // on the farm being copied, so locks are deliberately not filtered here.
+      db.prepare(`SELECT unit_id,zombie_key,mutation,invasions,color FROM roster_v3
+        WHERE account_id=? AND stored=0`).bind(defenderId).all<PvpRosterRow>(),
+      db.prepare("SELECT username FROM accounts WHERE id = ?").bind(defenderId).first<{ username: string | null }>(),
+      accountFightContext(db, attackerId),
+      accountFightContext(db, defenderId),
+      rosterNames(db, attackerId),
+      rosterNames(db, defenderId),
+    ]);
+  const attackerById = new Map((attackerRows.results ?? []).map((row) => [row.unit_id, row]));
+  if (attackerById.size !== ids.length) return { ok: false, error: "unit_not_owned" };
+
+  const toParty = (rows: PvpRosterRow[], names: Map<string, string>) => rows.map((row) => {
+    const def = zombieDefs.get(row.zombie_key);
+    if (!def) return null;
+    return makeOwned(
+      row.unit_id, def as Parameters<typeof makeOwned>[1], 0, 0, row.invasions, row.mutation,
+      parseRosterColor(row.color), names.get(row.unit_id)
+    );
+  });
+
+  const attackParty = toParty(ids.map((id) => attackerById.get(id)!), attackerNames);
+  if (attackParty.some((unit) => unit === null)) return { ok: false, error: "bad_roster" };
+  const defenseRows = (defenderRows.results ?? []);
+  const defenseParty = toParty(defenseRows, defenderNames).filter(
+    (unit): unit is NonNullable<typeof unit> => unit !== null
+  );
+  if (!defenseParty.length) return { ok: false, error: "no_defense" };
+
+  // Both sides fight at full focus (concentration): the minigame is skipped in PvP,
+  // and a snapshot defense has nobody home to pop bubbles for it anyway.
+  const playerUnits = buildPlayerUnits(attackParty as ReturnType<typeof makeOwned>[], {
+    concentration: true,
+    abilityUnlocked: attacker.abilityUnlocked,
+    playerLevel: attacker.level,
+    farmerStrengthMult: farmerMultiplier(attacker.bonusHead, "zombieStrength"),
+    farmerLifeMult: farmerMultiplier(attacker.bonusHead, "zombieLife"),
+  });
+  const defenseBuilt = buildPlayerUnits(defenseParty, {
+    concentration: true,
+    abilityUnlocked: defender.abilityUnlocked,
+    playerLevel: defender.level,
+    farmerStrengthMult: farmerMultiplier(defender.bonusHead, "zombieStrength"),
+    farmerLifeMult: farmerMultiplier(defender.bonusHead, "zombieLife"),
+  });
+  const enemyUnits = toDefenseUnits(defenseBuilt);
+  const attackScore = armyScore(playerUnits);
+  const defenseScore = armyScore(enemyUnits);
+  const defenderName = defenderAccount?.username?.trim() || "A friend";
+  return {
+    ok: true,
+    config: {
+      raidId: PVP_RAID_ID,
+      raidName: `${defenderName}'s Farm`,
+      rosterIds: ids,
+      playerUnits,
+      enemyUnits,
+      bossThrow: null,
+      bossSpecials: [],
+      summon: null,
+      waveCadence: PVP_WAVE_CADENCE,
+      wallTemplate: null,
+      turnedTemplate: null,
+      grabber: null,
+      concentration: true,
+      pvp: {
+        defenderId,
+        defenderName,
+        attackScore,
+        defenseScore,
+        attackerTier: pvpTierForScore(defenseScore),
+        defenderTier: pvpTierForScore(attackScore),
+      },
     },
   };
 }

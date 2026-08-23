@@ -47,7 +47,7 @@ server-owned tables and catalogs) into the session row. `/raid/finish` accepts
 replaying that input transcript against the pinned config (`src/raidVerifier.ts` →
 `src/raid/replay.ts`), and rewards are priced from the server catalog against the replayed
 survivor ratio. An elapsed-time gate (`future_finish`) and ruleset-version pinning
-(`stale_ruleset`, currently `RAID_RULESET_VERSION = 39` — declared once in
+(`stale_ruleset`, currently `RAID_RULESET_VERSION = 40` — declared once in
 `src/raid/replay.ts` and imported by both sides) are defense-in-depth on top of the replay,
 not substitutes for it. `/epic-boss/start` performs the same handshake and refuses a
 mismatched client with `426 stale_ruleset` before charging a token or a brain.
@@ -77,6 +77,8 @@ concession field.
   between accounts. Keep it behind `BLACK_MARKET_ENABLED` in any environment where the
   release gates in `../SECURITY.md` have not been confirmed.
 - Paid currency, competitive rankings, and PvP must remain disabled until those gates pass.
+  Friend invasions (zero-stakes PvP-lite) are built and parked behind `PVP_ENABLED`
+  ("0" in every deployed environment) — see `../docs/FRIEND_INVASIONS.md`.
 - A raid and an Epic Boss fight are mutually exclusive: `/raid/start` rejects with
   `409 raid_in_progress` while an Epic Boss session is live, and vice versa.
 

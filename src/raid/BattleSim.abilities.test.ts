@@ -1313,6 +1313,11 @@ describe("enemy cadence and boss hazard damage (ground truth)", () => {
     const sim = new BattleSim([a, b], [bagMinion(), boss], null, true, [
       { name: "pixelFire", weight: 1, castMs: 0, cooldownMs: 1e6, damage: 0 },
     ]);
+    // Take melee off the table entirely: these tests measure the FIRE alone, and since
+    // v40's reach-of-last-resort an enemy strikes whoever is hitting it even outside
+    // melee range — a stray hit of the 1-damage clamp inside the burn window would read
+    // as the burn mispaying.
+    for (const u of sim.units) if (u.team === "enemy") u.damage = 0;
     onTheLine(sim);
     for (let i = 0; i < 40 && !sim.burningPlayers().length; i++) sim.step(50);
     return sim;

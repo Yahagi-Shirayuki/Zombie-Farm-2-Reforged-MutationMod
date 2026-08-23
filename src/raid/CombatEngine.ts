@@ -236,11 +236,21 @@ export function buildPlayerUnits(
     // Distraction resistance keys off the unit's real focus stat. Damage abilities
     // are already part of finalPower (`str`) so lasers and healing see them too.
     const mult = focusFactor(focus, conc);
+    // `isGarden` is the SUPPORT flag, not the body type: it buys the whole rear-station
+    // treatment (deploy-last, pinned at GARDEN_STATION_X outside the combat zone, boss
+    // throws lobbed at it — see BattleSim armyOrder/assignFormation). A Garden zombie
+    // with no healing-type ability has nothing to do back there — heal is the FIFTH
+    // tier-1 unlock, so early accounts field exactly that zombie, and it stood at the
+    // station doing nothing (soft-locking any fight it was the last survivor of). Only
+    // a unit that can actually heal or revive stations; the rest fight in the line.
+    // Ruleset v40(a) — see replay.ts.
+    const supportsFromRear = z.group === "Garden" &&
+      ["heal", "healAOE", "ressurect"].some((ability) => keys.includes(ability));
     const u = unit(
       z.id, z.key, "player", z.name,
       str, dex, con, focus,
       mult, false,
-      z.group === "Garden", z.group === "Headless"
+      supportsFromRear, z.group === "Headless"
     );
     u.group = z.group;
     u.className = z.className;

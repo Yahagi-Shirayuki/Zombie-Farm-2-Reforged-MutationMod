@@ -522,7 +522,40 @@ import type { RaidOutcome } from "./types";
 // only ever drops (throws lost to the added delay, none gained), so no fight winnable on
 // v38 becomes unwinnable. Same cost as every bump: an invasion in flight at deploy time
 // settles as stale_ruleset and pays nothing.
-export const RAID_RULESET_VERSION = 39;
+// v40 — TWO ENGAGEMENT FIXES, both surfaced by the first friend-invasion playtests but
+// applying to every fight.
+// (a) A GARDEN ZOMBIE THAT CANNOT HEAL FIGHTS IN THE LINE. `isGarden` used to mean the
+// body type, and the body type alone bought the whole support treatment: deploy-last,
+// pinned at GARDEN_STATION_X (outside the combat zone, outside every enemy's reach),
+// boss throws lobbed at it. A Garden zombie whose owner has not unlocked a healing
+// ability — heal is the FIFTH tier-1 unlock, so early accounts field plenty — therefore
+// stood at the station doing literally nothing, and an army whose last survivor was one
+// soft-locked the fight into the four-minute cap. `isGarden` is now set by
+// buildPlayerUnits only when the unit actually carries heal / healAOE / ressurect;
+// without one it deploys in order, takes a real slot (rear of its band — bodyOf still
+// ranks the Garden body last), and swings like everyone else.
+// (b) AN ENEMY BEING HIT BY A STANDING FRONT ROW FIGHTS BACK. `playerInRange` returned
+// null whenever the melee band was empty, and v36 gave only KNOCKBACK enemies the
+// reach-of-last-resort because only they could empty their own range. But the melee
+// band also empties when the front SLOT is merely reserved: a Headless walking to the
+// promotion slot (or a line re-slotted by a garden reshuffle) holds slot 0 while the
+// rest of the row STANDS a row-depth back — inside the combat zone, hitting the enemy
+// every swing — and the enemy stood there taking it with no target ("enemies not
+// attacking despite zombies being in front of them"). A LINE enemy (not a turned pixel
+// zombie, a beamed-in abductee, or a wall — those stand mid-lane and the reach would
+// let them shred the army from behind: measured +35% on the ordinary Video Games p*,
+// almost entirely the turned unit) with nobody in melee range now strikes the
+// front-most FRONT-BAND zombie standing at its slot. Zombies mid-walk stay
+// untargetable exactly as before — a line re-forming after a death, a burn or a
+// conversion still walks in unpunished — so the change closes only the windows where
+// a STANDING row was hitting a contractually blind enemy. Knockback enemies keep their
+// broader v36 reach unchanged. Measured on the balance stick: every raid within
+// +3-9% of v39 (Pirates and Video Games elites the high end), ramp order intact, and
+// the elite profiles did not need to move — the balance suite passes on the same
+// numbers. Both halves make fights no easier; a rare v39-marginal win may become a
+// loss. Same cost as every bump: an invasion in flight at deploy time settles as
+// stale_ruleset and pays nothing.
+export const RAID_RULESET_VERSION = 40;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

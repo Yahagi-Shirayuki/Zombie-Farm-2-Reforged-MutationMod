@@ -810,8 +810,13 @@ export class RaidScene {
     // frames (idle-0..3 / attack-0..2, already in ENEMY_FRAME_COUNTS) have to be on hand
     // before the boss casts or the conversion lands as a blank token.
     const turnedKeys = this.turnedTemplate ? [this.turnedTemplate.sourceKey] : [];
+    // Friend invasions field the DEFENDER's zombies as the enemy team. Those render
+    // through the same farm rigs as the player's own (see makeToken's zombieRig test),
+    // so their keys must not reach the enemy-art loader below — a zombie key under
+    // assets/raids/enemies/ is the Epic Boss 404 stall all over again.
+    const zombieRigEnemy = (u: SimUnit) => !!u.group && !!this.assets.zombieModels[u.sourceKey];
     const enemyKeys = [...new Set([
-      ...this.sim.units.filter((u) => u.team === "enemy").map((u) => u.sourceKey),
+      ...this.sim.units.filter((u) => u.team === "enemy" && !zombieRigEnemy(u)).map((u) => u.sourceKey),
       ...summonKeys,
       ...turnedKeys,
     ])];
@@ -1190,16 +1195,22 @@ export class RaidScene {
     const ufoParts: Sprite[] = [];
     let pilotBars: Token["pilotBars"];
 
-    if (u.team === "player") {
+    // A defender zombie in a friend invasion fights on the ENEMY team but is drawn by
+    // the same farm rig path as the player's own — `group` marks a player-zombie
+    // taxonomy, which no authored enemy/wall/summon/turned unit carries.
+    const zombieRig = u.team === "player" || (!!u.group && !!this.assets.zombieModels[u.sourceKey]);
+    if (zombieRig) {
       // Real farm-style zombie rig (with the walk animation). Most families use
       // their authored raid height; Headless retains its actual farm silhouette.
       // `u.id` is the owned zombie's roster id (CombatEngine builds player units
       // from it), so the battlefield honours the same per-zombie mutation toggles
       // as its card and its farm rig. Presentation only — the sim never reads the
       // mask, and the stats it fights with already have the bonuses baked in.
+      // (A defender's `d<n>` id has no local visibility prefs, so its full mask shows.)
       actor = new RaidActor(
         this.assets, u.sourceKey, visibleMutations(u.id, u.mutation), u.group, u.color,
       );
+      if (u.team === "enemy") actor.setFacingFromDelta(-1); // square up to the attackers
       const b = actor.getSizingBounds();
       const heightScale = zombieRaidHeightScale(
         u.group ?? (u.isHeadless ? "Headless" : u.isGarden ? "Garden" : "Regular"),
@@ -1997,10 +2008,17 @@ export class RaidScene {
       const simMoving = Math.hypot(u.vx, u.vy) > 6;
       const exitMarch = (this.phase === "retreat" || this.phase === "outro") && u.team === "player" && u.alive;
       if (tok.actor) {
-        const facing = zombieFacingDelta(u, {
-          exitMarch,
-          retreating: this.phase === "retreat",
-        });
+        // A defender's rig (friend invasion) fights mirrored: its enemy line is to the
+        // LEFT, so the semantic returns of zombieFacingDelta ("+1 = toward the enemy")
+        // don't apply — face the attackers while holding/fighting, else face the walk.
+        const facing = u.team === "enemy"
+          ? (u.state === "fight" || u.state === "hold"
+            ? -1
+            : Math.abs(u.vx) > 6 ? u.vx : null)
+          : zombieFacingDelta(u, {
+            exitMarch,
+            retreating: this.phase === "retreat",
+          });
         if (facing !== null) tok.actor.setFacingFromDelta(facing);
         const moving = u.alive && (simMoving || exitMarch);
         // The source focus pose narrows the eyes while the gold bar is advancing.

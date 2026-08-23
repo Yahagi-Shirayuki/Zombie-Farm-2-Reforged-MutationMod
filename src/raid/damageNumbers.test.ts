@@ -86,6 +86,10 @@ describe("damage numbers report the attack, not the health removed", () => {
     const armoured = duel({ con: 50 }, {}, [
       unit({ id: "backer", sourceKey: "ZombieActorRegularTier1", team: "player", abilities: ["protect"] }),
     ]);
+    // Deploy the carrier explicitly: the aura pays only from DEPLOYED carriers, and since
+    // v40's reach-of-last-resort the first hit can land while the measured zombie is
+    // still crossing the zone — before auto-release would have fielded the backer.
+    armoured.units.find((u) => u.id === "backer")!.state = "advance";
     runUntilHits(armoured, 1);
     expect(zombieOf(armoured).damageReduction).toBeCloseTo(0.2, 5); // aura settles on step
     // The published figure is the MITIGATED blow — the number a player should read —

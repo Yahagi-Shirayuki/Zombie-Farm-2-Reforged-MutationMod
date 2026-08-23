@@ -100,7 +100,9 @@ Everything a contributor needs is in this repo:
 trust one:
 
 - **Current behaviour**, kept in step with the code: `FEATURES.md`, `EPIC_BOSS_MECHANICS.md`,
-  `PROTOCOL_V3_ROLLOUT.md`, `SPECIAL_ZOMBIE_ACQUISITION.md`, `EPIC_BOSS_ASSET_AUDIT.md`, and
+  `PROTOCOL_V3_ROLLOUT.md`, `SPECIAL_ZOMBIE_ACQUISITION.md`, `EPIC_BOSS_ASSET_AUDIT.md`,
+  `FRIEND_INVASIONS.md` (a built-and-parked feature: what exists, the switches, and the
+  redesign's open questions), and
   everything under `docs/mechanics/` (behaviour recovered from the original binary, with the
   derivation — these win over intuition, see CONTRIBUTING; `mechanics/README.md` indexes them).
 - **Historical design plans** for features that have since shipped:

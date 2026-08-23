@@ -168,7 +168,10 @@ describe("a reinforcement does not open a hole in the line while it walks up", (
       sim.step(50);
       const bubble = sim.chargingBubble();
       if (bubble?.id === a.id) sim.popBubble(bubble.id);
-      if (a.state === "fight" && e.state === "fight") break;
+      // Wait for the first zombie to be STANDING at its slot, not merely trading blows:
+      // since v40's reach-of-last-resort both sides enter "fight" while it is still
+      // crossing the combat zone, and this scenario needs it planted on the line.
+      if (a.state === "fight" && e.state === "fight" && Math.abs(a.x - a.slotX) <= 2) break;
     }
     expect(e.state, "the first zombie should be engaged before the second is sent").toBe("fight");
     const engagedAt = a.x;

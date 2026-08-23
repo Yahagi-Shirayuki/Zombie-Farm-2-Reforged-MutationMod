@@ -24,20 +24,23 @@
 // fitted:
 //
 //   raid                 normal   elite      the rung it was fitted to
-//   Old McDonnell's        0.10    0.56      not a p* target — see below
-//   Summer Break           0.11    0.52      between Pirates and Robots
-//   Tree World             0.10    0.54      between Pirates and Robots
-//   Valentine's Day        0.10    0.53      between Pirates and Robots
-//   Circus                 0.10    0.62      Robots, normally
-//   Lawyers                0.27    0.65      Robots, normally
-//   Pirates                0.43    1.58   \
-//   Ninjas                 0.77    1.72    |
-//   Robots                 0.73    1.91    >  the elite RAMP (see below)
-//   Aliens                 0.98    2.09    |
-//   Video Games            1.35    2.22   /
+//   Old McDonnell's        0.11    0.60      not a p* target — see below
+//   Summer Break           0.12    0.51      between Pirates and Robots
+//   Tree World             0.11    0.56      between Pirates and Robots
+//   Valentine's Day        0.11    0.56      between Pirates and Robots
+//   Circus                 0.10    0.66      Robots, normally
+//   Lawyers                0.28    0.69      Robots, normally
+//   Pirates                0.46    1.72   \
+//   Ninjas                 0.77    1.78    |
+//   Robots                 0.75    1.98    >  the elite RAMP (see below)
+//   Aliens                 1.00    2.16    |
+//   Video Games            1.48    2.57   /
 //
 // (Re-measured at ruleset 35: the formation fix there lifted every rung a little, and
-// the Pirates a lot — see raid 3's entry for why, and for the re-fit that answers it.)
+// the Pirates a lot — see raid 3's entry for why, and for the re-fit that answers it.
+// Re-measured again at ruleset 40: the standing-front-row reach lifted every rung
+// +3-9% — Pirates and Video Games elites the high end — without moving any rung off
+// its band, so the profiles themselves were left alone.)
 //
 // THE TOP FIVE ARE A RAMP, not a band. The five late invasions are fitted to a smooth
 // climb in ladder order — 1.58 at the Pirates (rec 21) up to 2.22 at the Video Games

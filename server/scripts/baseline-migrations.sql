@@ -75,4 +75,10 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0053_epic_boss_graveyard_backfill.sql'),
   -- Adds epic_boss_runs_v3.started_crop, which schema.sql already creates on a fresh
   -- database, so re-running the ALTER would fail on a duplicate column.
-  ('0054_epic_boss_started_crop.sql');
+  ('0054_epic_boss_started_crop.sql'),
+  -- Creates pvp_sessions_v3 (friend invasions), which schema.sql already creates
+  -- on a fresh database.
+  ('0055_pvp_invasions.sql'),
+  -- Data repair only (empties the pinned config of already-finished raid and Epic Boss
+  -- sessions); a fresh database has no finished sessions, so baselining it is a no-op.
+  ('0056_release_spent_fight_configs.sql');

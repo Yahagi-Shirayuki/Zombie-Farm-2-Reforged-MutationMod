@@ -41,7 +41,22 @@ import type { MutationAlmanacEntry } from "./zombie/mutationAlmanac";
 import { BASE } from "./base";
 import { compareCropMarketOrder, compareItemMarketOrder } from "./marketOrder";
 import { decorAvailable, themeLabel, themeOf } from "./decorThemes";
-import { fillPartySelection, orderPartyRoster } from "./raid/partySelection";
+import { orderPartyRoster } from "./raid/partySelection";
+import {
+  compactOrder, fillSlots, selectedCount, toggleSlot, type OrderSlots,
+} from "./raid/attackOrderSlots";
+import { PVP_ARMY_SIZE, PVP_UI_ENABLED } from "./raid/pvp";
+
+/** One row of the Friends panel's invasion history (see net/api.PvpHistoryEntry). */
+export interface PvpHistoryHudEntry {
+  sessionId: string;
+  role: "attacker" | "defender";
+  otherName: string;
+  finishedAt: number;
+  attackerWon: boolean;
+  /** Set when this row is a still-unclaimed successful defense of YOURS. */
+  claimableTier?: number;
+}
 import { otherPlayMode, playModeDestinationLabel, type PlayMode } from "./playMode";
 import type { UpdateCheckResult } from "./updateCheck";
 import type {
@@ -1684,6 +1699,16 @@ export class Hud {
   onGiftBrainOnline: ((friendId: string) => Promise<string | null>) | null = null;
   /** Open a read-only view of this friend's farm (by account id + display name). */
   onVisitFriend: ((friendId: string, name: string) => void) | null = null;
+  /** Launch a friend invasion against this friend (online only): opens the PvP army
+   *  picker, then the battle. Nobody risks anything; the winner takes boosts. */
+  onInvadeFriend: ((friendId: string, name: string) => void) | null = null;
+  /** Friend-invasion history: attacks by and against this account (online only). */
+  getPvpHistory: (() => Promise<PvpHistoryHudEntry[]>) | null = null;
+  /** Claim a successful defense's boost reward. Resolves to the granted bundles, or
+   *  null when nothing was granted (already claimed / offline). */
+  onCollectPvpDefense:
+    | ((sessionId: string) => Promise<{ key: string; qty: number }[] | null>)
+    | null = null;
   /** Pull the gift inbox from the server into the cache. */
   refreshInbox: (() => Promise<void>) | null = null;
   /** Cached unclaimed gifts addressed to me. */
@@ -2455,7 +2480,9 @@ export class Hud {
       host: this.el, bgClass: "army-bg", replaceSelector: ".army-bg", backdropClose: false,
     });
     if (!party?.eligible.length) { panel.insertAdjacentHTML("beforeend", `<h2>Choose your army</h2><p>You have no deployed zombies.</p>`); return; }
-    const order: string[] = [];
+    // Slotted attack order, same as the invasion picker: un-picking leaves the slot
+    // empty and the next tap fills the lowest one (see raid/attackOrderSlots).
+    let order: OrderSlots = [];
     const preferred = this.getEpicBossView?.().find((view) => view.active)?.run?.attackOrder ?? [];
     const eligible = orderPartyRoster(party.eligible, preferred);
     const wrap = document.createElement("div"); wrap.className = "army-wrap";
@@ -2475,9 +2502,10 @@ export class Hud {
       if (payment === "brains" && this.state.brains < EPIC_BOSS_FIGHT_BRAIN_COST && tokens > 0) payment = "token";
       pay.value = payment;
       const canPay = payment === "token" ? tokens > 0 : this.state.brains >= EPIC_BOSS_FIGHT_BRAIN_COST;
-      head.innerHTML = `<h2>Send your army — ${bossName}</h2><span class="army-count">${order.length}/${party.cap} · min 1</span>`;
-      start.textContent = order.length ? `Fight with ${order.length}` : "Choose a zombie";
-      start.disabled = !order.length || !canPay;
+      const n = selectedCount(order);
+      head.innerHTML = `<h2>Send your army — ${bossName}</h2><span class="army-count">${n}/${party.cap} · min 1</span>`;
+      start.textContent = n ? `Fight with ${n}` : "Choose a zombie";
+      start.disabled = !n || !canPay;
       cards.querySelectorAll<HTMLElement>(".army-card").forEach((el) => { const at = order.indexOf(el.dataset.id!); el.classList.toggle("sel", at >= 0); const tick = el.querySelector<HTMLElement>(".tick"); if (tick) tick.textContent = at >= 0 ? String(at + 1) : ""; });
     };
     for (const z of eligible) {
@@ -2497,21 +2525,21 @@ export class Hud {
       const name = document.createElement("div"); name.className = "army-nm"; name.textContent = z.name;
       const type = document.createElement("div"); type.className = "army-ty"; type.textContent = z.typeName;
       card.append(tick, portrait, name, type);
-      card.onclick = () => { const at = order.indexOf(z.id); if (at >= 0) order.splice(at, 1); else if (order.length < party.cap) order.push(z.id); refresh(); };
+      card.onclick = () => { order = toggleSlot(order, z.id, party.cap); refresh(); };
       cards.appendChild(card);
     }
     const pick = document.createElement("button"); pick.className = "raid-quick"; pick.textContent = "Pick for me";
     pay.onchange = () => { payment = pay.value as EpicBossPayment; refresh(); };
     pick.onclick = () => {
-      order.splice(0, order.length, ...fillPartySelection(
-        order, preferred, eligible.map((z) => z.id), party.cap
-      ));
+      order = fillSlots(order, preferred, eligible.map((z) => z.id), party.cap);
       refresh();
     };
     start.onclick = async () => {
-      if (!order.length || !this.onLaunchEpicBoss) return;
+      // Any gaps left while picking are closed here: the fight gets a continuous order.
+      const attackOrder = compactOrder(order);
+      if (!attackOrder.length || !this.onLaunchEpicBoss) return;
       start.disabled = true;
-      if (await this.onLaunchEpicBoss([...order], payment)) {
+      if (await this.onLaunchEpicBoss(attackOrder, payment)) {
         close();
         this.closeMarket();
       } else start.disabled = false;
@@ -4086,11 +4114,12 @@ export class Hud {
     acctBar.className = "fr-acct";
     const requestsWrap = document.createElement("div");
     const inboxWrap = document.createElement("div");
+    const pvpWrap = document.createElement("div");
     const toolbar = document.createElement("div");
     toolbar.className = "fr-toolbar";
     const list = document.createElement("div");
     list.className = "prof-list";
-    panel.append(x, h, note, acctBar, requestsWrap, inboxWrap, toolbar, list);
+    panel.append(x, h, note, acctBar, requestsWrap, inboxWrap, pvpWrap, toolbar, list);
 
     const canOnline = this.onlineAvailable?.() ?? false;
     const online = () => this.socialOnline?.() ?? false;
@@ -4613,6 +4642,19 @@ export class Hud {
           visit.title = `Look around ${f.name}'s farm (read-only)`;
           visit.onclick = () => this.onVisitFriend?.(f.id, f.name);
           acts.appendChild(visit);
+          // Friend invasion: fight a snapshot of their deployed zombies. Zero risk on
+          // both sides; the winner takes boosts scaled by the opposing army's strength.
+          // PARKED behind PVP_UI_ENABLED while the interface is redesigned.
+          if (PVP_UI_ENABLED) {
+          const invade = document.createElement("button");
+          invade.className = "prof-btn play fr-invade";
+          invade.textContent = "Invade ⚔";
+          invade.title =
+            `Send ${PVP_ARMY_SIZE} zombies against ${f.name}'s defenders. ` +
+            "Nobody loses zombies — win boosts scaled by their army's strength.";
+          invade.onclick = () => { bg.remove(); this.onInvadeFriend?.(f.id, f.name); };
+          acts.appendChild(invade);
+          }
           // Unfriend / block (online). Remove tears down the edge; Block also
           // prevents re-adding and future gifts.
           const del = document.createElement("button");
@@ -4700,12 +4742,70 @@ export class Hud {
           : "Sign in to connect with friends online. You can still keep a local list below.";
     };
 
+    // ---- Friend invasions: recent attacks by/against this account, and the Claim
+    // button for a successful defense's reward. Loaded once per panel open (plus on
+    // refresh); rendered from the cache so renderAll stays synchronous.
+    let pvpEntries: PvpHistoryHudEntry[] = [];
+    const boostName = (key: string) =>
+      this.boosts.find((b) => b.key === key)?.name ?? key;
+    const rewardLabel = (rewards: { key: string; qty: number }[]) =>
+      rewards.map((r) => (r.qty > 1 ? `${boostName(r.key)} x${r.qty}` : boostName(r.key))).join(", ");
+    const renderPvp = () => {
+      pvpWrap.innerHTML = "";
+      if (!PVP_UI_ENABLED || !online() || !pvpEntries.length) return;
+      const hd = document.createElement("div");
+      hd.className = "fr-inbox-h";
+      hd.textContent = `⚔ Friend invasions (${pvpEntries.length})`;
+      pvpWrap.appendChild(hd);
+      for (const entry of pvpEntries) {
+        const row = document.createElement("div");
+        row.className = "prof-row fr-inbox-row";
+        const nm = document.createElement("div");
+        nm.className = "prof-name";
+        const who = document.createElement("b");
+        who.textContent = entry.otherName; // account-controlled → textContent
+        if (entry.role === "attacker") {
+          nm.append("⚔ You invaded ", who, entry.attackerWon ? " — victory!" : " — repelled");
+        } else {
+          nm.append("🛡 ", who, entry.attackerWon ? " raided your farm" : " was repelled by your farm!");
+        }
+        row.appendChild(nm);
+        if (entry.claimableTier) {
+          const claim = document.createElement("button");
+          claim.className = "prof-btn play";
+          claim.textContent = "Claim reward";
+          claim.title = "Your zombies held the farm — collect the defense reward.";
+          claim.onclick = async () => {
+            claim.disabled = true;
+            const rewards = await (this.onCollectPvpDefense?.(entry.sessionId) ?? Promise.resolve(null));
+            if (rewards?.length) {
+              this.showToast(`Defense reward: ${rewardLabel(rewards)}!`, 6000);
+              entry.claimableTier = undefined;
+              renderPvp();
+            } else {
+              this.showToast("That reward couldn't be claimed.");
+              claim.disabled = false;
+            }
+          };
+          row.appendChild(claim);
+        }
+        pvpWrap.appendChild(row);
+      }
+    };
+    const loadPvp = async () => {
+      if (!PVP_UI_ENABLED || !online()) return;
+      try {
+        pvpEntries = (await this.getPvpHistory?.()) ?? [];
+      } catch { return; /* keep whatever was rendered */ }
+      renderPvp();
+    };
+
     // The toolbar's "Gift all (N)" count and the rows both read the same cooldown
     // state, so gifting one friend has to repaint BOTH — repainting only the list
     // left the count one gift stale.
     const renderFriends = () => { renderToolbar(); renderList(); };
     const renderAll = () => {
-      renderNote(); renderAcct(); renderRequests(); renderInbox(); renderFriends();
+      renderNote(); renderAcct(); renderRequests(); renderInbox(); renderPvp(); renderFriends();
     };
     const refresh = async () => {
       if (online()) {
@@ -4714,6 +4814,7 @@ export class Hud {
           await this.refreshRequests?.();
           await this.refreshInbox?.();
         } catch { /* stay on cached data */ }
+        void loadPvp(); // fire-and-forget: the section paints itself when it lands
       }
       renderAll();
     };
@@ -5741,9 +5842,11 @@ export class Hud {
     // Ordered selection: index in the array = attack position (first attacks first).
     // Starts EMPTY so any cards the player clicks land at the FRONT of the order — e.g.
     // click two new headless zombies to lead, then "Pick for me" fills the rest from
-    // last raid's order. Clicking a card appends it; clicking a picked card removes it
-    // and renumbers the rest.
-    const order: string[] = [];
+    // last raid's order. Un-picking a card leaves its slot EMPTY and the next card
+    // tapped drops into the lowest empty slot, so swapping out whoever leads the charge
+    // doesn't renumber (or mean re-picking) the whole line. Gaps are closed on launch —
+    // see raid/attackOrderSlots.
+    let order: OrderSlots = [];
 
     // Battle consumables for this raid: Concentration (skip the focus minigame) +
     // Golden Dice (each raises the loot to a rarer tier, capped by the raid's tier depth)
@@ -5766,7 +5869,7 @@ export class Hud {
     start.className = "raid-go";
 
     const refresh = () => {
-      const n = order.length;
+      const n = selectedCount(order);
       head.innerHTML =
         `<h2>Send your army — ${raid.name}</h2>` +
         `<span class="army-count${n < min ? " short" : ""}">${n}/${cap} · min ${min}</span>`;
@@ -5811,9 +5914,7 @@ export class Hud {
       tick.className = "tick"; // order number, filled in by refresh()
       card.append(tick, por, nm, ty, st);
       card.onclick = () => {
-        const at = order.indexOf(z.id);
-        if (at >= 0) order.splice(at, 1);
-        else if (order.length < cap) order.push(z.id);
+        order = toggleSlot(order, z.id, cap);
         refresh();
       };
       grid.appendChild(card);
@@ -5906,14 +6007,17 @@ export class Hud {
     pick.className = "raid-quick";
     pick.textContent = "Pick for me";
     pick.onclick = () => {
-      order.splice(0, order.length, ...fillPartySelection(
+      order = fillSlots(
         order, party.orderedSelectedIds, party.eligible.map((z) => z.id), cap,
-      ));
+      );
       refresh();
     };
 
     start.onclick = async () => {
-      if (order.length < min) return;
+      // Gaps are a picking convenience only: the invasion is launched with a
+      // continuous attack order.
+      const attackOrder = compactOrder(order);
+      if (attackOrder.length < min) return;
       // Always play the live battle scene — there is no instant/auto-resolve. Launch
       // may be async (an online server cooldown gate). Guard against a double-tap
       // while the gate is in flight. If it declines (cooldown, or a raid already
@@ -5933,7 +6037,7 @@ export class Hud {
         "Invade (Elite)"
       )) return;
       start.disabled = true;
-      const launched = await this.onLaunchRaid(raid.id, [...order], launchOpts());
+      const launched = await this.onLaunchRaid(raid.id, attackOrder, launchOpts());
       if (launched) bg.remove();
       else start.disabled = false;
     };
@@ -5945,6 +6049,126 @@ export class Hud {
   // slides in from the RIGHT while the survivors march off, listing the outcome
   // top-to-bottom with a finish button. `onClose` runs when the button is pressed
   // (the live scene uses it to tear itself down and return to the farm).
+  /** Friend-invasion lineup: pick EXACTLY eight zombies, in attack order, then launch.
+   *  A trimmed cousin of openRaidArmy — no cooldown, no vouchers, no battle boosts
+   *  (PvP always fights at full focus), and the min IS the cap. */
+  openPvpArmy(friendName: string, onLaunch: (orderedIds: string[]) => void) {
+    document.querySelector("#hud .army-bg")?.remove();
+    const party = this.getRaidParty ? this.getRaidParty() : null;
+    const bg = document.createElement("div");
+    bg.className = "panelbg army-bg";
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    const x = document.createElement("button");
+    x.className = "panelclose";
+    const xi = document.createElement("img");
+    xi.src = UI("button_close.png");
+    x.appendChild(xi);
+    x.onclick = () => bg.remove();
+    panel.appendChild(x);
+    bg.appendChild(panel);
+    bindBackdropDismiss(bg, () => bg.remove());
+    this.el.appendChild(bg);
+
+    const cap = PVP_ARMY_SIZE;
+    if (!party || party.eligible.length < cap) {
+      panel.insertAdjacentHTML("beforeend",
+        `<h2>Invade ${friendName}'s farm</h2><p class="rd-intro">A friend invasion needs ` +
+        `${cap} zombies on your farm. Grow a bigger army first.</p>`);
+      return;
+    }
+
+    const wrap = document.createElement("div");
+    wrap.className = "army-wrap";
+    const head = document.createElement("div");
+    head.className = "army-head";
+    const grid = document.createElement("div");
+    grid.className = "army-grid";
+    const foot = document.createElement("div");
+    foot.className = "army-foot";
+    wrap.append(head, grid, foot);
+    panel.appendChild(wrap);
+
+    let order: OrderSlots = [];
+    const start = document.createElement("button");
+    start.className = "raid-go";
+
+    const refresh = () => {
+      const n = selectedCount(order);
+      head.innerHTML =
+        `<h2>Invade ${friendName}'s farm</h2>` +
+        `<span class="army-count${n < cap ? " short" : ""}">${n}/${cap}</span>`;
+      start.textContent = n < cap ? `Pick ${cap - n} more` : `Invade with ${cap}`;
+      start.disabled = n < cap;
+      for (const el of grid.querySelectorAll<HTMLElement>(".army-card")) {
+        const pos = order.indexOf(el.dataset.id!);
+        el.classList.toggle("sel", pos >= 0);
+        const tick = el.querySelector<HTMLElement>(".tick");
+        if (tick) tick.textContent = pos >= 0 ? String(pos + 1) : "";
+      }
+    };
+
+    for (const z of party.eligible) {
+      const card = document.createElement("div");
+      card.className = "army-card";
+      card.dataset.id = z.id;
+      const por = document.createElement("div");
+      por.className = "army-por";
+      if (z.portrait) por.style.backgroundImage = `url(${z.portrait})`;
+      if (this.zombieMutationPortraitOf) {
+        onFirstVisible(por, () => {
+          void this.zombieMutationPortraitOf?.(
+            z.key, visibleMutations(z.id, z.mutation), z.color, () => por.isConnected,
+          )
+            .then((image) => { if (por.isConnected) por.style.backgroundImage = `url(${image})`; })
+            .catch(() => { /* retain the static species portrait */ });
+        });
+      }
+      const nm = document.createElement("div");
+      nm.className = "army-nm";
+      nm.textContent = z.name;
+      const ty = document.createElement("div");
+      ty.className = "army-ty";
+      ty.textContent = z.typeName;
+      const st = document.createElement("div");
+      st.className = "army-st";
+      st.textContent = `P${z.dispPower} S${z.dispSpeed} L${z.dispLife}`;
+      const tick = document.createElement("span");
+      tick.className = "tick";
+      card.append(tick, por, nm, ty, st);
+      card.onclick = () => {
+        order = toggleSlot(order, z.id, cap);
+        refresh();
+      };
+      grid.appendChild(card);
+    }
+
+    const pick = document.createElement("button");
+    pick.className = "raid-quick";
+    pick.textContent = "Pick for me";
+    pick.onclick = () => {
+      order = fillSlots(
+        order, party.orderedSelectedIds, party.eligible.map((z) => z.id), cap,
+      );
+      refresh();
+    };
+
+    start.onclick = () => {
+      const attackOrder = compactOrder(order);
+      if (attackOrder.length !== cap) return;
+      bg.remove();
+      onLaunch(attackOrder);
+    };
+
+    const note = document.createElement("p");
+    note.className = "rd-intro";
+    note.textContent =
+      "Friendly fight: nobody loses zombies, and there's no cooldown. Beat their " +
+      "defenders and the boost reward scales with how strong their army is.";
+    foot.append(note, pick, start);
+    refresh();
+  }
+
   openRaidResult(view: RaidResultView, onClose?: () => void) {
     const bg = document.createElement("div");
     bg.className = "raid-res-bg";

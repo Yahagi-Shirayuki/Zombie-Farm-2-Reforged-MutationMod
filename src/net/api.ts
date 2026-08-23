@@ -11,6 +11,7 @@ import { RAID_RULESET_VERSION, type RaidReplayInput } from "../raid/replay";
 import { BUILD_TAG } from "../version";
 import { crumb } from "../breadcrumbs";
 import type { RaidOutcome } from "../raid/types";
+import type { PvpFightConfig } from "../raid/pvp";
 import {
   CLIENT_INTEGRITY_VERSION,
   GAMEPLAY_PROTOCOL,
@@ -1056,6 +1057,75 @@ export const raidCheckpoint = (sessionId: string, finalTick: number, inputs: Rai
     "POST",
     "/raid/checkpoint",
     { sessionId, finalTick, inputs }
+  );
+
+// ---- friend invasions (PvP) ---------------------------------------------
+
+/** Open a friend invasion: the server pins the WHOLE fight config — the attacker's
+ *  eight, a snapshot of the defender's deployed zombies as the enemy team, scores and
+ *  reward tiers — and returns it. The client ADOPTS this config wholesale (it builds
+ *  its BattleSim from these exact units), so the verified replay cannot diverge. */
+export const pvpStart = (defenderId: string, orderedUnitIds: string[]) =>
+  req<{
+    ok: boolean;
+    sessionId?: string;
+    error?: string;
+    config?: PvpFightConfig;
+    expiresAt?: number;
+    earliestFinishAt?: number;
+    serverTime?: number;
+    /** Present on a `pair_limit` refusal. */
+    limit?: number;
+  }>("POST", "/raid/pvp/start", {
+    defenderId,
+    orderedUnitIds,
+    rulesetVersion: RAID_RULESET_VERSION,
+  });
+
+export interface PvpFinishResult {
+  settlementId?: string;
+  win: boolean;
+  outcome?: RaidOutcome;
+  /** Boost bundles credited on a win ([] on a loss). */
+  rewards: { key: string; qty: number }[];
+  rewardTier: number | null;
+  attackScore: number;
+  defenseScore: number;
+  defenderName?: string;
+  inventory?: Record<string, number>;
+  serverTime?: number;
+}
+
+/** Settle a friend invasion. Same contract as /raid/finish — the server replays the
+ *  transcript and decides; `clientWin` is a pure concession — but nothing is risked:
+ *  no roster changes, no cooldown, only boost rewards on a verified win. */
+export const pvpFinish = (sessionId: string, finalTick: number, inputs: RaidReplayInput[], outcome?: RaidOutcome) =>
+  req<PvpFinishResult>("POST", "/raid/pvp/finish", {
+    sessionId,
+    finalTick,
+    inputs,
+    ...(outcome ? { clientWin: outcome.win } : {}),
+  });
+
+export interface PvpHistoryEntry {
+  sessionId: string;
+  role: "attacker" | "defender";
+  otherName: string;
+  finishedAt: number;
+  attackerWon: boolean;
+  attackScore: number;
+  defenseScore: number;
+  /** Set when this row is a still-unclaimed successful defense of YOURS. */
+  claimableTier?: number;
+}
+
+export const pvpHistory = () =>
+  req<{ ok: boolean; entries: PvpHistoryEntry[] }>("GET", "/raid/pvp/history");
+
+/** Claim a successful defense's reward (one time, defender only). */
+export const pvpCollect = (sessionId: string) =>
+  req<{ ok: boolean; rewards: { key: string; qty: number }[]; tier: number; inventory?: Record<string, number>; serverTime?: number }>(
+    "POST", "/raid/pvp/collect", { sessionId }
   );
 
 export interface EpicBossFinishResult {

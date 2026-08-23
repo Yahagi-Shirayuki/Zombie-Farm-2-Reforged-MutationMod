@@ -1770,25 +1770,26 @@ export class BattleSim {
     *  the Headless zombies that fight for it) matter: the back rows deal damage without
     *  taking it.
     *
-    *  What that must NOT become is an enemy DISARMING ITSELF. A knockback attack shoves
-    *  its victim 0.9-2.7 melee gaps down the lane (see knockBackZombie) and re-slots it
-    *  last, which lands it well inside the combat zone it still attacks from but outside the
-    *  60-unit reach of the enemy that just hit it. Such an enemy could
-    *  push every zombie out of its own reach and then stand there being beaten to death,
-    *  punished for using its ability. Old McDonnell (his Lumberjack and the boss) and the
-    *  Video Games knights/monsters/boss are the units that carry knockback, and they had
-    *  no one to hit for ~13% of every fight because of it.
+    *  What that must NOT become is an enemy WITH NO ONE TO HIT WHILE A STANDING ROW IS
+    *  HITTING IT. The melee band empties in ways the zombies control: a knockback attack
+    *  shoves its victim 0.9-2.7 melee gaps down the lane (see knockBackZombie) and
+    *  re-slots it last; a Headless walking to its promotion slot RESERVES the front slot
+    *  while the rest of the row STANDS a row-depth back, inside the combat zone, swinging
+    *  every cycle. The enemy stood there with a null target, contractually blind
+    *  ("enemies not attacking despite zombies being in front of them"). v36 answered the
+    *  knockback case (the enemy disarmed ITSELF — its reach is unconditional); v40(b)
+    *  answers the reserved-slot case: a LINE enemy with an empty melee range strikes the
+    *  front-most FRONT-BAND zombie STANDING at its slot.
     *
-    *  So a KNOCKBACK enemy with an empty melee range reaches for the front-most zombie
-    *  that is close enough to be hitting IT: whatever it shoved away, it can still answer.
-    *  With a front row present — the overwhelmingly common case — this changes nothing.
-    *
-    *  Deliberately NOT extended to every enemy. Ordinary units also lose their target for
-    *  a moment (the line refilling after a kill, a zombie carried off by the Circus
-    *  trapeze), but those gaps are brief, not self-inflicted, and already priced into
-    *  every raid's balance — a recorded Circus victory in the server's fixtures flips to
-    *  a defeat if this reach is handed out generally. The bug is an enemy undoing its own
-    *  attack, so only that enemy gets the answer to it. */
+    *  Three deliberate limits on the v40 half, each holding a measured regression out:
+    *  - STANDING only: a line mid-walk (re-forming after a death, a burn, a conversion)
+    *    stays untargetable exactly as it always was — waves must not get free hits on
+    *    every re-form (+35% on the ordinary Video Games p* without it).
+    *  - FRONT BAND only: the deep rows keep dealing damage without taking it — that
+    *    asymmetry is the design, not the bug.
+    *  - LINE enemies only (not turned / summoned / wall units): a turned pixel zombie or
+    *    a beamed-in abductee stands MID-LANE, usually with an empty melee ring of its
+    *    own, and the reach let it shred the army from behind the line all fight long. */
   private playerInRange(e: SimUnit): SimUnit | null {
     // A zombie mid-shove is not a melee target: `-[ZombieActor isInMeleeRange]` returns
     // false for the whole time `knockBackPoint` is live, and every melee set the fight
@@ -1797,10 +1798,24 @@ export class BattleSim {
     const inMelee = this.frontMostPlayer(
       (p) => p.knockBackSpeed <= 0 && Math.abs(p.x - e.x) <= this.engageDistance
     );
-    if (inMelee || !e.knockBack) return inMelee;
+    if (inMelee) return inMelee;
     // Reach-of-last-resort: a zombie in attack position, with no wall standing between
-    // the two of them (that fight is the wall's, not this enemy's).
-    return this.frontMostPlayer((p) => this.inAttackPosition(p) && !this.wallInWay(p));
+    // the two of them (that fight is the wall's, not this enemy's). A KNOCKBACK enemy
+    // reaches any such zombie (v36 — whatever it shoved away, it can still answer);
+    // every other enemy reaches only one STANDING at its slot (v40 — the reserved-slot
+    // case), so a line mid-re-form walks in unpunished exactly as it always did.
+    const standingFrontBand = (p: SimUnit) =>
+      p.lineupIndex < BAND_SIZE &&
+      Math.abs(p.slotX - p.x) <= 2 && Math.abs(p.slotY - p.y) <= 2;
+    // The v40 reach belongs to enemies AT THE LINE — a turned pixel zombie or a beamed-in
+    // abductee stands MID-LANE, often with no one in its own melee ring, and handing one
+    // the standing reach let it shred the army from behind the line (measured: +35% on
+    // the ordinary Video Games p* almost entirely from the turned unit).
+    const onTheLine = !e.isTurned && !e.isSummon && !e.isWall;
+    return this.frontMostPlayer((p) =>
+      this.inAttackPosition(p) && !this.wallInWay(p) &&
+      (e.knockBack || (onTheLine && standingFrontBand(p)))
+    );
   }
 
   /** The front-most living, on-lane player satisfying `pick` (null if none). Ties on x

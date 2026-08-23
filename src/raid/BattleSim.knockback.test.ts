@@ -1,12 +1,14 @@
-// Knockback must not disarm the enemy that used it.
+// An enemy that is being hit has someone to hit.
 //
 // Ranges in this sim are deliberately asymmetric: a zombie attacks from anywhere in the
 // combat zone (a band four rows deep), while an enemy only strikes what stands within
-// `engageDistance`. That is what makes holding the front row matter. But a knockback
-// attack shoves its victim 150 units down the lane and re-slots it last — landing it
-// inside the band it still attacks from, and outside the 60-unit reach of the enemy that
-// just hit it. An enemy could clear its own melee range and then stand there being
-// killed, punished for using its ability. These tests pin the floor under that.
+// `engageDistance`. That is what makes holding the front row matter. But the melee band
+// can empty while the enemy is still under fire — a knockback shoves its victim 150
+// units down the lane (v36's case), and a reserved front slot leaves the walking-up line
+// a band-depth back (v40's) — and an enemy with a null target just stood there being
+// killed. The reach-of-last-resort answers both: with nobody in melee range, an enemy
+// strikes the front-most zombie in attack position. These tests pin that floor, and pin
+// that it never overrides normal front-row targeting while a front row stands.
 import { describe, expect, it } from "vitest";
 import { BattleSim } from "./BattleSim";
 import type { CombatUnit } from "./types";
@@ -102,43 +104,83 @@ describe("an enemy that knocks a zombie back can still reach it", () => {
   });
 });
 
-describe("the extra reach belongs to knockback enemies only", () => {
-  it("leaves an ordinary enemy unable to touch a zombie parked out of melee range", () => {
-    // The counterpart to the test above, and the reason the fallback is scoped to
-    // knockback: every enemy loses its target for a moment (the line refilling after a
-    // kill, a zombie carried off by the Circus trapeze), and handing all of them a longer
-    // reach for those gaps re-balances raids nobody complained about. A recorded Circus
-    // victory in the server's fixtures flips to a defeat when it is.
+describe("the reach-of-last-resort answers a standing front row too (v40)", () => {
+  it("lets an ordinary enemy answer a STANDING zombie hitting it from out of melee range", () => {
+    // v36 scoped the fallback to knockback enemies (the one case where the enemy emptied
+    // its OWN melee range). That left every other enemy contractually blind whenever the
+    // front slot was merely reserved — a Headless walking to its promotion slot while the
+    // rest of the row STOOD a row-depth back, hitting it every swing. v40(b) closes that:
+    // a line enemy with an empty melee ring strikes the front-most front-band zombie
+    // standing at its slot. See replay.ts's v40 note for the scoping and the ripple.
+    const sim = laneSim(false, 1) as unknown as {
+      step: (ms: number) => void;
+      players: Array<{ x: number; y: number; slotX: number; slotY: number; hp: number; maxHp: number }>;
+      enemies: Array<{ x: number; hp: number; maxHp: number }>;
+      frontX: number;
+      assignFormation: () => void;
+    };
+    // Freeze the formation so the zombie can be held AT ITS SLOT beyond the enemy's
+    // reach — the reserved-slot geometry, distilled. (Live formation would keep
+    // re-assigning slot 0 back onto the line.)
+    sim.assignFormation = () => {};
+    const zombie = sim.players[0];
+    const parked = sim.frontX - KNOCKBACK_PX;
+    zombie.x = parked;
+    zombie.slotX = parked;
+    zombie.slotY = zombie.y;
+    for (let t = 0; t < 8000; t += 50) sim.step(50);
+    expect(Math.abs(zombie.x - sim.enemies[0].x)).toBeGreaterThan(60); // out of melee reach
+    expect(sim.enemies[0].hp).toBeLessThan(sim.enemies[0].maxHp); // being hit…
+    expect(zombie.hp).toBeLessThan(zombie.maxHp); // …and it hits back.
+  });
+
+  it("still ignores a zombie that is mid-walk rather than standing", () => {
+    // The scoping that keeps re-forming lines walking in unpunished: the same geometry,
+    // but the zombie's SLOT is elsewhere (it is crossing, not standing) — an ordinary
+    // enemy has no answer to it, exactly as before v40.
     const sim = laneSim(false, 1) as unknown as {
       step: (ms: number) => void;
       players: Array<{ x: number; slotX: number; hp: number; maxHp: number }>;
-      enemies: Array<{ x: number; hp: number; maxHp: number }>;
+      enemies: Array<{ hp: number; maxHp: number }>;
       frontX: number;
+      assignFormation: () => void;
     };
+    sim.assignFormation = () => {};
     const zombie = sim.players[0];
-    const parked = sim.frontX - KNOCKBACK_PX;
     for (let t = 0; t < 8000; t += 50) {
-      zombie.x = parked;
-      zombie.slotX = parked;
+      zombie.x = sim.frontX - KNOCKBACK_PX; // held mid-lane…
+      zombie.slotX = sim.frontX;            // …with its slot still on the line
       sim.step(50);
     }
     expect(sim.enemies[0].hp).toBeLessThan(sim.enemies[0].maxHp); // being hit…
-    expect(zombie.hp).toBe(zombie.maxHp); // …but its reach is unchanged.
+    expect(zombie.hp).toBe(zombie.maxHp); // …but a walker is not a target.
   });
 });
 
 describe("the front row still takes the hits", () => {
-  it("targets the front-most zombie whenever one is in melee range", () => {
-    // The reach-of-last-resort must not turn into a free pass to snipe the back row:
-    // with a front row present, nothing about targeting changes.
+  it("strikes only melee-range zombies whenever the front row is actually standing", () => {
+    // The reach-of-last-resort must not turn into a free pass to snipe the back row.
+    // The invariant is per-tick, not fight-wide: while ANY zombie stands in melee range,
+    // the strike lands inside melee range — the fallback fires only in the windows where
+    // that range is empty (the line walking up, a reshuffle in progress).
     const sim = laneSim(false, 4);
-    for (let t = 0; t < 6000; t += 50) sim.step(50);
-    const players = playersOf(sim).filter((p) => p.alive);
-    const hurt = players.filter((p) => p.hp < p.maxHp);
-    expect(hurt.length).toBeGreaterThan(0);
-    const enemy = enemyOf(sim);
-    // Everything damaged is inside melee reach — the back of the band is untouched.
-    for (const p of hurt) expect(Math.abs(p.x - enemy.x)).toBeLessThanOrEqual(60);
+    let melee = 0;
+    for (let t = 0; t < 6000; t += 50) {
+      const enemy = enemyOf(sim);
+      const before = playersOf(sim).map((p) => ({
+        p, hp: p.hp,
+        near: p.alive && p.knockBackSpeed <= 0 && Math.abs(p.x - enemy.x) <= 60,
+      }));
+      const hadMelee = before.some((b) => b.near);
+      if (hadMelee) melee++;
+      sim.step(50);
+      for (const b of before) {
+        if (b.p.hp < b.hp && hadMelee) {
+          expect(b.near, "struck outside melee reach while the front row stood").toBe(true);
+        }
+      }
+    }
+    expect(melee).toBeGreaterThan(0); // the scenario actually exercised a standing front row
   });
 });
 

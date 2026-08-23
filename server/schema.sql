@@ -717,3 +717,28 @@ CREATE TABLE IF NOT EXISTS service_state (
   updated_at INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO service_state (id, mode, notice, updated_at) VALUES (1, 'open', NULL, 0);
+
+-- Friend invasions (PvP) — see migrations/0055_pvp_invasions.sql for the field notes.
+CREATE TABLE IF NOT EXISTS pvp_sessions_v3 (
+  id TEXT PRIMARY KEY,
+  attacker_id TEXT NOT NULL REFERENCES accounts(id),
+  defender_id TEXT NOT NULL REFERENCES accounts(id),
+  config_json TEXT NOT NULL,
+  ruleset_version INTEGER NOT NULL,
+  attack_score INTEGER NOT NULL,
+  defense_score INTEGER NOT NULL,
+  boosts_json TEXT NOT NULL DEFAULT '{}',
+  started_at INTEGER NOT NULL,
+  earliest_finish_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  result_json TEXT,
+  win INTEGER,
+  final_tick INTEGER,
+  inputs_json TEXT,
+  defense_claimed_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pvp_live ON pvp_sessions_v3(attacker_id) WHERE finished_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_pvp_pair_day ON pvp_sessions_v3(attacker_id, defender_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_pvp_defender ON pvp_sessions_v3(defender_id, finished_at);
+CREATE INDEX IF NOT EXISTS idx_pvp_attacker ON pvp_sessions_v3(attacker_id, finished_at);

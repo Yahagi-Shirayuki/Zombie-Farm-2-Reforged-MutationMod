@@ -65,6 +65,7 @@ import { CLIENT_INTEGRITY_VERSION, COMMAND_BATCH_LIMIT, EPIC_BOSS_TOKEN_GRANT_LI
 import * as v3 from "./v3/db";
 import * as v3Raid from "./v3/raid";
 import * as v3EpicBoss from "./v3/epicBoss";
+import * as v3Pvp from "./v3/pvp";
 import * as writer from "./v3/writer";
 import * as blackMarket from "./v3/blackMarket";
 
@@ -630,6 +631,10 @@ app.use("/friends/code/rotate", rateLimit("RL_WRITE", "code_rotate", 5, 60_000))
 app.use("/gifts", rateLimit("RL_WRITE", "gift_send", 60, 60_000));
 app.use("/gifts/claim", rateLimit("RL_WRITE", "gift_claim", 120, 60_000));
 app.use("/raid/start", rateLimit("RL_WRITE", "raid_start", 60, 60_000));
+app.use("/raid/pvp/start", rateLimit("RL_WRITE", "pvp_start", 30, 60_000));
+app.use("/raid/pvp/finish", rateLimit("RL_WRITE", "pvp_finish", 30, 60_000));
+app.use("/raid/pvp/collect", rateLimit("RL_WRITE", "pvp_collect", 60, 60_000));
+app.use("/raid/pvp/history", rateLimit("RL_READ", "pvp_history", 120, 60_000));
 app.use("/raid/checkpoint", rateLimit("RL_WRITE", "raid_checkpoint", 30, 60_000));
 app.use("/raid/finish", rateLimit("RL_WRITE", "raid_finish", 60, 60_000));
 app.use("/raid/revive", rateLimit("RL_WRITE", "raid_revive", 60, 60_000));
@@ -1418,6 +1423,43 @@ app.post("/raid/revive", async (c) => {
   if (result.status === 400) return c.json(result.body, 400);
   if (result.status === 404) return c.json(result.body, 404);
   return c.json(result.body, 409);
+});
+
+// ---- Friend invasions (PvP). Under /raid/ so requireAuth + writer fencing apply.
+// PARKED behind PVP_ENABLED while the interface is redesigned (docs/FRIEND_INVASIONS.md):
+// same shape as the Black Market's opt-in, and the client hides its surfaces behind
+// PVP_UI_ENABLED (src/raid/pvp.ts) — flip both to bring it back.
+const pvpEnabled = (env: Bindings): boolean => env.PVP_ENABLED === "1";
+
+app.post("/raid/pvp/start", async (c) => {
+  if (!pvpEnabled(c.env)) return c.json({ error: "pvp_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const result = await v3Pvp.startPvp(c.env.DB, c.get("accountId"), body, Date.now());
+  return c.json(result.body, result.status as 200);
+});
+
+app.post("/raid/pvp/finish", async (c) => {
+  // Deliberately NOT gated on pvpEnabled: a fight started while the flag was on must
+  // still be able to settle (and its idempotent result must stay readable) after an
+  // operator flips it off — only NEW attacks are refused.
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const result = await v3Pvp.finishPvp(c.env.DB, c.get("accountId"), body, Date.now());
+  return c.json(result.body, result.status as 200);
+});
+
+app.post("/raid/pvp/collect", async (c) => {
+  // Same reasoning: an earned defense reward stays claimable after the switch-off.
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const result = await v3Pvp.collectPvp(c.env.DB, c.get("accountId"), body, Date.now());
+  return c.json(result.body, result.status as 200);
+});
+
+app.get("/raid/pvp/history", async (c) => {
+  const result = await v3Pvp.historyPvp(c.env.DB, c.get("accountId"));
+  return c.json(result.body, result.status as 200);
 });
 
 app.post("/epic-boss/activate", async (c) => {

@@ -46,7 +46,8 @@ import { PeriodicQuestSystem } from "./quest/periodic/PeriodicQuestSystem";
 import { QuestDef, questBonusRewardInfo, questRewardInfo } from "./quest/types";
 import { RaidManager, RaidResultView, type LootDrop } from "./raid/RaidManager";
 import { RaidScene } from "./raid/RaidScene";
-import { RAID_COOLDOWN_MS } from "./raid/RaidCatalog";
+import { RAID_COOLDOWN_MS, MCDONNELL_ID } from "./raid/RaidCatalog";
+import { PVP_ARMY_SIZE, PVP_UI_ENABLED, buildPvpRaidDef } from "./raid/pvp";
 import { reconcilePartySelection } from "./raid/partySelection";
 import { planTeamAssembly, sanitizeTeams, settleTeamMembers } from "./zombie/teams";
 import { postRaidWinQuests } from "./raid/questEvents";
@@ -4964,6 +4965,175 @@ async function main() {
   let raidExpiresAt: number | null = null;
   let raidExpiryAnnounced: InvasionExpiryState = "ok";
   const clearRaidExpiry = () => { raidExpiresAt = null; raidExpiryAnnounced = "ok"; };
+
+  // ---- Friend invasions (PvP). ONLINE only: the server pins the whole fight —
+  // the chosen eight, a snapshot of the friend's deployed zombies as the enemy
+  // team, and both reward tiers — and this client ADOPTS that config wholesale, so
+  // the verified replay cannot diverge. Nobody loses anything; a verified win pays
+  // boosts scaled by the opposing army's strength.
+  const boostDefOf = (key: string) => assets.boosts.find((b) => b.key === key);
+  const launchPvpBattle = (
+    sessionId: string,
+    config: NonNullable<Awaited<ReturnType<typeof api.pvpStart>>["config"]>,
+    friendName: string
+  ) => {
+    const raidDef = buildPvpRaidDef(
+      { raidName: config.raidName, defenderName: config.pvp.defenderName },
+      assets.raids.find((r) => r.id === MCDONNELL_ID)
+    );
+    pauseFarmJobs();
+    raidActive = true;
+    world.visible = false;
+    hud.setRaiding(true);
+    hud.setBattleLoading(true, `Invading ${friendName}'s farm…`);
+    crumb("battle:launch", `pvp:${friendName} · ${config.playerUnits.length} zombies`);
+    audio.enterRaid(raidDef.music);
+    withBattleLoadTimeout(RaidScene.create(app, {
+      raid: raidDef,
+      assets,
+      playerUnits: config.playerUnits,
+      enemyUnits: config.enemyUnits,
+      bossThrow: null,
+      waveCadence: config.waveCadence,
+      // PvP always fights at full focus: pinned server-side, mirrored here — a
+      // disagreement would desync the verified replay from tick 0.
+      concentration: true,
+      onStrike: (strike) => audio.fightStrike(strike),
+      onBrainRelease: (sourceKey) => audio.brainForZombie(sourceKey),
+      onVictory: () => audio.playRaidVictory(),
+      confirmRetreat: () => hud.confirmInGame(
+        "Retreat from the invasion?", "The fight ends and their defense holds.", "Retreat"
+      ),
+      onCheckpoint: undefined,
+      onFinish: (outcome, finalTick, inputs) => {
+        void api.pvpFinish(sessionId, finalTick, inputs, outcome).then((res) => {
+          // Boost rewards were granted into server inventory; adopt the echoed counts.
+          if (res.inventory) economy?.adoptRaidStartInventory(res.inventory);
+          const rewards = res.rewards ?? [];
+          const view: RaidResultView = {
+            win: !!res.win,
+            title: res.win ? "FARM CONQUERED!" : "INVASION REPELLED",
+            enemiesBeaten: res.outcome?.enemiesBeaten ?? outcome.enemiesBeaten,
+            // Friendly fight: every fallen zombie walks home afterwards.
+            zombiesLost: 0,
+            gold: 0, brains: 0, xp: 0, firstClear: false,
+            loot: rewards.map((r) => ({
+              name: boostDefOf(r.key)?.name ?? r.key,
+              icon: `${BASE}assets/boosts/${boostDefOf(r.key)?.icon ?? `${r.key}.png`}`,
+              qty: r.qty,
+            })),
+            abilityUnlock: "",
+          };
+          hud.openRaidResult(view, () => {
+            if (raidScene) { app.stage.removeChild(raidScene.container); raidScene.destroy(); raidScene = null; }
+            raidActive = false;
+            resumeFarmJobs();
+            world.visible = true;
+            hud.setRaiding(false);
+            audio.exitRaid();
+          });
+        }).catch((error) => {
+          const code = error instanceof api.ApiError ? error.code : "unknown_error";
+          hud.showToast(
+            code === "stale_ruleset"
+              ? "The game was updated during this invasion, so its result could not be settled. Nothing was lost."
+              : "The invasion result could not be verified. Nothing was lost.",
+            6000
+          );
+          abandonBattle();
+        });
+      },
+    })).then((scene) => {
+      hud.setBattleLoading(false);
+      crumb("battle:ready", raidDef.name);
+      if (!raidActive) return scene.destroy();
+      raidScene = scene;
+      app.stage.addChild(scene.container);
+      if (import.meta.env.DEV) {
+        (window as unknown as { ZF?: Record<string, unknown> }).ZF!.raidScene = scene;
+      }
+    }).catch((error) => {
+      recordDiagnostic({
+        at: Date.now(), kind: "error", where: "pvp-scene",
+        message: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      console.warn("[pvp] battle scene failed to load", error);
+      crumb("battle:failed", raidDef.name);
+      abandonBattle();
+      hud.showToast("The invasion could not be loaded. Nothing was lost — try again.", 6000);
+    });
+  };
+  hud.onInvadeFriend = (friendId, friendName) => {
+    if (!PVP_UI_ENABLED) return; // parked — see docs/FRIEND_INVASIONS.md
+    if (!onlineFarm) { hud.showToast("Friend invasions need an online farm."); return; }
+    if (raidActive || Date.now() < raidLaunchLockedUntil) return;
+    hud.openPvpArmy(friendName, async (orderedIds) => {
+      try {
+        await economy?.settleBeforeDependency();
+        const settled = reconcilePartySelection(
+          orderedIds,
+          zombies.roster().filter((z) => !z.stored),
+          (id) => economy?.authoritativeUnitId(id) ?? id,
+          PVP_ARMY_SIZE
+        );
+        if (settled.missingIds.length || settled.ids.length !== PVP_ARMY_SIZE) {
+          hud.showToast("Some chosen zombies are no longer available. Please pick your army again.");
+          return;
+        }
+        const gate = await api.pvpStart(friendId, settled.ids);
+        if (!gate.ok || !gate.sessionId || !gate.config) {
+          const err = gate.error ?? "unknown";
+          hud.showToast(
+            err === "pair_limit"
+              ? `You've already invaded ${friendName} ${gate.limit ?? 3} times today — try again tomorrow.`
+              : err === "no_defense"
+                ? `${friendName} has no zombies on their farm to defend it.`
+                : err === "not_friends"
+                  ? "You can only invade friends."
+                  : err === "raid_in_progress"
+                    ? "Another invasion is already in progress."
+                    : "The invasion could not be started."
+          );
+          return;
+        }
+        raidLaunchLockedUntil = Math.max(raidLaunchLockedUntil, Date.now() + 15_000);
+        launchPvpBattle(gate.sessionId, gate.config, friendName);
+      } catch (error) {
+        if (error instanceof api.ApiError) {
+          const body = (error.body ?? {}) as { limit?: number };
+          if (error.code === "stale_ruleset") {
+            hud.showToast("The game has updated. Reload to invade friends.", 6000);
+            promptReload("The game has updated. Reload to keep playing.");
+          } else if (error.code === "pair_limit") {
+            hud.showToast(`You've already invaded ${friendName} ${body.limit ?? 3} times today — try again tomorrow.`);
+          } else if (error.code === "no_defense") {
+            hud.showToast(`${friendName} has no zombies on their farm to defend it.`);
+          } else if (error.code === "not_friends") {
+            hud.showToast("You can only invade friends.");
+          } else if (error.code === "raid_in_progress") {
+            hud.showToast("Another invasion is already in progress.");
+          } else hud.showToast("The invasion could not be started.");
+        } else hud.showToast("Gameplay is paused until the server reconnects.");
+      }
+    });
+  };
+  hud.getPvpHistory = async () => {
+    if (!onlineFarm) return [];
+    const res = await api.pvpHistory();
+    return res.entries ?? [];
+  };
+  hud.onCollectPvpDefense = async (sessionId) => {
+    if (!onlineFarm) return null;
+    try {
+      const res = await api.pvpCollect(sessionId);
+      if (res.inventory) economy?.adoptRaidStartInventory(res.inventory);
+      return res.rewards ?? [];
+    } catch {
+      return null;
+    }
+  };
+
   hud.onLaunchRaid = async (raidId, partyIds, opts) => {
     if (raidActive || Date.now() < raidLaunchLockedUntil) return false;
     raidSessionId = null;
