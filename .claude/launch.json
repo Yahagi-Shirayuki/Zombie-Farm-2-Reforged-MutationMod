@@ -39,6 +39,19 @@
       "port": 8787
     },
     {
+      "name": "zombiefarm-staging-client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "4173",
+        "--strictPort"
+      ],
+      "port": 4173
+    },
+    {
       "name": "zombiefarm-preview",
       "runtimeExecutable": "npm",
       "runtimeArgs": [

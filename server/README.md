@@ -200,7 +200,19 @@ and prod's are declared separately). Live at
 - Deploy: `npm run deploy` (or bare `npx wrangler deploy`).
 - Config mirrors prod except `DEV_AUTH=1` (sign in via `window.zfDevSignIn`, no
   Google) and `ALLOWED_ORIGIN=http://localhost:5173`.
-- To point a local client at it, set `VITE_API_URL` to the staging URL in `.env.local`.
+- **Connecting a local client** (verified end-to-end 2026-08-22): set
+  `VITE_API_URL=https://zombiefarm-server-staging.zombiefarm.workers.dev` in the
+  root `.env.local` (leave `VITE_GOOGLE_CLIENT_ID` blank), `npm run dev` in the
+  repo root, open `http://localhost:5173` **exactly** (CORS is exact-match on
+  `localhost:5173`/`4173`; `127.0.0.1` and other ports are rejected), then in the
+  console `localStorage.setItem("zf2r.play-mode.v1","online")` + reload, and
+  `await window.zfDevSignIn("you@test.local","YourName")` + reload. Every distinct
+  `devSub` is its own throwaway account. Full recipe: root `README.md`, "Online
+  against the deployed STAGING server".
+- Direct API poking: `GET /` is unauthenticated; for the rest, `POST /auth` with
+  `{"devSub":"..."}` returns a token to pass as `Authorization: Bearer`.
+- Database inspection: `npx wrangler d1 execute zombiefarm-staging --remote
+  --command "..."` (no `--env` flag — staging is the default environment).
 - New migrations: `npx wrangler d1 migrations apply zombiefarm-staging --remote`.
   The database was initialized via the fresh path (`schema.sql` +
   `scripts/baseline-migrations.sql` — see `migrations/README.md`), so only migrations

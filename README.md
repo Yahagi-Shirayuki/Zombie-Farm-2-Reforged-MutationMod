@@ -216,6 +216,35 @@ npm run dev              # wrangler dev on :8787
 Then `npm run dev` in the repo root as above. See `.env.example` for all client
 config; both online values are public (safe to commit).
 
+### Online against the deployed STAGING server (no local Worker needed)
+
+The deployed staging stack (`zombiefarm-server-staging` — see "Staging environment"
+in `server/README.md`) accepts local clients, so you can exercise the online layer
+on real Cloudflare infrastructure without running `wrangler dev` at all. In
+`.env.local`:
+
+```
+VITE_API_URL=https://zombiefarm-server-staging.zombiefarm.workers.dev
+VITE_GOOGLE_CLIENT_ID=
+```
+
+Then `npm run dev` and open **`http://localhost:5173` exactly** — the Worker's CORS
+allowlist is exact-match on `http://localhost:5173` and `http://localhost:4173`, so
+`127.0.0.1` or any other port is rejected. (If 5173 is taken, run
+`npm run dev -- --port 4173 --strictPort`; the `zombiefarm-staging-client` launch
+config does exactly that.)
+
+In the browser console:
+
+```js
+localStorage.setItem("zf2r.play-mode.v1", "online")   // then reload — no UI for this
+await window.zfDevSignIn("you@test.local", "YourName") // then reload, pick a name
+```
+
+Each distinct `devSub` string is its own disposable staging account. Real Google
+sign-in does NOT work from localhost (not an authorized origin on the OAuth
+client) — the dev bypass is the intended staging path.
+
 ### Production build
 
 ```bash
