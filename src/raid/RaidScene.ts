@@ -13,7 +13,7 @@ import { AnimatedSprite, Application, Assets, Container, Graphics, Rectangle, Sp
 import { GameAssets, raidImage } from "../assets";
 import { isEpicBossKey } from "../epicBoss/combat";
 import { noteAssetFailure } from "../assetFailures";
-import { ALIEN_LASER_SPRITE, BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, EPIC_BOSS_LAND_MS, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX, THROW_WINDUP_MS } from "./BattleSim";
+import { ALIEN_LASER_SPRITE, BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, EPIC_BOSS_LAND_MS, FIELD_H, FIELD_W, laserInterval, SimUnit, TELEPORT_PX, THROW_WINDUP_MS } from "./BattleSim";
 import { RaidActor } from "./RaidActor";
 import { EnemyActor, type EnemyAttackPose } from "./EnemyActor";
 import { ParticleField, ParticleConfig } from "./Particles";
@@ -153,9 +153,21 @@ const FUSE_SPARKS: ParticleConfig = {
   startParticleSize: 14, finishParticleSize: 2,
   startColorRed: 1, startColorGreen: 0.86, startColorBlue: 0.42,
 };
-// Keep the T3/T4 Regular-zombie laser combat active while its beam presentation
-// is temporarily hidden. Flip this back on when the visual is ready to ship.
-const SHOW_REGULAR_ZOMBIE_LASERS = false;
+// The T3/T4 Regular-zombie eye beam: the sim deals its laser damage in instant
+// ticks (BattleSim.stepLaser), and each tick re-arms the drawn beam for one firing
+// interval plus this linger. While the cadence keeps re-arming it the beam reads
+// as a single continuous ray from the eyes to the victim; once the ticks stop
+// (zombie halted, target down) it winks out after the fade below.
+const BEAM_LINGER_S = 0.2;
+const BEAM_FADE_IN_S = 0.05;
+const BEAM_FADE_OUT_S = 0.12;
+// The whole beam throbs — width and brightness together — at this angular rate
+// (~6.5 pulses/second), so the laser reads as pumped energy rather than a drawn line.
+const BEAM_PULSE_RAD_S = 41;
+// While a beam burns, the impact point smoulders: a small wisp of the stage's own
+// smoke particle (the enemy-death swirlCloudFX) on this cadence, at this scale.
+const BEAM_SMOKE_S = 0.22;
+const BEAM_SMOKE_SCALE = 0.35;
 // The per-hit dust burst a PLAYER zombie throws off as it connects, held back for
 // now: a full army swinging at once turned the frontline into a permanent cloud.
 // Enemy strikes keep theirs — they land one at a time and the puff is what marks
@@ -592,7 +604,12 @@ export class RaidScene {
   private damageWatch = new Map<string, number>();
   private damageTallies = new Map<string, DamageTally>();
   private damageNumbers: { text: Text; t: number; x: number; y: number }[] = [];
-  private laserFx: { g: Graphics; t: number; life: number }[] = [];
+  /** Live T3/T4 eye beams, one per firing zombie (keyed by unit id). Redrawn every
+   *  frame so both ends track their moving owners; see stepZombieBeams. */
+  private zombieBeams = new Map<string, {
+    g: Graphics; targetId: string; holdS: number; ageS: number; upgraded: boolean;
+    smokeS: number; // countdown to the next impact-smoke wisp
+  }>();
   private blastFx: { g: Graphics; t: number; scale: number }[] = [];
   private shakeT = 0; // seconds left in the blast shake (0 = still)
   private brainLayer = new Container();
@@ -1952,10 +1969,7 @@ export class RaidScene {
       }
       if (u.laserFxSeq > tok.laserFxSeq) {
         tok.laserFxSeq = u.laserFxSeq;
-        const target = u.laserTargetId ? this.tokens.get(u.laserTargetId) : null;
-        if (SHOW_REGULAR_ZOMBIE_LASERS && target) {
-          this.spawnLaserBeam(tok, target, u.abilities.includes("zomBeam"));
-        }
+        if (u.laserTargetId && this.tokens.has(u.laserTargetId)) this.armZombieBeam(u);
       }
       if (tok.healPose > 0) tok.healPose = Math.max(0, tok.healPose - dtSec);
 
@@ -2727,15 +2741,6 @@ export class RaidScene {
       for (const e of this.fx) if (e.t >= e.life) e.g.destroy();
       this.fx = this.fx.filter((e) => e.t < e.life);
     }
-    for (const beam of this.laserFx) {
-      beam.t += dtSec;
-      const k = Math.min(1, beam.t / beam.life);
-      beam.g.alpha = (1 - k) ** 2;
-    }
-    if (this.laserFx.some((beam) => beam.t >= beam.life)) {
-      for (const beam of this.laserFx) if (beam.t >= beam.life) beam.g.destroy();
-      this.laserFx = this.laserFx.filter((beam) => beam.t < beam.life);
-    }
   }
 
   /** The beam-down pillar: a column of white light that opens, then closes in from both
@@ -2788,29 +2793,90 @@ export class RaidScene {
     }
   }
 
-  /** Flash the Regular zombie's automatic T3/T4 beam from its eye line to the
-   *  enemy that received the sim's instant laser damage. This is presentation-only:
-   *  the replay-safe damage and cadence remain owned by BattleSim.stepLaser. */
-  private spawnLaserBeam(source: Token, target: Token, upgraded: boolean) {
-    // `hpCenterX` / `base` / `topY` are TOKEN-LOCAL; the root carries the size scale, so
-    // every one of them has to be scaled before being added to a screen position.
-    const szs = this.sizeScale();
-    const x0 = source.root.x + (source.hpCenterX + source.base * 0.16) * szs;
-    const y0 = source.root.y + source.topY * 0.72 * szs;
-    const x1 = target.root.x + (target.hpCenterX - target.base * 0.2) * szs;
-    const y1 = target.root.y + target.topY * 0.55 * szs;
-    const color = upgraded ? 0x6ffcff : 0x8dff45;
-    const g = new Graphics()
-      .moveTo(x0, y0).lineTo(x1, y1)
-      .stroke({ width: upgraded ? 9 : 7, color, alpha: 0.22 })
-      .moveTo(x0, y0).lineTo(x1, y1)
-      .stroke({ width: upgraded ? 4 : 3, color, alpha: 0.95 })
-      .moveTo(x0, y0).lineTo(x1, y1)
-      .stroke({ width: 1.25, color: 0xffffff, alpha: 1 })
-      .circle(x0, y0, upgraded ? 5 : 4).fill({ color: 0xffffff, alpha: 0.9 })
-      .circle(x1, y1, upgraded ? 8 : 6).fill({ color, alpha: 0.75 });
+  /** Light (or re-arm) the Regular zombie's automatic T3/T4 eye beam. This is
+   *  presentation-only: the replay-safe damage and cadence remain owned by
+   *  BattleSim.stepLaser. Each sim tick lands here and extends the beam's hold by
+   *  one firing interval plus a linger, so a zombie that keeps cycling shows one
+   *  unbroken ray rather than a flash per tick. */
+  private armZombieBeam(u: SimUnit) {
+    const holdS = laserInterval(u.abilities, u.cooldownMs) / 1000 + BEAM_LINGER_S;
+    const prev = this.zombieBeams.get(u.id);
+    if (prev) {
+      prev.holdS = holdS;
+      prev.targetId = u.laserTargetId!;
+      return;
+    }
+    const g = new Graphics();
     this.fxLayer.addChild(g);
-    this.laserFx.push({ g, t: 0, life: upgraded ? 0.18 : 0.14 });
+    this.zombieBeams.set(u.id, {
+      g, holdS, ageS: 0, targetId: u.laserTargetId!,
+      upgraded: u.abilities.includes("zomBeam"),
+      smokeS: 0,
+    });
+  }
+
+  /** Redraw every live eye beam against this frame's token positions — called AFTER
+   *  layout() has placed the tokens, so the beam pins to the eyes instead of trailing
+   *  them by a frame while its owner walks. */
+  private stepZombieBeams(dtSec: number) {
+    if (!this.zombieBeams.size) return;
+    const szs = this.sizeScale();
+    for (const [id, beam] of this.zombieBeams) {
+      beam.ageS += dtSec;
+      beam.holdS -= dtSec;
+      const src = this.tokens.get(id);
+      const dst = this.tokens.get(beam.targetId);
+      // A laser turning off is instant by nature: expire on the hold running dry, and
+      // cut immediately when either end dies — a beam from (or into) a corpse is worse
+      // than a hard stop.
+      if (beam.holdS <= 0 || !src || !dst || src.deathAnim >= 0 || dst.deathAnim >= 0) {
+        beam.g.destroy();
+        this.zombieBeams.delete(id);
+        continue;
+      }
+      // Origins: one beam per eye, and every beam runs PARALLEL TO THE GROUND — it
+      // leaves the eye horizontally and strikes the enemy at that same height,
+      // whatever the enemy's size. A face covered by a mutation (no eye sprites) or
+      // a portrait-fallback token fires a single beam from the approximate eye line
+      // the old flash used. `hpCenterX` / `base` / `topY` are TOKEN-LOCAL; the root
+      // carries the size scale, so each is scaled before being added to a screen
+      // position.
+      const eyePts = src.actor?.eyePointsGlobal() ?? [];
+      const origins = eyePts.length
+        ? eyePts.map((p) => this.fxLayer.toLocal(p))
+        : [{
+            x: src.root.x + (src.hpCenterX + src.base * 0.16) * szs,
+            y: src.root.y + src.topY * 0.72 * szs,
+          }];
+      const xHit = dst.root.x + (dst.hpCenterX - dst.base * 0.2) * szs;
+      // Thin white core in a coloured sheath, the whole thing throbbing in width and
+      // brightness together.
+      const env = Math.min(beam.ageS / BEAM_FADE_IN_S, beam.holdS / BEAM_FADE_OUT_S, 1);
+      const throb = 0.5 + 0.5 * Math.sin(beam.ageS * BEAM_PULSE_RAD_S);
+      const a = env * (0.6 + 0.4 * throb);
+      // Tier colours: green for the T3 laserBeam, blue for the T4 zomBeam upgrade.
+      const color = beam.upgraded ? 0x4f9dff : 0x8dff45;
+      const wCore = (beam.upgraded ? 1.6 : 1.3) * Math.max(0.7, szs) * (0.75 + 0.5 * throb);
+      const wBody = wCore * 2.4;
+      const wGlow = wCore * 5.5;
+      beam.g.clear();
+      for (const o of origins) {
+        beam.g
+          .moveTo(o.x, o.y).lineTo(xHit, o.y).stroke({ width: wGlow, color, alpha: 0.15 * a })
+          .moveTo(o.x, o.y).lineTo(xHit, o.y).stroke({ width: wBody, color, alpha: 0.8 * a })
+          .moveTo(o.x, o.y).lineTo(xHit, o.y).stroke({ width: wCore, color: 0xffffff, alpha: a })
+          .circle(o.x, o.y, wBody * 1.3).fill({ color: 0xffffff, alpha: 0.75 * a })
+          .circle(xHit, o.y, wGlow * (0.75 + 0.3 * throb)).fill({ color, alpha: 0.45 * a });
+      }
+      // The burn point smoulders: small wisps of the stage's smoke at the impact,
+      // centred between the (near-coincident) per-eye strike heights.
+      beam.smokeS -= dtSec;
+      if (beam.smokeS <= 0 && this.smokeCfg) {
+        beam.smokeS += BEAM_SMOKE_S;
+        const yHit = origins.reduce((sum, o) => sum + o.y, 0) / origins.length;
+        this.particles.burst(this.smokeCfg, xHit, yHit, BEAM_SMOKE_SCALE);
+      }
+    }
   }
 
   /** Yeet one visible brain per five awarded brains from the defeated boss into
@@ -3118,6 +3184,8 @@ export class RaidScene {
     }
 
     this.layout(dtSec);
+    // After layout: the beams pin to this frame's eye/target positions.
+    this.stepZombieBeams(dtSec);
   }
 
   private setPhase(p: Phase) {

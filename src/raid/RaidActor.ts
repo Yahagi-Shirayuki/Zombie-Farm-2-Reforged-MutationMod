@@ -150,6 +150,16 @@ export class RaidActor {
     return this.getSizingBounds().height / Math.max(0.001, this.renderScale);
   }
 
+  /** GLOBAL positions of the rig's individual eyes — the muzzles of the T3/T4
+   *  walking laser, which fires one beam per eye. Each point follows its eye through
+   *  walk-bob and attack tilts and honours the facing flip. Empty when the face is
+   *  covered (a pumpkin head builds no eye sprites) or the head has popped off in
+   *  death — callers fall back to an approximate eye height. */
+  eyePointsGlobal(): { x: number; y: number }[] {
+    if (this.deathT >= 0) return [];
+    return this.eyes.map((eye) => this.root.toGlobal({ x: eye.sp.x, y: eye.sp.y }));
+  }
+
   private build(
     assets: GameAssets, key: string, mutation: number, group: string,
     color?: [number, number, number],

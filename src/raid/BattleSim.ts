@@ -435,7 +435,7 @@ function stringSeed(value: string): number {
   return out % 100;
 }
 
-function laserInterval(abilities: readonly string[], attackCooldownMs: number): number {
+export function laserInterval(abilities: readonly string[], attackCooldownMs: number): number {
   if (abilities.includes("zomBeam")) return attackCooldownMs / 6;
   if (abilities.includes("laserBeam")) return attackCooldownMs / 3;
   return 0;
