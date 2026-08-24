@@ -5,6 +5,12 @@
 //
 // KEEP IN SYNC with raids.json (11 playable raids) and RaidCatalog.winGold.
 //
+// The table below is GENERATED from that asset: `npm run catalogs` (server/
+// scripts/gen-catalogs.mjs) rewrites the `#region generated:` block, and
+// `npm run catalogs:check` fails CI and the deploy:prod gate when the two drift.
+// Edit the ASSET, not the region. Everything outside the region is hand-written
+// and is not touched.
+//
 // Scope: this covers the DETERMINISTIC base reward (win gold from raid + survival
 // fraction, and first-clear XP). The random loot roll (an item, "Bonus Gold", or a
 // brain drop) stays on the bounds-validated economy/inventory path — server-owned
@@ -30,6 +36,8 @@ export interface RaidEcon {
 }
 
 export const RAIDS: Readonly<Record<number, RaidEcon>> = {
+  // #region generated:RAIDS
+  // Source: public/assets/raids/raids.json — regenerate with `npm run catalogs` (server/scripts/gen-catalogs.mjs) — do not hand-edit
   1: { gold: 1200, bonus: 400, xp: 100, recLevel: 5, unlockLevel: 0, playable: true }, // Old McDonnell's Farm
   2: { gold: 1500, bonus: 750, xp: 800, recLevel: 16, unlockLevel: 16, playable: true }, // Zombies vs Lawyers
   3: { gold: 2000, bonus: 750, xp: 1500, recLevel: 21, unlockLevel: 21, playable: true }, // Zombies vs Pirates
@@ -41,6 +49,7 @@ export const RAIDS: Readonly<Record<number, RaidEcon>> = {
   9: { gold: 6300, bonus: 1200, xp: 5500, recLevel: 43, unlockLevel: 43, playable: true }, // Zombies vs Video Games
   10: { gold: 1200, bonus: 600, xp: 500, recLevel: 8, unlockLevel: 8, playable: true }, // Tree World
   11: { gold: 1200, bonus: 600, xp: 500, recLevel: 8, unlockLevel: 8, playable: true }, // Valentine's Day
+  // #endregion generated:RAIDS
 };
 
 export function raidEcon(id: number): RaidEcon | undefined {

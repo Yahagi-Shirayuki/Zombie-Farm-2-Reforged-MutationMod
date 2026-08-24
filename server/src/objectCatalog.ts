@@ -6,6 +6,12 @@
 // refund credits floor(cost * SELL_BACK_RATIO). Object ownership is tracked as a COUNT
 // per key (like boosts) — placement/position stays client-side layout.
 //
+// The table below is GENERATED from that asset: `npm run catalogs` (server/
+// scripts/gen-catalogs.mjs) rewrites the `#region generated:` block, and
+// `npm run catalogs:check` fails CI and the deploy:prod gate when the two drift.
+// Edit the ASSET, not the region. Everything outside the region is hand-written
+// and is not touched.
+//
 // NOTE: the Zombie Pot has dynamic client pricing (500 first / 30 after) and stays a
 // client-side purchase; it is still listed here for completeness but the client does
 // not route its buy/refund through the server.
@@ -33,7 +39,8 @@ export interface ObjectEcon {
 }
 
 export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
-  // Mausoleum upgrade tiers (bought only as an object.upgrade of the placed one).
+  // #region generated:OBJECTS
+  // Source: public/assets/placeables.json — regenerate with `npm run catalogs` (server/scripts/gen-catalogs.mjs) — do not hand-edit
   "alienBanner": { cost: 0, brains: false, xp: 0, level: -1 },
   "antiHolidayIncinerator": { cost: 0, brains: false, xp: 0, level: -1 },
   "antiHolidayVault": { cost: 0, brains: false, xp: 0, level: -1 },
@@ -120,9 +127,9 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "crate_yellow": { cost: 750, brains: false, xp: 5, level: 28 },
   "croquet": { cost: 10000, brains: false, xp: 100, level: 42 },
   "crystalGazebo": { cost: 0, brains: false, xp: 0, level: -1 },
-  "cupidStatueA": { cost: 50, brains: true, xp: 3000, level: 0 },
-  "cupidStatueB": { cost: 50, brains: true, xp: 3000, level: 0 },
-  "cupidTopiary": { cost: 5000, brains: false, xp: 100, level: 0 },
+  "cupidStatueA": { cost: 50, brains: true, xp: 3000, level: 1 },
+  "cupidStatueB": { cost: 50, brains: true, xp: 3000, level: 1 },
+  "cupidTopiary": { cost: 5000, brains: false, xp: 100, level: 1 },
   "cursedChest": { cost: 2, brains: true, xp: 0, level: 1 },
   "cypressTree": { cost: 500, brains: false, xp: 5, level: 3 },
   "daisy": { cost: 10, brains: false, xp: 0, level: 6 },
@@ -224,10 +231,10 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "hauntedHouse": { cost: 3, brains: true, xp: 0, level: -1 },
   "haystack": { cost: 2500, brains: false, xp: 25, level: 11 },
   "hazardFence": { cost: 0, brains: false, xp: 0, level: -1 },
-  "heartCandle": { cost: 5000, brains: false, xp: 100, level: 0 },
+  "heartCandle": { cost: 5000, brains: false, xp: 100, level: 1 },
   "heartFountain": { cost: 10, brains: true, xp: 6000, level: 1 },
-  "heartGravestone": { cost: 15, brains: true, xp: 1750, level: 0 },
-  "heartHedge": { cost: 5000, brains: false, xp: 100, level: 0 },
+  "heartGravestone": { cost: 15, brains: true, xp: 1750, level: 1 },
+  "heartHedge": { cost: 5000, brains: false, xp: 100, level: 1 },
   "hedge_01": { cost: 1000, brains: false, xp: 10, level: 7 },
   "hedge_01_black": { cost: 2000, brains: false, xp: 18, level: 18 },
   "hedge_01_blue": { cost: 1800, brains: false, xp: 18, level: 10 },
@@ -272,9 +279,9 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "loveShack": { cost: 0, brains: false, xp: 0, level: -1 },
   "luckPlant": { cost: 1000, brains: false, xp: 10, level: 1 },
   "mailboxNormal": { cost: 950, brains: false, xp: 9, level: 8 },
-  // Only mausoleum3 is BOUGHT; every tier above it is an object.upgrade rung, and
-  // all nine rungs cost the same flat 4 brains. See MAUSOLEUM_TIERS in
-  // tools/prep_placeables.py, which authors the same numbers into the asset.
+  "mausoleum10": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum11": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum12": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum3": { cost: 8, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum4": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum5": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
@@ -282,14 +289,9 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "mausoleum7": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum8": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum9": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
-  "mausoleum10": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
-  "mausoleum11": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
-  "mausoleum12": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
-  // Deliberately NO purchaseLimit despite being `functional`: one statue remembers
-  // one zombie, so the farm needs as many as the player has lost.
-  "memorialStatue": { cost: 3000, brains: false, xp: 30, level: 1 },
   "mayflower": { cost: 5, brains: true, xp: 0, level: 1 },
   "mechanicalBull": { cost: 0, brains: false, xp: 0, level: -1 },
+  "memorialStatue": { cost: 3000, brains: false, xp: 30, level: 1 },
   "monkeyBars": { cost: 4000, brains: false, xp: 40, level: 40 },
   "monolithBusted": { cost: 3, brains: true, xp: 800, level: 25 },
   "monolithCombine": { cost: 12, brains: true, xp: 6000, level: 25, purchaseLimit: 1 },
@@ -399,7 +401,7 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "skeletonCouple": { cost: 3, brains: true, xp: 0, level: -1 },
   "skullCandle": { cost: 4500, brains: false, xp: 45, level: 28 },
   "skullWithSnake": { cost: 4000, brains: false, xp: 40, level: 27 },
-  "sleigh": { cost: 2, brains: true, xp: 1000, level: 0 },
+  "sleigh": { cost: 2, brains: true, xp: 1000, level: 1 },
   "smallCactus": { cost: 3300, brains: false, xp: 7, level: 12 },
   "smallDragonBoat": { cost: 2, brains: true, xp: 0, level: 1 },
   "snowBalls": { cost: 1500, brains: false, xp: 15, level: 1 },
@@ -408,7 +410,7 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "snowFort": { cost: 7500, brains: false, xp: 75, level: 1 },
   "snowHedge_01": { cost: 5000, brains: false, xp: 50, level: 30 },
   "snowLumberjack": { cost: 0, brains: false, xp: 0, level: -1 },
-  "snowMan": { cost: 3, brains: true, xp: 1500, level: 0 },
+  "snowMan": { cost: 3, brains: true, xp: 1500, level: 1 },
   "snowOlMcDonnell": { cost: 0, brains: false, xp: 0, level: -1 },
   "snowOwl": { cost: 0, brains: false, xp: 0, level: -1 },
   "snowZombie": { cost: 0, brains: false, xp: 0, level: -1 },
@@ -493,7 +495,7 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "windmill": { cost: 0, brains: false, xp: 0, level: -1 },
   "winterSnowWoman": { cost: 2, brains: true, xp: 0, level: 1 },
   "witchsCauldron": { cost: 0, brains: false, xp: 0, level: -1 },
-  "xmasArch": { cost: 1, brains: true, xp: 500, level: 0 },
+  "xmasArch": { cost: 1, brains: true, xp: 500, level: 1 },
   "xmasCandle": { cost: 3000, brains: false, xp: 30, level: 1 },
   "xmasFence": { cost: 5000, brains: false, xp: 50, level: 1 },
   "xmasGifts": { cost: 2000, brains: false, xp: 20, level: 1 },
@@ -507,6 +509,7 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "zombieGift": { cost: 5, brains: true, xp: 0, level: -1 },
   "zombieTopiaryNormal": { cost: 1750, brains: false, xp: 18, level: 15 },
   "zombieXingSign": { cost: 1, brains: true, xp: 500, level: 15 },
+  // #endregion generated:OBJECTS
 };
 
 export function objectEcon(key: string): ObjectEcon | undefined {
@@ -568,6 +571,8 @@ export const MAX_OBJECT_COUNT = 8192;
  *  object_counts rather than stored — an editable save can't declare it.
  *  KEEP IN SYNC with placeables.json. */
 export const SHED_SLOTS: Readonly<Record<string, number>> = {
+  // #region generated:SHED_SLOTS
+  // Source: public/assets/placeables.json — regenerate with `npm run catalogs` (server/scripts/gen-catalogs.mjs) — do not hand-edit
   storage01: 8,
   storage02: 16,
   storage03: 24,
@@ -576,10 +581,8 @@ export const SHED_SLOTS: Readonly<Record<string, number>> = {
   storage06: 48,
   storage07: 56,
   storage08: 64,
-  // Above the source ladder's top rung (see tools/prep_placeables.py
-  // EXTRA_SHED_TIERS): the same +8 step, so a maxed-out farm still has something
-  // to upgrade.
   storage09: 72,
+  // #endregion generated:SHED_SLOTS
 };
 
 /** The starter shed's capacity — what an account holds before buying a bigger one. Every

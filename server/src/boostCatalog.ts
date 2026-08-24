@@ -5,6 +5,12 @@
 //
 // KEEP IN SYNC with boosts.json (7 boosts).
 //
+// The table below is GENERATED from that asset: `npm run catalogs` (server/
+// scripts/gen-catalogs.mjs) rewrites the `#region generated:` block, and
+// `npm run catalogs:check` fails CI and the deploy:prod gate when the two drift.
+// Edit the ASSET, not the region. Everything outside the region is hand-written
+// and is not touched.
+//
 // Scope: consumable boosts only. Zombie-purchase "gift" powers are intentionally
 // omitted. Non-boost inventory (placed objects, ground skins, farm-size, received
 // loot) is not covered here.
@@ -25,17 +31,16 @@ export interface BoostEcon {
 }
 
 export const BOOSTS: Readonly<Record<string, BoostEcon>> = {
+  // #region generated:BOOSTS
+  // Source: public/assets/boosts.json — regenerate with `npm run catalogs` (server/scripts/gen-catalogs.mjs) — do not hand-edit
   insta_grow: { cost: 1, brains: true, perPurchase: 20, level: 0 },
   insta_harvest: { cost: 1, brains: true, perPurchase: 4, level: 0 },
   insta_plow: { cost: 1, brains: true, perPurchase: 4, level: 0 },
   concentration: { cost: 1, brains: true, perPurchase: 2, level: 0 },
   golden_dice: { cost: 1, brains: true, perPurchase: 1, level: 0 },
   invasion_voucher: { cost: 2000, brains: false, perPurchase: 1, level: 0 },
-  // Level 20 to match boosts.json. It shipped at 0 here while the asset said 20, which
-  // made the Market gate client-side only — the button was hidden, but a `power.buy`
-  // command sent straight at /commands was applied, and an elite invasion is the most
-  // valuable thing a low-level account could have bought its way into.
   brain_ticket: { cost: 10000, brains: false, perPurchase: 1, level: 20 },
+  // #endregion generated:BOOSTS
 };
 
 /** The boost that bypasses the raid cooldown — consumed server-side on /raid/start.
@@ -61,12 +66,16 @@ export const CONCENTRATION_KEY = "concentration";
  *  Voucher).
  *  KEEP IN SYNC with boosts.json `name`. */
 export const BOOST_BY_NAME: Readonly<Record<string, string>> = {
+  // #region generated:BOOST_BY_NAME
+  // Source: public/assets/boosts.json — regenerate with `npm run catalogs` (server/scripts/gen-catalogs.mjs) — do not hand-edit
   "Insta-Grow": "insta_grow",
   "Insta-Harvest": "insta_harvest",
   "Insta-Plow": "insta_plow",
   Concentration: "concentration",
   "Golden Dice": "golden_dice",
   "Invasion Voucher": "invasion_voucher",
+  "Brain Ticket": "brain_ticket",
+  // #endregion generated:BOOST_BY_NAME
 };
 
 /** The boost a loot entry grants, or undefined if the entry isn't a boost. */

@@ -41,6 +41,8 @@ jobs:
       - run: npm ci
       - name: Verify migrations
         run: npm run migrations:check
+      - name: Verify catalog mirrors match public/assets
+        run: npm run catalogs:check
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests
