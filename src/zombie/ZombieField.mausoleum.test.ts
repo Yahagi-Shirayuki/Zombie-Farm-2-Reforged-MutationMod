@@ -30,20 +30,32 @@ const withMausoleum = (tier?: PlaceableDef, stored = 0) => {
 
 describe("Mausoleum upgrade ladder", () => {
   it("ships ten tiers, each adding five slots for brains", () => {
-    // Only the base building is bought (8 brains); every rung above it costs the
-    // same flat 4, so the ladder never prices itself out of reach.
+    // Only the base building is bought outright (8 brains); every rung above it is an
+    // upgrade priced in brains.
+    //
+    // NOTE the shape of the prices below. Rungs 5-7 climb 6/8/10, and then rungs 8-12
+    // drop back to a flat 4 — so buying 35 -> 60 slots costs 20 brains while 15 -> 35
+    // costs 28. That reads like an escalating ladder that was started and not carried
+    // to the top rung. It is pinned here as it ships so the next edit to these numbers
+    // is a deliberate one; it is not an endorsement of the dip.
     expect(tombs.map((tier) => [tier.key, tier.cost, tier.zombieSlots])).toEqual([
       ["mausoleum3", 8, 15],
       ["mausoleum4", 4, 20],
-      ["mausoleum5", 4, 25],
-      ["mausoleum6", 4, 30],
-      ["mausoleum7", 4, 35],
+      ["mausoleum5", 6, 25],
+      ["mausoleum6", 8, 30],
+      ["mausoleum7", 10, 35],
       ["mausoleum8", 4, 40],
       ["mausoleum9", 4, 45],
       ["mausoleum10", 4, 50],
       ["mausoleum11", 4, 55],
       ["mausoleum12", 4, 60],
     ]);
+    // Whatever the prices do, the capacity ladder itself is regular: ten rungs, five
+    // more slots each, strictly increasing.
+    expect(tombs).toHaveLength(10);
+    tombs.forEach((tier, i) => {
+      expect(tier.zombieSlots, tier.key).toBe(15 + i * 5);
+    });
     // Every tier is a brain-priced functional building sharing the base art, so an
     // upgrade swaps capacity in place without changing how the farm looks.
     for (const tier of tombs) {

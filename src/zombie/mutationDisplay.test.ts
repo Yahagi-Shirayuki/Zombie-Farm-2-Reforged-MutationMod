@@ -34,8 +34,12 @@ describe("mutationEntries", () => {
   it("names each mutation the zombie carries, in tier order", () => {
     const rows = mutationEntries(zombie(bitOf("tomato") | bitOf("celery")));
     expect(rows.map((r) => r.name)).toEqual(["Tomatohead", "Celery-arms"]);
-    expect(rows.map((r) => r.slotLabel)).toEqual(["Head", "Arm"]);
-    expect(rows.map((r) => r.effects.map((e) => e.statLabel))).toEqual([["Damage"], ["Damage"]]);
+    // "Front Arm", not "Arm": this build gives a zombie two arm slots (arm / armB),
+    // so the label has to say which one is filled.
+    expect(rows.map((r) => r.slotLabel)).toEqual(["Head", "Front Arm"]);
+    // Both move attack and life, so both list two rows — one per stat touched.
+    expect(rows.map((r) => r.effects.map((e) => e.statLabel)))
+      .toEqual([["Damage", "Life"], ["Damage", "Life"]]);
   });
 
   it("reports the bonus in DISPLAYED units, not the raw 1-4 points", () => {
@@ -124,13 +128,19 @@ describe("mutationNames", () => {
 });
 
 describe("mutationTipText", () => {
-  it("is just the effect and the slot it occupies", () => {
-    // The tile carries no label, so the effect must be here — and nothing else, the
-    // name is the tooltip's own title.
+  it("is just the effects and the slot it occupies", () => {
+    // The tile carries no label, so the effects must be here — and nothing else, the
+    // name is the tooltip's own title. Every stat the mutation moves gets its own
+    // line: quoting only the first would hide half of what a two-stat mutation does.
     const [flytrap] = mutationEntries(zombie(bitOf("flytrap")));
-    expect(mutationTipText(flytrap)).toBe(
-      `<span class="zeff">+${flytrap.effects[0].delta} Life</span><br>Neck slot`
-    );
+    expect(flytrap.effects.length).toBeGreaterThan(0);
+    const tip = mutationTipText(flytrap);
+    for (const e of flytrap.effects) {
+      expect(tip).toContain(`<span class="zeff">+${e.delta} ${e.statLabel}</span>`);
+    }
+    // One line per effect, then the slot — nothing else in the tooltip.
+    expect(tip.split("<br>")).toHaveLength(flytrap.effects.length + 1);
+    expect(tip.endsWith("<br>Neck slot")).toBe(true);
   });
 
   it("writes a penalty signed, on its own line, and marks it as a loss", () => {

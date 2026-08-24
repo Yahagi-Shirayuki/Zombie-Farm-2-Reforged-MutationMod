@@ -26,13 +26,14 @@ describe("displayed stat — bonus fold-in", () => {
   });
 
   it("folds the mutation into the total and reports its display delta (Flytrap +10 Life)", () => {
-    // Flytrap = con base 10 + mutation bit 2048 (Flytrap, +4 con) → info.con 14.
+    // Flytrap = con base 12 + mutation bit 2048 (Flytrap, +2 con) → info.con 14.
     // NONE abilities so this isolates the mutation contribution.
     const bd = statBreakdown(z({ con: 14, mutation: 2048 }), "con", NONE);
-    expect(bd.base).toBe(37); // con 11
+    expect(bd.base).toBe(40); // con 12, the raw stat with the mutation peeled off
     expect(bd.total).toBe(47); // con 14
     const mut = bd.lines.find((l) => l.label === "Mutation")!;
-    expect(mut.amount).toBe("+10");
+    // The row quotes the DISPLAYED gain, not the +2 raw: the bar is normalized.
+    expect(mut.amount).toBe("+7");
     expect(mut.zero).toBe(false);
   });
 
@@ -71,10 +72,13 @@ describe("self stat abilities", () => {
   });
 
   it("lists the ability's real displayed increase on every stat", () => {
-    const dmg = statBreakdown(largeGreen, "str", ALL).lines.find((l) => l.label === "+10% Damage")!;
+    // The row is titled with the trait's NAME ("Jock"), not its effect string — see
+    // TRAITS.powerBuff in traits.ts, where "+10% Damage" is the sub-line.
+    const dmg = statBreakdown(largeGreen, "str", ALL).lines.find((l) => l.label === "Jock")!;
     expect(dmg.amount).toBe("+10");
     expect(dmg.zero).toBe(false);
-    const life = statBreakdown(largeGreen, "con", ALL).lines.find((l) => l.label === "+10% Damage")!;
+    // Still listed on a stat it does not touch, as an explicit +0 rather than a gap.
+    const life = statBreakdown(largeGreen, "con", ALL).lines.find((l) => l.label === "Jock")!;
     expect(life.amount).toBe("+0");
     expect(life.zero).toBe(true);
   });

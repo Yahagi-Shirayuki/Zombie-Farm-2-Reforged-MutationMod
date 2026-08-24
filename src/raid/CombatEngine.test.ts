@@ -3,6 +3,7 @@ import { resolveRaid, buildEnemyUnits, buildPlayerUnits } from "./CombatEngine";
 import { activeAbilities, naturalLeaderAllStatsMult } from "../zombie/abilities";
 import type { CombatUnit } from "./types";
 import type { OwnedZombie } from "../zombie/types";
+import { mutationBonus } from "../zombie/mutations";
 import shippedStats from "../../public/assets/raids/enemy_stats.json";
 import shippedAttacks from "../../public/assets/raids/attacks.json";
 
@@ -227,10 +228,15 @@ describe("buildPlayerUnits — level-scaling is applied", () => {
 // off, runs the chain, and adds it back. Baking it in before the ramp — the old
 // behaviour — left a full 5-slot set worth ~25 % of its face value at level 12.
 describe("buildPlayerUnits — mutations apply last, as a flat bonus", () => {
-  // Garlichead (+3 str, head) | Dragon-arm (+4 str, arm) | Carrot-eyed (+1 dex, hair_eye)
+  // Garlichead (head) | Dragon-arm (arm) | Carrot-eyed (hair/eye) — one bit per slot, so
+  // the mask is legal and the bonus is the sum of all three. Read from the catalog
+  // rather than typed out: what this describes is the ORDER the bonus is applied in,
+  // and re-stating the catalog's numbers here only makes it drift when they are retuned.
+  // mutations.test.ts is where those values are pinned.
   const MASK = 256 | 4096 | 4;
-  const MUT_STR = 7;
-  const MUT_DEX = 1;
+  const MUT = mutationBonus(MASK);
+  const MUT_STR = MUT.str;
+  const MUT_DEX = MUT.dex;
 
   /** A Blue Regular (base str 5 / dex 2 / con 5 — exactly the Regular endpoints, so the
    *  level ramp is a no-op on the base and any level dependence must come from the
@@ -260,7 +266,10 @@ describe("buildPlayerUnits — mutations apply last, as a flat bonus", () => {
 
   it("veterancy multiplies the base stat only, not the flat mutation", () => {
     const master = buildPlayerUnits(mutant({ invasions: 5 }), { playerLevel: 25 })[0];
-    expect(master.str).toBeCloseTo(5 * 1.25 + MUT_STR); // 13.25, not 12 × 1.25 = 15
+    // Rank 5 is +25 %. It multiplies the base 5 and leaves the mutation alone:
+    // 5 × 1.25 + MUT_STR, never (5 + MUT_STR) × 1.25.
+    expect(master.str).toBeCloseTo(5 * 1.25 + MUT_STR);
+    expect(master.str).not.toBeCloseTo((5 + MUT_STR) * 1.25);
   });
 
   it("still ramps the UNMUTATED base while paying the mutation in full", () => {

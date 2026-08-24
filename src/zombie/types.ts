@@ -5,6 +5,7 @@ import type { ZombieDef } from "../assets";
 import { classify } from "./taxonomy";
 import { applyBodyTypeIdRestriction, applyBodyTypeRestriction, mutationBonus, normalizeMutationIds, SLOT_MASK } from "./mutations";
 import { ABILITY_TIER, randomAbilityPoolForTiers, statDisplayMax, wisToFocusBonus, type StatMeta } from "./traits";
+import { upgradeVariantMutations } from "./variantMutations";
 import { randomZombieName } from "./names";
 import {
   sanitizeZombiePowderStatProgress,
@@ -81,7 +82,14 @@ export function makeOwned(
   const tax = classify(def.key);
   const group = def.group ?? tax.group;
   const restrictHeadSlots = group === "Headless" || def.mutationProfile === "headless";
-  const restrictedMask = applyBodyTypeRestriction(mutation ?? def.mutation ?? 0, restrictHeadSlots);
+  // Enforce the body-type restriction at the one place a mask lands on a unit, and
+  // retire the shared bit the two Tier-4 variants used to ride while we are here — the
+  // server's raid verifier builds its party through here too (rosterCatalog), so both
+  // sides upgrade a legacy unit identically and a replay cannot desync on it.
+  const restrictedMask = applyBodyTypeRestriction(
+    upgradeVariantMutations(def.key, mutation ?? def.mutation ?? 0),
+    restrictHeadSlots,
+  );
   const mask = def.mutationProfile === "headless"
     ? restrictedMask & ~(SLOT_MASK.head | SLOT_MASK.hair_eye)
     : restrictedMask;

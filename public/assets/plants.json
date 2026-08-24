@@ -461,7 +461,7 @@
   "growMs": 43200000,
   "stage1": "spinalch_stage1.png",
   "stage2": "spinalch_stage2.png",
-  "level": 23,
+  "level": 22,
   "xp": 1,
   "icon": "spinach_icon.png"
  },
@@ -473,7 +473,7 @@
   "growMs": 43200000,
   "stage1": "malakale_stage1.png",
   "stage2": "malakale_stage2.png",
-  "level": 23,
+  "level": 22,
   "xp": 1,
   "icon": "kale_icon.png"
  },

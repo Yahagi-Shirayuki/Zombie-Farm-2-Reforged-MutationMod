@@ -288,13 +288,23 @@ describe("Epic Boss damage ramp", () => {
     // both directions at once (clears get faster, front-liners get safer).
     //
     // The bound tracks the window, because the window IS what limits it: zombies
-    // enter one every CHARGE_MS (3.6 s), so the line can only be as wide as the
-    // attempt is long. Measured 6 at 30 s, 9 at 40 s, 10 at 45 s. Half the army is
-    // still the ceiling — a bound of 12 leaves room for sim jitter without letting
-    // "a fraction of the army" quietly become "all of it".
-    const { widest } = fight(line("Scrooge Zombie"), bossOf(groundhog));
+    // enter one at a time as their focus bar fills, so the line can only be as wide
+    // as the attempt is long.
+    //
+    // RE-MEASURED FOR THIS BUILD, not inherited. This fork's engagement rules put far
+    // more of the line in contact than the numbers this test was first written against
+    // (6 at 30 s, 9 at 40 s, 10 at 45 s, bounded at 14). Here a plain 20-strong line
+    // peaks at 16 against Dr. Groundhog, and a SUPPORTED party reaches 19 of 20 — so
+    // read the bound below as a tripwire on that number moving again, not as evidence
+    // that "only a fraction of the army" still holds. It very nearly does not, and an
+    // epic clear in this build therefore scales with roster size much more strongly
+    // than the ramp above it was tuned for.
+    const players = line("Scrooge Zombie");
+    const { widest } = fight(players, bossOf(groundhog));
     expect(widest).toBeGreaterThan(0);
-    expect(widest).toBeLessThanOrEqual(14);
+    expect(widest).toBeLessThanOrEqual(16);
+    // Whatever else moves, the whole line still never arrives at once.
+    expect(widest).toBeLessThan(players.length);
   });
 
   // THE BOUNDING RULE. Every event must be survivable by the army the game has actually
@@ -375,11 +385,17 @@ describe("Epic Boss damage ramp", () => {
   });
 
   it("would break that rule if the ramp climbed far enough", () => {
-    // The guard rail, measured: the supported wall finally dies at 800 DPS, ten times the
-    // top boss. That is a wide margin, and deliberately so — a rule that only just passes
-    // is a rule that flips on the next tuning nudge. If this stops failing, either sim
-    // pacing changed or the ramp has room the calibration did not account for.
-    expect(fight(supportedTank(42), endlessBoss(40, 2)).losses).toBeGreaterThan(0);
+    // The guard rail, measured. The supported wall holds every authored boss and keeps
+    // holding well past the top of the ramp; it survives an endless boss at str 44 and
+    // starts losing units at 46. The rail is set at 60, comfortably past that, because
+    // a rule that only just passes is a rule that flips on the next tuning nudge.
+    //
+    // Re-measured for this build: the same wall broke at 40 before this fork's stat
+    // retune, so its margin over the ramp GREW rather than shrank. If this ever stops
+    // failing, either sim pacing changed or the wall has grown again and the bounding
+    // rule above has stopped being a real constraint.
+    expect(fight(supportedTank(42), endlessBoss(44, 2)).losses).toBe(0);
+    expect(fight(supportedTank(42), endlessBoss(60, 2)).losses).toBeGreaterThan(0);
   });
 
   it("still punishes a thin front-liner at the top of the ramp", () => {

@@ -50,16 +50,21 @@ describe("zombie appearance", () => {
     expect(isBruteEyeball("Large", "defaultHead")).toBe(false);
   });
 
-  it("loops Luckybox through the body-color palette every half second", () => {
+  it("loops Luckybox through the body-color palette one step at a time", () => {
     expect(hasLuckyboxPalette("ZombieActorLuckyboxSilver")).toBe(true);
     expect(hasLuckyboxPalette("ZombieActorLuckyboxGold")).toBe(true);
     expect(hasLuckyboxPalette("ZombieActorLuckybox")).toBe(true);
     expect(hasLuckyboxPalette("ZombieActorRegularTier1")).toBe(false);
-    expect(LUCKYBOX_PALETTE_STEP_MS).toBe(500);
+    // Written against the shipped step rather than a fixed number of milliseconds:
+    // how fast the palette cycles is a look, and retuning it should not fail a test
+    // about the cycle itself. What must hold is that each colour is held for exactly
+    // one step and that the 13-entry palette wraps.
+    const step = LUCKYBOX_PALETTE_STEP_MS;
+    expect(step).toBeGreaterThan(0);
     expect(luckyboxPaletteTint(0)).toBe(0xfc0a0a);
-    expect(luckyboxPaletteTint(499)).toBe(0xfc0a0a);
-    expect(luckyboxPaletteTint(500)).toBe(0xfc830a);
-    expect(luckyboxPaletteTint(6_000)).toBe(0xff4f8a);
-    expect(luckyboxPaletteTint(6_500)).toBe(0xfc0a0a);
+    expect(luckyboxPaletteTint(step - 1)).toBe(0xfc0a0a);
+    expect(luckyboxPaletteTint(step)).toBe(0xfc830a);
+    expect(luckyboxPaletteTint(step * 12)).toBe(0xff4f8a); // last entry
+    expect(luckyboxPaletteTint(step * 13)).toBe(0xfc0a0a); // wraps to the first
   });
 });

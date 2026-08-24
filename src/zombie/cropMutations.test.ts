@@ -164,7 +164,7 @@ describe("crop -> mutation wiring", () => {
     expect(cropMutationBits("pumpking")).toEqual([8192]);
     expect(cropMutationBits("corn")).toEqual([]);
     expect(cropMutationBits("blueberyl")).toEqual([]);
-    expect(cropMutationBits("eyebiscus")).toEqual([4]); // the Tier-4 variant's shared bit
+    expect(cropMutationBits("eyebiscus")).toEqual([16384]); // its own bit, not carrot's
     expect(cropMutationBits("grass")).toEqual([]); // a crop that grows nothing
   });
 
@@ -189,11 +189,14 @@ describe("crop -> mutation wiring", () => {
   });
 
   it("pools adjacency when two crops name the same mutation", () => {
-    // Carrot and eyebiscus both grow bit 4, so two plots of them together clear the
-    // 25%-per-plot threshold exactly as two carrot plots would — one roll, not two.
+    // Nothing SHIPPED shares a mutation any more — eyebiscus and heartichoke grow
+    // their own — so this brings its own table. Two crops naming carrot means two
+    // adjacent plots clear the 25%-per-plot threshold together, as ONE roll rather
+    // than two independent ones.
+    const crops = { carrot: "carrot", carrot_too: "carrot" };
     const random = () => 0.4; // beats 2 x 25%, would fail a single plot's 25%
-    expect(resolveCropMutations(0, ["carrot", "eyebiscus"], { random })).toBe(4);
-    expect(resolveCropMutations(0, ["carrot"], { random })).toBe(0);
+    expect(resolveCropMutations(0, ["carrot", "carrot_too"], { crops, random })).toBe(4);
+    expect(resolveCropMutations(0, ["carrot"], { crops, random })).toBe(0);
   });
 
   it("ignores a mutation name the catalog does not have", () => {

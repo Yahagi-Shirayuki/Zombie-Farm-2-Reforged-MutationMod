@@ -31,7 +31,7 @@ export const CROP_MUTATIONS: CropMutationTable = {
   tomato: "tomato",
   onion: "onion",
   carrot: ["carrot", "carrot_arm"],
-  eyebiscus: "carrot",
+  eyebiscus: "eyebiscus",
   turnip: ["turnip", "turnip_head", "turnip_eye"],
   potato: "potato",
   coffee: "coffee",

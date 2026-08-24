@@ -72,7 +72,10 @@ describe("headless restriction — no head or hair/eye mutations", () => {
 describe("Pumpking — grown only on the headless family, worn by anyone", () => {
 
   it("pays the head slot's best attack bonus", () => {
-    expect(mutationBonus(PUMPKING)).toEqual({ str: 3, con: 2, dex: 0, wis: -2 });
+    expect(mutationBonus(PUMPKING)).toEqual({ str: 3, con: 2, dex: 0, wis: 1 });
+    // The claim in the name: no other head pays more attack, which is what makes the
+    // capstone crop worth growing over the Garlichead it evicts in the Pot.
+    expect(mutationBonus(PUMPKING).str).toBeGreaterThan(mutationBonus(GARLIC).str);
     expect(mutationLabel(PUMPKING)).toBe("Pumpking");
   });
 
@@ -126,6 +129,7 @@ describe("mutation catalog", () => {
   const SHIPPED_ORDER = [
     "tomato", "onion", "carrot", "turnip", "potato", "coffee", "celery",
     "broccoli", "garlic", "cauli", "limabean", "flytrap", "dragon", "pumpking",
+    "eyebiscus", "heartichoke",
   ];
 
   it("assigns every shipped mutation the bit it has always had", () => {
@@ -141,7 +145,8 @@ describe("mutation catalog", () => {
     });
     expect(bitOf("tomato")).toBe(1);
     expect(bitOf("pumpking")).toBe(8192);
-    expect(ALL_MUTATIONS_MASK).toBe(16383);
+    expect(bitOf("heartichoke")).toBe(32768); // the newest row, appended past pumpking
+    expect(ALL_MUTATIONS_MASK).toBe(65535);
   });
 
   it("keeps one mutation per slot resolvable from either its key or its bit", () => {
@@ -176,13 +181,13 @@ describe("mutation catalog", () => {
     });
     expect(MODDED_MUTATIONS.corn_arm_b).toMatchObject({
       key: "corn_arm_b",
-      name: "Corned Arms (secondary)",
+      name: "Corned Arm (secondary)",
       slot: "armB",
       stats: MODDED_MUTATIONS.corn_arm.stats,
     });
-    expect(mutationBonus(0, ["corn_head"])).toEqual({ str: 2, con: 3, dex: -1, wis: 0 });
+    expect(mutationBonus(0, ["corn_head"])).toEqual({ str: 1, con: 2, dex: 0, wis: 1 });
     expect(mutationLabel(0, ["corn_head"])).toBe("Corned head");
-    expect(mutationLabel(0, ["corn_arm_b"])).toBe("Corned Arms (secondary)");
+    expect(mutationLabel(0, ["corn_arm_b"])).toBe("Corned Arm (secondary)");
     expect(combineMutationSets(TOMATO, [], 0, ["corn_head"]).ids).toEqual(["corn_head"]);
   });
 
@@ -225,7 +230,7 @@ describe("mutation catalog", () => {
     // The next mutation appended to CATALOG lands here, and everything downstream —
     // slots, bonuses, combine — is bit-agnostic, so no other file has to learn it.
     const nextBit = bitValue(MUTATION_LIST.length);
-    expect(nextBit).toBe(16384);
+    expect(nextBit).toBe(65536);
     expect(maskHas(ALL_MUTATIONS_MASK, nextBit)).toBe(false);
     expect(sanitizeMutationMask(nextBit)).toBe(0); // unknown until it is catalogued
   });
@@ -258,15 +263,15 @@ describe("mutation stats", () => {
 
   it("sums the shipped catalog's bonuses across slots and stats", () => {
     expect(mutationBonus(0)).toEqual({ str: 0, con: 0, dex: 0, wis: 0 });
-    expect(mutationBonus(DRAGON)).toEqual({ str: 5, con: -3, dex: 2, wis: 0 }); // dragon arm
-    // garlic head + carrot eyes + lima bean body combine their signed effects.
-    expect(mutationBonus(GARLIC | CARROT | LIMABEAN)).toEqual({ str: 6, con: 4, dex: -3, wis: 1 });
+    expect(mutationBonus(DRAGON)).toEqual({ str: 4, con: 0, dex: 1, wis: 1 }); // dragon arm
+    // garlic head + carrot eyes + lima bean body: one bit per slot, all three counted.
+    expect(mutationBonus(GARLIC | CARROT | LIMABEAN)).toEqual({ str: 3, con: 5, dex: 1, wis: 1 });
     // tomato and dragon land on the same stats and add up.
-    expect(mutationBonus(TOMATO | DRAGON)).toEqual({ str: 6, con: -2, dex: 2, wis: 0 });
+    expect(mutationBonus(TOMATO | DRAGON)).toEqual({ str: 5, con: 1, dex: 1, wis: 1 });
   });
 
   it("keeps every shipped mutation effect non-zero", () => {
-    for (const def of MUTATION_LIST.slice(0, 14)) {
+    for (const def of MUTATION_LIST) {
       const effects = statEffectsOf(def);
       expect(effects.length, `${def.key} affects no stat`).toBeGreaterThan(0);
       for (const e of effects) {

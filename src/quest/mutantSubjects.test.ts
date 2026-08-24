@@ -13,6 +13,8 @@ const REGULAR = "Zombie";
 const TOMATO_BIT = 1;
 const CARROT_BIT = 4;
 const CAULI_BIT = 512;
+const EYEBISCUS_BIT = 16384;
+const HEARTICHOKE_BIT = 32768;
 
 /** Quest 55 "Mutation Nation" — harvest a Tomato + a Carrot Zombie. */
 const QUEST_55 = (questDefs as Record<string, { requirements: { notificationObject: string }[] }>)["55"];
@@ -25,10 +27,23 @@ describe("mutantSubjectIndex", () => {
     expect(index.get(CARROT_BIT)).toContain("Carrot Zombie");
   });
 
-  it("keeps both species when a Tier-4 mutant reuses a lower tier's bit", () => {
-    // Eyebiscus shares Carrot's bit 4; Heartichoke shares Cauliflower's 512.
-    expect(index.get(CARROT_BIT)).toEqual(expect.arrayContaining(["Carrot Zombie", "Eyebiscus Zombie"]));
-    expect(index.get(CAULI_BIT)).toEqual(expect.arrayContaining(["Cauliflower Zombie", "Heartichoke Zombie"]));
+  it("gives the Tier-4 mutants their own entry, not a share of a lower tier's", () => {
+    // They used to: Eyebiscus rode Carrot's bit 4 and Heartichoke Cauliflower's 512,
+    // so each of those bits named two species. Both are catalogued mutations now.
+    expect(index.get(CARROT_BIT)).toEqual(["Carrot Zombie"]);
+    expect(index.get(CAULI_BIT)).toEqual(["Cauliflower Zombie"]);
+    expect(index.get(EYEBISCUS_BIT)).toEqual(["Eyebiscus Zombie"]);
+    expect(index.get(HEARTICHOKE_BIT)).toEqual(["Heartichoke Zombie"]);
+  });
+
+  it("still maps one bit to every species carrying it", () => {
+    // The many-names-per-bit path is what makes a field-grown mutant answer to the
+    // Market species' name. Nothing shipped shares a bit now, so it is covered here.
+    const shared = mutantSubjectIndex([
+      { name: "Carrot Zombie", mutation: CARROT_BIT },
+      { name: "Baby Carrot Zombie", mutation: CARROT_BIT },
+    ]);
+    expect(shared.get(CARROT_BIT)).toEqual(["Carrot Zombie", "Baby Carrot Zombie"]);
   });
 
   it("ignores unmutated species so they never become an alias", () => {
@@ -56,8 +71,7 @@ describe("unit quest subjects", () => {
   });
 
   it("does not duplicate the name of a bought mutant", () => {
-    expect(unitQuestSubjects("Carrot Zombie", CARROT_BIT, index))
-      .toEqual(["Carrot Zombie", "Eyebiscus Zombie"]);
+    expect(unitQuestSubjects("Carrot Zombie", CARROT_BIT, index)).toEqual(["Carrot Zombie"]);
   });
 });
 
