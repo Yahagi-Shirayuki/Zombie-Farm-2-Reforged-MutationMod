@@ -78,9 +78,9 @@ function unitHitDamage(u: CombatUnit): number {
 }
 
 /** One unit's contribution to an army's FIGHT difficulty: staying power × sustained
- *  output (hp × dps over the built, level-scaled stats). Since the raw-stat tier
- *  system landed this is informational — it ranks the auto defense pick and fills
- *  the attack/defense score columns — and no longer prices rewards. */
+ *  output (hp × dps over the built, level-scaled stats). Also the base of the reward
+ *  tier — unitTierPoints folds Protect's damage reduction in on top (see below) —
+ *  and on its own it ranks the auto defense pick and fills the score columns. */
 export function unitScore(u: CombatUnit): number {
   const dps = unitHitDamage(u) * (1000 / Math.max(1, u.attackCooldownMs));
   return u.maxHp * dps;
@@ -160,15 +160,16 @@ export function orderedDefenseUnits(units: CombatUnit[]): CombatUnit[] {
 // Calibration (measured through the real buildPlayerUnits — see pvp.test.ts pins):
 // L7 starter greens 29k · L15 mid normals 31k · L20 tier-3 normals 75k · the
 // THEORETICAL max 5-slot mutation set on greens 253k (tier 3 starts above it) ·
-// tier-4 normals 327k (556k well-mutated) · plain tier-5/shop specials 457k–1.38M —
-// Special-class zombies NEVER carry mutations (owner's rule: barred from the Pot as
-// parents, promotion children arrive clean, every trusted write strips the mask —
-// see server rosterCatalog.legalMutation) — · a lone top epic 1.28M · the epic
-// shelf 3.75M plain, and still 2.55M fielding TWO healers. Tier 5 sits at 1.5M so
+// tier-4 normals 327k (556k well-mutated) · plain tier-5/shop specials 457k–1.38M,
+// and 2.02M once well-mutated — SPECIALS MAY BE MUTATED (only the Almanac's EPIC
+// page may not: those are refused as Pot parents and stripped by every trusted
+// write, see server rosterCatalog.legalMutation) · a lone top epic 1.28M · the
+// epic shelf 3.75M, and still 2.55M fielding TWO healers. Tier 5 sits at 1.5M so
 // a five-star defense can afford its support slots — high-tier healers score
 // almost nothing on hp×dps but make the fight harder, so the top tier must not
-// punish fielding them — while the strongest possible lone zombie (1.28M) still
-// can't solo into five stars. Pinned: plain greens tier 1 at any count,
+// punish fielding them (a mutated shop shelf keeps five stars at 1.93M with one
+// healer, 1.63M with two) — while the strongest possible lone zombie (1.28M)
+// still can't solo into five stars. Pinned: plain greens tier 1 at any count,
 // max-mutated greens tier 2 (never 3), a top epic group tier 5 even with two
 // healers in the line.
 export const PVP_TIER_POINT_THRESHOLDS: ReadonlyArray<number> = [

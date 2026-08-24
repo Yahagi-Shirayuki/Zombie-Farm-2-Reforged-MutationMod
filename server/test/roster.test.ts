@@ -50,6 +50,24 @@ describe("rosterCatalog", () => {
     expect(legalMutation("ZombieActorRegularTier1", 8192 | 8)).toBe(8192 | 8);
     expect(legalMutation("ZombieActorGardenTier4", 8192)).toBe(8192);
   });
+  it("strips mutations from EPIC zombies only — specials keep theirs (owner's rule)", () => {
+    // "Epic" is the Almanac's own Epic page: the Epic Boss event prizes
+    // (EPIC_QUEST_ZOMBIE_REWARDS / isRewardOnlyZombie). No trusted write may hand
+    // one a mutation, which closes the one door the organic gates leave open —
+    // mutations grow only on crop-grown zombies, and epics cannot enter the Pot.
+    expect(legalMutation("ZombieActorVagabond", 4 | 8 | 128)).toBe(0);
+    expect(legalMutation("ZombieActorScrooge", 8192)).toBe(0);
+    expect(legalMutation("ZombieActorAdmiral", 1024)).toBe(0);
+    // The seed path is stricter still: it refuses to mint an epic at all, so the
+    // strip above is the backstop for any other trusted write that names one.
+    expect(validateUnit("epic", "ZombieActorMadame", 9, 0))
+      .toEqual({ ok: false, error: "reward_only" });
+    // SPECIALS ARE NOT EPICS. The tier-5s, Pot promotions and brain-market legends
+    // are Special-class and may carry mutations exactly like a common zombie.
+    expect(legalMutation("ZombieActorRegularTier5", 4 | 8 | 128)).toBe(4 | 8 | 128);
+    expect(legalMutation("ZombieActorBombie", 8 | 1024)).toBe(8 | 1024);
+    expect(legalMutation("ZombieActorSheriff", 4 | 8 | 128)).toBe(4 | 8 | 128);
+  });
   it("defines Black Market gates independently of planting levels", () => {
     expect(blackMarketPurchaseRequirement("ZombieActorRegularTier1")).toEqual({});
     expect(blackMarketPurchaseRequirement("ZombieActorSmallTier2")).toEqual({ minLevel: 1 });
