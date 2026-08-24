@@ -206,6 +206,15 @@ describe("group tiers read the ACTUAL fight stats — owner's calibration rules"
     expect(tierOf(shelf)).toBe(5);
   });
 
+  it("a five-star defense can afford its healers — support slots don't cost the tier", () => {
+    // Healers score almost nothing on hp×dps but make the fight harder; the tier-5
+    // threshold is deliberately low enough that a top shelf fielding TWO of them
+    // stays five stars (owner's calibration, 2026-08-24).
+    const withHealers = buildGroup(
+      [...EPIC_SHELF.slice(0, 4), "ZombieActorGardenTier5", "ZombieActorGardenTier4"], 45);
+    expect(tierOf(withHealers)).toBe(5);
+  });
+
   it("Protect counts as staying power: damage reduction raises a unit's points", () => {
     const [unit] = buildGroup(["ZombieActorRegularTier4"], 30);
     const shielded = { ...unit, damageReduction: 0.5 };
