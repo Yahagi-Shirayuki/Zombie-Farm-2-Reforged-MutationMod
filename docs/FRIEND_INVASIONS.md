@@ -40,9 +40,11 @@ Asymmetries built into the off state, on purpose:
     (`Hud.openPvpArmy`) and launches. The tab shows today's rewarded-wins pips.
   - **Defense** — the defender AUTHORS their defense: any owned zombies (crypt-resting
     ones included — a defense is a plan, not who stands on the lawn), in an explicit
-    order where **slot 1 emerges first** (teams-style numbered picker, up to 16).
-    Accounts that never arrange one fall back to the automatic strongest-16 pick,
-    weakest emerging first. The tab shows your defense as attackers will meet it.
+    order where **slot 1 emerges first** (teams-style numbered picker). The defense
+    fields **6 zombies base** (`PVP_DEFENSE_CAP`); the customization shop will sell
+    slot upgrades toward the **10-slot ceiling** (`PVP_DEFENSE_CAP_MAX`). Accounts
+    that never arrange one fall back to the automatic strongest-6 pick, weakest
+    emerging first. The tab shows your defense as attackers will meet it.
   - **History** — the last 10 attacks and 10 defenses (rewarded/unrewarded marked,
     **▶ Watch** where the recording survives), lifetime + trailing-7-day win/loss
     stats for both roles, and the claim backlog banner with **Claim all**.
@@ -53,9 +55,16 @@ Asymmetries built into the off state, on purpose:
   rigs — mutations, tints, names — mirrored to face the attackers.
 - **Nobody loses anything.** The defender is only ever a snapshot; the settlement path
   touches no roster row, no balance, no cooldown, and offers no revival. There is no
-  gold/XP/loot — the reward is **boost bundles**, priced by the difficulty of the
-  OPPOSING army (attacker paid from the defense score, defender from the attack score).
+  gold/XP/loot — the reward is **boost bundles**, priced by the OPPOSING group's tier.
   Only tier 5 pays a Brain Ticket.
+- **Tiers read RAW hp × dps** (`unitTierPoints` / `groupTierPoints`,
+  `PVP_TIER_POINT_THRESHOLDS`): staying power × sustained output over species stats +
+  mutation bonuses, BEFORE the level ramp / veterancy / auras / farmer heads — so a
+  level-45 account's greens are still tier-1 greens — averaged per slot over at least
+  the group's base size (count never buys a tier; a half-empty defense dilutes).
+  Focus never enters. Calibration pinned by tests: plain greens tier 1, even the max
+  5-slot mutation set on greens stops at tier 2, the top epic shelf (which cannot
+  carry mutations) is tier 5 unmutated.
 - **Daily income caps, not fight caps** (`PVP_DAILY_REWARDED_WINS` /
   `_DEFENSES`, both 3): any number of fights happen, count in the stats, and are
   recorded — but only the first 3 verified wins per UTC day pay the attacker, and only
@@ -103,10 +112,12 @@ Invariants that were chosen deliberately (do not "fix" them):
   survives. Ids re-minted `d0..dN` so nothing downstream mistakes them for roster ids.
 - The defense snapshot ignores raid locks (a zombie mid-raid elsewhere still stands on
   the farm being copied) and includes presentation names for both sides.
-- The difficulty score is `Σ maxHp × sustained dps` over the built units
-  (`armyScore`), so mutations, veterancy, auras and farmer heads all count and a
-  token defense scores low whatever level its owner is. It is pinned at `/start`
-  along with both reward tiers, so a payout can never be re-priced at finish.
+- Two scores exist and they are DIFFERENT on purpose. The informational fight score
+  (`armyScore`, the attack/defense score columns) is `Σ maxHp × sustained dps` over
+  the BUILT units — level, veterancy, auras and farmer heads all count. The REWARD
+  tier reads raw-stat hp×dps instead (see "Tiers read RAW hp × dps" above), so an
+  account's level can make its fights harder without making its greens pay more.
+  Both are pinned at `/start`, so a payout can never be re-priced at finish.
 - Boost grants ride the settlement batch (the trusted-subsystem path
   `server/src/inventory.ts` demands — there is deliberately no public grant).
 - The verified transcript is **stored** on the session row (`inputs_json`, ≤32 KB) —
@@ -177,10 +188,10 @@ history of 2026-08-23; the phases below are its remainder.
   buys them nothing — the timeout IS the defense holding).
 - No "you were invaded" notification — the defender discovers history by opening the
   Invasions panel.
-- Reward tier thresholds (`PVP_TIER_THRESHOLDS`) and the tier bundles are first
-  guesses — **reward tuning is the explicit next step** once staging play data
-  exists. Measured references: a level-18 8-zombie attack ≈ 190k, its 10-defense
-  ≈ 268k → tier 3; a fresh level-8 pair scores ≈ 66k (tier 2) / ≈ 200k (tier 3).
+- Reward tier thresholds (`PVP_TIER_POINT_THRESHOLDS`) are calibrated against the
+  catalog (see the comment on them in `src/raid/pvp.ts`) but the BUNDLE contents are
+  first guesses — **reward tuning is the explicit next step** once staging play data
+  exists.
 - Fights are semi-auto (concentration pinned): the attacker's inputs are ability
   taps and retreat only.
 - The replay is watched from the ATTACKER's camera (it is the attacker's transcript);

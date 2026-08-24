@@ -20,7 +20,9 @@ import { visibleMutations } from "../../zombie/mutationVisibility";
 import {
   compactOrder, selectedCount, toggleSlot, type OrderSlots,
 } from "../../raid/attackOrderSlots";
-import { PVP_ARMY_SIZE, PVP_DEFENSE_CAP, PVP_MIN_LEVEL } from "../../raid/pvp";
+import {
+  PVP_ARMY_SIZE, PVP_DEFENSE_CAP, PVP_DEFENSE_CAP_MAX, PVP_MIN_LEVEL,
+} from "../../raid/pvp";
 
 // ---- view types (structurally matched by net/api's results; main.ts passes the
 // server payloads straight through) --------------------------------------------
@@ -272,12 +274,13 @@ export function openInvasionsPanel(hud: Hud) {
             : "Scouting failed — try again in a moment.";
           return;
         }
+        const tier = view.attackerTier ?? 1;
         const line = document.createElement("div");
         line.className = "zteam-sub";
         line.textContent =
+          `Tier ${tier} ${TIER_STARS(tier)} defense · ` +
           `${view.defenders?.length ?? 0} defenders · ` +
-          `${view.authored ? "arranged defense" : "auto defense"} · ` +
-          `beating them pays Tier ${view.attackerTier ?? 1} ${TIER_STARS(view.attackerTier ?? 1)}` +
+          `${view.authored ? "arranged" : "auto"} — a win pays the Tier ${tier} bundle` +
           ((view.pairAttacksToday ?? 0) > 0
             ? ` · ${view.pairAttacksToday}/${view.pairAttackLimit} attacks on them today`
             : "");
@@ -314,7 +317,9 @@ export function openInvasionsPanel(hud: Hud) {
       note.textContent =
         "When a friend invades, these zombies defend your farm (a copy of them — " +
         "your zombies never leave and never get hurt). Arrange your own line-up, or " +
-        "let the farm field its strongest automatically. Slot 1 walks out first.";
+        `let the farm field its strongest automatically. Slot 1 walks out first; ` +
+        `${PVP_DEFENSE_CAP} can stand, and future upgrades will raise that to ` +
+        `${PVP_DEFENSE_CAP_MAX}.`;
       holder.appendChild(note);
 
       if (view.error === "no_defense") {
@@ -337,8 +342,9 @@ export function openInvasionsPanel(hud: Hud) {
         const sub = document.createElement("div");
         sub.className = "zteam-sub";
         sub.textContent =
-          `An attacker who beats it earns Tier ${view.defense.tier} ${TIER_STARS(view.defense.tier)} — ` +
-          `holding them off pays YOU a reward scaled by their army instead.`;
+          `This is a Tier ${view.defense.tier} ${TIER_STARS(view.defense.tier)} defense — beating it ` +
+          `pays attackers the Tier ${view.defense.tier} bundle; holding them off pays YOU a reward ` +
+          `tiered by their army instead.`;
         info.append(head, sub, defenseStrip(hud, view.defense.defenders));
         summary.appendChild(info);
         holder.appendChild(summary);

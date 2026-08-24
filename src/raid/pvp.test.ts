@@ -20,12 +20,15 @@ import {
   PVP_WAVE_CADENCE,
   armyScore,
   buildPvpRaidDef,
+  groupTierPoints,
   orderedDefenseUnits,
   pvpRewardsForTier,
-  pvpTierForScore,
+  pvpTierForPoints,
   toDefenseUnits,
   unitScore,
+  unitTierPoints,
 } from "./pvp";
+import { bitOf } from "../zombie/mutations";
 import type { CombatUnit } from "./types";
 
 const zombieDefs = zombiesJson as Array<Record<string, unknown>>;
@@ -118,17 +121,17 @@ describe("difficulty score and reward tiers", () => {
     expect(armyScore(army(16, 1))).toBeGreaterThan(armyScore(army(8, 1)));
   });
 
-  it("maps scores to monotonically non-decreasing tiers 1..5", () => {
+  it("maps points to monotonically non-decreasing tiers 1..5", () => {
     let last = 0;
-    for (const score of [0, 10_000, 50_000, 300_000, 900_000, 5_000_000]) {
-      const tier = pvpTierForScore(score);
+    for (const points of [0, 20_000, 100_000, 400_000, 1_000_000, 5_000_000]) {
+      const tier = pvpTierForPoints(points);
       expect(tier).toBeGreaterThanOrEqual(1);
       expect(tier).toBeLessThanOrEqual(5);
       expect(tier).toBeGreaterThanOrEqual(last);
       last = tier;
     }
-    expect(pvpTierForScore(0)).toBe(1);
-    expect(pvpTierForScore(Number.MAX_SAFE_INTEGER)).toBe(5);
+    expect(pvpTierForPoints(0)).toBe(1);
+    expect(pvpTierForPoints(Number.MAX_SAFE_INTEGER)).toBe(5);
   });
 
   it("rewards exist for every tier, use only real boost keys, and only tier 5 pays a Brain Ticket", () => {
@@ -146,6 +149,52 @@ describe("difficulty score and reward tiers", () => {
     // Out-of-range tiers clamp instead of throwing.
     expect(pvpRewardsForTier(0)).toEqual(pvpRewardsForTier(1));
     expect(pvpRewardsForTier(99)).toEqual(pvpRewardsForTier(5));
+  });
+});
+
+describe("group tiers read RAW hp×dps — owner's calibration rules", () => {
+  const defOf = (key: string) =>
+    zombieDefs.find((z) => z.key === key) as unknown as Parameters<typeof makeOwned>[1];
+  const own = (key: string, mask = 0, id = key) => makeOwned(id, defOf(key), 0, 0, 0, mask);
+  const groupTier = (units: { str: number; dex: number; con: number }[], base = PVP_DEFENSE_CAP) =>
+    pvpTierForPoints(groupTierPoints(units, base));
+  // The strongest legal 5-slot mutation set: Pumpking (head, wearable by anyone via
+  // Pot inheritance), Eyebiscus (hair/eye), Dragon-arm, Heartichoke (body), Flytrap
+  // (neck). Distinct bits, so plain addition composes the mask without bitwise ops.
+  const MAX_MUTATIONS = ["pumpking", "eyebiscus", "dragon", "heartichoke", "flytrap"]
+    .reduce((mask, key) => mask + bitOf(key), 0);
+
+  it("a lawn of plain greens is tier 1, however many stand", () => {
+    const green = () => own("ZombieActorRegularTier1");
+    expect(groupTier(Array.from({ length: 6 }, green))).toBe(1);
+    // Count can never buy a tier: ten greens average exactly like six.
+    expect(groupTier(Array.from({ length: 10 }, green), 6)).toBe(1);
+  });
+
+  it("greens NEVER reach tier 3 — even the theoretical max mutation set stops at 2", () => {
+    const maxed = Array.from({ length: 6 }, (_, i) =>
+      own("ZombieActorRegularTier1", MAX_MUTATIONS, `m${i}`));
+    // Mutations count (a maxed set lifts the group out of tier 1)...
+    expect(groupTier(maxed)).toBe(2);
+    // ...and the ceiling is HARD: no green group, mutated or not, is ever tier 3.
+    expect(groupTier(maxed)).toBeLessThan(3);
+  });
+
+  it("the top epic shelf is tier 5 with ZERO mutations (epics can't carry any)", () => {
+    const shelf = ["ZombieActorVagabond", "ZombieActorScrooge", "ZombieActorOmegaZombieBot",
+      "ZombieActorMadame", "ZombieActorBandido", "ZombieActorAdmiral"].map((k) => own(k));
+    for (const epic of shelf) expect(epic.mutation).toBe(0);
+    expect(groupTier(shelf)).toBe(5);
+  });
+
+  it("a half-empty defense dilutes toward the bottom instead of riding one great zombie", () => {
+    const pair = [own("ZombieActorVagabond", 0, "v1"), own("ZombieActorVagabond", 0, "v2")];
+    expect(groupTier(pair)).toBeLessThan(5); // 2 of 6 slots filled — not a tier-5 GROUP
+  });
+
+  it("ignores focus entirely: only str/dex/con enter the points", () => {
+    const base = { str: 4, dex: 3, con: 5 };
+    expect(unitTierPoints(base)).toBe(unitTierPoints({ ...base, focus: 999 } as typeof base));
   });
 });
 

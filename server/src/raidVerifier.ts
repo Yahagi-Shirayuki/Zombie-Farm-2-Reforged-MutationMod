@@ -41,13 +41,15 @@ import { levelForXp } from "./levels";
 import { activeBonusHeadId, farmerMultiplier } from "../../src/farmer";
 import {
   PVP_ARMY_SIZE,
+  PVP_DEFENSE_CAP,
   PVP_MIN_LEVEL,
   PVP_RAID_ID,
   PVP_WAVE_CADENCE,
   armyScore,
-  orderedDefenseUnits,
-  pvpTierForScore,
-  toDefenseUnits,
+  enemyCopies,
+  groupTierPoints,
+  pvpTierForPoints,
+  selectAutoDefense,
   type PvpConfigInfo,
 } from "../../src/raid/pvp";
 import { parseRosterColor } from "./v3/rosterColor";
@@ -506,11 +508,15 @@ export type DefenseSnapshotResult =
       ok: true;
       /** Enemy-side units in EMERGENCE order, ready for the pinned config. */
       units: CombatUnit[];
+      /** Informational fight score (hp × dps over built stats). */
       score: number;
+      /** The group's tier (1..5) from the FIELDED zombies' raw stats + mutations —
+       *  what the attacker's reward reads. See groupTierPoints in src/raid/pvp.ts. */
+      tier: number;
       defenderName: string;
       defenders: PvpDefenderPreview[];
       /** True when the line-up came from the defender's saved defense, not the
-       *  strongest-16 auto pick. */
+       *  strongest-pick auto snapshot. */
       authored: boolean;
     }
   | { ok: false; error: string };
@@ -574,11 +580,19 @@ export async function buildDefenseSnapshot(
     farmerStrengthMult: farmerMultiplier(context.bonusHead, "zombieStrength"),
     farmerLifeMult: farmerMultiplier(context.bonusHead, "zombieLife"),
   });
-  const units = authored ? orderedDefenseUnits(built) : toDefenseUnits(built);
+  const selected = authored ? built.slice(0, PVP_DEFENSE_CAP) : selectAutoDefense(built);
+  const units = enemyCopies(selected);
+  // The tier reads the FIELDED zombies' raw stats (species + mutations, pre-level) —
+  // buildPlayerUnits preserves ids, so map the selection back to its OwnedZombies.
+  const partyById = new Map(party.map((z) => [z.id, z]));
+  const fielded = selected
+    .map((u) => partyById.get(u.id))
+    .filter((z): z is NonNullable<typeof z> => !!z);
   return {
     ok: true,
     units,
     score: armyScore(units),
+    tier: pvpTierForPoints(groupTierPoints(fielded, PVP_DEFENSE_CAP)),
     defenderName: account.username?.trim() || "A friend",
     defenders: units.map((u) => ({
       key: u.sourceKey,
@@ -622,10 +636,11 @@ export async function buildPinnedPvpRaid(
 
   const attackParty = toParty(ids.map((id) => attackerById.get(id)!), attackerNames);
   if (attackParty.some((unit) => unit === null)) return { ok: false, error: "bad_roster" };
+  const attackers = attackParty as ReturnType<typeof makeOwned>[];
 
   // Both sides fight at full focus (concentration): the minigame is skipped in PvP,
   // and a snapshot defense has nobody home to pop bubbles for it anyway.
-  const playerUnits = buildPlayerUnits(attackParty as ReturnType<typeof makeOwned>[], {
+  const playerUnits = buildPlayerUnits(attackers, {
     concentration: true,
     abilityUnlocked: attacker.abilityUnlocked,
     playerLevel: attacker.level,
@@ -657,8 +672,11 @@ export async function buildPinnedPvpRaid(
         defenderName,
         attackScore,
         defenseScore,
-        attackerTier: pvpTierForScore(defenseScore),
-        defenderTier: pvpTierForScore(attackScore),
+        // Tiers from RAW-stat hp×dps (groupTierPoints), pinned here so a payout can
+        // never be re-priced: the attacker's from the defense group, the defender's
+        // from the attack group (per-slot average over the attack's base size).
+        attackerTier: defense.tier,
+        defenderTier: pvpTierForPoints(groupTierPoints(attackers, PVP_ARMY_SIZE)),
       },
     },
   };

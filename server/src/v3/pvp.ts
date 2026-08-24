@@ -40,7 +40,6 @@ import {
   PVP_DEFENSE_CAP,
   PVP_REPLAYS_KEPT,
   pvpRewardsForTier,
-  pvpTierForScore,
   type PvpReward,
 } from "../../../src/raid/pvp";
 import type { RaidOutcome } from "../../../src/raid/types";
@@ -407,7 +406,7 @@ export async function getDefensePvp(
   }
   return { status: 200, body: { ok: true, unitIds, defense: {
     score: snapshot.score,
-    tier: pvpTierForScore(snapshot.score),
+    tier: snapshot.tier,
     defenders: snapshot.defenders,
     authored: snapshot.authored,
   } } };
@@ -440,7 +439,8 @@ export async function previewPvp(
   return { status: 200, body: { ok: true,
     defenderName: snapshot.defenderName,
     defenseScore: snapshot.score,
-    attackerTier: pvpTierForScore(snapshot.score),
+    /** The defense GROUP's tier — also exactly what a win against it pays. */
+    attackerTier: snapshot.tier,
     defenders: snapshot.defenders,
     authored: snapshot.authored,
     pairAttacksToday: pairToday?.n ?? 0,
