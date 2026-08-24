@@ -5,7 +5,7 @@
 //               before committing, then launch the invasion.
 //   • Defense — arrange your OWN defense: which owned zombies stand, in what
 //               order (slot 1 emerges first), or fall back to the automatic
-//               strongest-16 pick. Shows your defense as attackers will meet it.
+//               strongest pick. Shows your defense as attackers will meet it.
 //   • History — the last 10 attacks and 10 defenses (watchable while their
 //               recording survives), lifetime + trailing-week stats, and the
 //               accumulated defense-reward backlog with one Claim-all button.
@@ -20,9 +20,7 @@ import { visibleMutations } from "../../zombie/mutationVisibility";
 import {
   compactOrder, selectedCount, toggleSlot, type OrderSlots,
 } from "../../raid/attackOrderSlots";
-import {
-  PVP_ARMY_SIZE, PVP_DEFENSE_CAP, PVP_DEFENSE_CAP_MAX, PVP_MIN_LEVEL,
-} from "../../raid/pvp";
+import { PVP_ARMY_SIZE, PVP_DEFENSE_CAP, PVP_MIN_LEVEL } from "../../raid/pvp";
 
 // ---- view types (structurally matched by net/api's results; main.ts passes the
 // server payloads straight through) --------------------------------------------
@@ -208,7 +206,7 @@ export function openInvasionsPanel(hud: Hud) {
       pips.textContent =
         `Rewarded wins today: ${overview.rewardedWinsToday}/${overview.rewardedWinsPerDay}` +
         (overview.rewardedWinsToday >= overview.rewardedWinsPerDay
-          ? " — further wins still count, they just don't pay."
+          ? " — the rest are for bragging rights."
           : "");
     };
     paintPips();
@@ -254,8 +252,8 @@ export function openInvasionsPanel(hud: Hud) {
       const invade = document.createElement("button");
       invade.className = "zbtn deploy";
       invade.textContent = "Invade ⚔";
-      invade.title = `Send ${PVP_ARMY_SIZE} zombies against ${f.name}'s defense. ` +
-        "Nobody loses zombies — a win pays boosts scaled by their defense's strength.";
+      invade.title = `Send ${PVP_ARMY_SIZE} zombies at ${f.name}'s defense. ` +
+        "Nobody gets hurt for real — stronger defenders give more boosts.";
       if (locked) {
         scout.disabled = true;
         invade.disabled = true;
@@ -269,7 +267,7 @@ export function openInvasionsPanel(hud: Hud) {
         detail.innerHTML = "";
         if (!view || view.error) {
           detail.textContent =
-            view?.error === "no_defense" ? "Their farm has no zombies to defend it — nothing to fight."
+            view?.error === "no_defense" ? "No zombies on their farm — nothing to fight!"
             : view?.error === "defender_level" ? `Their farm opens for invasions at level ${PVP_MIN_LEVEL}.`
             : "Scouting failed — try again in a moment.";
           return;
@@ -278,11 +276,10 @@ export function openInvasionsPanel(hud: Hud) {
         const line = document.createElement("div");
         line.className = "zteam-sub";
         line.textContent =
-          `Tier ${tier} ${TIER_STARS(tier)} defense · ` +
-          `${view.defenders?.length ?? 0} defenders · ` +
-          `${view.authored ? "arranged" : "auto"} — a win pays the Tier ${tier} bundle` +
+          `Tier ${tier} ${TIER_STARS(tier)} defense · ${view.defenders?.length ?? 0} defenders · ` +
+          `${view.authored ? "arranged" : "auto"}` +
           ((view.pairAttacksToday ?? 0) > 0
-            ? ` · ${view.pairAttacksToday}/${view.pairAttackLimit} attacks on them today`
+            ? ` · ${view.pairAttacksToday}/${view.pairAttackLimit} attacks today`
             : "");
         detail.appendChild(line);
         if (view.defenders?.length) detail.appendChild(defenseStrip(hud, view.defenders));
@@ -315,11 +312,9 @@ export function openInvasionsPanel(hud: Hud) {
       const note = document.createElement("p");
       note.className = "rd-intro";
       note.textContent =
-        "When a friend invades, these zombies defend your farm (a copy of them — " +
-        "your zombies never leave and never get hurt). Arrange your own line-up, or " +
-        `let the farm field its strongest automatically. Slot 1 walks out first; ` +
-        `${PVP_DEFENSE_CAP} can stand, and future upgrades will raise that to ` +
-        `${PVP_DEFENSE_CAP_MAX}.`;
+        "When a friend invades, these zombies defend your farm. " +
+        "Zombies play nice with each other, so no losses are permanent. " +
+        "Arrange your own line-up, or let the farm field its strongest automatically.";
       holder.appendChild(note);
 
       if (view.error === "no_defense") {
@@ -342,9 +337,8 @@ export function openInvasionsPanel(hud: Hud) {
         const sub = document.createElement("div");
         sub.className = "zteam-sub";
         sub.textContent =
-          `This is a Tier ${view.defense.tier} ${TIER_STARS(view.defense.tier)} defense — beating it ` +
-          `pays attackers the Tier ${view.defense.tier} bundle; holding them off pays YOU a reward ` +
-          `tiered by their army instead.`;
+          `Tier ${view.defense.tier} ${TIER_STARS(view.defense.tier)} defense. ` +
+          "Stronger defenders give more boosts — hold the farm and the reward is yours.";
         info.append(head, sub, defenseStrip(hud, view.defense.defenders));
         summary.appendChild(info);
         holder.appendChild(summary);

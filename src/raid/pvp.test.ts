@@ -152,49 +152,64 @@ describe("difficulty score and reward tiers", () => {
   });
 });
 
-describe("group tiers read RAW hp×dps — owner's calibration rules", () => {
+describe("group tiers read the ACTUAL fight stats — owner's calibration rules", () => {
   const defOf = (key: string) =>
     zombieDefs.find((z) => z.key === key) as unknown as Parameters<typeof makeOwned>[1];
-  const own = (key: string, mask = 0, id = key) => makeOwned(id, defOf(key), 0, 0, 0, mask);
-  const groupTier = (units: { str: number; dex: number; con: number }[], base = PVP_DEFENSE_CAP) =>
-    pvpTierForPoints(groupTierPoints(units, base));
   // The strongest legal 5-slot mutation set: Pumpking (head, wearable by anyone via
   // Pot inheritance), Eyebiscus (hair/eye), Dragon-arm, Heartichoke (body), Flytrap
   // (neck). Distinct bits, so plain addition composes the mask without bitwise ops.
   const MAX_MUTATIONS = ["pumpking", "eyebiscus", "dragon", "heartichoke", "flytrap"]
     .reduce((mask, key) => mask + bitOf(key), 0);
+  const buildGroup = (keys: string[], level: number, mask = 0) =>
+    buildPlayerUnits(
+      keys.map((k, i) => makeOwned(`u${i}`, defOf(k), 0, 0, 0, mask)),
+      { concentration: true, abilityUnlocked: () => true, playerLevel: level }
+    );
+  const tierOf = (units: CombatUnit[], base = PVP_DEFENSE_CAP) =>
+    pvpTierForPoints(groupTierPoints(units, base));
+  const greens = (n: number, level: number, mask = 0) =>
+    buildGroup(Array.from({ length: n }, () => "ZombieActorRegularTier1"), level, mask);
+  const EPIC_SHELF = ["ZombieActorVagabond", "ZombieActorScrooge", "ZombieActorOmegaZombieBot",
+    "ZombieActorMadame", "ZombieActorBandido", "ZombieActorAdmiral"];
 
-  it("a lawn of plain greens is tier 1, however many stand", () => {
-    const green = () => own("ZombieActorRegularTier1");
-    expect(groupTier(Array.from({ length: 6 }, green))).toBe(1);
-    // Count can never buy a tier: ten greens average exactly like six.
-    expect(groupTier(Array.from({ length: 10 }, green), 6)).toBe(1);
+  it("a lawn of plain greens is tier 1 at ANY level — the ramp bands species, not accounts", () => {
+    expect(tierOf(greens(6, 7))).toBe(1);
+    expect(tierOf(greens(6, 30))).toBe(1);
+    expect(tierOf(greens(10, 45))).toBe(1);
+  });
+
+  it("more zombies raise the score a bit (√count) — but count never buys weaklings a tier", () => {
+    const six = groupTierPoints(greens(6, 45), PVP_DEFENSE_CAP);
+    const ten = groupTierPoints(greens(10, 45), PVP_DEFENSE_CAP);
+    expect(ten).toBeGreaterThan(six);
+    expect(pvpTierForPoints(ten)).toBe(1);
   });
 
   it("greens NEVER reach tier 3 — even the theoretical max mutation set stops at 2", () => {
-    const maxed = Array.from({ length: 6 }, (_, i) =>
-      own("ZombieActorRegularTier1", MAX_MUTATIONS, `m${i}`));
-    // Mutations count (a maxed set lifts the group out of tier 1)...
-    expect(groupTier(maxed)).toBe(2);
-    // ...and the ceiling is HARD: no green group, mutated or not, is ever tier 3.
-    expect(groupTier(maxed)).toBeLessThan(3);
+    const maxed = greens(6, 30, MAX_MUTATIONS);
+    expect(tierOf(maxed)).toBe(2); // mutations count: out of tier 1...
+    expect(tierOf(maxed)).toBeLessThan(3); // ...but the ceiling is HARD
+  });
+
+  it("one powerful zombie out-scores a weakling crowd, yet a lone zombie is no tier-5 GROUP", () => {
+    const lone = buildGroup(["ZombieActorVagabond"], 45);
+    expect(groupTierPoints(lone, PVP_DEFENSE_CAP))
+      .toBeGreaterThan(groupTierPoints(greens(10, 45), PVP_DEFENSE_CAP));
+    const loneTier = tierOf(lone);
+    expect(loneTier).toBeGreaterThanOrEqual(3); // a monster alone still reads strong
+    expect(loneTier).toBeLessThan(5); // but five stars take a full shelf
   });
 
   it("the top epic shelf is tier 5 with ZERO mutations (epics can't carry any)", () => {
-    const shelf = ["ZombieActorVagabond", "ZombieActorScrooge", "ZombieActorOmegaZombieBot",
-      "ZombieActorMadame", "ZombieActorBandido", "ZombieActorAdmiral"].map((k) => own(k));
-    for (const epic of shelf) expect(epic.mutation).toBe(0);
-    expect(groupTier(shelf)).toBe(5);
+    const shelf = buildGroup(EPIC_SHELF, 45);
+    for (const epic of shelf) expect(epic.mutation ?? 0).toBe(0);
+    expect(tierOf(shelf)).toBe(5);
   });
 
-  it("a half-empty defense dilutes toward the bottom instead of riding one great zombie", () => {
-    const pair = [own("ZombieActorVagabond", 0, "v1"), own("ZombieActorVagabond", 0, "v2")];
-    expect(groupTier(pair)).toBeLessThan(5); // 2 of 6 slots filled — not a tier-5 GROUP
-  });
-
-  it("ignores focus entirely: only str/dex/con enter the points", () => {
-    const base = { str: 4, dex: 3, con: 5 };
-    expect(unitTierPoints(base)).toBe(unitTierPoints({ ...base, focus: 999 } as typeof base));
+  it("Protect counts as staying power: damage reduction raises a unit's points", () => {
+    const [unit] = buildGroup(["ZombieActorRegularTier4"], 30);
+    const shielded = { ...unit, damageReduction: 0.5 };
+    expect(unitTierPoints(shielded)).toBeCloseTo(unitTierPoints(unit) * 2, 5);
   });
 });
 

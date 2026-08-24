@@ -6115,8 +6115,8 @@ export class Hud {
     const note = document.createElement("p");
     note.className = "rd-intro";
     note.textContent =
-      "Friendly fight: nobody loses zombies, and there's no cooldown. Beat their " +
-      "defenders and the boost reward scales with how strong their army is.";
+      "Friendly fight — nobody loses zombies, no cooldown. " +
+      "Stronger defenders give more boosts.";
     foot.append(note, pick, start);
     refresh();
   }

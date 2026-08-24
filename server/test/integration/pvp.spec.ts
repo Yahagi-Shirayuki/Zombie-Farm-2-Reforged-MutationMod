@@ -172,6 +172,89 @@ describe("defense authoring", () => {
   });
 });
 
+describe("defenses degrade gracefully when zombies disappear", () => {
+  const removeUnits = (s: { token: string }, ids: string[]) =>
+    call("POST", "/dev/fixture/roster", s.token, { remove: ids });
+  interface Preview {
+    ok: boolean;
+    error?: string;
+    authored?: boolean;
+    defenders?: { key: string }[];
+  }
+
+  it("drops lost loadout members, survives losses MID-invasion, falls back to auto, then no_defense", async () => {
+    const attacker = await pvpPlayer("pvp-gone-a", attackUnits);
+    const defender = await pvpPlayer("pvp-gone-d", [
+      { id: "d0" }, { id: "d1", key: HEADLESS }, { id: "d2" },
+    ]);
+    await befriend(attacker, defender);
+    const saved = await call<{ ok: boolean }>("POST", "/raid/pvp/defense", defender.token,
+      { unitIds: ["d1", "d2"] });
+    expect(saved.status).toBe(200);
+
+    // d2 is lost elsewhere (sold / perished): the authored defense simply fields on
+    // without it, order intact.
+    await removeUnits(defender, ["d2"]);
+    const thinned = await call<Preview>("POST", "/raid/pvp/preview", attacker.token,
+      { defenderId: defender.accountId });
+    expect(thinned.status).toBe(200);
+    expect(thinned.body.authored).toBe(true);
+    expect(thinned.body.defenders?.map((d) => d.key)).toEqual([HEADLESS]);
+
+    // A fight pinned against that defense is UNTOUCHED by anything that happens to
+    // the defender's farm while it runs: lose the last loadout zombie, clear the
+    // loadout — the settlement replays the pinned config and the recording survives.
+    const started = await call<{ ok: boolean; sessionId: string }>(
+      "POST", "/raid/pvp/start", attacker.token, startBody(defender.accountId));
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    await removeUnits(defender, ["d1"]);
+    await call("POST", "/raid/pvp/defense", defender.token, { unitIds: [] });
+    const finished = await call<{ win: boolean }>("POST", "/raid/pvp/finish", attacker.token,
+      retreatFinish(started.body.sessionId));
+    expect(finished.status, JSON.stringify(finished.body)).toBe(200);
+    expect(finished.body.win).toBe(false);
+    const replay = await call<{ ok: boolean }>(
+      "GET", `/raid/pvp/replay/${started.body.sessionId}`, defender.token);
+    expect(replay.status).toBe(200);
+
+    // With the loadout gone the snapshot falls back to the auto pick over whoever
+    // still stands (d0)...
+    const auto = await call<Preview>("POST", "/raid/pvp/preview", attacker.token,
+      { defenderId: defender.accountId });
+    expect(auto.status).toBe(200);
+    expect(auto.body.authored).toBe(false);
+    expect(auto.body.defenders).toHaveLength(1);
+
+    // ...and an emptied farm refuses cleanly everywhere.
+    await removeUnits(defender, ["d0"]);
+    const bare = await call<Preview>("POST", "/raid/pvp/preview", attacker.token,
+      { defenderId: defender.accountId });
+    expect(bare).toMatchObject({ status: 409, body: { error: "no_defense" } });
+    const noStart = await call<{ error: string }>("POST", "/raid/pvp/start", attacker.token,
+      startBody(defender.accountId));
+    expect(noStart.body.error).toBe("no_defense");
+  });
+
+  it("a farm whose zombies all rest in the crypt defends only by authored choice", async () => {
+    const attacker = await pvpPlayer("pvp-crypt-a", attackUnits);
+    const defender = await pvpPlayer("pvp-crypt-d", [
+      { id: "c0", stored: true }, { id: "c1", stored: true },
+    ]);
+    await befriend(attacker, defender);
+    // No loadout: the auto pick only fields DEPLOYED zombies, so there is nothing.
+    const bare = await call<Preview>("POST", "/raid/pvp/preview", attacker.token,
+      { defenderId: defender.accountId });
+    expect(bare).toMatchObject({ status: 409, body: { error: "no_defense" } });
+    // An authored line-up may field resting zombies — a defense is a plan.
+    await call("POST", "/raid/pvp/defense", defender.token, { unitIds: ["c1"] });
+    const planned = await call<Preview>("POST", "/raid/pvp/preview", attacker.token,
+      { defenderId: defender.accountId });
+    expect(planned.status).toBe(200);
+    expect(planned.body.authored).toBe(true);
+    expect(planned.body.defenders).toHaveLength(1);
+  });
+});
+
 describe("friend invasion — attacks, claims, daily caps", () => {
   interface StartResponse {
     ok: boolean;

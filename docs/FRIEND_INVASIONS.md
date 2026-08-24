@@ -57,14 +57,17 @@ Asymmetries built into the off state, on purpose:
   touches no roster row, no balance, no cooldown, and offers no revival. There is no
   gold/XP/loot — the reward is **boost bundles**, priced by the OPPOSING group's tier.
   Only tier 5 pays a Brain Ticket.
-- **Tiers read RAW hp × dps** (`unitTierPoints` / `groupTierPoints`,
-  `PVP_TIER_POINT_THRESHOLDS`): staying power × sustained output over species stats +
-  mutation bonuses, BEFORE the level ramp / veterancy / auras / farmer heads — so a
-  level-45 account's greens are still tier-1 greens — averaged per slot over at least
-  the group's base size (count never buys a tier; a half-empty defense dilutes).
-  Focus never enters. Calibration pinned by tests: plain greens tier 1, even the max
-  5-slot mutation set on greens stops at tier 2, the top epic shelf (which cannot
-  carry mutations) is tier 5 unmutated.
+- **Tiers read the ACTUAL fight stats** (`unitTierPoints` / `groupTierPoints`,
+  `PVP_TIER_POINT_THRESHOLDS`): hp × dps over the BUILT units — level ramp,
+  veterancy, mutations, team auras, farmer heads, and Protect's damage reduction all
+  count. The level ramp bands each species, so an outleveled lawn of greens DEFLATES
+  rather than inflates — greens stay tier 1 at any account level. **Group size
+  matters, sub-linearly**: the score is Σ points / √(count × base size), so more
+  zombies raise the tier a bit while one powerful zombie still out-scores a crowd of
+  weaklings (and a lone zombie is never a tier-5 GROUP). Focus never enters.
+  Calibration pinned by tests: plain greens tier 1 at any level and count, even the
+  max 5-slot mutation set on greens stops at tier 2, the top epic shelf (which
+  cannot carry mutations) is tier 5 unmutated.
 - **Daily income caps, not fight caps** (`PVP_DAILY_REWARDED_WINS` /
   `_DEFENSES`, both 3): any number of fights happen, count in the stats, and are
   recorded — but only the first 3 verified wins per UTC day pay the attacker, and only
@@ -112,11 +115,9 @@ Invariants that were chosen deliberately (do not "fix" them):
   survives. Ids re-minted `d0..dN` so nothing downstream mistakes them for roster ids.
 - The defense snapshot ignores raid locks (a zombie mid-raid elsewhere still stands on
   the farm being copied) and includes presentation names for both sides.
-- Two scores exist and they are DIFFERENT on purpose. The informational fight score
-  (`armyScore`, the attack/defense score columns) is `Σ maxHp × sustained dps` over
-  the BUILT units — level, veterancy, auras and farmer heads all count. The REWARD
-  tier reads raw-stat hp×dps instead (see "Tiers read RAW hp × dps" above), so an
-  account's level can make its fights harder without making its greens pay more.
+- The REWARD tier (see "Tiers read the ACTUAL fight stats" above) and the
+  informational fight score (`armyScore`, the attack/defense score columns) both read
+  the built units; the tier additionally folds in Protect and the √count size factor.
   Both are pinned at `/start`, so a payout can never be re-priced at finish.
 - Boost grants ride the settlement batch (the trusted-subsystem path
   `server/src/inventory.ts` demands — there is deliberately no public grant).

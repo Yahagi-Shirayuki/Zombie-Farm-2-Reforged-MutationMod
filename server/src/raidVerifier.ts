@@ -582,17 +582,13 @@ export async function buildDefenseSnapshot(
   });
   const selected = authored ? built.slice(0, PVP_DEFENSE_CAP) : selectAutoDefense(built);
   const units = enemyCopies(selected);
-  // The tier reads the FIELDED zombies' raw stats (species + mutations, pre-level) —
-  // buildPlayerUnits preserves ids, so map the selection back to its OwnedZombies.
-  const partyById = new Map(party.map((z) => [z.id, z]));
-  const fielded = selected
-    .map((u) => partyById.get(u.id))
-    .filter((z): z is NonNullable<typeof z> => !!z);
   return {
     ok: true,
     units,
     score: armyScore(units),
-    tier: pvpTierForPoints(groupTierPoints(fielded, PVP_DEFENSE_CAP)),
+    // The tier reads the FIELDED zombies' built fight stats (level ramp, veterancy,
+    // mutations, auras, heads, Protect) — see groupTierPoints in src/raid/pvp.ts.
+    tier: pvpTierForPoints(groupTierPoints(selected, PVP_DEFENSE_CAP)),
     defenderName: account.username?.trim() || "A friend",
     defenders: units.map((u) => ({
       key: u.sourceKey,
@@ -672,11 +668,11 @@ export async function buildPinnedPvpRaid(
         defenderName,
         attackScore,
         defenseScore,
-        // Tiers from RAW-stat hp×dps (groupTierPoints), pinned here so a payout can
-        // never be re-priced: the attacker's from the defense group, the defender's
-        // from the attack group (per-slot average over the attack's base size).
+        // Tiers from built-stat hp×dps (groupTierPoints), pinned here so a payout
+        // can never be re-priced: the attacker's from the defense group, the
+        // defender's from the attack group.
         attackerTier: defense.tier,
-        defenderTier: pvpTierForPoints(groupTierPoints(attackers, PVP_ARMY_SIZE)),
+        defenderTier: pvpTierForPoints(groupTierPoints(playerUnits, PVP_ARMY_SIZE)),
       },
     },
   };

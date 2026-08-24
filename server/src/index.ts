@@ -459,7 +459,20 @@ app.use("/dev/*", async (c, next) => {
 // exists so tests can establish trusted authoritative state without reopening the
 // permanently-closed client import endpoints.
 app.post("/dev/fixture/roster", requireAuth, async (c) => {
-  const body = await c.req.json<{ units?: unknown }>().catch(() => ({ units: [] }));
+  const body = await c.req.json<{ units?: unknown; remove?: unknown }>()
+    .catch(() => ({ units: [], remove: [] }));
+  // `remove` deletes roster rows outright — the fixture stand-in for a zombie lost,
+  // sold, or perished elsewhere, so tests can exercise a defense whose members are
+  // gone (or go missing MID-invasion) without staging the raid that kills them.
+  const remove = Array.isArray(body.remove)
+    ? body.remove.filter((id): id is string => typeof id === "string" && !!id).slice(0, 200)
+    : [];
+  if (remove.length) {
+    const placeholders = remove.map(() => "?").join(",");
+    await c.env.DB.prepare(
+      `DELETE FROM roster_v3 WHERE account_id = ? AND unit_id IN (${placeholders})`)
+      .bind(c.get("accountId"), ...remove).run();
+  }
   const count = await db.grantRosterFixture(c.env.DB, c.get("accountId"), body.units);
   return c.json({ count });
 });

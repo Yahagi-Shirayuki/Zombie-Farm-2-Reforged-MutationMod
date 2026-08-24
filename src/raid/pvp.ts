@@ -13,7 +13,7 @@
 // ADOPTS it wholesale, so there is no per-side derivation to keep in sync and no
 // ruleset bump — a defender zombie is just an enemy-team CombatUnit.
 import type { CombatUnit, RaidDef, WaveCadence } from "./types";
-import { ATTACK_INTERVAL_SEC, HP_PER_CON, POWER_PER_STR } from "./combatStats";
+import { POWER_PER_STR } from "./combatStats";
 
 /** CLIENT KILL SWITCH — normally leave this true: the Invasions surfaces already
  *  follow the WORKER's capability flag (`PVP_ENABLED` in wrangler.toml, surfaced to
@@ -141,48 +141,49 @@ export function orderedDefenseUnits(units: CombatUnit[]): CombatUnit[] {
 }
 
 // ---------------------------------------------------------------------------
-// Tiers. A group's tier is hp × dps — staying power times sustained output — but
-// computed from RAW stats: species str/dex/con plus mutation bonuses, exactly what
-// `makeOwned` bakes into an OwnedZombie, BEFORE the player-level ramp, veterancy,
-// auras and farmer heads. That is the improvement over the v1 tier (which read the
-// built fight stats): a level-45 account's lawn of green Regulars is still a lawn
-// of green Regulars. FOCUS is deliberately excluded (owner's ruling: a distraction
-// stat, not fighting strength). Rewards are priced from the OPPOSING group's tier.
+// Tiers. A group's tier is hp × dps — staying power times sustained output — over
+// the ACTUAL fight stats: the built units, with the player-level ramp, veterancy,
+// mutations, team auras, farmer heads, and Protect's damage reduction (which
+// multiplies effective staying power) all counted. The level ramp normalizes each
+// species to its own band, so an outleveled lawn of greens DEFLATES rather than
+// inflates — greens never buy their way up a tier ladder they've outgrown. FOCUS
+// never enters (unitScore reads str/dex/con-derived numbers only — owner's ruling:
+// a distraction stat, not fighting strength). Rewards are priced from the OPPOSING
+// group's tier.
 //
-// The group score is the PER-SLOT AVERAGE, divided by at least the group's base
-// size (defense PVP_DEFENSE_CAP, attack PVP_ARMY_SIZE): count alone can never buy
-// a tier (ten greens are still tier 1), and a half-empty defense dilutes toward
-// the bottom rather than letting one great zombie read as a great group.
+// GROUP SIZE matters, sub-linearly: the score is Σ points / √(count × baseSize)
+// (defense base PVP_DEFENSE_CAP, attack base PVP_ARMY_SIZE). At count = base that
+// is exactly the per-slot average; more zombies raise it by √count — a bigger army
+// IS stronger, a little — while one powerful zombie (kept at 1/√base of its full
+// points) still out-scores a shuffle of weaklings walking out one by one.
 //
-// Calibration against the catalog (raw hp×dps per zombie): green 4k ·
-// realistically-mutated greens 50–90k · the THEORETICAL max 5-slot mutation set on
-// a green 242k (tier 3 starts above it — mutations alone never buy tier 3) ·
-// tier-4/5 commons 135k–262k · a fully-mutated Tier-4 market mutant ~1.1M · the
-// epic shelf 850k–2.7M, which CANNOT carry mutations — tier 5 is keyed to its top
-// half, never to mutation points. Pinned by tests: plain greens = tier 1,
-// max-mutated greens = tier 2 (never 3), a top epic group = tier 5 unmutated.
+// Calibration (measured through the real buildPlayerUnits — see pvp.test.ts pins):
+// L7 starter greens 29k · L15 mid normals 31k · L20 tier-3 normals 75k · the
+// THEORETICAL max 5-slot mutation set on greens 253k (tier 3 starts above it) ·
+// tier-4 normals 327k · tier-5 commons 862k · a lone top epic 1.28M · the epic
+// shelf — which CANNOT carry mutations — 3.75M. Pinned: plain greens tier 1 at any
+// count, max-mutated greens tier 2 (never 3), a top epic group tier 5 unmutated.
 export const PVP_TIER_POINT_THRESHOLDS: ReadonlyArray<number> = [
-  25_000, // below: tier 1 (starter farms, plain early normals)
-  250_000, // below: tier 2 (mutation-driven greens top out at 242k; mid/late normals)
-  800_000, // below: tier 3 (top commons, lower epics)
-  1_600_000, // below: tier 4; at/above: tier 5 (the top epic shelf)
+  60_000, // below: tier 1 (starter farms, outleveled lawns)
+  300_000, // below: tier 2 (mid/late normals; mutation-maxed greens top out at 253k)
+  700_000, // below: tier 3 (tier-4 normals, heavy mutants)
+  2_000_000, // below: tier 4 (tier-5 commons, lone epics); at/above: tier 5 (epic shelf)
 ];
 
-/** One zombie's tier points: hp × dps over its RAW stats (+ mutations), on the
- *  player-side attack clock (2 s / dex). Focus never enters. */
-export function unitTierPoints(u: { str: number; dex: number; con: number }): number {
-  const hp = u.con * HP_PER_CON;
-  const dps = u.str * POWER_PER_STR * (u.dex / ATTACK_INTERVAL_SEC.player);
-  return hp * dps;
+/** One zombie's tier points: its built hp × dps, with Protect's damage reduction
+ *  folded in as effective staying power. Focus never enters. */
+export function unitTierPoints(u: CombatUnit): number {
+  return unitScore(u) / Math.max(0.05, 1 - (u.damageReduction ?? 0));
 }
 
-/** A group's tier score: per-slot average over at least `baseSize` slots. */
+/** A group's tier score: Σ points / √(count × baseSize) — the per-slot average at
+ *  base size, rising √count above it, diluting below it. */
 export function groupTierPoints(
-  units: ReadonlyArray<{ str: number; dex: number; con: number }>,
+  units: ReadonlyArray<CombatUnit>,
   baseSize: number
 ): number {
   const total = units.reduce((sum, u) => sum + unitTierPoints(u), 0);
-  return total / Math.max(units.length, baseSize, 1);
+  return total / Math.sqrt(Math.max(units.length, 1) * Math.max(baseSize, 1));
 }
 
 export function pvpTierForPoints(points: number): number {

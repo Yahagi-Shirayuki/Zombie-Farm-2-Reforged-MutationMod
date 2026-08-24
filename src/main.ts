@@ -5034,7 +5034,7 @@ async function main() {
           });
           // A win past the daily rewarded-wins cap counts everywhere except the wallet.
           if (res.win && res.rewarded === false) {
-            hud.showToast("Past today's rewarded wins — this one was for the glory (and the stats).", 6000);
+            hud.showToast("Past today's rewarded wins — that one was for glory.", 6000);
           }
         }).catch((error) => {
           const code = error instanceof api.ApiError ? error.code : "unknown_error";
