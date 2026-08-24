@@ -2,11 +2,11 @@
 // Presentation metadata for the zombie detail card, using the AUTHENTIC game art
 // (tools/prep_zombie_detail.py) and the AUTHENTIC text pulled from the game binary.
 //
-// Abilities in ZF2 are NOT stored in the extractable asset data â€” they're assigned
+// Abilities in ZF2 are NOT stored in the extractable asset data — they're assigned
 // by compiled logic. The real structure (user-confirmed 2026-07-07) is a fixed
-// 6-groups Ã— 4-tiers matrix (GROUP_ABILITIES below): each zombie GROUP has ONE
+// 6-groups × 4-tiers matrix (GROUP_ABILITIES below): each zombie GROUP has ONE
 // ability per tier, and a unit shows the abilities for tiers 1..(its colour-class
-// rank) â€” Green=t1, Blue=t1-2, Red=t1-3, Silver/Combined=t1-4. A tier's ability is
+// rank) — Green=t1, Blue=t1-2, Red=t1-3, Silver/Combined=t1-4. A tier's ability is
 // usable once that tier's invasion boss is beaten (else a padlock). This is NOT
 // random and a zombie never has more than 4 abilities (Small has none below t3, so
 // mini abilities only appear on Red-and-up). Every one of the 22 ability icons is
@@ -42,38 +42,38 @@ export const STATS: StatMeta[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Stat DISPLAY normalization â€” GROUND TRUTH (user-verified 2026-07-17).
+// Stat DISPLAY normalization — GROUND TRUTH (user-verified 2026-07-17).
 // ---------------------------------------------------------------------------
 // The detail card never shows a zombie's raw str/con/dex. Each is rendered as a
-// 0â€“100 bar = raw / (the strongest BASE tier-5 zombie's value for that stat) Ã— 100,
+// 0–100 bar = raw / (the strongest BASE tier-5 zombie's value for that stat) × 100,
 // rounded. The three denominators are exactly the per-stat maxima across the six
 // standard group tier-5s (Large wins Damage/Power, Headless wins Life, Small wins
 // Speed). Verified to reproduce the game's shown Power/Speed/Life for Zombarian,
-// Zombee, Zombielocks, Zombelly Dancer and the Flytrap zombie â€” all 20 values exact.
-// Focus is already a 0â€“100 stat, so it is shown as-is.
+// Zombee, Zombielocks, Zombelly Dancer and the Flytrap zombie — all 20 values exact.
+// Focus is already a 0–100 stat, so it is shown as-is.
 //
 // IMPORTANT: these are FIXED REFERENCE CONSTANTS, deliberately NOT derived from the
 // live roster. Adding a stronger zombie later must NOT rescale everyone else's shown
-// numbers â€” the reference stays put, so existing zombies always display the same
+// numbers — the reference stays put, so existing zombies always display the same
 // value. A unit stronger than the reference simply reads ABOVE 100 (NOT clamped);
 // e.g. George Washington (str 30) shows 129 Power. The reference is a stable "100 =
 // this specific base zombie", not a hard cap.
 export const STAT_DISPLAY_MAX: Record<"str" | "con" | "dex", number> = {
-  str: 23.32, // Large tier-5 (Zomviking) base str â€” the Damage/Power reference
-  con: 29.7, //  Headless tier-5 (Bombie) base con â€” the Life reference
-  dex: 4.4, //   Small tier-5 (Zombricaun) base dex â€” the Speed reference
+  str: 23.32, // Large tier-5 (Zomviking) base str — the Damage/Power reference
+  con: 29.7, //  Headless tier-5 (Bombie) base con — the Life reference
+  dex: 4.4, //   Small tier-5 (Zombricaun) base dex — the Speed reference
 };
 
-/** The reference stat a value of 100 represents, or null for focus (already 0â€“100). */
+/** The reference stat a value of 100 represents, or null for focus (already 0–100). */
 export function statDisplayMax(key: StatMeta["key"]): number | null {
   return key === "focus" ? null : STAT_DISPLAY_MAX[key];
 }
 
 /** Convert a raw combat stat to the whole-number value shown on the card. str/con/dex
  *  are normalized against STAT_DISPLAY_MAX (100 = the reference base zombie) and can
- *  exceed 100 for above-reference units â€” NOT clamped. Focus is already 0â€“100 and only
+ *  exceed 100 for above-reference units — NOT clamped. Focus is already 0–100 and only
  *  gets rounded. Species base stats can be fractional, hence the round. Pass the
- *  FULLY-RESOLVED stat (mutation/veterancy already folded in) â€” normalization is linear
+ *  FULLY-RESOLVED stat (mutation/veterancy already folded in) — normalization is linear
  *  so the shown value reflects those bonuses automatically. */
 export function displayStat(key: StatMeta["key"], raw: number): number {
   const max = statDisplayMax(key);
@@ -166,7 +166,7 @@ export const ABILITY_POOL: Record<string, AbilityMeta> = {
 };
 
 // ---------------------------------------------------------------------------
-// Ability tiers (t1-t4) â€” the REAL game structure (user-supplied, 2026-07-06)
+// Ability tiers (t1-t4) — the REAL game structure (user-supplied, 2026-07-06)
 // ---------------------------------------------------------------------------
 // Each tier is gated behind an invasion boss: beating that tier's boss (winning
 // its raid) unlocks the whole tier GLOBALLY, so every zombie whose colour class
@@ -243,7 +243,7 @@ export function abilityTierOf(key: string): number {
   return -1;
 }
 
-// Each zombie GROUP's ability per tier (index 0 = t1 â€¦ index 3 = t4). A unit shows
+// Each zombie GROUP's ability per tier (index 0 = t1 … index 3 = t4). A unit shows
 // the abilities for tiers 1..(its colour-class rank), so it never has more than 4.
 // `null` = the group has no ability at that tier (Small only gains one at t3/t4, so
 // mini abilities appear on Red-and-up). Every ABILITY_POOL key is used exactly once.
@@ -264,7 +264,7 @@ export function groupAbilityAt(group: string, tier: number): string | null {
 
 // Named unique zombies override their group's ability set. The Crazy zombie
 // (user-confirmed 2026-07-07) carries +5% All Stats, Chivalry, Random Stun, and
-// Double Strike â€” one per tier (t1..t4), gated by those tiers' bosses.
+// Double Strike — one per tier (t1..t4), gated by those tiers' bosses.
 export const SPECIAL_ABILITIES: Record<string, (string | null)[]> = {
   //                        t1              t2          t3      t4
   ZombieActorRegularCrazy: ["buffAllStats", "chivalry", "stun", "doubleStrike"],
@@ -277,18 +277,18 @@ export function unitAbilityAt(key: string | undefined, group: string, tier: numb
   return special ? special[tier - 1] ?? null : groupAbilityAt(group, tier);
 }
 
-// Veterancy: a zombie ranks up each invasion it SURVIVES â€” a 6-rung ladder
-// (user-confirmed 2026-07-07): Newbie (base) â†’ Veteran 1..4 â†’ Master, one rank per
+// Veterancy: a zombie ranks up each invasion it SURVIVES — a 6-rung ladder
+// (user-confirmed 2026-07-07): Newbie (base) → Veteran 1..4 → Master, one rank per
 // battle so Master is reached at the 5th. Each rung grants +5% to all stats
 // (Master = +25%).
 //
 // `survivals` is the OwnedZombie.invasions counter, which the raid code increments
-// only for units that live through a battle â€” so invasions == survived invasions
+// only for units that live through a battle — so invasions == survived invasions
 // today. When permanent casualties + a separate participation counter land, key
 // this off the survivals count specifically.
 export const VET_RANKS = ["Newbie", "Veteran 1", "Veteran 2", "Veteran 3", "Veteran 4", "Master"];
 export const MAX_VET_RANK = VET_RANKS.length - 1; // 5 = Master
-// Battles (survived invasions) required to REACH each rank â€” one per battle.
+// Battles (survived invasions) required to REACH each rank — one per battle.
 export const VET_THRESHOLDS = [0, 1, 2, 3, 4, 5];
 /** Per-rank stat bonus (+5% of base per rank). */
 export const VET_STAT_STEP = 0.05;
@@ -307,7 +307,7 @@ export function veterancy(survivals: number): string {
   return VET_RANKS[veterancyLevel(survivals)];
 }
 
-/** All-stats multiplier from veterancy (1.0 at Recruit â€¦ 1.20 at Master). */
+/** All-stats multiplier from veterancy (1.0 at Recruit … 1.20 at Master). */
 export function veterancyMultiplier(survivals: number): number {
   return 1 + VET_STAT_STEP * veterancyLevel(survivals);
 }

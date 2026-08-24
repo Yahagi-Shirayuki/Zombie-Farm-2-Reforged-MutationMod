@@ -1,6 +1,6 @@
 ﻿// A display-only zombie sprite for the raid scene: the SAME per-type skeletal
 // model the farm uses (assets.zombieModels), with the SAME idle-tilt + leg-step
-// walk animation as ZombieUnit â€” just decoupled from the farm's field/pathing.
+// walk animation as ZombieUnit — just decoupled from the farm's field/pathing.
 // The scene positions it and tells it whether it's moving each frame.
 import { Container, Sprite } from "pixi.js";
 import { GameAssets, ZombieModel } from "../assets";
@@ -40,17 +40,17 @@ const STEP_ANGLE = 0.18;
 // the enemy); rotating toward ARM_REST drops them DOWN to the sides; RAISE_ANGLE swings
 // them up overhead (activated-move wind-up).
 const RAISE_ANGLE = -2.5;
-// Arms held STRAIGHT OUT IN FRONT (toward the enemy) â€” the classic zombie pose, used
+// Arms held STRAIGHT OUT IN FRONT (toward the enemy) — the classic zombie pose, used
 // while WALKING (advancing) and as the base while ATTACKING.
 const ARM_FWD = 0.0;
-// Arms hanging DOWN at the sides â€” only while WAITING in the back group.
+// Arms hanging DOWN at the sides — only while WAITING in the back group.
 const ARM_REST = -1.5;
 // Healing is cast from rest, sweeping FORWARD past ARM_FWD and up over the head.
 // The activated-move angle starts from the forward zombie pose and winds backward,
 // which makes a rest-to-heal motion look like the arms kick behind the body.
 const HEAL_OVERHEAD = 1.5;
 // Basic-attack wave: from the forward pose, the arms pump up/down in opposition (one
-// up while the other's down) â€” a full switch per landed hit. Kept small so they stay
+// up while the other's down) — a full switch per landed hit. Kept small so they stay
 // reading as "out in front" rather than flailing overhead.
 // A faint alternating sway on the forward arms while walking, so they're not stiff.
 const ARM_WALK_SWAY = 0.09;
@@ -108,7 +108,7 @@ export class RaidActor {
   private facing = -1;
   private tiltPhase = 0;
   private stepPhase = 0;
-  private deathT = -1; // â‰¥0 once dead: seconds into the head-pop animation
+  private deathT = -1; // ≥0 once dead: seconds into the head-pop animation
   /** Free-running clock for authored clips. */
   private t = 0;
   /** Base rig sprites by model part index; authored clips address parts by index. */
@@ -275,7 +275,7 @@ export class RaidActor {
       this.root.addChild(sp);
     }
     this.syncMutationArmFacing();
-    // Headless models have no feet â€” guard the walk animation.
+    // Headless models have no feet — guard the walk animation.
     const headFxKind = specialHeadFxKind(key, mutation);
     if (headFxKind) {
       this.specialHeadFx = new SpecialHeadFx(headFxKind);
@@ -490,7 +490,7 @@ export class RaidActor {
     });
   }
 
-  /** Mark this zombie dead â€” begins the head-pop on the next update. Idempotent. */
+  /** Mark this zombie dead — begins the head-pop on the next update. Idempotent. */
   markDead() {
     if (this.deathT < 0) {
       this.deathT = 0;

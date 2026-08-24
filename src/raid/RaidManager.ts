@@ -4,7 +4,7 @@
 //
 // The game ALWAYS plays raids in the live scene (beginRaid + finishRaid). `start()` is a
 // headless instant-resolve (beginRaid + resolveRaid + finishRaid) retained ONLY for the
-// ZF.runRaid dev hook and tests â€” it is not wired to any player-facing control.
+// ZF.runRaid dev hook and tests — it is not wired to any player-facing control.
 import { GameAssets, zombiePortrait, raidImage, raidRewardImage } from "../assets";
 import { GameState } from "../GameState";
 import { ZombieField } from "../zombie/ZombieField";
@@ -80,7 +80,7 @@ export interface RaidCardView {
   unlockLevel: number;
   xp: number; // the enemy's XP value (informational)
   /** XP actually on offer from this card: the enemy's `xp` if never cleared, else 0
-   *  â€” XP is a one-time first-clear bonus (`firstTimeBeatingEnemy`). */
+   *  — XP is a one-time first-clear bonus (`firstTimeBeatingEnemy`). */
   firstClearXp: number;
   /** Brain payout odds for a boss win here. */
   brainOdds: { chance: number; tiers: { amount: number; chance: number }[] };
@@ -112,7 +112,7 @@ export interface RaidPartyZombie {
   con: number;
   focus: number;
   power: number;
-  // Displayed 0â€“100 bars (all always-on bonuses folded in â€” see statDisplay.displayTotals).
+  // Displayed 0–100 bars (all always-on bonuses folded in — see statDisplay.displayTotals).
   dispPower: number;
   dispSpeed: number;
   dispLife: number;
@@ -141,7 +141,7 @@ export interface LootDrop {
   qty?: number;
   /** Where the prize actually went, when that is not "straight onto the farm". A
    *  reward zombie earned with a full army is filed in Received and has to be
-   *  claimed, and the results panel is the only place the player reliably looks â€”
+   *  claimed, and the results panel is the only place the player reliably looks —
    *  a toast fired behind this panel is not a notification. */
   note?: string;
 }
@@ -159,10 +159,10 @@ export interface RaidResultView {
   zombiesLost: number;
   gold: number; // gold plundered
   brains: number; // brains plundered
-  xp: number; // XP earned â€” the enemy's `xp`, granted only on the FIRST clear (0 otherwise)
+  xp: number; // XP earned — the enemy's `xp`, granted only on the FIRST clear (0 otherwise)
   loot: LootDrop[]; // item drops (with pictures)
   abilityUnlock: string; // "" unless a tier unlocked on this clear
-  /** ONLINE only: the base win gold + first-clear XP the SERVER must credit â€” NOT
+  /** ONLINE only: the base win gold + first-clear XP the SERVER must credit — NOT
    *  applied locally (main.ts submits it to /raid/finish, which prices it from the
    *  server catalog; the balance client reconciles). Absent offline, where the base
    *  reward was credited locally like before. Bonus gold / brains / loot are always
@@ -197,7 +197,7 @@ export interface RaidLaunchOpts {
   /** ONLINE: whether the server actually charged a Brain Ticket and pinned this session as elite. */
   serverElite?: boolean;
   /** Seed for any per-fight randomness in the wave itself (today only the Robots'
-   *  random boss â€” see resolveStageWave). ONLINE this MUST be the raid session id,
+   *  random boss — see resolveStageWave). ONLINE this MUST be the raid session id,
    *  because the server pinned its own wave from the same seed and the replay
    *  compares the two. Offline any value works; omitting it draws a fresh one. */
   waveSeed?: string;
@@ -221,16 +221,16 @@ export interface RaidSetup {
   wallTemplate: CombatUnit | null;
   /** Carried-grab hazard (Circus Trapeze Artist) for the live scene (null if none). */
   grabber: GrabberConfig | null;
-  /** Beach crab hazard (client-only â€” see crabOf). */
+  /** Beach crab hazard (client-only — see crabOf). */
   crab: CrabConfig | null;
-  /** Golden Dice spent on this fight â€” carried into finishRaid() for loot luck. */
+  /** Golden Dice spent on this fight — carried into finishRaid() for loot luck. */
   dice: number;
-  /** Concentration boost spent â€” the live scene skips the focus-bubble minigame. */
+  /** Concentration boost spent — the live scene skips the focus-bubble minigame. */
   concentration: boolean;
   /** Pre-rolled award used by both the boss-death visual and final settlement. */
   brainDrop: number;
   /** Whether this fight could pay brains at all (it fields a boss). Only such an
-   *  invasion moves the silent dry-streak counter â€” see finishRaid. */
+   *  invasion moves the silent dry-streak counter — see finishRaid. */
   brainEligible: boolean;
   /** A Brain Ticket was charged: the enemy line is scaled to this raid's elite profile. */
   elite: boolean;
@@ -288,7 +288,7 @@ export class RaidManager {
     return this.assets.raids.find((r) => r.id === id);
   }
 
-  /** Deployed (on-farm) owned zombies â€” the eligible army source. */
+  /** Deployed (on-farm) owned zombies — the eligible army source. */
   private deployed(): OwnedZombie[] {
     return this.zombies.roster().filter((r) => !r.stored);
   }
@@ -429,9 +429,9 @@ export class RaidManager {
     const brainLuck = elite ? ELITE_BRAIN_LUCK : 1;
 
     // Cooldown gate. ONLINE (serverAuthorized): the server already decided via
-    // /raid/start â€” it owns the clock â€” and it ALSO consumed the voucher there if it
+    // /raid/start — it owns the clock — and it ALSO consumed the voucher there if it
     // bypassed a cooldown, so there's nothing to spend here (main.ts refreshes the
-    // inventory). OFFLINE: the client is authoritative â€” wait it out, or spend a
+    // inventory). OFFLINE: the client is authoritative — wait it out, or spend a
     // voucher (or the Brain Ticket just charged) to skip.
     if (opts.serverAuthorized) {
       if (opts.bypassed && !elite && !online) this.state.useBoost(VOUCHER_KEY);
@@ -439,7 +439,7 @@ export class RaidManager {
       if (!opts.useVoucher || !this.state.useBoost(VOUCHER_KEY)) return null;
     }
 
-    // Battle consumables â€” spent now that the launch is committed. Concentration
+    // Battle consumables — spent now that the launch is committed. Concentration
     // (fight at full focus) needs at most one; Golden Dice stack for loot luck,
     // capped by both the player's stock and the raid's rare-tier depth.
     let concentration = false;
@@ -452,7 +452,7 @@ export class RaidManager {
 
     // Golden Dice: ONLINE the server already consumed them at /raid/start and PINNED the
     // real count to the session (its loot roll reads that, not a client claim), so take
-    // its number and don't spend again â€” `opts.serverDice` is what it actually charged.
+    // its number and don't spend again — `opts.serverDice` is what it actually charged.
     // OFFLINE: spend locally as before.
     let dice = 0;
     const wantDice = Math.max(0, Math.floor(opts.dice ?? 0));
@@ -468,14 +468,14 @@ export class RaidManager {
     this.state.raidAttackOrder = party.map((z) => z.id);
 
     // raidId + playerLevel drive the farm raid's enemy speed-up (see buildEnemyUnits).
-    // The server's raidVerifier passes the same pair â€” keep them in step.
+    // The server's raidVerifier passes the same pair — keep them in step.
     const enemyUnits = buildEnemyUnits(stage, this.assets.enemyStats, this.assets.raidAttacks, {
       raidId: raid.id,
       playerLevel: this.state.level,
       elite: profile,
     });
     // OFFLINE the roll carries the silent pity floor (a long brain-less streak guarantees
-    // the smallest stack). ONLINE the server rolls it â€” floor included â€” and pins it.
+    // the smallest stack). ONLINE the server rolls it — floor included — and pins it.
     const hasBoss = enemyUnits.some((unit) => unit.isBoss);
     const brainDrop = hasBoss
       ? opts.serverAuthorized
@@ -517,7 +517,7 @@ export class RaidManager {
    *  Source HP is 1000; tuned to 667 for desktop input, with 100 damage per tap. The first
    *  sweep starts after ~4s (spawnState wait_4). Returns null for raids
    *  with no trapeze. (The Lawyers cars also `grabZombie` but ship no sprite / different
-   *  motion â€” not wired here.) */
+   *  motion — not wired here.) */
   private grabberOf(raid: RaidDef): GrabberConfig | null {
     const sprite = GRAB_SPRITE[raid.id];
     if (!raid.hasGrab || !sprite) return null;
@@ -532,7 +532,7 @@ export class RaidManager {
    *  DELIBERATELY CLIENT-ONLY. The server verifier (server/src/raidVerifier.ts) builds its
    *  sim without this, so the authoritative replay is the un-harassed run. A crab can
    *  therefore only ever make the player's own live result WORSE than the server ceiling,
-   *  never better â€” which is why it needs no anti-cheat plumbing. */
+   *  never better — which is why it needs no anti-cheat plumbing. */
   private crabOf(raid: RaidDef): CrabConfig | null {
     if (raid.initialSpawnClass !== CRAB_ACTOR || !raid.obstacleLimit) return null;
     return {
@@ -591,7 +591,7 @@ export class RaidManager {
     return { summonTemplate, wallTemplate };
   }
 
-  /** Build the boss's SPECIAL (non-throw) actions for the selected stage â€” lasers,
+  /** Build the boss's SPECIAL (non-throw) actions for the selected stage — lasers,
    *  AoE bursts, turn-zombie, etc. Same gate as throws (needs a boss and an "active"
    *  stage). Cast/cooldown come from the source castTime/cooldownTime (seconds);
    *  where a special has no cooldown the cast doubles as the recovery.
@@ -599,7 +599,7 @@ export class RaidManager {
    *  Strictly the BOSS's own list. Each robot carries a different special (JunkBot the
    *  junk wall, BrainBot telekinesis, BroBot only faster throws) and the source note is
    *  explicit that "a Robot will only use their special abilities when they are the boss
-   *  of the invasion" â€” so a stage-wide scan for an action is exactly the bug that had
+   *  of the invasion" — so a stage-wide scan for an action is exactly the bug that had
    *  BrainBot summoning JunkBot's walls. */
   private bossSpecialsOf(stage: RaidStage): BossSpecial[] {
     if (!stage.bossKey || stage.throwingDisabled) return [];
@@ -621,7 +621,7 @@ export class RaidManager {
 
   /** Build the boss's projectile config for the selected stage. Returns null when
    *  the stage has no boss OR throwing is disabled on it (early boss waves let the
-   *  boss come down to fight without throwing â€” verified in the real game). The
+   *  boss come down to fight without throwing — verified in the real game). The
    *  throw interval comes from the stage's throwSpeed, else the raid default. */
   private bossThrowOf(
     raid: RaidDef,
@@ -659,12 +659,12 @@ export class RaidManager {
     /** A Brain Ticket was charged for this fight, so the rare-zombie roll runs at elite luck. */
     elite = false
   ): RaidResultView {
-    // Veterancy is earned by SURVIVING a battle â€” credit only the units still
+    // Veterancy is earned by SURVIVING a battle — credit only the units still
     // standing (drives rank-up). A unit knocked out mid-fight, even in a win, gets
     // nothing; a total loss credits no one.
     if (!serverRewards) this.zombies.recordInvasion(outcome.survivors);
 
-    // Permanent casualties (GROUND TRUTH â€” raids cull the fallen; see
+    // Permanent casualties (GROUND TRUTH — raids cull the fallen; see
     // IMPLEMENTATION_RAIDS_PLAN Phase 6): every downed zombie leaves the roster for
     // good, on wins and losses alike. outcome.losses is exactly the units that died
     // (fled-but-alive zombies on a retreat are survivors, not losses). The reduced
@@ -683,15 +683,15 @@ export class RaidManager {
       const wins = serverRewards
         ? this.state.raidWins(String(raid.id)) + 1
         : this.state.completeRaid(String(raid.id));
-      // XP (GROUND TRUTH â€” disassembled `firstTimeBeatingEnemy` gate + "You earned
+      // XP (GROUND TRUTH — disassembled `firstTimeBeatingEnemy` gate + "You earned
       // %ixp for beating this enemy for the first time."): the enemy's `xp` is granted
       // only on the FIRST clear of this raid; repeat wins pay gold/brains but no XP.
       // One boss enemy per raid, so first-ever win (wins === 1) IS first-time-beaten.
       if (wins === 1 && raid.xp > 0) xp = raid.xp;
       const survivalFrac = party.length ? outcome.survivors.length / party.length : 0;
       gold = winGold(raid, survivalFrac);
-      // ONLINE: the base win gold + first-clear XP are SERVER-authoritative â€” hand
-      // them off (main.ts â†’ /raid/finish) instead of crediting locally, so the server
+      // ONLINE: the base win gold + first-clear XP are SERVER-authoritative — hand
+      // them off (main.ts → /raid/finish) instead of crediting locally, so the server
       // prices them and can't be out-fabricated. OFFLINE: credit locally as before.
       if (serverRewards) {
         serverReward = { gold, xp, survivalFrac };
@@ -719,7 +719,7 @@ export class RaidManager {
         } else if (drop) {
           // A boost drop stacks straight into the player's boost inventory (bumping
           // that boost's count) rather than sitting in Storage/Received to be claimed.
-          // Bundled boosts pay their whole bundle â€” Insta-Grow drops ten at a time.
+          // Bundled boosts pay their whole bundle — Insta-Grow drops ten at a time.
           const boost = this.assets.boosts.find((b) => b.name === drop);
           const qty = boost ? raidBoostBundle(boost.key) : 1;
           if (boost) this.state.addBoost(boost.key, qty);
@@ -738,7 +738,7 @@ export class RaidManager {
         // and the next one hands it over outright (see zombieDrops.ts). Streak settles on
         // every win of a raid that has one; raids without a rare zombie never get a key.
         const dryKey = String(raid.id);
-        // `dice` â€” the Golden Dice spent on this fight â€” widens the rare-zombie chance the
+        // `dice` — the Golden Dice spent on this fight — widens the rare-zombie chance the
         // same way it shifts the item roll's tier.
         const zombieDrop = rollRaidZombieDropWithPity(
           raid.id, true, Math.random(), this.state.zombieDryWins[dryKey] ?? 0, dice,
@@ -753,7 +753,7 @@ export class RaidManager {
         }
       }
       // Beating a tier boss unlocks ONE still-locked ability of that tier (the next
-      // in canonical order) across the roster â€” so `wins` maps to the wins-th pool
+      // in canonical order) across the roster — so `wins` maps to the wins-th pool
       // entry. Once every ability in the tier is unlocked, further wins add none.
       const tier = raidTier(raid);
       if (tier > 0) {
@@ -789,7 +789,7 @@ export class RaidManager {
    *  eligible (e.g. every tier already collected). */
   private rollLoot(raid: RaidDef, bonus: number): string | null {
     // Owned = unclaimed raid loot + the shed + the object it becomes once PLACED
-    // (`drops.json` tile â†’ hooks.placedCount). All three matter: claiming a drop is how
+    // (`drops.json` tile → hooks.placedCount). All three matter: claiming a drop is how
     // it gets used and that empties Received, so counting anything less puts a `unique`
     // straight back on the table the moment the player takes it. Matches the source's
     // `doesOwnItem:` and the server's ownedLootCounter.
@@ -818,7 +818,7 @@ export class RaidManager {
   }
 
   /** Resolve a loot item's picture URL ("" when there's no art). Boost loot
-   *  (Insta-Plow, Concentration, â€¦) has no drop art, so fall back to the boost
+   *  (Insta-Plow, Concentration, …) has no drop art, so fall back to the boost
    *  catalog sprite. */
   /** Loot art for a drop the SERVER rolled (the client no longer rolls its own online,
    *  but still has to render the result). */
@@ -831,7 +831,7 @@ export class RaidManager {
   }
 
   /** Headless instant-resolve: commit, resolve the fight instantly, apply rewards.
-   *  Returns null if the raid can't launch. NOT player-facing â€” retained only for the
+   *  Returns null if the raid can't launch. NOT player-facing — retained only for the
    *  `ZF.runRaid` dev hook and tests; the game plays raids via beginRaid + the live
    *  scene + finishRaid. */
   start(raidId: number, partyIds: string[], opts: RaidLaunchOpts = {}): RaidResultView | null {

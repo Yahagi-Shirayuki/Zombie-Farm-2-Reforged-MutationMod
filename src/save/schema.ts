@@ -9,7 +9,7 @@
 //      recomputed on load: player level (from xp), sprites/textures, screen
 //      positions, baseY, growth stage art, the wandering-zombie cosmetic actor.
 //   2. Reference catalog data by KEY, never embed it. A planted carrot stores
-//      "carrot", not the whole CropConfig â€” configs come from plants.json /
+//      "carrot", not the whole CropConfig — configs come from plants.json /
 //      zombies.json at load time.
 //   3. Versioned from day one. `version` gates migrations so later phases can
 //      grow the shape without corrupting old saves.
@@ -96,7 +96,7 @@ export interface SaveGame {
   /** First-run Tim Buckwheat guided tutorial progress. Absent = never started. */
   tutorial?: TutorialSave;
   /** Zombie Almanac: lifetime obtained count per species key. Absent in saves
-   *  written before the Almanac existed â€” backfilled from ownedZombies on load. */
+   *  written before the Almanac existed — backfilled from ownedZombies on load. */
   almanac?: AlmanacSave;
   /** Saved farm line-ups. Presentation only; assembling runs ordinary roster moves. */
   teams?: ZombieTeam[];
@@ -178,7 +178,7 @@ export interface PlayerSave {
 export interface FarmerAppearanceSave {
   ownedHeads?: number[];
   ownedBodies?: number[];
-  /** The head worn â€” appearance only, and the face friends see beside your name. */
+  /** The head worn — appearance only, and the face friends see beside your name. */
   headId?: number;
   bodyId?: number;
   /** The head whose bonus is pinned. Absent/null = the worn head supplies it,
@@ -258,7 +258,7 @@ export interface CropSave {
    *  sessions. (Currently scaled to 8-45s for playtesting; real times live in
    *  the source data.) */
   growMs: number;
-  /** A Garden zombie fertilized this crop (on plant) â†’ 2x harvest + leaf FX. */
+  /** A Garden zombie fertilized this crop (on plant) → 2x harvest + leaf FX. */
   fertilized?: boolean;
   /** Optional visual/result variant rolled when the seed was planted. */
   variant?: number;
@@ -267,7 +267,7 @@ export interface CropSave {
 }
 
 // ---------------------------------------------------------------------------
-// Reserved later-phase shapes (stubs â€” refine when each phase lands)
+// Reserved later-phase shapes (stubs — refine when each phase lands)
 // ---------------------------------------------------------------------------
 
 /** Phase 2: a persistent placed object (tree/decor/functional). */
@@ -281,7 +281,7 @@ export interface PlacedObjectSave {
   /** Optional orientation for rotatable objects. */
   rotation?: number;
   /** Fruit trees: epoch ms when the fruit next becomes harvestable (offline
-   *  growth â€” fruit ripens while the game is closed). */
+   *  growth — fruit ripens while the game is closed). */
   readyAt?: number;
 }
 
@@ -368,8 +368,8 @@ export interface ZombiePotSave {
   playerLevel?: number;
   /** True when this job was started against a server that RESERVES both parents
    *  (`lockedByRaid = "pot:<id>"`). It makes a missing reservation diagnostic: the
-   *  server has no such combine, so the job is a local fiction and its parents â€” which
-   *  the presentation hides while a job holds them â€” must be released rather than kept
+   *  server has no such combine, so the job is a local fiction and its parents — which
+   *  the presentation hides while a job holds them — must be released rather than kept
    *  hidden forever. Absent on offline jobs and on jobs persisted before reservations
    *  existed, which the server still honours through its unreserved fallback. */
   reserved?: boolean;
@@ -422,12 +422,12 @@ export interface TileRef {
   row: number;
 }
 
-/** Device settings â€” persisted separately from game progress (SETTINGS_KEY).
+/** Device settings — persisted separately from game progress (SETTINGS_KEY).
  * Managed by AudioManager, which reads/writes this key directly. */
 export interface Settings {
-  music: boolean;    // farm BGM loop â€” defaults on
-  sfx: boolean;      // action + menu one-shots â€” defaults on
-  ambience: boolean; // ambient farm bed (birds/rooster) â€” defaults on
+  music: boolean;    // farm BGM loop — defaults on
+  sfx: boolean;      // action + menu one-shots — defaults on
+  ambience: boolean; // ambient farm bed (birds/rooster) — defaults on
   muteWhenUnfocused: boolean; // also pause while a visible desktop window lacks focus
 }
 

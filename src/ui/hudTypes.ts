@@ -79,7 +79,7 @@ export interface ZombieInfo {
   focus: number;
   /** Market/catalog previews can hide stats that are randomized on harvest. */
   hideStats?: boolean;
-  mutation: number; // vanilla mutation bitmask â€” stats it boosts render green
+  mutation: number; // vanilla mutation bitmask — stats it boosts render green
   mutationIds?: string[]; // local modded mutation ids
   abilityKeys?: string[]; // explicit per-unit ability slots, when a species overrides the matrix
   portrait: string;
@@ -100,14 +100,14 @@ export interface AlmanacEntryView {
   className: string;
   classColor: string;
   category: "normal" | "special" | "mutant";
-  // BASE stats straight from the catalog â€” no farmer/veterancy/mutation modifiers.
+  // BASE stats straight from the catalog — no farmer/veterancy/mutation modifiers.
   str: number;
   dex: number;
   con: number;
   focus: number;
   /** Lifetime obtained count. 0 = undiscovered (rendered as a silhouette). */
   obtained: number;
-  /** How to acquire this species â€” the only detail an undiscovered entry reveals. */
+  /** How to acquire this species — the only detail an undiscovered entry reveals. */
   hint: string;
   /** True on Epic Boss exclusives. `category` alone cannot tell them apart (they are
    *  all "special"), so this is what files them under the Almanac's Epic group. */
@@ -130,7 +130,7 @@ export interface ObjectActions {
   onStore: () => void;
   onSell: () => void;
   /** A building whose tap USED to go straight to its own panel (the Pet Pen's pet
-   *  collection) keeps that panel one tap away here â€” otherwise routing the tap to
+   *  collection) keeps that panel one tap away here — otherwise routing the tap to
    *  this sheet would be the only way to store it and the only way to lose the panel. */
   manageLabel?: string;
   onManage?: () => void;
@@ -141,7 +141,7 @@ export interface LevelUpUnlock {
   icon: string;
   tint?: number; // packed placeable tint, so the card matches the farm
   name: string;
-  kind: string; // "Invasion" | "Item" | "Boost" | â€¦
+  kind: string; // "Invasion" | "Item" | "Boost" | …
 }
 export interface LevelUpView {
   level: number; // the new level reached

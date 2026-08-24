@@ -3,7 +3,7 @@
 //
 // The MVP resolves a raid instantly from stats (no animated scene), so most of
 // the timing/sfx fields below are carried through only for the future live
-// battle scene â€” the resolver reads str/dex/con and the attack damage multiplier.
+// battle scene — the resolver reads str/dex/con and the attack damage multiplier.
 
 /** One enemy wave within a raid (from the source stageSettings). */
 export interface RaidStage {
@@ -49,7 +49,7 @@ export interface RaidDef {
   /** XP awarded on a win. */
   xp: number;
   /** Guaranteed win gold ("gold without casualties"). Wiki-sourced (see
-   *  prep_raids.py WIKI_GOLD) â€” approximate, not in the source data. */
+   *  prep_raids.py WIKI_GOLD) — approximate, not in the source data. */
   goldReward: number;
   /** Additional possible bonus gold on a win. Wiki-sourced, approximate. */
   bonusGold: number;
@@ -57,7 +57,7 @@ export interface RaidDef {
   /** Looping battle BGM filename under /assets/audio/ (themed track for the 5
    *  stages that ship one, generic fightBGM.mp3 for the rest). */
   music: string;
-  /** Event/seasonal invasion â€” shown apart from the level ladder. */
+  /** Event/seasonal invasion — shown apart from the level ladder. */
   seasonal: boolean;
   /** Has playable stages (enemy data). Others show as a locked/coming-soon card. */
   playable: boolean;
@@ -156,7 +156,7 @@ export interface CombatUnit {
   visualScale?: number;
   className?: string;
   /** Owned body tint (Zombie Pot children inherit a mixed parent colour). Purely
-   *  presentational â€” carried so the battlefield rig matches the farm and the
+   *  presentational — carried so the battlefield rig matches the farm and the
    *  Army screen instead of falling back to the catalog colour. Never read by the
    *  sim, so it cannot affect deterministic replay. */
   color?: [number, number, number];
@@ -170,19 +170,19 @@ export interface CombatUnit {
   attacks: CombatAttack[];
   isBoss: boolean;
   alive: boolean;
-  /** Garden-group zombie â€” the boss prefers to throw projectiles at these. */
+  /** Garden-group zombie — the boss prefers to throw projectiles at these. */
   isGarden: boolean;
-  /** Headless-group zombie â€” pushes to the front row of the formation. */
+  /** Headless-group zombie — pushes to the front row of the formation. */
   isHeadless: boolean;
   /** The unit's unlocked, active ability keys (players only; [] for enemies). Used
    *  by the live scene to drive the top-left ability strip + activated moves. */
   abilities: string[];
-  /** Enemy attack carries knockback (Attacks.json `knockBack`) â€” on hit it shoves the
+  /** Enemy attack carries knockback (Attacks.json `knockBack`) — on hit it shoves the
    *  struck zombie back down the lane and interrupts it (see BattleSim). Players: false. */
   knockBack?: boolean;
   /** Enemy attack stun on hit, in ms (Attacks.json `stun`/`stunTimer`). 0 = none. */
   stunMs?: number;
-  /** Fraction (0..1) of the attack animation at which the strike connects â€” Attacks.json
+  /** Fraction (0..1) of the attack animation at which the strike connects — Attacks.json
    *  `damageTiming` of the enemy's primary attack (Farmhand poke 0.33, Lumberjack slice
    *  0.75, boss punch 0.4). Purely cosmetic: shapes the enemy's lunge/thrust in the raid
    *  scene so the forward peak lands with the hit. Players: unused. */
@@ -209,7 +209,7 @@ export interface CombatUnit {
    *  DEX or the attack interval. */
   walkingSpeedMult?: number;
   /** This enemy ignores its own dex clock and MIRRORS its opponent's attack interval
-   *  (`combatStats.mirroredAttackIntervalSec`) â€” the Pirate Scallywag's override.
+   *  (`combatStats.mirroredAttackIntervalSec`) — the Pirate Scallywag's override.
    *  Recomputed against the current foe every time it re-arms. Players: false. */
   mirrorsOpponentSpeed?: boolean;
 }
@@ -249,39 +249,39 @@ export type BossActionChoice =
 
 // NOTE: there is deliberately no "crossing obstacle" hazard config here. An earlier
 // ground-crossing obstacle/grab mechanic (a sprite or dot sliding along the lane, damaging
-// or seizing zombies) was NOT part of the base game â€” it was fabricated during development
+// or seizing zombies) was NOT part of the base game — it was fabricated during development
 // and has been removed. The real, source-derived hazards are GrabberConfig (Circus Trapeze
 // Artist) and CrabConfig (Beach crab) below. Do not reintroduce a crossing obstacle without
 // ground truth from the binary.
 
 /** Carried-grab hazard config (Circus Trapeze Artist). Ground truth: the actor sweeps
  *  in from the left, grabs the rear-most deployed zombie, then rises to carry it off; the
- *  player taps it (`damageSelf_100`) to whittle its HP â€” killing it drops (frees) the
+ *  player taps it (`damageSelf_100`) to whittle its HP — killing it drops (frees) the
  *  zombie back into the fight, but if it escapes with the zombie, that zombie dies.
  *  See docs/mechanics/RAID_TIMING_AND_HAZARDS.md (Trapeze Artist lifecycle). */
 export interface GrabberConfig {
   sprite: string; // hazard art (e.g. hazard_trapeze_girl.png)
   hp: number; // tuned trapeze HP (source-derived value is 1000)
-  tapDamage: number; // damage per tap (damageSelf_100 â†’ 100)
+  tapDamage: number; // damage per tap (damageSelf_100 → 100)
   spawnDelayMs: number; // initial wait + respawn cadence (spawnState wait_4)
 }
 
 /** Beach crab hazard config (`BeachStageActorCrab`, Summer Break). Disassembled ground
- *  truth: it is NOT a combat enemy â€” it has no attack path and no gold loot. It spawns on
+ *  truth: it is NOT a combat enemy — it has no attack path and no gold loot. It spawns on
  *  the obstacle timer up to a concurrent cap, wanders the lane, and on touching a deployed
  *  zombie GRABS it (the zombie goes inert + invincible), holds ~2 s, then carries it off
- *  the LEFT edge, at which point the zombie is removed from the fight (source state 38 â€”
+ *  the LEFT edge, at which point the zombie is removed from the fight (source state 38 —
  *  explicitly not the death path). Tapping the crab deals `tapDamage` per tap; killing it
  *  frees the zombie back onto the lane. See docs/mechanics/RAID_TIMING_AND_HAZARDS.md.
  *
  *  CLIENT-ONLY: the server verifier builds its sim WITHOUT this, so the authoritative
- *  replay is the un-harassed ("optimistic") run â€” see RaidManager.crabOf. */
+ *  replay is the un-harassed ("optimistic") run — see RaidManager.crabOf. */
 export interface CrabConfig {
   sprite: string; // beach_crab.png
   hp: number; // tuned crab HP (source-derived value is 1000)
   tapDamage: number; // hitBoxTouched -> damage:100 (=> exactly 10 taps)
   spawnMs: number; // obstacleSpawnTimer (5 s on raid 7)
-  limit: number; // obstacleLimit â€” concurrent cap, slot returned when one dies
+  limit: number; // obstacleLimit — concurrent cap, slot returned when one dies
   holdMs: number; // grab -> carry delay (CCDelayTime 2.0 s)
 }
 

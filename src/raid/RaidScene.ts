@@ -2,7 +2,7 @@
 // BattleSim: a cover-fit stage background, a token per combatant (zombie
 // portrait / enemy icon / boss portrait) with a health bar, and top-corner team
 // bars (total HP + unit count). Zombies march in, the fight plays out live, and
-// survivors march off on a win â€” then onFinish(outcome) hands the result back to
+// survivors march off on a win — then onFinish(outcome) hands the result back to
 // RaidManager.finishRaid for rewards.
 //
 // Scope note: the boss is a plain fighter here; its structure, thrown
@@ -61,9 +61,9 @@ export interface RaidSceneParams {
   wallTemplate?: CombatUnit | null;
   /** Carried-grab hazard (Circus Trapeze Artist) for this raid (null/omitted = none). */
   grabber?: GrabberConfig | null;
-  /** Beach crab hazard for this raid (null/omitted = none). Client-only â€” see crabOf. */
+  /** Beach crab hazard for this raid (null/omitted = none). Client-only — see crabOf. */
   crab?: CrabConfig | null;
-  /** Concentration boost spent â€” skip the focus-bubble minigame this fight. */
+  /** Concentration boost spent — skip the focus-bubble minigame this fight. */
   concentration?: boolean;
   /** Precommitted 10/30/50 brain award. Each visible brain represents a stack of 5. */
   brainDrop?: number;
@@ -110,7 +110,7 @@ const INTRO_MS = 700; // brief establishing hold before combat starts
 const END_PAUSE_MS = 650; // beat after the last blow before we move on
 // On a win, survivors stroll off to the right at a normal walking pace (not the old
 // victory sprint). Results wait until the entire visible army clears the stage.
-const OUTRO_WALK_SPEED = 230; // sim px/s â€” a normal march (cf. enemy EMERGE_SPEED 210)
+const OUTRO_WALK_SPEED = 230; // sim px/s — a normal march (cf. enemy EMERGE_SPEED 210)
 const OUTRO_RESULT_DELAY_MS = 1500; // keep the original menu timing while the march continues behind it
 const RETREAT_RESULT_DELAY_MS = 1500;
 const EPIC_BOSS_EXIT_MS = 800; // reverse the sky entry before the result panel appears
@@ -141,7 +141,7 @@ const ABILITY_TINT_RECHARGING = 0x9a9a9a; // in position, mid wind-up or cooling
 const ABILITY_TINT_UNAVAILABLE = 0x5e5e5e; // nobody in position to perform it
 
 /** The face of a tappable ability button: the HUD's plank browns, a lit top bevel,
- *  a warm inner rule, and a dark rim â€” the same read as the farm's wooden buttons. */
+ *  a warm inner rule, and a dark rim — the same read as the farm's wooden buttons. */
 function woodenButtonFace(R: number): Graphics {
   const D = 2 * R;
   const g = new Graphics()
@@ -184,7 +184,7 @@ const CRAB_H = ENEMY_H / 3;
 // The ropes occupy x=0..~280 and the artist's grabbing body is centered near x=300.
 const TRAPEZE_ARTIST_X = 300;
 // Per-boss height multipliers (by enemy source key) for bosses that read wrong at the
-// shared BOSS_H. Old McDonnell is a chunky sprite that looms too large on his silo â€”
+// shared BOSS_H. Old McDonnell is a chunky sprite that looms too large on his silo —
 // scaled down 20% to sit better on the structure.
 // Per-enemy forward nudge, as a fraction of the sprite's RENDERED width (+ = toward the
 // zombies / screen-left). Enemy rigs are authored with every part in positive model x, so
@@ -201,7 +201,7 @@ const ENEMY_FORWARD_FX: Record<string, number> = {
   ValentinesDayStageActorMinion3: 0.4,
 };
 const BOSS_H_SCALE: Record<string, number> = {
-  FarmStageActorBoss: 0.8, // Old McDonnell â€” 20% smaller
+  FarmStageActorBoss: 0.8, // Old McDonnell — 20% smaller
 };
 // The contain-fit scale at which the *_H heights above render 1:1. Raise this to make
 // all units smaller across the board, lower it to make them bigger.
@@ -215,14 +215,14 @@ const GROUND_FY = 0.9;
 const GROUND_NUDGE = ZOMBIE_H * 0.2;
 const UNIT_GROUND_NUDGE = ZOMBIE_H * 0.22;
 // Default boss perch (fraction of the stage rect) for raids with no right-side
-// structure â€” the boss hovers up-right like a UFO (Aliens) rather than standing.
+// structure — the boss hovers up-right like a UFO (Aliens) rather than standing.
 const PERCH_FX = 0.82;
 const PERCH_FY = 0.2;
 // How far to sink the boss BELOW the perch structure's top edge (fraction of the
 // structure height), so it stands behind the roof/silo with its legs occluded by the
-// structure â€” the boss renders in a layer BEHIND the perch art (see bossBackLayer).
+// structure — the boss renders in a layer BEHIND the perch art (see bossBackLayer).
 const PERCH_SINK_F = 0.14;
-// Where a perched boss's THROWS leave from â€” its hand, in unit-space offsets from the
+// Where a perched boss's THROWS leave from — its hand, in unit-space offsets from the
 // boss token origin (feet at the perch). Without this the projectile spawned at the
 // raw sim origin (mapped separately from the boss token) appeared down-left of him.
 const BOSS_HAND_DX = -4; // slightly toward the zombies (screen-left) of centre
@@ -232,7 +232,7 @@ const BOSS_HAND_FY = 0.58; // up the boss sprite (fraction of its rendered heigh
 // left, over the building.
 const PERCH_BIAS_FX = 0.22;
 // Per-raid perch nudge (screen-rect fractions; +dx = right, +dy = DOWN). Corrects the
-// computed/default perch where a specific boss reads wrong vs. the real game â€” eyeballed.
+// computed/default perch where a specific boss reads wrong vs. the real game — eyeballed.
 // Applies to BOTH structure perches (sinks the boss lower behind the building) and sky
 // perches (moves the hovering boss). Keyed by raid id.
 const PERCH_TWEAK: Record<number, { dx?: number; dy?: number }> = {
@@ -249,7 +249,7 @@ const PERCH_TWEAK: Record<number, { dx?: number; dy?: number }> = {
   10: { dy: 0.2 }, // Tree World (sky perch): head cropped off the top of the screen
   // Valentine's: Felix Wonky stands on the shop table, not up in the sky. The default
   // sky perch (PERCH_FY 0.2) puts him near the ceiling; +0.45 lands his feet at 0.65
-  // down the stage rect â€” i.e. ~35% up from the bottom, on the table top.
+  // down the stage rect — i.e. ~35% up from the bottom, on the table top.
   11: { dy: 0.45 },
 };
 // Alien boss rides a UFO (AlienStageElements bossShip/bossShipBack): the saucer + glass
@@ -266,7 +266,7 @@ const UFO_BACK_DX = 6;
 // Letterbox fill behind the contain-fit stage image (visible only where the screen
 // shape leaves bars around the 480x320 art). Kept DARK so it reads as an inset stage
 // rather than fake sky/grass that never matched the real background art. (The stage
-// backgrounds themselves still need proper work â€” this is the interim treatment.)
+// backgrounds themselves still need proper work — this is the interim treatment.)
 const LETTERBOX_TOP = 0x1b1e24;
 const LETTERBOX_BOT = 0x101216;
 // Horizontal inset of the combat lane inside the stage rect: units used to run right
@@ -343,7 +343,7 @@ interface Token {
   actorBaseY: number; // and its normal container y (feet at the token origin)
   // Last-drawn bar states. Graphics.clear()+redraw forces a re-tessellation and a
   // GPU geometry upload, so the bars only redraw when their drawn width changes
-  // (-1 = hidden). Keys quantise the fraction to Â¼% steps.
+  // (-1 = hidden). Keys quantise the fraction to ¼% steps.
   hpKey: number;
   chargeKey: number;
   healFxSeq: number; // last heal event rendered for this unit
@@ -402,7 +402,7 @@ export class RaidScene {
   private backdrop = new Graphics(); // sky/grass fill behind the (letterboxed) stage
   private stageLayer = new Container(); // parallax level-asset layers (behind everyone)
   private stageLayers: { sp: Sprite; asset: RaidLevelAsset }[] = [];
-  // The perch STRUCTURE (barn/silo/â€¦) is split into its own layer drawn in FRONT of
+  // The perch STRUCTURE (barn/silo/…) is split into its own layer drawn in FRONT of
   // the boss, so a boss standing on it has its legs occluded by the roof, while
   // ground units (enemies in the doorway) still render in front of the structure.
   private stageFrontLayer = new Container();
@@ -472,7 +472,7 @@ export class RaidScene {
   private stageMatte = new Graphics();
   private bashCfg: ParticleConfig | null = null;
   private confettiCfg: ParticleConfig | null = null;
-  private smokeCfg: ParticleConfig | null = null; // enemy death poof (source: playDeathEffect â†’ smoke.plist)
+  private smokeCfg: ParticleConfig | null = null; // enemy death poof (source: playDeathEffect → smoke.plist)
   private healCfg: ParticleConfig | null = null;
   private confettiFired = false;
 
@@ -483,7 +483,7 @@ export class RaidScene {
   private eFill = new Graphics();
   private pLabel!: Text;
   private eLabel!: Text;
-  private roundLabel!: Text; // top-center countdown â†’ "ENRAGED" when it expires
+  private roundLabel!: Text; // top-center countdown → "ENRAGED" when it expires
   private pFace = new Container(); // generic zombie face badge, left of the player bar
   private eFace = new Container(); // boss face badge, right of the enemy bar
   private maxPlayerHp = 1;
@@ -500,7 +500,7 @@ export class RaidScene {
     this.replayInputs.push({ ...input, seq: ++this.inputSeq, tick: this.simTick } as RaidReplayInput);
   }
 
-  /** Wall taps are the only input a player can produce without limit â€” one per tap,
+  /** Wall taps are the only input a player can produce without limit — one per tap,
    *  against however many blockers a boss summons over a four-minute fight. Every one
    *  of them has to reach the verifier (an untranscribed tap desynchronises the two
    *  simulations), so once the transcript nears its cap the wall simply stops taking
@@ -513,13 +513,13 @@ export class RaidScene {
 
   // Abilities read as two separate things, because they ARE two separate things.
   //
-  //  â€¢ activeAbilityStrip â€” the tappable moves (Bash/Smash/Explode/Mini Buddy). Big
+  //  • activeAbilityStrip — the tappable moves (Bash/Smash/Explode/Mini Buddy). Big
   //    wooden buttons in a vertical column, and each one is on screen ONLY while a
   //    zombie can actually perform it (Mini Buddy while a Large is still thinking,
   //    Bash/Smash/Explode once its zombie has reached the fighting line). A button
   //    the player can see is a button the player can press.
-  //  â€¢ passiveAbilityStrip â€” small informational icons for the automatic team
-  //    effects (Heal/Protect/Chivalry/â€¦), laid out horizontally under the player's
+  //  • passiveAbilityStrip — small informational icons for the automatic team
+  //    effects (Heal/Protect/Chivalry/…), laid out horizontally under the player's
   //    health bar. Nothing to tap, so nothing that looks tappable.
   private activeAbilityStrip = new Container();
   private passiveAbilityStrip = new Container();
@@ -530,12 +530,12 @@ export class RaidScene {
     badgeDot?: Graphics;
     activated: boolean;
   }[] = [];
-  /** Whether the army carries any team passive at all â€” decides how far down the
+  /** Whether the army carries any team passive at all — decides how far down the
    *  active column starts. Static for the whole fight, so the buttons never move. */
   private hasPassiveAbilities = false;
 
   // Focus bubble hovering over the charging zombie: the source game's own thought-
-  // bubble art â€” a butterfly while distracted (tap to refocus), a brain when the
+  // bubble art — a butterfly while distracted (tap to refocus), a brain when the
   // bar is full (tap to send it forward), or the empty "..." bubble while it simply
   // charges. One sprite, three textures, swapped in layout().
   private bubble = new Container();
@@ -606,7 +606,7 @@ export class RaidScene {
   private async build() {
     // Stage: render EVERY level asset as its own parallax layer, positioned in the
     // source 480x320 design space and z-sorted, so multi-layer raids (Pirate's
-    // sky/water/mid/front, City's front building, Circus's car) compose correctly â€”
+    // sky/water/mid/front, City's front building, Circus's car) compose correctly —
     // not just the single lowest-z layer.
     this.stageLayer.sortableChildren = true;
     this.container.addChild(this.backdrop, this.stageLayer);
@@ -620,7 +620,7 @@ export class RaidScene {
     }
     this.computePerch();
     // Move the perch structure into a FRONT layer, with the boss layer just behind
-    // it: render order becomes backdrop â†’ stage (bg) â†’ boss â†’ perch structure â†’
+    // it: render order becomes backdrop → stage (bg) → boss → perch structure →
     // ground tokens. So the boss stands behind the barn/silo (legs hidden by the
     // roof) while enemies in the doorway still draw in front of the structure.
     if (this.perchLayer) {
@@ -629,7 +629,7 @@ export class RaidScene {
     }
     this.container.addChild(this.bossBackLayer, this.stageFrontLayer);
 
-    // Enemy sprites: one composited actor per enemy type (farmhand/boss/â€¦). Fall
+    // Enemy sprites: one composited actor per enemy type (farmhand/boss/…). Fall
     // back to the raid's flat enemy icon / boss portrait for types without one.
     const enemyKeys = [...new Set(this.sim.units.filter((u) => u.team === "enemy").map((u) => u.sourceKey))];
     await Promise.all(
@@ -689,7 +689,7 @@ export class RaidScene {
       );
     }
 
-    // Alien boss rides a UFO â€” preload its two ship sprites so makeToken can build it.
+    // Alien boss rides a UFO — preload its two ship sprites so makeToken can build it.
     if (this.sim.units.some((u) => u.isBoss && u.sourceKey === ALIEN_BOSS_KEY)) {
       [this.ufoBackTex, this.ufoFrontTex] = await Promise.all([
         loadTex(raidImage("ufo_bossShipBack.png")),
@@ -800,7 +800,7 @@ export class RaidScene {
   /** Build both ability strips from the army's abilities: one tappable wooden
    *  button per distinct ACTIVATED move (badge = how many zombies are ready) and
    *  one small static icon per TEAM-passive ability in play. Self-buffs aren't
-   *  shown at all â€” the player has no decision to make about them.
+   *  shown at all — the player has no decision to make about them.
    *
    *  Every activated button takes its slot in the column HERE, once, and keeps it
    *  for the whole fight. Nothing is ever removed or re-packed: a knocked-back Large
@@ -832,8 +832,8 @@ export class RaidScene {
 
   /** One ability cell.
    *
-   *  ACTIVATED cells are wooden buttons â€” the farm HUD's own plank palette, a lit
-   *  bevel across the top and a dark rim â€” sized ABILITY_ACTIVE_R so they read as
+   *  ACTIVATED cells are wooden buttons — the farm HUD's own plank palette, a lit
+   *  bevel across the top and a dark rim — sized ABILITY_ACTIVE_R so they read as
    *  the thing you press. PASSIVE cells are half that size and keep the flat dark
    *  slot frame, so a glance separates "press me" from "you already have this". */
   private makeAbilityCell(key: string, tex: Texture | null, activated: boolean) {
@@ -848,7 +848,7 @@ export class RaidScene {
     }
     // Count badge: ready-to-act zombies on a button, deployed carriers on a passive
     // icon. Either way it only earns its pixels past one, so layout() hides it at
-    // exactly 1 â€” a badge on every icon is just noise.
+    // exactly 1 — a badge on every icon is just noise.
     const dotR = activated ? 10 : 8;
     const badgeDot = new Graphics().circle(R - 4, -R + 4, dotR).fill(0xc0392b);
     const badge = new Text({
@@ -1010,7 +1010,7 @@ export class RaidScene {
         const sp = new Sprite(tex);
         sp.anchor.set(0.5, 1); // feet at the origin
         const s = targetH / Math.max(1, tex.height);
-        sp.scale.set(s); // composites already face LEFT toward the zombies â€” no mirror
+        sp.scale.set(s); // composites already face LEFT toward the zombies — no mirror
         root.addChild(sp);
         tintSprites.push(sp);
         base = Math.max(16, (tex.width * s) / 2);
@@ -1057,7 +1057,7 @@ export class RaidScene {
     // Weapon reach should not dictate health-bar width. Enemy bars use compact,
     // role-based caps while player bars retain their body-relative sizing.
     if (u.team === "enemy") base = Math.min(base, u.isBoss ? 55 : 42);
-    // Health bar sits ABOVE the head (enemies red, players green â€” set in layout).
+    // Health bar sits ABOVE the head (enemies red, players green — set in layout).
     const hp = new Graphics();
     hp.x = hpCenterX;
     hp.y = topY - 8;
@@ -1077,8 +1077,8 @@ export class RaidScene {
     // visually lower Circus trapeze remain tappable even behind a Large zombie.
     if (u.team === "player") root.eventMode = "none";
     // A summoned wall (carrotWall / junkWall) is tappable to chip it (ZFFightWall touch),
-    // in addition to the zombies attacking it. The wall is a fully simulated enemy, so â€”
-    // unlike the client-only trapeze and crab â€” every tap MUST be transcribed or the
+    // in addition to the zombies attacking it. The wall is a fully simulated enemy, so —
+    // unlike the client-only trapeze and crab — every tap MUST be transcribed or the
     // verifier keeps fighting a wall the player already knocked down.
     if (u.isWall) {
       root.eventMode = "static";
@@ -1133,7 +1133,7 @@ export class RaidScene {
     this.eWrap = e.wrap;
     this.pBar = p.bar;
     this.eBar = e.bar;
-    // Round countdown (top-center) â†’ turns red "ENRAGED" when the boss enrages.
+    // Round countdown (top-center) → turns red "ENRAGED" when the boss enrages.
     this.roundLabel = new Text({
       text: "",
       style: { fontFamily: "sans-serif", fontSize: 18, fontWeight: "800", fill: 0xffffff },
@@ -1144,10 +1144,10 @@ export class RaidScene {
   }
 
   /** A "Retreat" button (bottom-right) that ends the raid as a
-   *  loss â€” the army flees, so no rewards and no veterancy credit. */
+   *  loss — the army flees, so no rewards and no veterancy credit. */
   private buildRetreatButton() {
     const label = new Text({
-      text: "âš‘ Retreat",
+      text: "⚑ Retreat",
       style: { fontFamily: "sans-serif", fontSize: 14, fontWeight: "700", fill: 0xffffff },
     });
     label.position.set(12, 6);
@@ -1173,7 +1173,7 @@ export class RaidScene {
   private eBar!: Graphics;
 
   // The contain-fit stage rectangle (the 480x320 design space) + ground line,
-  // recomputed live so the simâ†’screen mapping and unit placement track resizes.
+  // recomputed live so the sim→screen mapping and unit placement track resizes.
   // Memoised on the screen size: mapX/mapY/sizeScale call this several times per
   // unit per frame, and a fresh object each call is pure GC pressure.
   // Last viewport the resize-only chrome (stage layers, letterboxes, HUD backing)
@@ -1192,7 +1192,7 @@ export class RaidScene {
     const H = this.app.screen.height;
     const c = this.bgRectCache;
     if (c && c.W === W && c.H === H) return c.r;
-    const scale = Math.min(W / DESIGN_W, H / DESIGN_H); // CONTAIN â€” whole scene visible
+    const scale = Math.min(W / DESIGN_W, H / DESIGN_H); // CONTAIN — whole scene visible
     const w = DESIGN_W * scale;
     const h = DESIGN_H * scale;
     const left = (W - w) / 2;
@@ -1203,7 +1203,7 @@ export class RaidScene {
   }
 
   // Stand the boss on top of the tallest RIGHT-SIDE structure (barn/silo/front
-  // building/circus car) â€” the piece enemies emerge from. Raids without one (Aliens,
+  // building/circus car) — the piece enemies emerge from. Raids without one (Aliens,
   // Beach, Tree World) keep the default up-right sky perch, so their boss hovers
   // (the Alien "UFO" reads as floating). Perch is stored as a fraction of the stage
   // rect so it survives resizes.
@@ -1246,15 +1246,15 @@ export class RaidScene {
     this.perchFY += tw.dy ?? 0;
   }
 
-  // Simâ†’screen mapping, anchored to the background rect + its ground line.
+  // Sim→screen mapping, anchored to the background rect + its ground line.
   private mapX(sx: number): number {
     const r = this.bgRect();
     const mx = r.w * FIELD_INSET_FX;
     return r.left + mx + (sx / FIELD_W) * (r.w - 2 * mx);
   }
   /** How much to scale unit-space sizes/offsets so they track the contain-fit stage
-   *  (1 at SIZE_REF_SCALE). Everything measured in "unit px" â€” heights, ground nudges,
-   *  poof offsets â€” multiplies by this so it grows/shrinks with the window. */
+   *  (1 at SIZE_REF_SCALE). Everything measured in "unit px" — heights, ground nudges,
+   *  poof offsets — multiplies by this so it grows/shrinks with the window. */
   private sizeScale(): number {
     return this.bgRect().scale / SIZE_REF_SCALE;
   }
@@ -1273,7 +1273,7 @@ export class RaidScene {
     const t = (sy - BOSS_STRUCT_Y) / (CENTER_Y - BOSS_STRUCT_Y);
     return perchY + t * (groundLineY - perchY);
   }
-  /** Horizontal simâ†’screen scale, for sizing projectiles in field units. */
+  /** Horizontal sim→screen scale, for sizing projectiles in field units. */
   private scaleX(): number {
     const r = this.bgRect();
     return (r.w * (1 - 2 * FIELD_INSET_FX)) / FIELD_W;
@@ -1303,7 +1303,7 @@ export class RaidScene {
     for (const { sp, asset } of this.stageLayers) {
       const [ax, ay] = parseVec(asset.anchor);
       const [px, py] = parseVec(asset.position);
-      sp.anchor.set(ax, 1 - ay); // cocos Y-up anchor â†’ Pixi Y-down
+      sp.anchor.set(ax, 1 - ay); // cocos Y-up anchor → Pixi Y-down
       sp.scale.set(r.scale);
       sp.position.set(r.left + px * r.scale, r.top + (DESIGN_H - py) * r.scale);
     }
@@ -1348,7 +1348,7 @@ export class RaidScene {
     const perchY = r.top + this.perchFY * r.h;
     const bossPos = (u: SimUnit, x: number, y: number): [number, number] => {
       // Perched: on the structure. Descending: slide right off-screen at perch height
-      // (behind the structure â€” reads as exiting through the entrance). Emerging/hold/
+      // (behind the structure — reads as exiting through the entrance). Emerging/hold/
       // fight: a normal ground unit, walking in from the right to the attack spot.
       if (u.state === "structure") return [perchX, perchY];
       if (u.state === "descending") {
@@ -1376,7 +1376,7 @@ export class RaidScene {
     let eAlive = 0;
     for (const u of this.sim.units) {
       // Units spawned mid-fight (summoned minions, walls) get their token on first
-      // sight â€” the renderer only holds tokens for the initial roster otherwise.
+      // sight — the renderer only holds tokens for the initial roster otherwise.
       let tok = this.tokens.get(u.id);
       if (!tok) {
         tok = this.makeToken(u);
@@ -1393,13 +1393,13 @@ export class RaidScene {
         if (u.alive) eAlive++;
       }
 
-      // Queued enemies haven't emerged yet â€” keep them hidden off the field.
+      // Queued enemies haven't emerged yet — keep them hidden off the field.
       if (u.state === "queued") {
         tok.root.visible = false;
         continue;
       }
       // A finished corpse is pure cost: Pixi does not cull on alpha, so an
-      // alpha-0 rig (15â€“25 sprites) would keep being posed, transformed and
+      // alpha-0 rig (15–25 sprites) would keep being posed, transformed and
       // batched for the rest of the fight. Once the death fade has played out,
       // hide the token and skip all of its per-frame work for good.
       if (!u.alive && tok.deathAnim >= DEATH_FADE) {
@@ -1509,7 +1509,7 @@ export class RaidScene {
           sy = this.mapY(c.y) + UNIT_GROUND_NUDGE * this.sizeScale();
         }
       }
-      // Carried off the field by a crab â€” gone from this fight (it comes home after).
+      // Carried off the field by a crab — gone from this fight (it comes home after).
       tok.root.visible = !u.taken;
       tok.root.position.set(sx, sy);
       // Depth-sort in 4-px bands, and only write zIndex when the band changes:
@@ -1527,7 +1527,7 @@ export class RaidScene {
       }
 
       // Spawn puff the first time a unit reaches the field mid-fight (queued enemies
-      // emerging, summoned minions) â€” the intro roster slides in and doesn't puff.
+      // emerging, summoned minions) — the intro roster slides in and doesn't puff.
       if (!tok.emerged) {
         tok.emerged = true;
         if (this.phase !== "intro" && u.alive) this.spawnPoof(sx, sy + tok.topY * 0.5 * szs, 0xe6d6b0);
@@ -1538,7 +1538,7 @@ export class RaidScene {
         // pulse. Smash still scales the actor rig itself below as part of the move.
         const pulseScale = u.team === "enemy" ? 1 + 0.16 * tok.pulse : 1;
         // A wall shrinks as it's whittled down (ground truth ZFFightWall.damage: setScale),
-        // to a 0.5 floor at 0 HP â€” a clear "keep hitting it" cue.
+        // to a 0.5 floor at 0 HP — a clear "keep hitting it" cue.
         const wallShrink = u.isWall ? 0.5 + 0.5 * Math.max(0, u.hp / u.maxHp) : 1;
         tok.root.scale.set(pulseScale * szs * wallShrink);
         tok.root.alpha = 1;
@@ -1549,7 +1549,7 @@ export class RaidScene {
           tok.deathAnim = 0;
           const midY = sy + tok.topY * 0.5 * szs;
           if (u.team === "enemy" && this.smokeCfg) {
-            // Enemy death: the source game's own poof â€” CivilianActorFight
+            // Enemy death: the source game's own poof — CivilianActorFight
             // playDeathEffect fetches the "smoke" particle (swirlCloudFX) at the
             // actor's position, so a slain enemy vanishes in a rising smoke burst.
             this.particles.burst(this.smokeCfg, sx, midY, 1);
@@ -1622,7 +1622,7 @@ export class RaidScene {
         // charge dropping to 0 (windupKey clears once the payoff blow lands).
         const smashing = !!u.windupKey && SMASH_KEYS.has(u.windupKey);
         if (tok.wasSmashWindup > 0 && !smashing && tok.smashSlam < 0) {
-          tok.smashSlam = SMASH_SLAM_S; // just released â€” begin the slam
+          tok.smashSlam = SMASH_SLAM_S; // just released — begin the slam
         }
         tok.wasSmashWindup = smashing ? windup : 0;
         let grow = 1;
@@ -1631,12 +1631,12 @@ export class RaidScene {
           grow = 1 + SMASH_GROW * windup; // loom up as the arms rise
         } else if (tok.smashSlam >= 0) {
           tok.smashSlam -= dtSec;
-          slamProg = Math.max(0, tok.smashSlam) / SMASH_SLAM_S; // 1 â†’ 0
-          grow = 1 + SMASH_GROW * slamProg; // shrink 1.4 â†’ 1
+          slamProg = Math.max(0, tok.smashSlam) / SMASH_SLAM_S; // 1 → 0
+          grow = 1 + SMASH_GROW * slamProg; // shrink 1.4 → 1
           if (tok.smashSlam <= 0) tok.smashSlam = -1;
         }
-        // Feet-anchored grow: scale the rig container (and its feet offset) â€” NOT the
-        // whole token â€” so the HP bar doesn't balloon with it.
+        // Feet-anchored grow: scale the rig container (and its feet offset) — NOT the
+        // whole token — so the HP bar doesn't balloon with it.
         tok.actor.container.scale.set(tok.actorBaseScale * grow);
         tok.actor.container.y = tok.actorBaseY * grow;
 
@@ -1651,7 +1651,7 @@ export class RaidScene {
         );
       }
       // Enemy rig: idle bob when holding position, walk cycle while advancing, and a
-      // forward strike lunge while trading blows â€” the lunge peaks at the attack's
+      // forward strike lunge while trading blows — the lunge peaks at the attack's
       // damageTiming so its reach lands with the sim's hit (see EnemyActor).
       if (tok.enemyActor) {
         // The Ringmaster's direct hop travels slightly right from the circus car.
@@ -1668,7 +1668,7 @@ export class RaidScene {
         let attack: EnemyAttackPose | null = enemyFighting
           ? { atkProg, damageTiming: u.attackDamageTiming, attackName: u.attackName }
           : null;
-        // Perched boss: a simple throw swing â€” the arm cocks and swings forward as the
+        // Perched boss: a simple throw swing — the arm cocks and swings forward as the
         // throw winds up, releasing (peak reach) as the projectile launches. Map the
         // sim's 0..1 wind-up onto the attack envelope's active window (past its rest
         // lead-in) so the arm animates over the whole wind-up.
@@ -1791,7 +1791,7 @@ export class RaidScene {
     if (bubbleId && bubTok) {
       this.bubbleUnitId = bubbleId;
       this.bubble.visible = true;
-      // Same bubble art in all three states â€” only what's inside it changes.
+      // Same bubble art in all three states — only what's inside it changes.
       const tex = !bub
         ? this.bubbleTexHmm
         : bub.kind === "brain" ? this.bubbleTexBrain : this.bubbleTexButterfly;
@@ -1862,10 +1862,10 @@ export class RaidScene {
     this.eLabel.text = `${this.raid.bossName || "Enemies"}  ${eAlive}`;
     this.eLabel.x = barW - this.eLabel.width;
 
-    // Round countdown â†’ ENRAGED. Only meaningful for a raid with a boss timer.
+    // Round countdown → ENRAGED. Only meaningful for a raid with a boss timer.
     const remMs = this.sim.roundRemainingMs();
     if (this.sim.enraged) {
-      this.roundLabel.text = "âš  ENRAGED";
+      this.roundLabel.text = "⚠ ENRAGED";
       this.roundLabel.style.fill = 0xff5a3c;
     } else if (remMs > 0) {
       const s = Math.ceil(remMs / 1000);
@@ -1882,13 +1882,13 @@ export class RaidScene {
 
     // Activated buttons never move and never leave; they only darken. Three states,
     // read off the sim:
-    //   armed       â€” a zombie can perform it this instant; a tap lands.
-    //   recharging  â€” its zombie is in position, but is mid wind-up or cooling down.
-    //   unavailable â€” nobody is in position to perform it at all.
+    //   armed       — a zombie can perform it this instant; a tap lands.
+    //   recharging  — its zombie is in position, but is mid wind-up or cooling down.
+    //   unavailable — nobody is in position to perform it at all.
     // `present` (in position) is deliberately steadier than `ready` (tap lands now):
     // driving the look off `ready` alone would strobe the column between swings and
     // leave nothing to time a wind-up into. Every button stays tappable in all three
-    // states â€” a tap the sim refuses is simply a no-op.
+    // states — a tap the sim refuses is simply a no-op.
     // Passive icons still appear only once a carrier has advanced onto the field;
     // they aren't tap targets, so re-packing that row is harmless.
     // All of it is throttled: this changes on sim events, not per render frame.
@@ -2278,7 +2278,7 @@ export class RaidScene {
       if (!sp) {
         const tex = this.projTex.get(pr.sprite) ?? null;
         // Hazards with no preloaded sprite (falling obstacles / grabs) render as a
-        // round warning dot â€” NOT Texture.WHITE, which read as a spinning square.
+        // round warning dot — NOT Texture.WHITE, which read as a spinning square.
         sp = new Sprite(tex ?? this.hazardDotTex());
         sp.anchor.set(0.5);
         if (!tex) sp.tint = 0xff7a3c;
@@ -2288,7 +2288,7 @@ export class RaidScene {
           this.onStrike?.({ team: "enemy", sfxFile: "alienLaser.wav" });
         }
       }
-      // Rendered ~2Ã— the old size (the collision radius in BattleSim is unchanged â€”
+      // Rendered ~2× the old size (the collision radius in BattleSim is unchanged —
       // this is a visual-legibility bump so thrown items read clearly).
       const size = Math.max(20, pr.spriteSize * s * 2.4);
       sp.width = size;
@@ -2326,7 +2326,7 @@ export class RaidScene {
     state: { w: number; h: number; f: number },
   ) {
     const f = Math.max(0, Math.min(1, frac));
-    const fq = Math.round(f * 400); // Â¼% steps â€” sub-pixel for a â‰¤350 px bar
+    const fq = Math.round(f * 400); // ¼% steps — sub-pixel for a ≤350 px bar
     const sized = state.w !== w || state.h !== h;
     if (sized) {
       bar.clear()

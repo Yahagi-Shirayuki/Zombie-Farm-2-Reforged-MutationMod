@@ -118,11 +118,11 @@ export function buildZombiePortraitRig(
 /** How many times one key/mask/color may fail before it stops being retried. A
  *  failing extraction costs as much as a successful one (~30ms of blocked main
  *  thread), and the panels that request portraits rebuild their whole list on every
- *  tap â€” so without a ceiling a single zombie whose textures never loaded re-pays
+ *  tap — so without a ceiling a single zombie whose textures never loaded re-pays
  *  that cost on every interaction, forever. */
 export const MAX_PORTRAIT_ATTEMPTS = 2;
 
-/** Hand the main thread back between extractions. Each one blocks on a GPUâ†’CPU
+/** Hand the main thread back between extractions. Each one blocks on a GPU→CPU
  *  readback, so a panel that asks for fifty at once used to run them as a single
  *  uninterruptible task (~1.5s frozen on a full roster). Spacing them across frames
  *  keeps input and rendering alive while the portraits fill in. */
@@ -139,7 +139,7 @@ export class MutationPortraits {
   private cache = new Map<string, Promise<string>>();
   /** Consecutive failures per cache key, capped by MAX_PORTRAIT_ATTEMPTS. */
   private failures = new Map<string, number>();
-  /** Tail of the extraction chain â€” see enqueue(). */
+  /** Tail of the extraction chain — see enqueue(). */
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private renderer: Renderer, private assets: GameAssets) {}
