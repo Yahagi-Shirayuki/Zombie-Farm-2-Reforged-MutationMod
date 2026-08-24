@@ -237,6 +237,8 @@ export interface PlotSave {
   state: PlotStateSave;
   /** Player fenced this plot to prevent manual/boost harvesting. */
   harvestLocked?: boolean;
+  /** This plot had invasive Diamint manually cleared; active source Diamints skip it. */
+  invasiveMintCleared?: boolean;
   /** Present iff state === "planted". */
   crop?: CropSave;
 }

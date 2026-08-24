@@ -122,7 +122,7 @@ export const ABILITY_POOL: Record<string, AbilityMeta> = {
   randomAbility: { label: "Schrödinger Skill", effect: "Random existing ability", desc: "What's inside? Unbox to find out.", icon: `${AB}ability_random.png` },
   naturalLeader: { label: "Natural Leader", effect: "+15% All Stats to all zombies", desc: "Everyone fights harder when you're around.", icon: `${AB}ability_lead.png` },
   improvise: { label: "Improvise", effect: "Rolls a random unlocked ability for each raid", desc: "Make it up as you go.", icon: `${AB}ability_improv.png` },
-  freeze: { label: "Freeze", effect: "10% chance to freeze for 3 seconds", desc: "Stop them cold.", icon: `${AB}ability_freeze.png` },
+  freeze: { label: "Freeze", effect: "10% chance to freeze for 3 seconds", desc: "Stop them cold.", icon: `${AB}ability_freeze.png` }, // reused the stun effect lol
   lifeSteal: { label: "Life steal", effect: "Heal for 2% of damage dealt", desc: "Take a little life for yourself.", icon: `${AB}ability_drain.png` },
   castle: { label: "Castle body", effect: "Take 50% less damage", desc: "Built like a fortress.", icon: `${AB}ability_placeholder.png` },
   gymRat: { label: "Gym rat", effect: "+20% Power and Life", desc: "No pain, no gain.", icon: `${AB}ability_placeholder.png` },

@@ -216,6 +216,7 @@ interface Plot {
   state: PlotState;
   crop?: Planting;
   harvestLocked?: boolean;
+  invasiveMintCleared?: boolean;
   fenceBack?: Sprite;
   fenceFront?: Sprite;
 }
@@ -651,7 +652,7 @@ export class Field {
     return !!c && (c.cfg.key === INVADING_MINT_KEY || c.ageMs >= c.cfg.growMs);
   }
   isHarvestable(col: number, row: number): boolean {
-    return this.isRipe(col, row) && !this.isHarvestLocked(col, row);
+    return this.isRipe(col, row) && (this.isInvasiveMintAt(col, row) || !this.isHarvestLocked(col, row));
   }
   hasCrop(col: number, row: number): boolean {
     const at = this.plotOriginAt(col, row);
@@ -921,6 +922,7 @@ export class Field {
   ): CropConfig | null {
     const p = this.plots.get(this.key(oc, or));
     if (!p || p.state !== "plowed" || p.crop) return null;
+    p.invasiveMintCleared = false;
     this.fit(p.soil, this.assets.soil[SEED_FILE], oc, or, PLOT); // seeded soil
     // Mutant Monolith: a mutant-zombie crop planted while the monolith is placed
     // grows in half the time. Bake it into this planting's own config (persists via
@@ -954,6 +956,7 @@ export class Field {
     const k = this.key(oc, or);
     const p = this.plots.get(k);
     if (!p) return false;
+    if (p.invasiveMintCleared && p.crop?.cfg.key !== INVADING_MINT_KEY) return false;
     let changed = false;
 
     if (p.crop) {
@@ -1028,6 +1031,12 @@ export class Field {
     for (const p of this.plots.values()) this.desiredInvasiveMintFromDiamint(p, now, desired);
 
     let changed = false;
+    for (const [key, plot] of this.plots) {
+      if (plot.invasiveMintCleared && !desired.has(key)) {
+        plot.invasiveMintCleared = false;
+        changed = true;
+      }
+    }
     for (const { oc, or, stage } of desired.values()) {
       if (this.plantInvasiveMintAt(oc, or, now, stage)) changed = true;
     }
@@ -1099,14 +1108,16 @@ export class Field {
   // `name` is the crop/zombie display name (for quest-progress matching).
   harvestAt(oc: number, or: number): HarvestResult | null {
     const p = this.plots.get(this.key(oc, or));
-    if (!p || p.harvestLocked || !p.crop ||
-        (p.crop.cfg.key !== INVADING_MINT_KEY && p.crop.ageMs < p.crop.cfg.growMs)) return null;
+    if (!p || !p.crop) return null;
     const { cfg } = p.crop;
+    const invasiveMint = cfg.key === INVADING_MINT_KEY;
+    if (!invasiveMint && (p.harvestLocked || p.crop.ageMs < p.crop.cfg.growMs)) return null;
     if (cfg.key === INVADING_MINT_KEY) {
       const stage = this.invasiveMintStage(p.crop);
       const fee = this.invasiveMintRemovalFee(p.crop);
       destroyCrop(p.crop);
       p.crop = undefined;
+      p.invasiveMintCleared = true;
       p.state = "dirt";
       this.fit(p.soil, this.assets.soil[DIRT_FILE], oc, or, PLOT);
       return {
@@ -1990,6 +2001,7 @@ export class Field {
     for (const p of this.plots.values()) {
       const ps: PlotSave = { oc: p.oc, or: p.or, state: p.state };
       if (p.harvestLocked) ps.harvestLocked = true;
+      if (p.invasiveMintCleared) ps.invasiveMintCleared = true;
       if (p.crop) {
         ps.crop = {
           key: p.crop.cfg.key,
@@ -2035,7 +2047,11 @@ export class Field {
       const soil = new Sprite();
       this.fit(soil, this.assets.soil[soilFile[ps.state]], oc, or, PLOT);
       this.plotLayer.addChild(soil);
-      const plot: Plot = { oc, or, soil, state: ps.state, harvestLocked: !!ps.harvestLocked };
+      const plot: Plot = {
+        oc, or, soil, state: ps.state,
+        harvestLocked: !!ps.harvestLocked,
+        invasiveMintCleared: !!ps.invasiveMintCleared,
+      };
       this.plots.set(k, plot);
       this.forEachTile(oc, or, (t) => this.tilePlot.set(t, k));
       this.syncFence(plot);
@@ -2088,6 +2104,7 @@ export class Field {
           !next ||
           current.state !== next.state ||
           !!current.harvestLocked !== !!next.harvestLocked ||
+          !!current.invasiveMintCleared !== !!next.invasiveMintCleared ||
           (current.state === "planted" &&
             (!current.crop || !next.crop ||
               current.crop.cfg.key !== next.crop.key ||
@@ -2105,6 +2122,7 @@ export class Field {
 
     const now = Date.now();
     for (const [key, current] of this.plots) {
+      current.invasiveMintCleared = !!wanted.get(key)!.invasiveMintCleared;
       if (current.state !== "planted" || !current.crop) continue;
       const saved = wanted.get(key)!.crop!;
       const base = resolve(saved.key);

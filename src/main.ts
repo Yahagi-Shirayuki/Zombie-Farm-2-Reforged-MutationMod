@@ -1229,7 +1229,9 @@ async function main() {
   };
   hud.canUseBoost = (def) =>
     def.effect !== "plow" ||
-    field.serialize().some((plot) => plot.state === "dirt" || plot.state === "hole");
+    field.serialize().some((plot) =>
+      plot.state === "dirt" || plot.state === "hole" || plot.crop?.key === INVADING_MINT.key
+    );
 
   // The speed-grow (Insta-Grow) boost, exposed so the HUD can render the equippable
   // Grow tool (icon + live count) and the growing-crop info window can offer it.
