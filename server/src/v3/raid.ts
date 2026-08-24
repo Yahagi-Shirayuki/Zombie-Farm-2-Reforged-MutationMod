@@ -1,20 +1,49 @@
-import { DICE_KEY, CONCENTRATION_KEY, VOUCHER_KEY, MAX_STACK } from "../boostCatalog";
-import { levelForXp, levelUpBrains } from "../levels";
+import { BRAIN_TICKET_KEY, DICE_KEY, CONCENTRATION_KEY, VOUCHER_KEY, MAX_STACK } from "../boostCatalog";
+import { XP_THRESHOLDS, levelForXp, levelUpBrains } from "../levels";
 import { ownedLootCounter, resolveLoot, rollLoot } from "../loot";
 import { raidEcon, raidUnlocked, winGold } from "../raidCatalog";
-import { applyQuestEvents } from "./engine";
-import type { QuestProjection } from "../../../src/net/protocol";
+import { invasionWinXp } from "../../../src/raid/repeatXp";
+import { applyQuestEvents, CONFIG_SPENT, MEMORIAL_GRAVEYARD_CAP } from "./engine";
+import { applyPeriodicEvents, refreshPeriodicState, xpToNextLevel } from "../../../src/quest/periodic/generate";
+import type { PeriodicQuestState } from "../../../src/quest/periodic/types";
+import type { PeriodicQuestProjection, QuestProjection } from "../../../src/net/protocol";
 import type { RaidOutcome } from "../../../src/raid/types";
 import raidRows from "../../../public/assets/raids/raids.json";
 import { activeBonusHeadId, farmerCooldownMs } from "../../../src/farmer";
 import { buildPinnedV3Raid, verifyRaid, RAID_RULESET_VERSION, type PinnedRaidConfig, type RaidReplayInput } from "../raidVerifier";
 import { rollBrainDrop, rollBrainDropWithPity, nextBrainDryStreak } from "../../../src/raid/brainDrops";
-import { rollRaidZombieDropWithPity, nextRaidZombieDryWins, hasRaidZombieDrop } from "../../../src/raid/zombieDrops";
+import { ELITE_BRAIN_LUCK } from "../../../src/raid/eliteInvasion";
+import { rollRaidZombieDropWithPity, nextRaidZombieDryWins, hasRaidZombieDrop,
+  RARE_INVASION_ZOMBIE_SUBJECT } from "../../../src/raid/zombieDrops";
+import { raidFeatQuestEvents } from "../../../src/raid/featQuestEvents";
 import objectRows from "../../../public/assets/placeables.json";
 import { shouldStoreEpicReward } from "../../../src/epicBoss/rewards";
 import { encodeReceivedZombie } from "../../../src/zombie/receivedReward";
 
 const DEFAULT_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+/** How long an invasion session may sit open before it is treated as ABANDONED and
+ *  its roster released. That is the whole job, and the only one it can do well.
+ *
+ *  It used to void the fight as well — a finish arriving after it was answered 200 with
+ *  `{expired:true}` and nothing else, no replay, whatever the battle had done. That
+ *  predates deterministic replay and outlived its reason. Nothing about a LATE
+ *  transcript is easier to forge than a prompt one: the fight is replayed byte-for-byte
+ *  from the `config_json` pinned at /raid/start, `pacedTick` still refuses a finalTick
+ *  ahead of wall clock, and `RAID_MAX_TICKS` caps any replay at four simulated minutes
+ *  however long the session has been open. So the clock was gating rewards it was not
+ *  protecting.
+ *
+ *  Meanwhile an honest player reaches it easily, because the fight does NOT run on wall
+ *  clock — it is driven by the Pixi ticker, so a backgrounded tab or a locked phone
+ *  freezes the battle while this keeps counting. Prod bore that out: 11 sessions across
+ *  11 accounts in 8 days, 18 to 785 minutes late, one apiece. Not a client defect;
+ *  people walking away mid-fight and coming back.
+ *
+ *  Fifteen minutes is RIGHT for the job that remains, and deliberately not raised:
+ *  a player who abandoned a fight wants their zombies back promptly, and the lock is
+ *  the real correctness boundary — while it is held, nothing else can have touched
+ *  those units, which is exactly the condition under which a late settlement is safe to
+ *  pay. `finishRaid` therefore keys on the lock (`finished_at IS NULL`), not the clock. */
 const RAID_TTL_MS = 15 * 60 * 1000;
 const EARLIEST_FINISH_MS = 15_000;
 
@@ -84,8 +113,13 @@ const objectArmyCapacity = new Map(
  *  (raid_state_v3.brain_dry_streak): at the threshold the roll's zero is floored to one
  *  brain. Silent by design — the pinned amount is the only thing that reaches the client,
  *  and a floored drop looks exactly like a rolled one. */
-function rollPinnedBrainDrop(recommendedLevel: number, hasBoss: boolean, dryStreak: number): number {
-  return hasBoss ? rollBrainDropWithPity(recommendedLevel, dryStreak) : 0;
+function rollPinnedBrainDrop(
+  recommendedLevel: number,
+  hasBoss: boolean,
+  dryStreak: number,
+  luck: number
+): number {
+  return hasBoss ? rollBrainDropWithPity(recommendedLevel, dryStreak, Math.random, luck) : 0;
 }
 
 /** Brain drop for a session opened BEFORE the amount was pinned (legacy derivation, kept
@@ -104,13 +138,39 @@ function legacyBrainDrop(sessionId: string, recommendedLevel: number, hasBoss: b
   });
 }
 
+/** Releases a settled invasion's roster and ticks veterancy in ONE write per zombie.
+ *
+ *  Every survivor's row used to be written TWICE per invasion — once to bump `invasions`,
+ *  once to drop the lock — which across the beta was 420k of 5.9M rows written, about 7% of
+ *  the entire D1 write bill, for nothing the unlock was not already carrying.
+ *
+ *  The CASE is load-bearing and must not be simplified into a blanket `+ 1`. By the time
+ *  this runs the casualties are already deleted, so the rows still locked by this session
+ *  are everyone who was NOT killed — a SUPERSET of `survivors`. A retreat brings zombies
+ *  home that the replay does not count as survivors, and a concession fallback empties
+ *  `survivors` outright while still releasing the whole roster. Those come home WITHOUT a
+ *  veterancy tick. Veterancy is +5% a rank, so a blanket bump would quietly inflate the
+ *  army on every retreat.
+ *
+ *  Binds in order: the survivor ids, then accountId, sessionId, and whatever `guard` takes.
+ *  Exported so raidSettlementWrites.test.ts can run this exact string against real SQLite —
+ *  the risk here is in the SQL, not in the surrounding TypeScript. */
+export function releaseRosterSql(survivors: string[], guard: string): string {
+  const veterancy = survivors.length
+    ? `invasions + CASE WHEN unit_id IN (${survivors.map(() => "?").join(",")}) THEN 1 ELSE 0 END`
+    : "invasions";
+  return `UPDATE roster_v3 SET locked_by_raid = NULL, invasions = ${veterancy}
+    WHERE account_id = ? AND locked_by_raid = ? AND ${guard}`;
+}
+
 export async function expireLiveRaid(db: D1Database, accountId: string, now: number): Promise<void> {
   const expired = await db.prepare(`SELECT id FROM raid_sessions_v3
     WHERE account_id = ? AND finished_at IS NULL AND expires_at <= ?`)
     .bind(accountId, now).first<{ id: string }>();
   if (!expired) return;
   await db.batch([
-    db.prepare("UPDATE raid_sessions_v3 SET finished_at = ? WHERE id = ? AND finished_at IS NULL").bind(now, expired.id),
+    db.prepare(`UPDATE raid_sessions_v3 SET finished_at = ?, config_json = ${CONFIG_SPENT}
+      WHERE id = ? AND finished_at IS NULL`).bind(now, expired.id),
     db.prepare("UPDATE roster_v3 SET locked_by_raid = NULL WHERE account_id = ? AND locked_by_raid = ?").bind(accountId, expired.id),
   ]);
 }
@@ -118,7 +178,7 @@ export async function expireLiveRaid(db: D1Database, accountId: string, now: num
 export async function startRaid(
   db: D1Database,
   accountId: string,
-  body: { raidId?: unknown; orderedUnitIds?: unknown; useVoucher?: unknown; concentration?: unknown; dice?: unknown; rulesetVersion?: unknown },
+  body: { raidId?: unknown; orderedUnitIds?: unknown; useVoucher?: unknown; brainTicket?: unknown; concentration?: unknown; dice?: unknown; rulesetVersion?: unknown },
   now: number,
   cooldownMs = DEFAULT_COOLDOWN_MS
 ): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -139,14 +199,23 @@ export async function startRaid(
   // randomness in the wave (the Robots' random boss), and the client redraws the same
   // wave from the session id this response returns.
   const sessionId = crypto.randomUUID();
+  // The gameplay document is read BEFORE the wave is pinned, because whether the player
+  // owns a Brain Ticket decides whether the pinned wave is the elite one. Owning none is
+  // not settled here — it is refused alongside the other inventory gates below, with the
+  // wave pinned as an ordinary invasion that is then never used.
+  const coreRow = await db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?")
+    .bind(accountId).first<{ current_json: string }>();
+  const wantsElite = body.brainTicket === true;
+  const ticketsOwned = parse<CoreState>(coreRow?.current_json ?? "", { inventory: {}, storage: { received: {}, stored: {} } })
+    .inventory[BRAIN_TICKET_KEY] ?? 0;
+  const elite = wantsElite && ticketsOwned >= 1;
   const pinned = await buildPinnedV3Raid(db, accountId, raidId, body.orderedUnitIds, concentration, sessionId);
   if (!pinned.ok) {
     const status = pinned.error === "locked" ? 403 : pinned.error === "bad_raid" || pinned.error === "bad_roster" ? 400 : 409;
     return { status, body: { ok: false, error: pinned.error } };
   }
-  const [balance, coreRow, raidState, live, liveEpic, roster] = await Promise.all([
+  const [balance, raidState, live, liveEpic, roster] = await Promise.all([
     db.prepare("SELECT gold, brains, xp FROM balances WHERE account_id = ?").bind(accountId).first<{ gold: number; brains: number; xp: number }>(),
-    db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<{ current_json: string }>(),
     db.prepare("SELECT last_started_at, progress_json, brain_dry_streak FROM raid_state_v3 WHERE account_id = ?")
       .bind(accountId).first<Pick<RaidStateRow, "last_started_at" | "progress_json" | "brain_dry_streak">>(),
     db.prepare("SELECT id FROM raid_sessions_v3 WHERE account_id = ? AND finished_at IS NULL").bind(accountId).first<{ id: string }>(),
@@ -162,18 +231,27 @@ export async function startRaid(
   const activeCooldownMs = farmerCooldownMs(cooldownMs, activeBonusHeadId(core.farmerHeadId ?? 1, core.farmerBonusHeadId));
   const remaining = Math.max(0, raidState.last_started_at + activeCooldownMs - now);
   const useVoucher = body.useVoucher === true;
-  if (remaining && !useVoucher) return { status: 429, body: { ok: false, error: "cooldown", cooldownRemaining: remaining } };
-  if (remaining && (core.inventory[VOUCHER_KEY] ?? 0) < 1) return { status: 409, body: { ok: false, error: "no_voucher" } };
+  // A Brain Ticket covers the wait as well as the difficulty — charging a voucher on top
+  // of it would bill the player twice for one bypass.
+  if (wantsElite && !elite) return { status: 409, body: { ok: false, error: "no_brain_ticket" } };
+  const voucherBypass = remaining > 0 && !elite;
+  if (remaining && !useVoucher && !elite) return { status: 429, body: { ok: false, error: "cooldown", cooldownRemaining: remaining } };
+  if (voucherBypass && (core.inventory[VOUCHER_KEY] ?? 0) < 1) return { status: 409, body: { ok: false, error: "no_voucher" } };
   const dice = Math.max(0, Math.min(10, Math.trunc(Number(body.dice) || 0)));
   if ((core.inventory[DICE_KEY] ?? 0) < dice) return { status: 409, body: { ok: false, error: "insufficient_dice" } };
   if (concentration && (core.inventory[CONCENTRATION_KEY] ?? 0) < 1) return { status: 409, body: { ok: false, error: "no_concentration" } };
-  if (remaining) core.inventory[VOUCHER_KEY]--;
+  // Re-read from `core` rather than trusting the count taken before the pin: this is the
+  // copy that gets written back, so the debit has to come off it.
+  if (elite && (core.inventory[BRAIN_TICKET_KEY] ?? 0) < 1) return { status: 409, body: { ok: false, error: "no_brain_ticket" } };
+  if (elite) core.inventory[BRAIN_TICKET_KEY]--;
+  if (voucherBypass) core.inventory[VOUCHER_KEY]--;
   if (dice) core.inventory[DICE_KEY] -= dice;
   if (concentration) core.inventory[CONCENTRATION_KEY]--;
   const brainDrop = rollPinnedBrainDrop(
     econ.recLevel,
     pinned.config.enemyUnits.some((unit) => unit.isBoss),
-    raidState.brain_dry_streak ?? 0
+    raidState.brain_dry_streak ?? 0,
+    elite ? ELITE_BRAIN_LUCK : 1
   );
   const expiresAt = now + RAID_TTL_MS;
   const earliestFinishAt = now + EARLIEST_FINISH_MS;
@@ -181,22 +259,26 @@ export async function startRaid(
     db.prepare(`INSERT INTO raid_sessions_v3
       (id, account_id, raid_id, roster_json, boosts_json, config_json, ruleset_version, started_at, earliest_finish_at, expires_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(sessionId, accountId, String(raidId), JSON.stringify(requested), JSON.stringify({ dice, concentration, brainDrop }),
+      .bind(sessionId, accountId, String(raidId), JSON.stringify(requested), JSON.stringify({ dice, concentration, brainDrop, elite }),
         JSON.stringify(pinned.config), RAID_RULESET_VERSION, now, earliestFinishAt, expiresAt),
     db.prepare("UPDATE raid_state_v3 SET last_started_at = ? WHERE account_id = ?").bind(now, accountId),
     db.prepare("UPDATE gameplay_documents_v3 SET current_json = ?, updated_at = ? WHERE account_id = ?")
       .bind(JSON.stringify(core), now, accountId),
     db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
       VALUES(?,?, 'raid_start', ?, ?)`)
-      .bind(crypto.randomUUID(), accountId, JSON.stringify({ sessionId, raidId, roster: requested, dice, concentration, bypassed: remaining > 0 }), now),
+      .bind(crypto.randomUUID(), accountId, JSON.stringify({ sessionId, raidId, roster: requested, dice, concentration, elite, bypassed: remaining > 0 }), now),
   ];
-  for (const id of requested) statements.push(
-    db.prepare("UPDATE roster_v3 SET locked_by_raid = ? WHERE account_id = ? AND unit_id = ? AND locked_by_raid IS NULL")
-      .bind(sessionId, accountId, id)
-  );
+  // One statement for the whole army. `locked_by_raid IS NULL` still gates each row
+  // individually, so a unit locked between the pre-check above and this write is skipped
+  // exactly as it was when this ran a statement per zombie — the set of rows written is
+  // unchanged, only the number of round trips inside the batch.
+  statements.push(db.prepare(`UPDATE roster_v3 SET locked_by_raid = ?
+    WHERE account_id = ? AND locked_by_raid IS NULL
+      AND unit_id IN (${requested.map(() => "?").join(",")})`)
+    .bind(sessionId, accountId, ...requested));
   await db.batch(statements);
   return { status: 200, body: { ok: true, sessionId, bypassed: remaining > 0, dice,
-    concentration, brainDrop, inventory: core.inventory, lastRaidAt: now, expiresAt, earliestFinishAt,
+    concentration, elite, brainDrop, inventory: core.inventory, lastRaidAt: now, expiresAt, earliestFinishAt,
     serverTime: now,
     rulesetVersion: RAID_RULESET_VERSION } };
 }
@@ -209,7 +291,8 @@ async function closeInvalidRaid(
   rejection?: { raidId: string; error: string; finalTick: unknown; clientWin: unknown; inputCount: number }
 ): Promise<void> {
   const statements = [
-    db.prepare("UPDATE raid_sessions_v3 SET finished_at=? WHERE id=? AND account_id=? AND finished_at IS NULL")
+    db.prepare(`UPDATE raid_sessions_v3 SET finished_at=?, config_json=${CONFIG_SPENT}
+      WHERE id=? AND account_id=? AND finished_at IS NULL`)
       .bind(now, sessionId, accountId),
     db.prepare("UPDATE roster_v3 SET locked_by_raid=NULL WHERE account_id=? AND locked_by_raid=?")
       .bind(accountId, sessionId),
@@ -256,16 +339,13 @@ export async function finishRaid(
     return { status: 200, body: { ...parse<Record<string, unknown>>(session.result_json, {}), serverTime: now } };
   }
   if (session.finished_at) return { status: 409, body: { error: "already_finished" } };
+  // NO expiry gate here on purpose — see RAID_TTL_MS. A session still holding its
+  // roster lock is settled on its merits however late it arrives; one whose lock has
+  // already been released by `expireLiveRaid` was caught by the `finished_at` check
+  // above and answers 409, because those units are free again and may since have fought
+  // elsewhere, which makes retroactive casualties and veterancy unsound rather than
+  // merely generous.
   const locked = parse<string[]>(session.roster_json, []);
-  if (now >= session.expires_at) {
-    const result = { expired: true, gold: 0, xp: 0, firstClear: false, loot: null };
-    await db.batch([
-      db.prepare("UPDATE raid_sessions_v3 SET finished_at = ?, result_json = ? WHERE id = ? AND finished_at IS NULL")
-        .bind(now, JSON.stringify(result), session.id),
-      db.prepare("UPDATE roster_v3 SET locked_by_raid = NULL WHERE account_id = ? AND locked_by_raid = ?").bind(accountId, session.id),
-    ]);
-    return { status: 200, body: result };
-  }
   if (session.ruleset_version !== RAID_RULESET_VERSION) {
     await closeInvalidRaid(db, accountId, session.id, now, {
       raidId: session.raid_id, error: "stale_ruleset", finalTick: body.finalTick,
@@ -373,23 +453,43 @@ export async function finishRaid(
   const raidId = Number(session.raid_id);
   const econ = raidEcon(raidId);
   if (!econ) return { status: 409, body: { error: "bad_raid" } };
-  const [balance, coreRow, raidState, questRow, casualtyRows, objectRow, rosterCounts] = await Promise.all([
+  // Materialise the daily/weekly document before reading it. Every OTHER writer of it
+  // reaches it through ensureV3 (bootstrap, a command batch, a presentation write); the
+  // raid path deliberately loads no projection, so this is the one place that can meet
+  // an account which has never had the row created. A missing row is read as null below
+  // and answered `state_conflict` — i.e. a won invasion paying nothing — so it is worth
+  // one statement to make impossible. Same INSERT OR IGNORE `startRaid` already does for
+  // raid_state_v3, and a no-op once 0049's backfill has run.
+  await db.prepare(`INSERT OR IGNORE INTO periodic_quest_documents_v3
+    (account_id, updated_at) VALUES (?, ?)`).bind(accountId, now).run();
+  const [balance, coreRow, raidState, questRow, periodicRow, casualtyRows, presentationRow, objectRow, rosterCounts] = await Promise.all([
     db.prepare("SELECT gold, brains, xp, claimed_level FROM balances WHERE account_id = ?").bind(accountId).first<{ gold: number; brains: number; xp: number; claimed_level: number }>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<{ current_json: string }>(),
     db.prepare("SELECT last_started_at, progress_json, brain_dry_streak, zombie_dry_json FROM raid_state_v3 WHERE account_id = ?").bind(accountId).first<RaidStateRow>(),
     db.prepare("SELECT version, current_json FROM quest_documents_v3 WHERE account_id = ?").bind(accountId).first<QuestRow>(),
+    db.prepare("SELECT version, current_json FROM periodic_quest_documents_v3 WHERE account_id = ?").bind(accountId).first<QuestRow>(),
     losses.length
-      ? db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, created_at FROM roster_v3
+      ? db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, created_at, color FROM roster_v3
           WHERE account_id = ? AND locked_by_raid = ? AND unit_id IN (${losses.map(() => "?").join(",")})`)
         .bind(accountId, session.id, ...losses)
-        .all<{ unit_id: string; zombie_key: string; mutation: number; invasions: number; stored: number; created_at: number }>()
+        .all<{ unit_id: string; zombie_key: string; mutation: number; invasions: number; stored: number;
+          created_at: number; color: string | null }>()
       : Promise.resolve({ results: [] }),
+    // Individual zombie NAMES live only in the client's presentation blob, keyed by
+    // unit id. This is the last moment they can be captured: the roster row is about
+    // to be deleted, and with it the id that entry hangs off. Read only when someone
+    // actually died. A missing name is harmless — the client falls back to the same
+    // deterministic default it uses for an unnamed living unit.
+    losses.length
+      ? db.prepare("SELECT current_json FROM presentations_v3 WHERE account_id = ?")
+        .bind(accountId).first<{ current_json: string }>()
+      : Promise.resolve(null),
     db.prepare("SELECT current_json FROM object_documents_v3 WHERE account_id = ?")
       .bind(accountId).first<{ current_json: string }>(),
     db.prepare("SELECT stored, COUNT(*) AS count FROM roster_v3 WHERE account_id = ? GROUP BY stored")
       .bind(accountId).all<{ stored: number; count: number }>(),
   ]);
-  if (!balance || !coreRow || !raidState || !questRow || !objectRow) {
+  if (!balance || !coreRow || !raidState || !questRow || !periodicRow || !objectRow) {
     return { status: 409, body: { error: "state_conflict" } };
   }
   const core = parse<CoreState>(coreRow.current_json, { inventory: {}, storage: { received: {}, stored: {} } });
@@ -401,8 +501,15 @@ export async function finishRaid(
   const zombieDry = parse<Record<string, number>>(raidState.zombie_dry_json, {});
   const firstClear = win && !(progress[String(raidId)] > 0);
   const baseGold = win ? winGold(econ, survivors.length / locked.length) : 0;
-  const xp = firstClear ? econ.xp : 0;
-  const boosts = parse<{ dice?: number; brainDrop?: number }>(session.boosts_json, {});
+  const boosts = parse<{ dice?: number; brainDrop?: number; elite?: boolean }>(session.boosts_json, {});
+  // Elite is read back from the SESSION, not from this request: the ticket was charged
+  // and the wave scaled at /raid/start, so that is where the fact lives.
+  const eliteLuck = boosts.elite ? ELITE_BRAIN_LUCK : 1;
+  // The first clear pays the enemy's authored bonus; every later win pays the small
+  // per-raid trickle, x4 on a Brain Ticket (repeatXp.ts). Priced here from the raid id
+  // and the SESSION's elite flag — never from anything the client sent — so a repeat
+  // win cannot be re-billed as a first clear.
+  const xp = win ? invasionWinXp(raidId, econ.xp, firstClear, !!boosts.elite) : 0;
   const pinnedBrains = Number.isFinite(boosts.brainDrop)
     ? Math.max(0, Math.trunc(boosts.brainDrop as number))
     : null;
@@ -439,7 +546,7 @@ export async function finishRaid(
     // Same PINNED dice the item roll uses: they widen the rare-zombie chance too, and the
     // count came from /raid/start (already charged), never from this request.
     const zombieDrop = rollRaidZombieDropWithPity(
-      raidId, true, Math.random(), zombieDry[String(raidId)] ?? 0, boosts.dice ?? 0
+      raidId, true, Math.random(), zombieDry[String(raidId)] ?? 0, boosts.dice ?? 0, eliteLuck
     );
     // Settle this raid's dry-win streak on every win it could have dropped from. A win that
     // pays (rolled or floored) resets it; a dry one adds to it. Raids with no rare zombie
@@ -475,16 +582,54 @@ export async function finishRaid(
     questRow.current_json, { completed: [], progress: [] }
   );
   const quests: QuestProjection = { version: questRow.version, ...questData };
+  const raidName = raidNames.get(raidId) ?? String(raidId);
   const questEvents = win ? [
-    { type: "kInvasionSuccessfulNotification", subject: raidNames.get(raidId) ?? String(raidId) },
-    ...(losses.length === 0 ? [{ type: "kInvasionPerfectGameNotification", subject: raidNames.get(raidId) ?? String(raidId) }] : []),
+    { type: "kInvasionSuccessfulNotification", subject: raidName },
+    ...(losses.length === 0 ? [{ type: "kInvasionPerfectGameNotification", subject: raidName }] : []),
+    // The rare invasion zombie also answers to a generic alias, so ONE quest can ask for
+    // "a rare zombie from an invasion" without naming which of the four. A blank subject
+    // would not do: it is the format's wildcard and would count Bonus Gold as well.
     ...(loot ? [{ type: "kLootItemWonNotification", subject: loot.name }] : []),
-    ...(newZombieName ? [{ type: "kLootItemWonNotification", subject: newZombieName }] : []),
+    ...(newZombieName
+      ? [{ type: "kLootItemWonNotification", subject: newZombieName, aliases: [RARE_INVASION_ZOMBIE_SUBJECT] }]
+      : []),
+    // Elite + technique events, derived by the SAME shared function the offline build
+    // uses. `outcome.feats` comes from the server's own replay of this fight, so none of
+    // it is client-asserted.
+    ...raidFeatQuestEvents({
+      win: true,
+      perfect: losses.length === 0,
+      elite: !!boosts.elite,
+      raidName,
+      feats: replayOutcome.feats,
+    }),
   ] : [];
   const questChanges = applyQuestEvents(nextBalance, quests, questEvents, {
     inventory: core.inventory,
     storage: core.storage,
   });
+  // Daily/weekly quests count invasions too, and this is the only path a win travels —
+  // raids deliberately bypass the command lane. Roll the sets forward first (a raid can
+  // easily be the first thing a player does after midnight) using the level they held
+  // BEFORE this win, so the board they were playing against is the one that pays.
+  const periodicLevel = levelForXp(balance.xp);
+  const periodic: PeriodicQuestState = parse<PeriodicQuestState>(
+    periodicRow.current_json, { daily: null, weekly: null }
+  );
+  const periodicBefore = JSON.stringify(periodic);
+  refreshPeriodicState(periodic, {
+    accountId,
+    level: periodicLevel,
+    xpToNext: xpToNextLevel(periodicLevel, XP_THRESHOLDS),
+    now,
+  });
+  applyPeriodicEvents(periodic, questEvents);
+  const periodicChanged = periodicBefore !== JSON.stringify(periodic);
+  const periodicQuests: PeriodicQuestProjection = {
+    version: periodicRow.version + (periodicChanged ? 1 : 0),
+    daily: periodic.daily,
+    weekly: periodic.weekly,
+  };
   const levelBefore = levelForXp(balance.xp);
   const levelAfter = levelForXp(nextBalance.xp);
   const lastRaidAt = levelAfter > levelBefore ? 0 : raidState.last_started_at;
@@ -493,6 +638,19 @@ export async function finishRaid(
   // above already treated this as a loss, so the echoed outcome must agree or the
   // client's result panel would claim a win it was not paid for.
   const outcome = { ...replayOutcome, win, survivors, losses };
+  // unit id -> the name its owner gave it, harvested from the presentation blob
+  // before the roster row that entry is keyed to disappears.
+  const casualtyNames = new Map<string, string>();
+  if (presentationRow) {
+    const layout = parse<{ rosterLayout?: { id?: unknown; name?: unknown }[] }>(
+      presentationRow.current_json, {}
+    ).rosterLayout;
+    for (const entry of Array.isArray(layout) ? layout : []) {
+      if (typeof entry?.id === "string" && typeof entry.name === "string" && entry.name) {
+        casualtyNames.set(entry.id, entry.name.slice(0, 24));
+      }
+    }
+  }
   const casualties: CasualtySnapshot[] = (casualtyRows.results ?? []).map((row) => ({
     id: row.unit_id,
     key: row.zombie_key,
@@ -508,11 +666,12 @@ export async function finishRaid(
   const result = { settlementId, lastRaidAt, serverTime: now, balance: nextBalance, gold: baseGold + lootGold,
     brains, xp: nextBalance.xp - balance.xp, firstClear, loot, newZombie, outcome, questChanges,
     inventory: core.inventory, storage: core.storage, raidProgress: progress, revival,
-    rulesetVersion: RAID_RULESET_VERSION };
+    periodicQuests, rulesetVersion: RAID_RULESET_VERSION };
   const resultJson = JSON.stringify(result);
   const guard = "EXISTS (SELECT 1 FROM raid_sessions_v3 s WHERE s.id = ? AND s.result_json = ?)";
   const statements: D1PreparedStatement[] = [
-    db.prepare("UPDATE raid_sessions_v3 SET finished_at = ?, result_json = ? WHERE id = ? AND finished_at IS NULL")
+    db.prepare(`UPDATE raid_sessions_v3 SET finished_at = ?, result_json = ?, config_json = ${CONFIG_SPENT}
+      WHERE id = ? AND finished_at IS NULL`)
       .bind(now, resultJson, session.id),
     db.prepare(`UPDATE balances SET gold = ?, brains = ?, xp = ?, claimed_level = ?
       WHERE account_id = ? AND ${guard}`)
@@ -526,6 +685,10 @@ export async function finishRaid(
     db.prepare(`UPDATE quest_documents_v3 SET version = version + 1, current_json = ?, updated_at = ?
       WHERE account_id = ? AND ${guard}`)
       .bind(JSON.stringify({ completed: quests.completed, progress: quests.progress }), now, accountId, session.id, resultJson),
+    db.prepare(`UPDATE periodic_quest_documents_v3 SET version = version + ?, current_json = ?, updated_at = ?
+      WHERE account_id = ? AND ${guard}`)
+      .bind(periodicChanged ? 1 : 0, JSON.stringify({ daily: periodic.daily, weekly: periodic.weekly }),
+        now, accountId, session.id, resultJson),
     db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
       SELECT ?, ?, 'raid_finish', ?, ? WHERE ${guard}`)
       .bind(settlementId, accountId, JSON.stringify({ sessionId: session.id, raidId, win, survivors, losses,
@@ -536,19 +699,45 @@ export async function finishRaid(
   if (revival) statements.push(db.prepare(`INSERT OR IGNORE INTO raid_revivals_v3
     (session_id, account_id, casualties_json, created_at) VALUES (?, ?, ?, ?)`)
     .bind(session.id, accountId, JSON.stringify(casualties), now));
-  for (const id of losses) statements.push(db.prepare(`DELETE FROM roster_v3
-    WHERE account_id = ? AND unit_id = ? AND locked_by_raid = ? AND ${guard}`)
-    .bind(accountId, id, session.id, session.id, resultJson));
-  for (const id of survivors) statements.push(db.prepare(`UPDATE roster_v3 SET invasions = invasions + 1
-    WHERE account_id = ? AND unit_id = ? AND locked_by_raid = ? AND ${guard}`)
-    .bind(accountId, id, session.id, session.id, resultJson));
+  // The graveyard. Written here, at the one moment a zombie stops existing, so a
+  // Memorial Statue has something to carve. Anyone the player then buys back at the
+  // revival offer is deleted again in resolveRevival — they are not dead after all.
+  for (const row of casualtyRows.results ?? []) {
+    statements.push(db.prepare(`INSERT INTO fallen_v3
+      (account_id, unit_id, zombie_key, name, mutation, invasions, color, died_at)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${guard}
+      ON CONFLICT(account_id, unit_id) DO NOTHING`)
+      .bind(accountId, row.unit_id, row.zombie_key, casualtyNames.get(row.unit_id) ?? null,
+        row.mutation, row.invasions, row.color, now, session.id, resultJson));
+  }
+  // Keep the graveyard bounded. Only UNENSHRINED rows are candidates: a statue is a
+  // monument, and a player who raids for a year must not come back to find the farm
+  // covered in bare plinths. Runs after the inserts above, so a settlement that
+  // overflows the cap drops the oldest rather than refusing the newest.
+  //
+  // "Oldest" is COALESCE(released_at, died_at), matching the bootstrap's ORDER BY in
+  // v3/db.ts: a zombie taken back off a statue rejoins the graveyard at the top and
+  // is aged out by the NEXT sixty losses, not deleted by the first settlement after
+  // the statue was sold.
+  if (casualties.length) statements.push(db.prepare(`DELETE FROM fallen_v3
+    WHERE account_id = ? AND memorial_object_id IS NULL AND unit_id NOT IN (
+      SELECT unit_id FROM fallen_v3 WHERE account_id = ? AND memorial_object_id IS NULL
+      ORDER BY COALESCE(released_at, died_at) DESC, unit_id LIMIT ?
+    ) AND ${guard}`)
+    .bind(accountId, accountId, MEMORIAL_GRAVEYARD_CAP, session.id, resultJson));
+  // The casualties, in one statement rather than one apiece. Same rows deleted; the win is
+  // that a full army costs the batch one statement instead of twenty. Bounded by ARMY_CAP,
+  // like the `IN (...)` the roster pre-check at /raid/start already builds.
+  if (losses.length) statements.push(db.prepare(`DELETE FROM roster_v3
+    WHERE account_id = ? AND locked_by_raid = ?
+      AND unit_id IN (${losses.map(() => "?").join(",")}) AND ${guard}`)
+    .bind(accountId, session.id, ...losses, session.id, resultJson));
   if (newZombie && !newZombie.received) statements.push(db.prepare(`INSERT INTO roster_v3
     (account_id, unit_id, zombie_key, mutation, invasions, stored, created_at)
     SELECT ?, ?, ?, 0, 0, ?, ? WHERE ${guard}`)
     .bind(accountId, newZombie.id, newZombie.key, newZombie.stored ? 1 : 0, now, session.id, resultJson));
-  statements.push(db.prepare(`UPDATE roster_v3 SET locked_by_raid = NULL
-    WHERE account_id = ? AND locked_by_raid = ? AND ${guard}`)
-    .bind(accountId, session.id, session.id, resultJson));
+  statements.push(db.prepare(releaseRosterSql(survivors, guard))
+    .bind(...survivors, accountId, session.id, session.id, resultJson));
   const committed = await db.batch(statements);
   if ((committed[0]?.meta.changes ?? 0) !== 1) {
     const raced = await db.prepare("SELECT result_json FROM raid_sessions_v3 WHERE id = ?").bind(session.id).first<{ result_json: string | null }>();
@@ -602,13 +791,22 @@ export async function resolveRevival(
     db.prepare(`UPDATE balances SET brains = brains - ? WHERE account_id = ? AND brains >= ? AND ${guard}`)
       .bind(cost, accountId, cost, body.sessionId, accountId, resolutionId),
   ];
-  for (const zombie of revived) statements.push(
-    db.prepare(`INSERT INTO roster_v3
-      (account_id, unit_id, zombie_key, mutation, invasions, stored, locked_by_raid, created_at)
-      SELECT ?, ?, ?, ?, ?, ?, NULL, ? WHERE ${guard}`)
-      .bind(accountId, zombie.id, zombie.key, zombie.mutation, zombie.invasions,
-        zombie.stored ? 1 : 0, zombie.createdAt, body.sessionId, accountId, resolutionId)
-  );
+  for (const zombie of revived) {
+    statements.push(
+      db.prepare(`INSERT INTO roster_v3
+        (account_id, unit_id, zombie_key, mutation, invasions, stored, locked_by_raid, created_at)
+        SELECT ?, ?, ?, ?, ?, ?, NULL, ? WHERE ${guard}`)
+        .bind(accountId, zombie.id, zombie.key, zombie.mutation, zombie.invasions,
+          zombie.stored ? 1 : 0, zombie.createdAt, body.sessionId, accountId, resolutionId)
+    );
+    // Bought back, so not dead after all: out of the graveyard. Settlement wrote the
+    // row a moment ago, and leaving it would let a Memorial Statue remember a zombie
+    // that is standing on the farm.
+    statements.push(
+      db.prepare(`DELETE FROM fallen_v3 WHERE account_id = ? AND unit_id = ? AND ${guard}`)
+        .bind(accountId, zombie.id, body.sessionId, accountId, resolutionId)
+    );
+  }
   statements.push(db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
     SELECT ?, ?, 'raid_revive', ?, ? WHERE ${guard}`)
     .bind(crypto.randomUUID(), accountId, JSON.stringify({ sessionId: body.sessionId, revivedIds: requested, cost }), now,

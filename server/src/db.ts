@@ -2127,7 +2127,7 @@ export async function applyObjectActions(
       bal.brains += await creditLevelUps(db, accountId, now); // buy xp may cross a level
       results.push({ id: a.id, status: "applied" });
     } else if (a.type === "refund") {
-      const plan = planObjectRefund(econ, have);
+      const plan = planObjectRefund(a.key, econ, have);
       if (!plan.ok) {
         results.push({ id: a.id, status: "rejected", error: plan.error });
         continue;

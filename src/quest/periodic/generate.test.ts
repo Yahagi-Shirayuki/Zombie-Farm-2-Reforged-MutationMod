@@ -6,7 +6,9 @@ import {
   claimPeriodicQuest, claimablePeriodicCount, dailyUnitXp, generatePeriodicSet,
   refreshPeriodicState, xpToNextLevel,
 } from "./generate";
-import { DAILY_MAX_GROW_MS, WEEKLY_COUNT_MULTIPLIER } from "./templates";
+import {
+  DAILY_FIELD_MAX, DAILY_MAX_GROW_MS, WEEKLY_COUNT_MULTIPLIER, WEEKLY_FIELD_MAX,
+} from "./templates";
 import { dayIndex } from "./periods";
 import { emptyPeriodicState, type PeriodicQuestState } from "./types";
 
@@ -20,7 +22,7 @@ const weekly = (level: number, period: number, accountId = ACCOUNT) =>
 const cropByName = new Map(plants.map((crop) => [crop.name, crop]));
 
 describe("periodic quest generation", () => {
-  it("is deterministic ? the same account, day and level always roll the same board", () => {
+  it("is deterministic — the same account, day and level always roll the same board", () => {
     expect(daily(20, 20670)).toEqual(daily(20, 20670));
     expect(weekly(30, 2953)).toEqual(weekly(30, 2953));
   });
@@ -51,7 +53,7 @@ describe("periodic quest generation", () => {
   });
 
   // Below level 20 the invasion slot has only one buildable template, so it is the
-  // same every day ON PURPOSE ? the two crop/chore slots carry the variety.
+  // same every day ON PURPOSE — the two crop/chore slots carry the variety.
   it("still varies the crop and chore slots before the flawless-win variant unlocks", () => {
     for (let period = 20670; period < 20690; period++) {
       const today = daily(12, period).quests.map((q) => q.text);
@@ -98,14 +100,18 @@ describe("periodic quest generation", () => {
   });
 
   // The weekly counts are DERIVED from the daily ones, so this is the property that
-  // keeps "a weekly is five dailies" true after either is tuned.
-  it("asks a weekly for exactly five times its daily counterpart", () => {
-    const pairs: [string, string][] = [
-      ["daily_harvest_any", "weekly_harvest_any"],
-      ["daily_harvest_crop", "weekly_harvest_crop"],
-      ["daily_harvest_zombies", "weekly_harvest_zombies"],
-      ["daily_invade", "weekly_invade"],
+  // keeps a weekly a fixed multiple of its daily after either is tuned. Most objectives
+  // use WEEKLY_COUNT_MULTIPLIER; harvestAny carries an override so its ramp can stay
+  // under a 200 ceiling (see WEEKLY_MULTIPLIER_OVERRIDE).
+  it("asks a weekly for a fixed multiple of its daily counterpart", () => {
+    const pairs: [string, string, keyof typeof CEILING | "invade" | "harvestAny" | "other"][] = [
+      ["daily_harvest_any", "weekly_harvest_any", "harvestAny"],
+      ["daily_harvest_crop", "weekly_harvest_crop", "other"],
+      ["daily_harvest_zombies", "weekly_harvest_zombies", "other"],
+      ["daily_invade", "weekly_invade", "invade"],
     ];
+    const CEILING = { invade: 8, harvestAny: WEEKLY_FIELD_MAX, other: Infinity } as const;
+    const MULT = { invade: WEEKLY_COUNT_MULTIPLIER, harvestAny: 3.3, other: WEEKLY_COUNT_MULTIPLIER };
     for (let level = 20; level <= 45; level += 5) {
       const dailies = new Map<string, number>();
       const weeklies = new Map<string, number>();
@@ -114,16 +120,51 @@ describe("periodic quest generation", () => {
         for (const q of daily(level, 20670 + period).quests) dailies.set(q.template, q.countTotal);
         for (const q of weekly(level, 2953 + period).quests) weeklies.set(q.template, q.countTotal);
       }
-      for (const [dailyKey, weeklyKey] of pairs) {
+      for (const [dailyKey, weeklyKey, kind] of pairs) {
         const one = dailies.get(dailyKey);
-        const five = weeklies.get(weeklyKey);
-        if (one === undefined || five === undefined) continue;
-        // Invasions carry a ceiling (see WEEKLY_MAX) because five times the daily
-        // target would exceed what a week is meant to ask for.
-        const expected = Math.min(one * WEEKLY_COUNT_MULTIPLIER, weeklyKey === "weekly_invade" ? 8 : Infinity);
-        expect(five, `${weeklyKey} at level ${level}`).toBe(expected);
+        const many = weeklies.get(weeklyKey);
+        if (one === undefined || many === undefined) continue;
+        const k = kind as keyof typeof CEILING;
+        expect(many, `${weeklyKey} at level ${level}`)
+          .toBe(Math.min(Math.round(one * MULT[k]), CEILING[k]));
       }
     }
+  });
+
+  // The two ceilings the board is tuned against: a daily field chore must fit inside what
+  // an hour of play produces (measured at ~176 harvests a day for a full level-44 field),
+  // and a week may ask a multiple of that but not an open-ended one. These are design
+  // constraints, not preferences — a band edited past them fails here.
+  //
+  // BOTH field objectives are covered. Harvesting and plowing track each other one-for-one
+  // (every spent plot is re-tilled before it is replanted), so capping one and leaving the
+  // other simply moves the day's workload to the uncapped slot — which is exactly what
+  // happened when harvestAny was capped on its own.
+  it("keeps every field objective under its daily and weekly ceiling", () => {
+    // Plowing has no weekly template — the weekly board's field slot is the harvest one.
+    const DAILY_FIELD = ["daily_harvest_any", "daily_plow"];
+    const WEEKLY_FIELD = ["weekly_harvest_any"];
+    const seen = new Set<string>();
+    for (let level = DAILY_UNLOCK_LEVEL; level <= 45; level++) {
+      for (let period = 0; period < 12; period++) {
+        for (const q of daily(level, 20670 + period).quests) {
+          if (!DAILY_FIELD.includes(q.template)) continue;
+          seen.add(q.template);
+          expect(q.countTotal, `${q.template} at level ${level}`)
+            .toBeLessThanOrEqual(DAILY_FIELD_MAX);
+        }
+        if (level < 15) continue;
+        for (const q of weekly(level, 2953 + period).quests) {
+          if (!WEEKLY_FIELD.includes(q.template)) continue;
+          seen.add(q.template);
+          expect(q.countTotal, `${q.template} at level ${level}`)
+            .toBeLessThanOrEqual(WEEKLY_FIELD_MAX);
+        }
+      }
+    }
+    // Guard against the assertions above silently covering nothing if a template is
+    // renamed — every field objective must actually have been rolled and checked.
+    expect([...seen].sort()).toEqual([...DAILY_FIELD, ...WEEKLY_FIELD].sort());
   });
 
   // Invasions are the one objective bounded by a real-time cooldown rather than by the
@@ -152,7 +193,7 @@ describe("periodic quest generation", () => {
   // The weekly counts are derived from the daily ones, and a derivation carries a
   // template's NUMBER across without its reasons. `daily_invade_clean` withholds itself
   // below level 20 because a farm that cannot absorb a stage should not be asked for a
-  // flawless win ? and 5x of a quest that was never offered is how a level-15 board came
+  // flawless win — and 5x of a quest that was never offered is how a level-15 board came
   // to demand five of them. Both scopes answer the level question the same way now.
   it("asks neither scope for a flawless invasion before the daily would offer one", () => {
     const FLAWLESS = "kInvasionPerfectGameNotification";
@@ -168,7 +209,7 @@ describe("periodic quest generation", () => {
     }
   });
 
-  // Withholding the flawless variant must not cost the slot ? it falls through to the
+  // Withholding the flawless variant must not cost the slot — it falls through to the
   // ordinary win rather than leaving the board a quest short.
   it("still fills the invasion slot in both scopes below that gate", () => {
     const INVASION_EVENTS = new Set([
@@ -185,7 +226,7 @@ describe("periodic quest generation", () => {
   });
 
   // Above the gate the derivation applies as it does everywhere else: one a day, five a
-  // week. Pinned because this pair is the one the 5x property test above cannot cover ?
+  // week. Pinned because this pair is the one the 5x property test above cannot cover —
   // the daily does not exist at every band, so it is excluded from `pairs` there.
   it("asks a weekly for five flawless wins once the daily asks for one", () => {
     for (const level of [20, 30, 45]) {
@@ -226,11 +267,20 @@ describe("periodic quest generation", () => {
 describe("periodic quest rewards", () => {
   // The two anchors the curve was fitted to. They are what makes a daily feel worth
   // doing at both ends of a 28x XP curve; a flat share of the level cannot hit both.
-  it("pays roughly 30 XP for a daily around level 10 and roughly 600 in the forties", () => {
+  it("pays roughly 30 XP for a daily around level 10 and roughly 330 at the cap", () => {
     expect(dailyUnitXp(10, toNext(10))).toBeGreaterThanOrEqual(20);
     expect(dailyUnitXp(10, toNext(10))).toBeLessThanOrEqual(40);
-    expect(dailyUnitXp(45, toNext(45))).toBeGreaterThanOrEqual(500);
-    expect(dailyUnitXp(45, toNext(45))).toBeLessThanOrEqual(800);
+    expect(dailyUnitXp(45, toNext(45))).toBeGreaterThanOrEqual(250);
+    expect(dailyUnitXp(45, toNext(45))).toBeLessThanOrEqual(420);
+  });
+
+  // The point of the halved max-level endpoint: the top of the curve must not be able
+  // to out-earn the early game's SHARE of a level. A regression that walked the cap
+  // share back up would show here first.
+  it("pays a smaller share of the level at the cap than at the unlock level", () => {
+    const shareAt = (level: number) => (dailyUnitXp(level, toNext(level)) * 3) / toNext(level);
+    expect(shareAt(45)).toBeLessThan(shareAt(DAILY_UNLOCK_LEVEL) / 2);
+    expect(shareAt(45)).toBeCloseTo(0.04, 3);
   });
 
   it("makes one weekly worth about seven dailies", () => {
@@ -295,7 +345,7 @@ describe("periodic quest lifecycle", () => {
     const state = emptyPeriodicState();
     refreshPeriodicState(state, ctx(20, now));
     const rewardAtGeneration = state.daily!.quests[0].xp;
-    // Level up without the day changing: the board ? and its rewards ? must not move.
+    // Level up without the day changing: the board — and its rewards — must not move.
     refreshPeriodicState(state, ctx(40, now + 60_000));
     expect(state.daily!.quests[0].xp).toBe(rewardAtGeneration);
     expect(state.daily!.level).toBe(20);
@@ -376,7 +426,7 @@ describe("periodic quest claiming", () => {
 
     refreshPeriodicState(state, { accountId: ACCOUNT, level: 30, xpToNext: toNext(30), now: now + 86_400_000 });
     const result = claimPeriodicQuest(state, "daily", stale.id);
-    // A different template today ? unknown id. The same template ? freshly zeroed.
+    // A different template today → unknown id. The same template → freshly zeroed.
     expect(result.ok).toBe(false);
     if (!result.ok) expect(["no_such_quest", "not_complete"]).toContain(result.error);
   });

@@ -86,6 +86,15 @@ export class ZombieField {
   // (it credits gold), so it deliberately does NOT go through onCasualty.
   onGrant: ((u: { id: string; key: string; mutation: number; invasions: number }) => void) | null = null;
   onCasualty: ((ids: string[]) => void) | null = null;
+  // ---- the graveyard (Memorial Statues) ----
+  // Fired for every unit lost to a raid, and again for any of them the player then
+  // buys back at the revival offer. Both live here rather than at the call sites
+  // because removeCasualties/reviveCasualties are the ONLY doors a zombie dies or
+  // un-dies through, and the offline and server-verified raid paths use both.
+  // Unlike the hooks above these are NOT gated by `rosterLive`: an offline farm has
+  // no server shadow but still buries its dead.
+  onFallen: ((units: OwnedZombie[]) => void) | null = null;
+  onRevived: ((ids: string[]) => void) | null = null;
   // Combine goes through its own server ops so the result can be validated against the
   // two parents: onCombineStart consumes the parents; onCombineCollect grants the
   // result (the v3 server derives its species from the authoritative parents). Fall
@@ -131,13 +140,34 @@ export class ZombieField {
    *  the field's top corner, usually buried under whatever is built there. */
   private arrivalTile(): { col: number; row: number } {
     const at = this.farmerTile();
-    const col = Math.round(at.col);
-    const row = Math.round(at.row);
-    if (this.field.isPassable(col, row)) return { col, row };
-    const out = findEscape({ col, row }, (c, r) => this.field.isPassable(c, r), {
+    return this.openTileNear(at.col, at.row);
+  }
+
+  /** (col,row) itself when a zombie can stand there, else the nearest tile it can.
+   *  "Walkable" is not enough: a hedge tile is crossable but is no place to put a
+   *  zombie down, so the search walks out to real open ground. */
+  private openTileNear(atCol: number, atRow: number): { col: number; row: number } {
+    const col = Math.round(atCol);
+    const row = Math.round(atRow);
+    const open = (c: number, r: number) => this.field.isOpenGround(c, r);
+    if (open(col, row)) return { col, row };
+    const out = findEscape({ col, row }, open, {
       inBounds: (c, r) => this.field.inBounds(c, r),
     });
     return out.length ? out[out.length - 1] : { col, row };
+  }
+
+  /** Where a zombie collected from a placed object turns up: beside THAT OBJECT,
+   *  not wherever the farmer happens to be standing when the panel's button is
+   *  pressed. Collecting a Zombie Pot from across the farm used to drop the child
+   *  at the player's feet, which reads as the farmer having grown it.
+   *
+   *  The object's own tiles are built on, so this steps out to the open ground
+   *  beside it. Falls back to the farmer if the object is gone (sold or reconciled
+   *  away between the panel opening and the collection landing). */
+  objectArrivalTile(instanceId: string | null | undefined): { col: number; row: number } {
+    const at = instanceId ? this.field.objectAnchorTile(instanceId) : null;
+    return at ? this.openTileNear(at.col, at.row) : this.arrivalTile();
   }
 
   /** Deployed (on-farm) unit count — what the army cap limits. */
@@ -170,19 +200,23 @@ export class ZombieField {
     return this.units.length < this.state.zombieMax;
   }
 
-  /** Can a grown zombie be collected into either the active army or Mausoleum? */
-  canHarvestZombie(): boolean {
-    return this.canAdd() || (!!this.field.mausoleumId() && !this.mausoleumFull);
-  }
-
-  /** How many grown zombie crops can be collected right now. */
+  /** How many more grown zombies have somewhere to go: free army slots plus free
+   *  Mausoleum slots. Zero means a ripe zombie crop must stay in the ground — the
+   *  farm cap is never exceeded, and the crop is never spent on a unit with no home.
+   *  Callers queueing several harvests at once must debit their own pending ones. */
   zombieHarvestRoom(): number {
-    const armyRoom = Math.max(0, this.state.zombieMax - this.units.length);
-    const cryptRoom = this.field.mausoleumId()
+    const army = Math.max(0, this.state.zombieMax - this.units.length);
+    const crypt = this.field.mausoleumId()
       ? Math.max(0, this.mausoleumCap - this.stored.length)
       : 0;
-    return armyRoom + cryptRoom;
+    return army + crypt;
   }
+
+  /** Can a grown zombie be collected into either the active army or Mausoleum? */
+  canHarvestZombie(): boolean {
+    return this.zombieHarvestRoom() > 0;
+  }
+
 
   /** A crop was just planted at plot (oc,or): each DEPLOYED Garden zombie rolls its
    *  tier's `fertilizeChance` (first success wins), matching the source's per-actor
@@ -274,7 +308,7 @@ export class ZombieField {
     const mutationSet = splitMutationInput(mutation, mutationIds);
     const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutationSet.mask, undefined, undefined, mutationSet.ids);
     const unit = this.addUnit(data);
-    this.state.recordZombieDiscovered(data.key);
+    this.state.recordZombieDiscovered(data.key, data.mutation);
     this.syncCount();
     return unit;
   }
@@ -295,7 +329,7 @@ export class ZombieField {
       const mutationSet = splitMutationInput(mutation, mutationIds);
     const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutationSet.mask, undefined, undefined, mutationSet.ids);
       this.stored.push(data);
-      this.state.recordZombieDiscovered(data.key);
+      this.state.recordZombieDiscovered(data.key, data.mutation);
       return data;
     } finally {
       this.harvesting = false;
@@ -468,6 +502,7 @@ export class ZombieField {
     }
     // Drop the dead from the server shadow too, so they can't be sold after dying.
     if (this.rosterLive && removed.length) this.onCasualty?.(removed.map((r) => r.id));
+    if (removed.length) this.onFallen?.(removed);
     return removed;
   }
 
@@ -558,7 +593,9 @@ export class ZombieField {
       else this.onCasualty?.([idA, idB]);
     }
     return pot.start(
-      { id: a.id, key: a.key, mutation: a.mutation, mutationIds: a.mutationIds, color: this.colorOf(a), ...this.speciesTraits(a) },
+      // Slot 1's NAME rides along with its species: the child is the zombie the player
+      // put in the first slot, so it keeps that zombie's name (see ZombiePotSave.nameA).
+      { id: a.id, key: a.key, name: a.name, mutation: a.mutation, mutationIds: a.mutationIds, color: this.colorOf(a), ...this.speciesTraits(a) },
       { id: b.id, key: b.key, mutation: b.mutation, mutationIds: b.mutationIds, color: this.colorOf(b), ...this.speciesTraits(b) },
       this.field.hasCombineMonolith(), // Clay Monolith → 15-min combine
       baseDurationMs,
@@ -643,7 +680,7 @@ export class ZombieField {
       // preserve the earned zombie in the Mausoleum instead of dropping the reward.
       if (serverStored !== true && this.canAdd()) { this.addUnit(data); this.syncCount(); }
       else this.stored.push(data);
-      if (opts.recordDiscovery !== false) this.state.recordZombieDiscovered(data.key);
+      if (opts.recordDiscovery !== false) this.state.recordZombieDiscovered(data.key, data.mutation);
     } finally { this.harvesting = false; }
     return data;
   }
@@ -696,13 +733,17 @@ export class ZombieField {
     const mutations = def.mutation
       ? addMutationRef({ mask: result.mutation, ids: result.mutationIds ?? [] }, def.mutation)
       : { mask: result.mutation, ids: result.mutationIds ?? [] };
-    const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutations.mask, result.color, undefined, mutations.ids);
+    // `result.name` is slot 1's name (see ZombiePot.preview). A job started before the
+    // pot recorded it passes undefined, which is the old id-derived random name.
+    const data = makeOwned(
+      `z${this.nextId++}`, def, col, row, 0, mutations.mask, result.color, result.name, mutations.ids
+    );
     // A combine result is granted via onCombineCollect (server validates it against the
     // two parents), NOT the generic onGrant — so suppress the latter while adding.
     this.combining = true;
     if (toCrypt) this.stored.push(data);
     else this.addUnit(data);
-    this.state.recordZombieDiscovered(data.key);
+    this.state.recordZombieDiscovered(data.key, data.mutation);
     this.syncCount();
     this.combining = false;
     if (this.rosterLive) {
@@ -719,6 +760,10 @@ export class ZombieField {
         this.onGrant?.({ id: data.id, key: data.key, mutation: data.mutation, invasions: data.invasions });
       }
     }
+    // Lifetime tally, counted LAST: every failure path above either returns null or
+    // goes through abandon(), so reaching here is the one place a Pot child is
+    // certainly the player's — a refused hand-off puts the job back in the Pot.
+    this.state.recordZombieCombined();
     return data;
   }
 
@@ -1047,6 +1092,10 @@ export class ZombieField {
     } finally {
       this.rosterLive = live;
     }
+    // Anyone bought back is not dead after all, so they leave the graveyard. This
+    // runs for every id offered, not just the ones re-added: a unit already in the
+    // roster (`owned` above) was revived by another path and must not stay buried.
+    if (casualties.length) this.onRevived?.(casualties.map((zombie) => zombie.id));
   }
 
   /** Reconcile a server roster without rebuilding unchanged actors. `aliases` maps
@@ -1107,7 +1156,7 @@ export class ZombieField {
         // this player escrowed on a Black Market listing they then cancelled. It
         // carries a fresh unit id but it is the same zombie they already own, so
         // crediting it would let list/cancel cycles farm the lifetime count.
-        if (this.rosterLive && !source && !save.restored) this.state.recordZombieDiscovered(data.key);
+        if (this.rosterLive && !source && !save.restored) this.state.recordZombieDiscovered(data.key, data.mutation);
       }
     } finally {
       this.harvesting = false;

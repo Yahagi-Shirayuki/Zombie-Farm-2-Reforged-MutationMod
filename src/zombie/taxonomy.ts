@@ -15,6 +15,16 @@ const TIER_CLASS: Record<string, ZClass> = {
   "1": "Green", "2": "Blue", "3": "Red", "4": "Silver", "5": "Special",
 };
 
+/** The colour class a numeric tier wears: 1 Green, 2 Blue, 3 Red, 4 Silver, 5 Special.
+ *  Anything outside 1-5 falls back to Yellow, the tier-less class.
+ *
+ *  Exported because the Mutation Almanac ranks by a tier the zombie catalog does not
+ *  carry (see MutationTier), and drawing that ladder in the same four colours as the
+ *  zombie one is what makes "this is a Tier-3 mutation" legible at a glance. */
+export function classForTier(tier: number): ZClass {
+  return TIER_CLASS[String(tier)] ?? "Yellow";
+}
+
 // Display + tint colour per class (hex string for CSS, number for Pixi tint).
 export const CLASS_COLOR: Record<ZClass, string> = {
   Green: "#7bd84a", Blue: "#5aa8ff", Red: "#ff5a4a",

@@ -26,7 +26,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -100,7 +100,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 40,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -141,8 +141,8 @@
  },
  "1001": {
   "id": "1001",
-  "title": "Defeat Dr. Groundhog Level 10",
-  "messageComplete": "You defeated Dr. Groundhog Level 10!",
+  "title": "Defeat Dr. Groundhog Level 5",
+  "messageComplete": "You defeated Dr. Groundhog Level 5!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_drgroundhog.png",
   "levelRequired": -1,
@@ -150,9 +150,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "10",
+    "notificationObject": "5",
     "countTotal": 1,
-    "text": "Dr. Groundhog Level 10 Defeated",
+    "text": "Dr. Groundhog Level 5 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -170,8 +170,8 @@
  },
  "1002": {
   "id": "1002",
-  "title": "Defeat Dr. Groundhog Level 15",
-  "messageComplete": "You defeated Dr. Groundhog Level 15!",
+  "title": "Defeat Dr. Groundhog Level 8",
+  "messageComplete": "You defeated Dr. Groundhog Level 8!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_drgroundhog.png",
   "levelRequired": -1,
@@ -179,9 +179,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "15",
+    "notificationObject": "8",
     "countTotal": 1,
-    "text": "Dr. Groundhog Level 15 Defeated",
+    "text": "Dr. Groundhog Level 8 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -199,8 +199,8 @@
  },
  "1003": {
   "id": "1003",
-  "title": "Defeat Dr. Groundhog Level 20",
-  "messageComplete": "You defeated Dr. Groundhog Level 20!",
+  "title": "Defeat Dr. Groundhog Level 10",
+  "messageComplete": "You defeated Dr. Groundhog Level 10!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_drgroundhog.png",
   "levelRequired": -1,
@@ -208,9 +208,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "20",
+    "notificationObject": "10",
     "countTotal": 1,
-    "text": "Dr. Groundhog Level 20 Defeated",
+    "text": "Dr. Groundhog Level 10 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -314,7 +314,7 @@
  "1011": {
   "id": "1011",
   "title": "Omega Dr. Zombie",
-  "messageComplete": "You defeated Dr. Groundhog Level 20!",
+  "messageComplete": "You defeated Dr. Groundhog Level 10!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_drgroundhog.png",
   "levelRequired": -1,
@@ -322,9 +322,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "20",
+    "notificationObject": "10",
     "countTotal": 1,
-    "text": "Dr. Groundhog Level 20 Defeated",
+    "text": "Dr. Groundhog Level 10 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -367,7 +367,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 40,
+  "rewardValue": 75,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -396,7 +396,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 40,
+  "rewardValue": 25,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -425,7 +425,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 50,
+  "rewardValue": 200,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -454,7 +454,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 75,
+  "rewardValue": 400,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -483,7 +483,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 150,
+  "rewardValue": 800,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -512,7 +512,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 500,
+  "rewardValue": 2000,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -541,7 +541,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 50,
+  "rewardValue": 75,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -570,7 +570,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 150,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -599,7 +599,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 150,
+  "rewardValue": 300,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -657,7 +657,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -698,8 +698,8 @@
  },
  "2001": {
   "id": "2001",
-  "title": "Defeat Loco Locust Level 10",
-  "messageComplete": "You defeated Loco Locust Level 10!",
+  "title": "Defeat Loco Locust Level 3",
+  "messageComplete": "You defeated Loco Locust Level 3!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_locolocust.png",
   "levelRequired": -1,
@@ -707,9 +707,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "10",
+    "notificationObject": "3",
     "countTotal": 1,
-    "text": "Loco Locust Level 10 Defeated",
+    "text": "Loco Locust Level 3 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -727,8 +727,8 @@
  },
  "2002": {
   "id": "2002",
-  "title": "Defeat Loco Locust Level 15",
-  "messageComplete": "You defeated Loco Locust Level 15!",
+  "title": "Defeat Loco Locust Level 4",
+  "messageComplete": "You defeated Loco Locust Level 4!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_locolocust.png",
   "levelRequired": -1,
@@ -736,9 +736,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "15",
+    "notificationObject": "4",
     "countTotal": 1,
-    "text": "Loco Locust Level 15 Defeated",
+    "text": "Loco Locust Level 4 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -756,8 +756,8 @@
  },
  "2003": {
   "id": "2003",
-  "title": "Defeat Loco Locust Level 20",
-  "messageComplete": "You defeated Loco Locust Level 20!",
+  "title": "Defeat Loco Locust Level 5",
+  "messageComplete": "You defeated Loco Locust Level 5!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_locolocust.png",
   "levelRequired": -1,
@@ -765,9 +765,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "20",
+    "notificationObject": "5",
     "countTotal": 1,
-    "text": "Loco Locust Level 20 Defeated",
+    "text": "Loco Locust Level 5 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -785,8 +785,8 @@
  },
  "2004": {
   "id": "2004",
-  "title": "Defeat Loco Locust Level 25",
-  "messageComplete": "You defeated Loco Locust Level 25!",
+  "title": "Defeat Loco Locust Level 7",
+  "messageComplete": "You defeated Loco Locust Level 7!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_locolocust.png",
   "levelRequired": -1,
@@ -794,9 +794,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "25",
+    "notificationObject": "7",
     "countTotal": 1,
-    "text": "Loco Locust Level 25 Defeated",
+    "text": "Loco Locust Level 7 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -814,8 +814,8 @@
  },
  "2005": {
   "id": "2005",
-  "title": "Defeat Loco Locust Level 30",
-  "messageComplete": "You defeated Loco Locust Level 30!",
+  "title": "Defeat Loco Locust Level 8",
+  "messageComplete": "You defeated Loco Locust Level 8!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_locolocust.png",
   "levelRequired": -1,
@@ -823,9 +823,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "30",
+    "notificationObject": "8",
     "countTotal": 1,
-    "text": "Loco Locust Level 30 Defeated",
+    "text": "Loco Locust Level 8 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -843,8 +843,8 @@
  },
  "2006": {
   "id": "2006",
-  "title": "Defeat Loco Locust Level 35",
-  "messageComplete": "You defeated Loco Locust Level 35!",
+  "title": "Defeat Loco Locust Level 9",
+  "messageComplete": "You defeated Loco Locust Level 9!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_locolocust.png",
   "levelRequired": -1,
@@ -852,9 +852,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "35",
+    "notificationObject": "9",
     "countTotal": 1,
-    "text": "Loco Locust Level 35 Defeated",
+    "text": "Loco Locust Level 9 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -958,7 +958,7 @@
  "2011": {
   "id": "2011",
   "title": "Vagabond Zombie",
-  "messageComplete": "You defeated Loco Locust Level 40!",
+  "messageComplete": "You defeated Loco Locust Level 10!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_locolocust.png",
   "levelRequired": -1,
@@ -966,9 +966,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "40",
+    "notificationObject": "10",
     "countTotal": 1,
-    "text": "Loco Locust Level 40 Defeated",
+    "text": "Loco Locust Level 10 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -1019,7 +1019,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 675,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1035,7 +1035,7 @@
   "messageComplete": "You completed Cook Up Some More Zombies!",
   "tip": "Experiment with the Zombie Pot to get these.",
   "sprite": "Icon_Quest_Combining.png",
-  "levelRequired": -1,
+  "levelRequired": 25,
   "prerequisiteQuest": 21,
   "requirements": [
    {
@@ -1064,7 +1064,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1093,7 +1093,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 50,
+  "rewardValue": 90,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1122,7 +1122,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 150,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1151,7 +1151,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 300,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1180,7 +1180,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 250,
+  "rewardValue": 750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1225,7 +1225,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 300,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1254,7 +1254,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 50,
+  "rewardValue": 90,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1283,7 +1283,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 150,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1341,7 +1341,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 300,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1378,7 +1378,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 2100,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1400,22 +1400,22 @@
    {
     "notificationID": "kCropHarvestedNotification",
     "notificationObject": "Broccoli",
-    "countTotal": 10,
-    "text": "Harvest 10 Broccoli",
+    "countTotal": 25,
+    "text": "Harvest 25 Broccoli",
     "type": 2,
     "sprite": "stex0029.png"
    },
    {
     "notificationID": "kCropHarvestedNotification",
     "notificationObject": "Cauliflower",
-    "countTotal": 10,
-    "text": "Harvest 10 Cauliflower",
+    "countTotal": 25,
+    "text": "Harvest 25 Cauliflower",
     "type": 2,
     "sprite": "stex0029.png"
    }
   ],
   "rewardType": 0,
-  "rewardValue": 100,
+  "rewardValue": 900,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1452,7 +1452,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 75,
+  "rewardValue": 300,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1481,7 +1481,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 75,
+  "rewardValue": 1350,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1526,7 +1526,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 75,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1592,7 +1592,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 600,
+  "rewardValue": 3200,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1711,7 +1711,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -1781,8 +1781,8 @@
  },
  "4001": {
   "id": "4001",
-  "title": "Defeat Foul Owl Level 10",
-  "messageComplete": "You defeated Foul Owl Level 10!",
+  "title": "Defeat Foul Owl Level 3",
+  "messageComplete": "You defeated Foul Owl Level 3!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "Icon_Quest_FoulOwl.png",
   "levelRequired": -1,
@@ -1790,9 +1790,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "10",
+    "notificationObject": "3",
     "countTotal": 1,
-    "text": "Foul Owl Level 10 Defeated",
+    "text": "Foul Owl Level 3 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -1810,8 +1810,8 @@
  },
  "4002": {
   "id": "4002",
-  "title": "Defeat Foul Owl Level 15",
-  "messageComplete": "You defeated Foul Owl Level 15!",
+  "title": "Defeat Foul Owl Level 4",
+  "messageComplete": "You defeated Foul Owl Level 4!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "Icon_Quest_FoulOwl.png",
   "levelRequired": -1,
@@ -1819,9 +1819,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "15",
+    "notificationObject": "4",
     "countTotal": 1,
-    "text": "Foul Owl Level 15 Defeated",
+    "text": "Foul Owl Level 4 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -1839,8 +1839,8 @@
  },
  "4003": {
   "id": "4003",
-  "title": "Defeat Foul Owl Level 20",
-  "messageComplete": "You defeated Foul Owl Level 20!",
+  "title": "Defeat Foul Owl Level 5",
+  "messageComplete": "You defeated Foul Owl Level 5!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "Icon_Quest_FoulOwl.png",
   "levelRequired": -1,
@@ -1848,9 +1848,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "20",
+    "notificationObject": "5",
     "countTotal": 1,
-    "text": "Foul Owl Level 20 Defeated",
+    "text": "Foul Owl Level 5 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -1868,8 +1868,8 @@
  },
  "4004": {
   "id": "4004",
-  "title": "Defeat Foul Owl Level 25",
-  "messageComplete": "You defeated Foul Owl Level 25!",
+  "title": "Defeat Foul Owl Level 7",
+  "messageComplete": "You defeated Foul Owl Level 7!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "Icon_Quest_FoulOwl.png",
   "levelRequired": -1,
@@ -1877,9 +1877,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "25",
+    "notificationObject": "7",
     "countTotal": 1,
-    "text": "Foul Owl Level 25 Defeated",
+    "text": "Foul Owl Level 7 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -1897,8 +1897,8 @@
  },
  "4005": {
   "id": "4005",
-  "title": "Defeat Fould Owl Level 30",
-  "messageComplete": "You defeated Foul Owl Level 30!",
+  "title": "Defeat Fould Owl Level 8",
+  "messageComplete": "You defeated Foul Owl Level 8!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "Icon_Quest_FoulOwl.png",
   "levelRequired": -1,
@@ -1906,9 +1906,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "30",
+    "notificationObject": "8",
     "countTotal": 1,
-    "text": "Foul Owl Level 30 Defeated",
+    "text": "Foul Owl Level 8 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -1926,8 +1926,8 @@
  },
  "4006": {
   "id": "4006",
-  "title": "Defeat Foul Owl Level 35",
-  "messageComplete": "You defeated Foul Owl Level 35!",
+  "title": "Defeat Foul Owl Level 9",
+  "messageComplete": "You defeated Foul Owl Level 9!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "Icon_Quest_FoulOwl.png",
   "levelRequired": -1,
@@ -1935,9 +1935,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "35",
+    "notificationObject": "9",
     "countTotal": 1,
-    "text": "Foul Owl Level 35 Defeated",
+    "text": "Foul Owl Level 9 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -2041,7 +2041,7 @@
  "4011": {
   "id": "4011",
   "title": "Scrooge Zombie",
-  "messageComplete": "You defeated Foul Owl Level 40!",
+  "messageComplete": "You defeated Foul Owl Level 10!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "Icon_Quest_FoulOwl.png",
   "levelRequired": -1,
@@ -2049,9 +2049,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "40",
+    "notificationObject": "10",
     "countTotal": 1,
-    "text": "Foul Owl Level 40 Defeated",
+    "text": "Foul Owl Level 10 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -2086,7 +2086,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 700,
+  "rewardValue": 4000,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2403,7 +2403,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2453,7 +2453,7 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "5",
+    "notificationObject": "2",
     "countTotal": 1,
     "text": "Complete Card 1",
     "type": 3,
@@ -2461,7 +2461,7 @@
    },
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "10",
+    "notificationObject": "3",
     "countTotal": 1,
     "text": "Complete Card 2",
     "type": 3,
@@ -2469,7 +2469,7 @@
    },
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "15",
+    "notificationObject": "4",
     "countTotal": 1,
     "text": "Complete Card 3",
     "type": 3,
@@ -2477,7 +2477,7 @@
    },
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "20",
+    "notificationObject": "5",
     "countTotal": 1,
     "text": "Complete Card 4",
     "type": 3,
@@ -2654,7 +2654,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 35,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2683,7 +2683,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 40,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2720,7 +2720,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 3750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2757,7 +2757,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 3750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2779,22 +2779,22 @@
    {
     "notificationID": "kCropHarvestedNotification",
     "notificationObject": "Eyebiscus",
-    "countTotal": 25,
-    "text": "Harvest 25 Eyebiscuses",
+    "countTotal": 50,
+    "text": "Harvest 50 Eyebiscuses",
     "type": 2,
     "sprite": "stex0029.png"
    },
    {
     "notificationID": "kCropHarvestedNotification",
     "notificationObject": "Heartichoke",
-    "countTotal": 25,
-    "text": "Harvest 25 Heartichokes",
+    "countTotal": 50,
+    "text": "Harvest 50 Heartichokes",
     "type": 2,
     "sprite": "stex0029.png"
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 3750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2823,7 +2823,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 75,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2860,7 +2860,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 3750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2905,7 +2905,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 200,
+  "rewardValue": 3750,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2934,7 +2934,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2963,7 +2963,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 35,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -2992,7 +2992,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 50,
+  "rewardValue": 150,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3050,7 +3050,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 25,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3079,7 +3079,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 35,
+  "rewardValue": 25,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3108,7 +3108,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 35,
+  "rewardValue": 25,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3137,7 +3137,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3166,7 +3166,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 10,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3224,7 +3224,7 @@
    }
   ],
   "rewardType": 0,
-  "rewardValue": 30,
+  "rewardValue": 20,
   "rewardItem": "",
   "rewardItemKey": "",
   "tutorialQuest": false,
@@ -3303,7 +3303,7 @@
  "3011": {
   "id": "3011",
   "title": "Admiral Zombie",
-  "messageComplete": "You defeated Bully Frog Level 40!",
+  "messageComplete": "You defeated Bully Frog Level 10!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_bullyfrog.png",
   "levelRequired": -1,
@@ -3311,9 +3311,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "40",
+    "notificationObject": "10",
     "countTotal": 1,
-    "text": "Bully Frog Level 40 Defeated",
+    "text": "Bully Frog Level 10 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -3331,8 +3331,8 @@
  },
  "3010": {
   "id": "3010",
-  "title": "Defeat Bully Frog Level 10",
-  "messageComplete": "You defeated Bully Frog Level 10!",
+  "title": "Defeat Bully Frog Level 3",
+  "messageComplete": "You defeated Bully Frog Level 3!",
   "tip": "Harvest crops to reveal the Enemy.",
   "sprite": "questicon_bullyfrog.png",
   "levelRequired": -1,
@@ -3340,9 +3340,9 @@
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "10",
+    "notificationObject": "3",
     "countTotal": 1,
-    "text": "Bully Frog Level 10 Defeated",
+    "text": "Bully Frog Level 3 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -3362,16 +3362,16 @@
   "id": "5011",
   "title": "Madame Zombie",
   "messageComplete": "You earned Madame Zombie!",
-  "tip": "Defeat the Epic Boss at level 40.",
+  "tip": "Defeat the Epic Boss at level 10.",
   "sprite": "questicon_skunkarella.png",
   "levelRequired": -1,
   "prerequisiteQuest": -1,
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "40",
+    "notificationObject": "10",
     "countTotal": 1,
-    "text": "Epic Boss Level 40 Defeated",
+    "text": "Epic Boss Level 10 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -3391,6 +3391,35 @@
   "id": "8000",
   "title": "Brock Coley",
   "messageComplete": "You earned Brock Coley!",
+  "tip": "Defeat the Epic Boss at level 5.",
+  "sprite": "questicon_rockyrhino.png",
+  "levelRequired": -1,
+  "prerequisiteQuest": -1,
+  "requirements": [
+   {
+    "notificationID": "kEpicStageEnemyDefeatedNotification",
+    "notificationObject": "5",
+    "countTotal": 1,
+    "text": "Epic Boss Level 5 Defeated",
+    "type": 3,
+    "sprite": "stex1003.png"
+   }
+  ],
+  "rewardType": 5,
+  "rewardValue": 0,
+  "rewardItem": "Brock Coley",
+  "rewardItemKey": "ZombieActorBrockColey",
+  "tutorialQuest": false,
+  "epicEvent": true,
+  "seasonal": false,
+  "seasonalDate": "",
+  "removeQuest": false,
+  "ignoreCheckQuest": true
+ },
+ "8011": {
+  "id": "8011",
+  "title": "Another Brock Coley",
+  "messageComplete": "A second Brock Coley joins the farm!",
   "tip": "Defeat the Epic Boss at level 10.",
   "sprite": "questicon_rockyrhino.png",
   "levelRequired": -1,
@@ -3449,16 +3478,16 @@
   "id": "9011",
   "title": "Zombug",
   "messageComplete": "You earned Zombug!",
-  "tip": "Defeat the Epic Boss at level 40.",
+  "tip": "Defeat the Epic Boss at level 10.",
   "sprite": "questicon_generallarvaelus.png",
   "levelRequired": -1,
   "prerequisiteQuest": -1,
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "40",
+    "notificationObject": "10",
     "countTotal": 1,
-    "text": "Epic Boss Level 40 Defeated",
+    "text": "Epic Boss Level 10 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }
@@ -3507,16 +3536,16 @@
   "id": "10011",
   "title": "Zomtar",
   "messageComplete": "You earned Zomtar!",
-  "tip": "Defeat the Epic Boss at level 40.",
+  "tip": "Defeat the Epic Boss at level 10.",
   "sprite": "questicon_mysticalmamba.png",
   "levelRequired": -1,
   "prerequisiteQuest": -1,
   "requirements": [
    {
     "notificationID": "kEpicStageEnemyDefeatedNotification",
-    "notificationObject": "40",
+    "notificationObject": "10",
     "countTotal": 1,
-    "text": "Epic Boss Level 40 Defeated",
+    "text": "Epic Boss Level 10 Defeated",
     "type": 3,
     "sprite": "stex1003.png"
    }

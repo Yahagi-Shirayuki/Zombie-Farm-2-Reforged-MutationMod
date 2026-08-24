@@ -315,4 +315,22 @@ export interface RaidOutcome {
   feats?: RaidFeats;
 }
 
+/** Wave pacing for a drip-feeding stage. Carried here so upstream's alien and PvP stage
+ *  modules type-check against this fork's raid stack; this fork's BattleSim does not
+ *  read it (see MERGE_REVIEW.md — the raid ruleset stayed on the fork's side). */
+export interface WaveCadence {
+  /** Enemies on the field at once: 1 + the five `enemySlots`, or 1 with no drip. */
+  maxActive: number;
+  /** Reinforcement clock in ms (0 = none) — the alien stage's `spawnTimer`. */
+  dripMs: number;
+}
 
+/** The alien boss's `summonBoss` queue: a FIFO of abducted humans plus the pool a
+ *  completed summon pushes back on. Same note as WaveCadence — declared for upstream's
+ *  stage modules, unread by this fork's simulation. */
+export interface SummonConfig {
+  /** FIFO queue, in the authored seed order. */
+  queue: CombatUnit[];
+  /** The five candidates a completed summon pushes back on (uniform roll). */
+  pool: CombatUnit[];
+}

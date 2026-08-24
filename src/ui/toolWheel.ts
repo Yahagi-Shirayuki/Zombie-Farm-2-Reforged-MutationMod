@@ -36,6 +36,35 @@ export interface ToolWheelOpts {
   onClose?: () => void;
 }
 
+/** The object the rotate control is looking at right now: the one on the placement
+ *  ghost, or the one the Move tool is carrying. Null when the player's hands are empty,
+ *  which is when Rotate means the standalone tool. `move` mode alone is not enough —
+ *  the tool is equipped long before anything is picked up with it.
+ *
+ *  Pure so the rule can be pinned in a test; the menu itself is built in main. */
+export function heldObjectName(
+  mode: string,
+  placingName: string | undefined,
+  carryingName: string | undefined,
+): string | null {
+  if (mode === "place") return placingName ?? null;
+  if (mode === "move") return carryingName ?? null;
+  return null;
+}
+
+/** The rotate row's identity for the current context.
+ *
+ *  With something in hand this row TURNS it — the same thing the toolbar's Rotate button
+ *  and the 3 key already do, and the only rotate-before-placing a right-click player has.
+ *  It was briefly a plain tool switch, after a report of picking Rotate here mid-purchase
+ *  and appearing to be stuck in placement mode (the pick was spinning the ghost, which is
+ *  easy to miss); that removed the capability and came straight back as its own report.
+ *  Naming the row after the thing it turns settles both — it cannot be mistaken for a
+ *  tool switch, and Select, the row the menu opens on, is still the way out. */
+export function rotateRowFor(heldName: string | null): { id: string; label: string } {
+  return heldName ? { id: "turn", label: `Turn ${heldName}` } : { id: "rotate", label: "Rotate" };
+}
+
 /** Trackpads emit many tiny wheel events; a notch-per-row menu needs a
  *  deliberate gesture. Roughly one mouse notch. */
 export const WHEEL_STEP_THRESHOLD = 40;

@@ -146,7 +146,7 @@ describe("planTeamAssembly", () => {
     const plan = planTeamAssembly(["z1"], farm(["z1", "z2", "z3", "z4"]), 16, 2);
     expect(plan.store).toEqual(["z2", "z3"]);
     expect(plan.deploy).toEqual([]);
-    // The team IS fielded ? it just is not alone out there.
+    // The team IS fielded — it just is not alone out there.
     expect(plan.left).toEqual(["z4"]);
     expect(plan.shortfall).toBe("mausoleum_full");
   });
@@ -212,7 +212,7 @@ describe("assembleReport / shortfallNotice", () => {
 
   it("says nothing moved rather than implying it worked", () => {
     expect(assembleReport("Raid Squad", result({ blocked: 2, shortfall: "mausoleum_full" })))
-      .toBe("Raid Squad: nothing could be moved. 2 could not come out ? your Mausoleum is full.");
+      .toBe("Raid Squad: nothing could be moved. 2 could not come out — your Mausoleum is full.");
   });
 
   it("names the army cap when the team is too big for the farm", () => {
@@ -236,8 +236,8 @@ describe("assembleReport / shortfallNotice", () => {
 
   it("warns before the tap, naming the same cause", () => {
     expect(shortfallNotice(planTeamAssembly(["z1", "z2", "z3"], farm(["z1", "z2"], ["z3"]), 2, 15)))
-      .toBe("Too big for your farm ? 1 would stay in the Mausoleum.");
+      .toBe("Too big for your farm — 1 would stay in the Mausoleum.");
     expect(shortfallNotice(planTeamAssembly(["z1"], farm(["z1", "z2"]), 4, 0)))
-      .toBe("Needs a Mausoleum ? 1 would stay on the farm.");
+      .toBe("Needs a Mausoleum — 1 would stay on the farm.");
   });
 });

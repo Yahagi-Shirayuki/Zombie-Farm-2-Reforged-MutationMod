@@ -3,13 +3,13 @@
 // Everything here is PURE and DETERMINISTIC: the same (accountId, scope, period,
 // level) always produces the same set, and nothing reads a clock or Math.random on its
 // own. That is what lets the offline build generate its own quests locally while the
-// online build takes the server's ? the two run the identical code, so a set generated
+// online build takes the server's — the two run the identical code, so a set generated
 // on either side is the set the other would have produced.
 //
 // Rewards are XP only, and are FROZEN into the quest at generation time. Sizing them
 // at claim time instead would pay a completed quest at whatever level the player had
 // climbed to by the time they pressed the button, which is worth deliberately waiting
-// for ? an incentive to sit on finished quests rather than play.
+// for — an incentive to sit on finished quests rather than play.
 
 import { questSubjectMatches } from "../matching";
 import { periodEndsAt, periodIndex } from "./periods";
@@ -21,7 +21,7 @@ import type {
 
 /** Dailies appear once the tutorial's own quest rail is behind the player. */
 export const DAILY_UNLOCK_LEVEL = 5;
-/** Weeklies are a later commitment ? a week-long goal needs a farm that can meet it. */
+/** Weeklies are a later commitment — a week-long goal needs a farm that can meet it. */
 export const WEEKLY_UNLOCK_LEVEL = 15;
 
 /** A day's worth of quests is worth this share of the CURRENT level's XP requirement.
@@ -30,18 +30,27 @@ export const WEEKLY_UNLOCK_LEVEL = 15;
  *  abstract but paid far too little where it matters: the XP curve steepens ~28x from
  *  level 10 to level 40 while the farm's own XP income barely doubles, so a flat share
  *  produces a daily worth a rounding error early and a windfall late. Interpolating
- *  between these two endpoints lands a single daily at roughly 28 XP around level 10,
- *  390 around level 40 and 600 at the cap, which is the intended feel across the range. */
+ *  between these two endpoints lands a single daily at roughly 27 XP around level 10,
+ *  270 around level 40 and 330 at the cap, which is the intended feel across the range.
+ *
+ *  The max-level endpoint was HALVED (0.08 -> 0.04) after modelling what the board is
+ *  actually worth up there: above level 35 the farm loop and raid gold have both gone
+ *  flat (no crop unlocks past 45), so periodic XP was carrying ~70% of a level on its
+ *  own and the endgame cleared at a near-constant ~5 days a level however steep the
+ *  curve got. Because the reward is a SHARE of the requirement, raising thresholds
+ *  could never slow that down — only this number can. The unlock endpoint is untouched:
+ *  early dailies were never the problem, and the taper means levels under ~20 barely
+ *  move (a level-10 daily goes 28 -> 27). */
 const DAILY_SHARE_AT_UNLOCK = 0.18;
-const DAILY_SHARE_AT_MAX_LEVEL = 0.08;
+const DAILY_SHARE_AT_MAX_LEVEL = 0.04;
 const MAX_LEVEL = 45;
 
-/** One weekly quest PAYS seven dailies ? literally "a week of showing up".
+/** One weekly quest PAYS seven dailies — literally "a week of showing up".
  *
  *  It only COSTS five (templates.WEEKLY_COUNT_MULTIPLIER), and the gap is the point: a
  *  weekly has to survive a missed day or two to be worth starting, so it asks for five
  *  days of play across seven and pays the whole week for finishing it. Keep the two
- *  numbers apart ? collapsing them to one would silently price that slack out. */
+ *  numbers apart — collapsing them to one would silently price that slack out. */
 export const WEEKLY_MULTIPLIER = 7;
 
 /** Per-slot reward weights, summing to the slot count so the pool is preserved. The
@@ -50,7 +59,7 @@ const DAILY_SLOT_WEIGHTS = [0.9, 0.9, 1.2] as const;
 const WEEKLY_SLOT_WEIGHTS = [1, 1] as const;
 
 /** XP needed to advance FROM `level` to the next one. At the cap there is no next
- *  level, so the final step is reused ? periodic quests keep paying at max level. */
+ *  level, so the final step is reused — periodic quests keep paying at max level. */
 export function xpToNextLevel(level: number, thresholds: readonly number[]): number {
   const index = Math.max(1, Math.min(thresholds.length, Math.floor(level)));
   if (index >= thresholds.length) {
@@ -65,7 +74,7 @@ function dailyShare(level: number): number {
   return DAILY_SHARE_AT_UNLOCK + (DAILY_SHARE_AT_MAX_LEVEL - DAILY_SHARE_AT_UNLOCK) * t;
 }
 
-/** The value of ONE daily quest at this level ? the unit every reward is a multiple
+/** The value of ONE daily quest at this level — the unit every reward is a multiple
  *  of, dailies and weeklies alike. */
 export function dailyUnitXp(level: number, xpToNext: number): number {
   return Math.max(1, Math.round((xpToNext * dailyShare(level)) / DAILY_SLOTS.length));
@@ -104,7 +113,7 @@ export interface PeriodicGenerationInput {
   scope: PeriodicScope;
   period: number;
   level: number;
-  /** XP from `level` to the next ? see xpToNextLevel. */
+  /** XP from `level` to the next — see xpToNextLevel. */
   xpToNext: number;
 }
 
@@ -154,7 +163,7 @@ export function generatePeriodicSet(input: PeriodicGenerationInput): PeriodicSco
 export interface PeriodicRefreshContext {
   accountId: string;
   level: number;
-  /** XP from `level` to the next ? see xpToNextLevel. */
+  /** XP from `level` to the next — see xpToNextLevel. */
   xpToNext: number;
   now: number;
 }
@@ -163,7 +172,7 @@ export interface PeriodicRefreshContext {
  *  period has rolled over (or a scope has just unlocked). Returns true if it changed
  *  anything, so callers can skip a write.
  *
- *  Rolling over DISCARDS unclaimed rewards ? that is the point of a daily. */
+ *  Rolling over DISCARDS unclaimed rewards — that is the point of a daily. */
 export function refreshPeriodicState(
   state: PeriodicQuestState,
   ctx: PeriodicRefreshContext
@@ -222,7 +231,7 @@ export type PeriodicClaimResult =
   | { ok: true; xp: number; quest: PeriodicQuest }
   | { ok: false; error: "no_such_scope" | "no_such_quest" | "not_complete" | "already_claimed" };
 
-/** Pay out one completed quest. The caller credits the XP ? this only decides whether
+/** Pay out one completed quest. The caller credits the XP — this only decides whether
  *  the claim is legal and records that it happened.
  *
  *  Call refreshPeriodicState FIRST. An id from an expired period is simply not in the
@@ -243,7 +252,7 @@ export function claimPeriodicQuest(
   return { ok: true, xp: quest.xp, quest };
 }
 
-/** Everything still worth claiming right now ? used for the HUD's attention badge. */
+/** Everything still worth claiming right now — used for the HUD's attention badge. */
 export function claimablePeriodicCount(state: PeriodicQuestState): number {
   let total = 0;
   for (const scope of ["daily", "weekly"] as const) {

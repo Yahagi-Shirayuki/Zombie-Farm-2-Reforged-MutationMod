@@ -264,8 +264,10 @@ describe("buildPlayerUnits — mutations apply last, as a flat bonus", () => {
   });
 
   it("still ramps the UNMUTATED base while paying the mutation in full", () => {
-    // Headless con: endpoint 11, base 29.7, +3 con from Cauli-hair -> listed 32.7.
-    const mask = 512;
+    // Headless con: endpoint 11, base 29.7, +3 con from Lima Bean -> listed 32.7.
+    // Lima Bean deliberately, not a hair/eye mutation: this unit is HEADLESS, which
+    // may hold body/arm/neck bits and nothing else (HEADLESS_SLOTS).
+    const mask = 1024;
     const head = (): OwnedZombie[] => [
       { ...mutant()[0], group: "Headless", key: "ZombieActorHeadless", mutation: mask,
         str: 11, dex: 1, con: 29.7 + 3 },
@@ -341,12 +343,26 @@ describe("buildPlayerUnits — binary-authentic zombie abilities", () => {
     expect(buffedRegular.maxHp).toBeCloseTo(regularSolo.maxHp * 1.20);
   });
 
-  it("Protect reduces damage for every group except Headless", () => {
+  it("Protect shields the rest of the line, and a carrier does not shield itself", () => {
+    // Headless used to be cut out of its own group's aura entirely, which left the game's
+    // tank bodies as the only ones that could not be shielded — a Bombie carries the
+    // highest hit points in the roster and still took every blow raw. Ruleset v38 grants
+    // it to every body type, keeping only the self-exclusion: the aura is what a Protect
+    // zombie gives the OTHERS, so one carrier alone is still worth nothing to itself.
     const regular = owned("regular", "Regular", "Green");
     const headless = owned("protector", "Headless", "Blue");
-    const built = buildPlayerUnits([regular, headless], { abilityUnlocked: unlocked });
-    expect(built[0].damageReduction).toBeCloseTo(0.20);
-    expect(built[1].damageReduction).toBe(0);
+    const one = buildPlayerUnits([regular, headless], { abilityUnlocked: unlocked });
+    expect(one[0].damageReduction).toBeCloseTo(0.20); // shielded by the carrier
+    expect(one[1].damageReduction).toBe(0); // …which does not shield itself
+
+    // A second carrier shields the first — the case the old exclusion could never reach.
+    const built = buildPlayerUnits(
+      [regular, headless, owned("protector-2", "Headless", "Blue")],
+      { abilityUnlocked: unlocked }
+    );
+    expect(built[0].damageReduction).toBeCloseTo(0.40); // both carriers
+    expect(built[1].damageReduction).toBeCloseTo(0.20); // the other one
+    expect(built[2].damageReduction).toBeCloseTo(0.20);
   });
 
   it("stacks duplicate Protect carriers additively", () => {
@@ -481,6 +497,8 @@ describe("buildEnemyUnits — attack cadence", () => {
       ],
     },
     PirateStageActorScallywag: { str: 50, dex: 0.5, con: 40, attacks: [{ name: "poke", frequency: 100 }] },
+    PirateStageActorBoss: { str: 500, dex: 0.4, con: 120, attacks: [{ name: "poke", frequency: 100 }] },
+    PirateStageActorSwashbuckler: { str: 8, dex: 2, con: 25, attacks: [{ name: "poke", frequency: 100 }] },
   };
   const attacks = {
     poke: {},
@@ -507,8 +525,13 @@ describe("buildEnemyUnits — attack cadence", () => {
     expect(dps).toBeCloseTo(22.5, 1);
   });
 
-  it("flags the Scallywag as mirroring its opponent's speed", () => {
+  it("flags BOTH pirates as mirroring their opponent's speed", () => {
+    // The Scallywag's mirror is recovered ground truth; the boss's is a deliberate
+    // divergence (ruleset v38) — see combatStats.PIRATE_BOSS_KEY. Nothing outside the
+    // pirate family mirrors.
     expect(build("PirateStageActorScallywag").mirrorsOpponentSpeed).toBe(true);
+    expect(build("PirateStageActorBoss").mirrorsOpponentSpeed).toBe(true);
+    expect(build("PirateStageActorSwashbuckler").mirrorsOpponentSpeed).toBe(false);
     expect(build("Farmhand").mirrorsOpponentSpeed).toBe(false);
   });
 

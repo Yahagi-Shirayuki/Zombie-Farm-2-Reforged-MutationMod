@@ -94,32 +94,40 @@ export class JobSystem {
     private onCropPlanted: (oc: number, or: number, cfg: CropConfig) => string | null = () => null,
     // Carries the exact free-placement origin into the tutorial's next beat.
     private onPlotPlowed: (oc: number, or: number) => void = () => {},
-    // Offline Epic Boss token roll. Online harvests are rolled authoritatively by
-    // the server and arrive through the reconciled Epic Boss projection.
-    private onCropHarvested: (growMs: number, value: number, x: number, y: number) => boolean = () => false,
+    // Epic Boss token roll, performed HERE in both modes and returning whether this
+    // crop yielded one. Online it is reported to the server rather than checked by it.
+    // The crop KEY rides along because the running boss's favourite crop rolls at a
+    // better rate (epicBoss/favoriteCrops.ts); `name` is display text and cannot be
+    // matched on. The rarer favourite-crop event LURE is not reported back here — it
+    // announces itself with a modal rather than a float over the plot.
+    private onCropHarvested: (
+      crop: { key: string; growMs: number; value: number }, x: number, y: number
+    ) => boolean = () => false,
     // Immediate affordability feedback. Queue validation used to fail silently,
     // making a valid plot look unresponsive when the player lacked currency.
     private onInsufficientFunds: (currency: JobCurrency, needed: number) => void = () => {},
     // Visual-only collection feedback. Called after a successful crop harvest.
     private onHarvestFx: (result: HarvestResult, x: number, y: number) => void = () => {},
-    // Free army + Mausoleum room for grown zombie crops. Checked when queued, when
-    // reached, and immediately before the crop is consumed.
-    private zombieHarvestRoom: () => number | boolean = () => Number.POSITIVE_INFINITY
+    // How many more grown zombies the farm can take RIGHT NOW: free army slots plus
+    // free Mausoleum slots. Read at three points — enqueue, arrival, and the instant
+    // before the crop is consumed — because capacity moves under a queued harvest
+    // (an earlier queued crop lands, a combine is collected, a raid party returns).
+    private zombieHarvestRoom: () => number = () => Number.POSITIVE_INFINITY
   ) {}
 
   private key(kind: JobKind, oc: number, or: number) {
     return `${kind}:${oc},${or}`;
   }
 
+  /** Is there anywhere for one more grown zombie to go? */
   private hasZombieRoom(): boolean {
-    return this.zombieRoom() > 0;
+    return this.zombieHarvestRoom() > 0;
   }
 
-  private zombieRoom(): number {
-    const room = this.zombieHarvestRoom();
-    return typeof room === "boolean" ? (room ? Number.POSITIVE_INFINITY : 0) : room;
-  }
-
+  /** Zombie crops already queued (or being worked): each one has claimed a slot that
+   *  the room count still shows as free, because nothing is spawned until the farmer
+   *  finishes. Without this, a farm one slot from full accepts every ripe zombie on
+   *  the field and refuses them one by one on arrival. */
   private pendingZombieHarvests(): number {
     let count = 0;
     for (const job of this.active ? [this.active, ...this.queue] : this.queue) {
@@ -169,8 +177,10 @@ export class JobSystem {
         return false;
       }
     }
+    // A zombie crop may only be queued if a home for the unit is still unclaimed —
+    // counting the zombie harvests already in the queue, which have not spawned yet.
     if (kind === "harvest" && this.field.ripeZombieAt(oc, or) &&
-        this.zombieRoom() <= this.pendingZombieHarvests()) {
+        this.zombieHarvestRoom() <= this.pendingZombieHarvests()) {
       const at = this.field.plotCenterOf(oc, or);
       this.float(at.x, at.y, "Army full!");
       return false;
@@ -225,6 +235,9 @@ export class JobSystem {
     return this.pending.has(`tree:${objId}`);
   }
 
+  /** The queued/active plot job whose 4x4 area covers tile (col,row), if any.
+   * Lets the cancel stroke resolve and preview the job a drag would un-queue
+   * without touching the queue; cancelAtTile()/cancelObject() stay authoritative. */
   pendingPlotJobAt(col: number, row: number): { kind: JobKind; oc: number; or: number } | null {
     for (const job of this.active ? [this.active, ...this.queue] : this.queue) {
       if (job.kind === "walk" || job.kind === "harvestTree") continue;
@@ -351,6 +364,9 @@ export class JobSystem {
     this.audioSuppressed ||= suppressAudio;
     try {
       while (remaining > 0 && (this.busy || this.walk.moving)) {
+        // The queue is stalled on an unreachable server, so no amount of further time
+        // moves it. Leave now rather than grinding out one no-op step per 50 ms of the
+        // whole absence — an overnight tab would otherwise burn hundreds of thousands.
         if (!this.active && this.queue.length && this.mutationBlocked(this.queue[0].kind)) break;
         const step = Math.min(CATCH_UP_STEP_SEC, remaining);
         cursor += step * 1000;
@@ -434,6 +450,9 @@ export class JobSystem {
   update(dt: number) {
     if (this.paused) return;
     if (!this.active) {
+      // Don't start work the server can't be told about — the head of the queue simply
+      // waits for the command lane to come back. Checked HERE as well as at the payoff
+      // so the farmer doesn't walk out and mime a plow that cannot land.
       if (this.queue.length && this.mutationBlocked(this.queue[0].kind)) return;
       const next = this.queue.shift();
       if (!next) return;
@@ -494,6 +513,12 @@ export class JobSystem {
     }
   }
 
+  /** Put the active job back at the head of the queue, untouched, and stand down.
+   *
+   *  Used only when `apply` refused because the server is unreachable. The job keeps its
+   *  plot reservation and its pending key, so nothing else can claim the plot and a fresh
+   *  swipe over it still dedupes; only the walk/work animation is thrown away. The next
+   *  `update` after the lane recovers re-walks it. */
   private hold() {
     if (!this.active) return;
     this.active.bar?.cont.destroy();
@@ -504,13 +529,26 @@ export class JobSystem {
     this.onQueueChanged?.();
   }
 
+  /** Whether this job's outcome has to reach the server, and the server is currently
+   *  unreachable. Online, the farm document is authoritative: applying locally while the
+   *  command lane is paused produces work the server never hears about, which the next
+   *  reconcile silently erases.
+   *
+   *  This used to be checked inside `apply` as a bare early return, and `update` finished
+   *  the job either way — so every plot the farmer reached during a pause was quietly
+   *  consumed. A player who drag-plowed a field and then lost the lane (a rate limit, a
+   *  bad connection, a writer hand-off) got holes in it with no error anywhere, which is
+   *  the "drag-plowing skips plots" report. Now the job WAITS. */
   private mutationBlocked(kind: Kind): boolean {
     if (kind === "walk") return false;
-    const serverOwned = kind === "fence" ? false
-      : kind === "harvestTree" ? !!this.state.onTreeHarvest : !!this.state.onFarm;
+    const serverOwned = kind === "harvestTree" ? !!this.state.onTreeHarvest : !!this.state.onFarm;
     return serverOwned && !!this.state.canMutateOnline && !this.state.canMutateOnline();
   }
 
+  /** Returns false when the job could not be applied because the server is unreachable,
+   *  so the caller must put it back rather than finish it. Every other outcome —
+   *  including a legitimate refusal like insufficient funds — returns true: the job was
+   *  judged, and repeating it would only produce the same refusal forever. */
   private apply(job: Job): boolean {
     if (job.kind === "walk") return true;
     if (this.mutationBlocked(job.kind)) return false;
@@ -521,6 +559,7 @@ export class JobSystem {
         const gold = this.state.farmerHarvestGold(baseGold);
         if (this.state.onTreeHarvest && job.objId) this.state.onTreeHarvest(job.objId, gold);
         else this.state.addGold(gold);
+        this.state.recordTreeHarvest();
         if (treeName) this.quest.post(QuestEvent.CropHarvested, treeName);
         this.float(job.cx, job.cy, `+${gold}g`);
         this.playSfx("xp");
@@ -554,6 +593,7 @@ export class JobSystem {
         this.float(job.cx, job.cy, cost > 0 ? `-${cost}g` : "Plowed!");
         if (xp) this.float(job.cx, job.cy, `+${xp}xp`, 0.42);
         this.playSfx(xp ? "xp" : "till");
+        this.state.recordPlowed();
         this.onPlotPlowed(job.oc, job.or);
         this.quest.post(QuestEvent.SoilPlowed, "Plow");
         this.quest.post(QuestEvent.NewSoilPlowed, "Plow");
@@ -604,10 +644,16 @@ export class JobSystem {
           else this.state.spendGold(cfg.cost);
           this.float(job.cx, job.cy, `-${cfg.cost}${cfg.brainsNeeded ? "b" : "g"}`);
         }
+        this.state.recordPlanted();
         this.quest.post(QuestEvent.CropPlanted, cfg.name);
         this.playSfx("place");
       }
     } else {
+      // Last fence before the crop is destroyed. The arrival check ran a full work
+      // phase ago, and the army/Mausoleum can fill inside it (a combine collected, a
+      // reward claimed, a raid party returning, an online reconcile). harvestAt clears
+      // the plot unconditionally, so harvesting here with nowhere to put the unit
+      // would delete a grown zombie outright rather than merely refusing it.
       if (this.field.ripeZombieAt(job.oc, job.or) && !this.hasZombieRoom()) {
         this.float(job.cx, job.cy, "Army full!");
         return true;
@@ -656,10 +702,10 @@ export class JobSystem {
           if (r.sell) this.state.addGold(r.sell);
           this.state.addXp(xp);
         }
-        // Always report veggie harvests. Offline this performs the token roll now;
-        // online it remembers the plot so the later server-confirmed token can pop
-        // out of the crop that produced it.
-        const bossToken = !r.isZombie && this.onCropHarvested(r.growMs, r.sell, job.cx, job.cy);
+        // Always report veggie harvests: the Boss Token roll happens now, in both
+        // modes, so the token pops out of the crop that produced it.
+        const bossToken = !r.isZombie
+          && this.onCropHarvested({ key: r.key, growMs: r.growMs, value: r.sell }, job.cx, job.cy);
         // Zombie crops pay no gold — they yield an owned zombie unit instead.
         if (r.zombieKey) {
           this.float(job.cx, job.cy, `+${xp}xp`);
@@ -668,6 +714,7 @@ export class JobSystem {
           if (xp) this.float(job.cx, job.cy, `+${xp}xp`, 0.42);
           if (bossToken) this.float(job.cx, job.cy, "+1 Boss Token!", xp ? 0.84 : 0.42);
         }
+        this.state.recordHarvest(r.key, !!r.zombieKey);
         // A harvested zombie "resurrects"; a plain crop gives the reward chime.
         this.playSfx(r.isZombie ? "harvestZombie" : "xp");
         this.quest.post(

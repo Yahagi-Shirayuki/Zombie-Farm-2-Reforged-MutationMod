@@ -3,12 +3,12 @@
 // It runs in one of two modes, chosen once at construction from whether this build
 // talks to a server at all:
 //
-//   OFFLINE (`authoritative: false`) ? this system IS the authority. It generates the
+//   OFFLINE (`authoritative: false`) — this system IS the authority. It generates the
 //     sets, counts game events off the quest bus, pays the XP on claim, and persists
 //     everything in the save. Exactly the same generator the server uses, so the two
 //     builds agree about what a Tuesday looks like.
 //
-//   ONLINE (`authoritative: true`) ? the server owns all of it. Bus events are ignored
+//   ONLINE (`authoritative: true`) — the server owns all of it. Bus events are ignored
 //     outright (the server counts the commands they came from), the state is whatever
 //     the last projection said, and a claim is a command whose result arrives as a new
 //     projection. Progress is NOT previewed optimistically the way catalog quests are:
@@ -42,7 +42,7 @@ export interface PeriodicQuestHooks {
 }
 
 /** The account identity the roll is seeded with. Offline there is no account, so the
- *  local profile's own id stands in ? it just has to be stable for one save. */
+ *  local profile's own id stands in — it just has to be stable for one save. */
 export type PeriodicIdentity = () => string;
 
 export class PeriodicQuestSystem {
@@ -62,7 +62,7 @@ export class PeriodicQuestSystem {
         // Roll the day over first: the event that arrives after midnight belongs to the
         // NEW day's board, not to the expired one it would otherwise be counted against.
         const rolled = this.refresh();
-        // One event advances a quest by one, matching the server engine ? `n` is
+        // One event advances a quest by one, matching the server engine — `n` is
         // deliberately ignored so a bulk post cannot outpace the authoritative count.
         const advanced = applyPeriodicEvents(this.state, [{ type: nid, subject: object, aliases }]);
         if (rolled || advanced) this.hooks.render(this.views());
@@ -97,7 +97,7 @@ export class PeriodicQuestSystem {
 
   /** Collect a finished quest.
    *
-   *  Offline this pays immediately. Online it only SENDS ? the XP and the claimed flag
+   *  Offline this pays immediately. Online it only SENDS — the XP and the claimed flag
    *  both come back from the server, because a claim can legitimately be refused (the
    *  period rolled over between the panel rendering and the button being pressed). */
   claim(scope: PeriodicScope, questId: string): void {
@@ -129,7 +129,7 @@ export class PeriodicQuestSystem {
     return periodicViews(this.state, now);
   }
 
-  /** How many finished quests are waiting to be collected ? the HUD's badge. */
+  /** How many finished quests are waiting to be collected — the HUD's badge. */
   get claimable(): number {
     return claimablePeriodicCount(this.state);
   }

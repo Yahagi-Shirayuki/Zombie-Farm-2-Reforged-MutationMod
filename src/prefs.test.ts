@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_FARM_BACKGROUND,
   getDayNightMode,
+  getFarmBackground,
+  hasSeenHazardTip,
   isLocalNight,
   setDayNightMode,
+  setPrefStorageErrorHandler,
   setShowZombieMutations,
   setZombieBodyColorMode,
   zombieAppearancePrefs,
@@ -38,5 +42,45 @@ describe("environment preferences", () => {
     expect(isLocalNight(new Date(2026, 6, 26, 7, 0))).toBe(false);
     expect(isLocalNight(new Date(2026, 6, 26, 18, 59))).toBe(false);
     expect(isLocalNight(new Date(2026, 6, 26, 19, 0))).toBe(true);
+  });
+});
+
+describe("a device that cannot keep a preference says so", () => {
+  // The silent version of this is the reported bug: the toggle moves, the setting
+  // applies for the session, and it is gone at the next launch with nothing anywhere
+  // to explain it. One warning, not one per write — a full quota fails every time.
+  it("reports the first refused write and then stays quiet", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => { throw new DOMException("quota", "QuotaExceededError"); },
+    });
+    const warnings: string[] = [];
+    setPrefStorageErrorHandler((message) => warnings.push(message));
+    try {
+      setDayNightMode("night");
+      setShowZombieMutations(false);
+      setZombieBodyColorMode("species");
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/reset when you come back/);
+    } finally {
+      setPrefStorageErrorHandler(null);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reads defaults instead of throwing when storage is blocked outright", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => { throw new DOMException("denied", "SecurityError"); },
+      setItem: () => { throw new DOMException("denied", "SecurityError"); },
+    });
+    try {
+      // getFarmBackground is read at module scope during boot: a throw here took the
+      // whole launch, which is why every accessor goes through the guarded helpers.
+      expect(getFarmBackground()).toBe(DEFAULT_FARM_BACKGROUND);
+      expect(getDayNightMode()).toBe("auto");
+      expect(hasSeenHazardTip()).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

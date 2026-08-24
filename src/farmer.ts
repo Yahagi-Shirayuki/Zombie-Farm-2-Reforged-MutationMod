@@ -5,7 +5,8 @@ export type FarmerEffectKey =
   | "zombieGrowTime"
   | "zombieLife"
   | "zombieStrength"
-  | "invasionCooldown";
+  | "invasionCooldown"
+  | "farmerSpeed";
 
 /** Source-priced head bonuses keyed by PlayerDictionary head ID. */
 const HEAD_EFFECTS: Partial<Record<number, { key: FarmerEffectKey; amount: number }>> = {
@@ -18,6 +19,13 @@ const HEAD_EFFECTS: Partial<Record<number, { key: FarmerEffectKey; amount: numbe
   7: { key: "zombieStrength", amount: 0.10 },
   8: { key: "invasionCooldown", amount: -0.25 },
   9: { key: "invasionCooldown", amount: -0.25 },
+  // The ninja masks. ZF2 shipped them (and every head after the Zombie Queen) as pure
+  // cosmetics; this is ours, and it is the only bonus that moves the FARMER rather than
+  // the farm — a ninja walks the field a quarter faster. Client pacing only: it changes
+  // how quickly the farmer reaches the next plot, never what a job costs or how long a
+  // crop takes, so nothing server-authoritative reads it.
+  23: { key: "farmerSpeed", amount: 0.25 }, // Ninja Male
+  22: { key: "farmerSpeed", amount: 0.25 }, // Ninja Female
 };
 
 export function farmerEffect(headId: number, key: FarmerEffectKey): number {
@@ -57,3 +65,8 @@ export const farmerZombieGrowMs = (value: number, headId: number): number =>
 
 export const farmerCooldownMs = (value: number, headId: number): number =>
   Math.max(0, Math.round(value * farmerMultiplier(headId, "invasionCooldown")));
+
+/** Walk speed in world px/sec after the head bonus. Not rounded — this feeds a
+ *  per-frame step, where a fraction of a pixel is meaningful. */
+export const farmerSpeedPx = (value: number, headId: number): number =>
+  Math.max(1, value * farmerMultiplier(headId, "farmerSpeed"));

@@ -1,7 +1,8 @@
 # Combat stat pipeline — GROUND TRUTH (disassembled)
 
 Recovered 2026-07-09 from the shipped ARMv7 (Thumb) Mach-O
-`app-internals/executable/ZF2R` with `tools/re/objc_disasm.py`, the same method that
+`app-internals/executable/ZF2R` with `ZF2R_extracted/tools/re/objc_disasm.py` (the external
+extraction tree, not this repo's `tools/`), the same method that
 produced `zombie-pot-ground-truth`. This is REAL ground truth (compiled code), not a plist.
 It answers the highest-value open question: **how `str`/`dex`/`con` become HP, damage,
 attack speed, and how a hit resolves** — the numbers the reimplementation currently invents.

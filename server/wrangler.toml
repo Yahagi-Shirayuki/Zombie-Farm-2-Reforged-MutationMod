@@ -1,25 +1,129 @@
-name = "zombiefarm-server"
+# Two environments, safe-by-default:
+#
+#   npx wrangler deploy                    → STAGING (zombiefarm-server-staging)
+#   npx wrangler deploy --env production   → PROD    (zombiefarm-server)
+#
+# The TOP LEVEL of this file is the staging/default environment, so every bare
+# wrangler command (deploy, dev, d1 …) targets the disposable staging stack.
+# Production config lives in [env.production] at the bottom and is only reachable
+# with an explicit `--env production` — that flag IS the extra step guarding prod.
+# Prefer `npm run deploy` / `npm run deploy:prod`; the latter runs the full check
+# suite (migrations:check, typecheck, unit + integration tests) before deploying.
+#
+# NOTE: named environments inherit almost nothing — vars, d1_databases, and
+# unsafe.bindings must be declared in BOTH places. A binding added only at the
+# top level silently does not exist in production, and vice versa.
+
+name = "zombiefarm-server-staging"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
-# ---- D1 (SQLite) binding -------------------------------------------------
-# Create the DB once with:  wrangler d1 create zombiefarm
-# then paste the printed database_id below (local dev works without it).
+# Workers Logs. Without this there is no per-route CPU attribution at all — the GraphQL
+# analytics API reports CPU per SCRIPT, so a rising cost/request (5.16 -> 9.75 CPU-ms
+# across beta) can be measured but never explained. CPU is the first allowance the $5
+# plan exhausts, so that blind spot is the one worth closing before a release.
+#
+# head_sampling_rate = 1 logs every request. That is the point during a launch; drop it
+# to ~0.1 once the picture is clear. Budget: 20M log events/month included on Workers
+# Paid, then $0.60/M. At beta volume (~2.4M requests/month) invocation logs plus the
+# existing slog() calls land well inside that; re-check if traffic passes ~5x beta.
+#
+# NOTE: repeated verbatim under [env.production.observability] below. Named environments
+# inherit almost nothing, so a block written only here does not exist in production.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# ---- STAGING (default) -----------------------------------------------------
+# A fully separate Worker + D1 database for testing server features without
+# touching prod. Config mirrors prod except: DEV_AUTH=1 (no-Google sign-in —
+# this flag must NEVER appear in the production [vars] below) and
+# ALLOWED_ORIGIN=localhost:5173 so a local `npm run dev` client can call it
+# (set VITE_API_URL in .env.local).
+#
+# Migrations:  npx wrangler d1 migrations apply zombiefarm-staging --remote
+# Secrets:     npx wrangler secret put SESSION_SECRET
+# The staging DB was initialized via the fresh path (schema.sql + baseline
+# ledger — see migrations/README.md); its data is disposable.
+
 [[d1_databases]]
+binding = "DB"
+database_name = "zombiefarm-staging"
+database_id = "2ee97121-08c8-4f03-ad96-84295c33484b"
+migrations_dir = "migrations"
+
+[vars]
+GOOGLE_CLIENT_ID = "249211577622-cmqa6so9re0hgh2lti4mpe40nlcm3l4k.apps.googleusercontent.com"
+ALLOWED_ORIGIN = "http://localhost:5173"
+DEV_AUTH = "1"
+MIGRATION_CUTOFF_MS = "0"
+INTEGRITY_V2_ENFORCE_AFTER_MS = "1"
+MIN_PROTOCOL_VERSION = "3"
+MUTATIONS_DISABLED = "0"
+BLACK_MARKET_ENABLED = "1"
+# Friend invasions: ON for the staging test stack (interface rework of 2026-08-23).
+# This is now the ONE launch switch: the client's Invasions surfaces follow it via
+# the bootstrap's `pvpEnabled` capability — see docs/FRIEND_INVASIONS.md.
+PVP_ENABLED = "1"
+WRITER_LEASE_MODE = "enforce"
+
+# Staging rate limiters use distinct namespace_ids from prod (1001-1003):
+# ratelimit namespaces are account-scoped, so sharing ids would share throttle
+# buckets across environments. `period` must be 10 or 60 (seconds). If these
+# bindings are removed the server falls back to a D1 counter automatically.
+[[unsafe.bindings]]
+name = "RL_AUTH"
+type = "ratelimit"
+namespace_id = "2001"
+simple = { limit = 60, period = 60 }
+
+[[unsafe.bindings]]
+name = "RL_WRITE"
+type = "ratelimit"
+namespace_id = "2002"
+simple = { limit = 120, period = 60 }
+
+[[unsafe.bindings]]
+name = "RL_READ"
+type = "ratelimit"
+namespace_id = "2003"
+simple = { limit = 300, period = 60 }
+
+# Same daily cleanup sweep as prod, on staging's own database.
+[triggers]
+crons = ["17 3 * * *"]
+
+# ---- PRODUCTION (--env production only) ------------------------------------
+# Deploy:      npx wrangler deploy --env production   (or `npm run deploy:prod`)
+# Migrations:  npx wrangler d1 migrations apply zombiefarm --remote --env production
+#              See migrations/README.md for the fresh-vs-upgrade paths and the
+#              non-idempotent ALTER caveats — rehearse upgrades on a prod snapshot;
+#              staging was built fresh, so it does not prove the upgrade path.
+# Secrets:     npx wrangler secret put SESSION_SECRET --env production
+#              (SESSION_SECRET signs our own session JWTs; set out-of-band,
+#              never committed. Local dev uses a git-ignored .dev.vars instead.)
+
+[env.production]
+name = "zombiefarm-server"
+
+# The twin of [observability] at the top of this file — see the reasoning there. It has
+# to be repeated because named environments do not inherit it, and the environment this
+# one matters most for is production.
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[[env.production.d1_databases]]
 binding = "DB"
 database_name = "zombiefarm"
 database_id = "bf1b288f-7419-41d5-8ee6-0f022c17fd20"
-# Versioned migrations live here (0001…). Apply with `wrangler d1 migrations apply
-# zombiefarm [--local|--remote]`. See migrations/README.md for the fresh-vs-upgrade
-# paths and the non-idempotent ALTER caveats.
 migrations_dir = "migrations"
 
-# ---- Public-ish config (not secret) --------------------------------------
 # GOOGLE_CLIENT_ID is your OAuth 2.0 Web client id (safe to expose).
 # ALLOWED_ORIGIN is the site allowed to call this API (your Pages origin).
 # DEV_AUTH=1 enables the no-Google dev sign-in path — MUST stay unset/0 in prod.
-[vars]
+[env.production.vars]
 GOOGLE_CLIENT_ID = "249211577622-cmqa6so9re0hgh2lti4mpe40nlcm3l4k.apps.googleusercontent.com"
 ALLOWED_ORIGIN = "https://zombiefarmreforged.com"
 DEV_AUTH = "0"
@@ -30,6 +134,12 @@ INTEGRITY_V2_ENFORCE_AFTER_MS = "1"
 MIN_PROTOCOL_VERSION = "3"
 MUTATIONS_DISABLED = "0"
 BLACK_MARKET_ENABLED = "1"
+# Friend invasions: PARKED in production while the feature is finished on staging.
+# This var is the ONE launch switch — the client's Invasions surfaces follow it via
+# the bootstrap's `pvpEnabled` capability, so flipping it to "1" and deploying this
+# Worker launches the feature with no client redeploy (docs/FRIEND_INVASIONS.md).
+# Deploy order still matters for the ruleset handshake: Worker first.
+PVP_ENABLED = "0"
 WRITER_LEASE_MODE = "enforce"
 # Server-owned raid cooldown in ms. Omit to use the 2h default (see src/index.ts
 # raidCooldownMs). Prod uses the default; local dev sets a small value in .dev.vars.
@@ -42,21 +152,10 @@ WRITER_LEASE_MODE = "enforce"
 # To run a deliberately time-boxed import in a separate recovery deployment, replace
 # the zero above with its absolute end timestamp. Production should remain zero.
 
-# ---- Secrets (set out-of-band, never committed) --------------------------
-# wrangler secret put SESSION_SECRET      # signs our own session JWTs
-#
-# For local dev, put the same in a git-ignored .dev.vars file:
-#   SESSION_SECRET="dev-only-change-me"
-#   DEV_AUTH="1"
-#   ALLOWED_ORIGIN="http://localhost:5173"
-
-# ---- Rate Limiting bindings ----------------------------------------------
 # Cloudflare's native per-key limiter. Throttling only — the D1 constraints
 # (gift uniqueness, grants, save CAS) remain the real correctness controls. These
 # do NOT write to D1, so they don't consume the free-tier D1 write allowance.
-# `period` must be 10 or 60 (seconds). If these bindings are removed the server
-# falls back to a D1 counter automatically (see src/index.ts rateLimit()).
-[[unsafe.bindings]]
+[[env.production.unsafe.bindings]]
 name = "RL_AUTH"                       # sign-in (per IP): tight, but NAT-tolerant
 type = "ratelimit"
 namespace_id = "1001"
@@ -65,21 +164,20 @@ namespace_id = "1001"
 # many legitimate users share one IP. Google-token verification is the real gate.
 simple = { limit = 60, period = 60 }
 
-[[unsafe.bindings]]
+[[env.production.unsafe.bindings]]
 name = "RL_WRITE"                      # mutations (per account): moderate
 type = "ratelimit"
 namespace_id = "1002"
 simple = { limit = 120, period = 60 }
 
-[[unsafe.bindings]]
+[[env.production.unsafe.bindings]]
 name = "RL_READ"                       # reads / polling (per account): loose
 type = "ratelimit"
 namespace_id = "1003"
 simple = { limit = 300, period = 60 }
 
-# ---- Scheduled cleanup ----------------------------------------------------
 # Daily sweep (03:17 UTC) of expired/revoked sessions, stale rate-limit buckets,
 # and old pending friend requests — keeps D1 small on the free tier. Handler:
 # the `scheduled` export in src/index.ts.
-[triggers]
+[env.production.triggers]
 crons = ["17 3 * * *"]

@@ -28,6 +28,8 @@ import plistlib
 import re
 
 from reforge_economy import brain_price
+import contributed_art
+import memorial_statue
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ = os.path.dirname(HERE)
@@ -166,8 +168,13 @@ def is_reward_only(tile):
     Reforged does not (category "reward" is absent from the Market's tabs), so
     carrying the source's brain price gave those rows a sell-back value they were
     never paid for — selling a free prize minted 1,000-4,000 gold. Priced like every
-    other earned decoration instead: cost 0, so the refund is the game's one-gold
-    minimum. KEEP IN SYNC with server/src/objectCatalog.ts.
+    other earned decoration instead: cost 0, which also makes them unpurchasable
+    server-side (planObjectBuy refuses cost <= 0).
+
+    What they SELL for is decided separately, by the authored table in
+    src/awardSellValue.ts (a quarter of the brain price for an Epic Boss prize), so
+    do not give these rows a real `cost` to raise their sale value — that would put
+    them back on the market. KEEP IN SYNC with server/src/objectCatalog.ts.
     """
     return tile in REWARD_ONLY_DECOR or tile in EPIC_REWARD_TILES
 
@@ -178,19 +185,61 @@ def is_reward_only(tile):
 # no meaning — the pen's five slots are shared, not per-building.
 FUNCTIONAL_OVERRIDE_TILES = {"pettingZoo"}
 
+# ---- Objects the Rotate tool must not turn (design override, NOT source data) ----
+# In isometric art a horizontal mirror IS a quarter turn, which is why Rotate is a flip.
+# It stops being a turn the moment the art has WRITING baked into it: mirroring the Ice
+# Cream Stand gives its sign as "MAERC ECI", which is what a player reported. There is no
+# mechanical repair — un-mirroring the letters afterwards would need them re-skewed onto a
+# plank now leaning the other way — so these simply do not rotate, and the tool says so.
+#
+# Reviewed the whole object set for baked lettering; this is all of it. Judge by TEXT, not
+# by asymmetry: every raid banner is asymmetric and mirrors perfectly well, because its
+# crest is a picture. See canMirrorObject in src/assets.ts.
+NO_MIRROR_TILES = {
+    "iceCreamStand",      # "ICE CREAM 5c" across the sign board
+    "iceCreamTruck",      # "ICE CREAM" down the side panel
+    "newYearBannerLeft",  # "HAPPY 2012" on the bunting
+    "newYearBannerRight",
+}
+
 # ---- Mausoleum upgrade ladder (design override, NOT source data) ------------
 # The source ships one buyable Mausoleum (mausoleum3) plus two key-fragment tiers
 # that Reforged does not use. Reforged instead makes the placed Mausoleum
 # upgradeable in place, exactly like the storage sheds: each tier costs brains and
 # adds five zombie storage slots. Every tier reuses the base row (same art, same
 # 4x4 footprint) and differs only in key/name/cost/zombieSlots.
+#
+# Prices are per STEP (see object.upgrade in server/src/v3/engine.ts). Every rung
+# costs the SAME 4 brains — the ladder used to ramp 4/6/8/10 and stop, which both
+# priced the late rungs out and left nothing above Mausoleum V. Only the base
+# building is bought (8 brains, from the source row); the rest is a flat climb.
+# KEEP IN SYNC with server/src/objectCatalog.ts (OBJECTS).
 MAUSOLEUM_BASE_SLOTS = 15
+MAUSOLEUM_STEP_COST = 4  # flat brain price of every upgrade rung
 MAUSOLEUM_TIERS = [
-    # key, market name, brain cost, zombie storage slots
-    ("mausoleum4", "Mausoleum II", 4, MAUSOLEUM_BASE_SLOTS + 5),
-    ("mausoleum5", "Mausoleum III", 6, MAUSOLEUM_BASE_SLOTS + 10),
-    ("mausoleum6", "Mausoleum IV", 8, MAUSOLEUM_BASE_SLOTS + 15),
-    ("mausoleum7", "Mausoleum V", 10, MAUSOLEUM_BASE_SLOTS + 20),
+    # key, market name, zombie storage slots (every rung costs MAUSOLEUM_STEP_COST)
+    ("mausoleum4", "Mausoleum II", MAUSOLEUM_BASE_SLOTS + 5),
+    ("mausoleum5", "Mausoleum III", MAUSOLEUM_BASE_SLOTS + 10),
+    ("mausoleum6", "Mausoleum IV", MAUSOLEUM_BASE_SLOTS + 15),
+    ("mausoleum7", "Mausoleum V", MAUSOLEUM_BASE_SLOTS + 20),
+    ("mausoleum8", "Mausoleum VI", MAUSOLEUM_BASE_SLOTS + 25),
+    ("mausoleum9", "Mausoleum VII", MAUSOLEUM_BASE_SLOTS + 30),
+    ("mausoleum10", "Mausoleum VIII", MAUSOLEUM_BASE_SLOTS + 35),
+    ("mausoleum11", "Mausoleum IX", MAUSOLEUM_BASE_SLOTS + 40),
+    ("mausoleum12", "Mausoleum X", MAUSOLEUM_BASE_SLOTS + 45),
+]
+
+# ---- Extra storage-shed rungs (design override, NOT source data) -------------
+# The source's shed ladder stops at storage08 (McDonnell's Barn, 64 slots), which a
+# long-running farm outgrows with nothing left to spend gold on. These rungs continue
+# the same ladder: +8 slots each, keeping the source's roughly x1.5 price step. Each
+# clones the top source shed's row, so it reuses that art until it gets its own —
+# only key/name/cost/xp/storageSlots differ. KEEP IN SYNC with
+# server/src/objectCatalog.ts (OBJECTS + SHED_SLOTS).
+EXTRA_SHED_BASE = "storage08"
+EXTRA_SHED_TIERS = [
+    # key, market name, gold cost, item storage slots
+    ("storage09", "Zombie Warehouse", 525_000, 72),
 ]
 
 # ---- Recolor variants --------------------------------------------------------
@@ -378,6 +427,231 @@ def extract_from_atlas(fl, fn):
     return im.rotate(-90, expand=True) if rotated else im
 
 
+def pair(s):
+    n = [float(v) for v in re.findall(r"-?\d+\.?\d*", s)]
+    return n[0], n[1]
+
+
+# ---- Flat tiles whose art is authored CENTRED on its own footprint -------------
+# The seven pond pieces are one interchangeable set: six rims plus a fill, all 3x3,
+# all drawn on the same 150x75 canvas, made to be laid edge to edge into a single
+# body of water. Each one's water diamond IS that canvas, i.e. the footprint diamond
+# (144x72) with 3px of bleed on every side so neighbours overlap instead of leaving a
+# gap. That means the anchor is not a free parameter — it is fixed by the geometry,
+# and every piece must use the SAME one or the rim steps where two pieces meet.
+#
+# The source pivots are hand-rounded to 2dp and disagree: pond5 0.36, pond2/pond7
+# 0.35, the rest 0.34, and pond7 alone is 0.02 vertically where the rest are 0.03. In
+# the original that slop was survivable because ponds are never turned there; here
+# Rotate mirrors about the front tile's centre line (`1 - pivotx - 48/width`), which
+# turns a 0.02 error into a 6px jump — the Pond 5 misalignment. So these pieces take
+# the computed centred anchor instead of the authored one; see
+# centered_flat_tile_fields. Roads are NOT in this set: a road bend's art is
+# deliberately off-centre on its footprint (up to 5px vertically), so the same
+# reasoning does not apply and their authored pivots stand.
+CENTERED_FLAT_TILES = {"pond1", "pond2", "pond3", "pond4", "pond5", "pond6", "pond7"}
+# The anchor may only be nudged by rounding-scale slop. A bigger correction means the
+# tile does not belong in the set above and the art would teleport, so fail loudly.
+CENTERED_ANCHOR_TOLERANCE_PX = 4.0
+
+
+def centered_flat_tile_fields(tp, sprite_img):
+    """Flat-tile anchor fields for art centred on its footprint diamond.
+
+    The anchor is the point of the art that lands on the FRONT tile's own position —
+    the bottom-left corner of that tile's 48x24 box (see flat_tile_fields). For a
+    tileW x tileH block the footprint diamond is (tileW+tileH)*24 wide by
+    (tileW+tileH)*12 tall, and that corner sits (tileW-1)*24 right of the diamond's
+    west corner and exactly on its south corner. Centring art of size w x h on the
+    diamond therefore puts the anchor at
+
+        x = (tileW-1)*24 + (w - diamondW)/2      measured from the art's left edge
+        y = (h - diamondH)/2                     measured UP from the art's bottom
+
+    which for a pond piece is (51/150, 1.5/75) = (0.34, 0.02). 0.34 is also the fixed
+    point of the mirror `1 - anchorX - 48/w`, so a turned piece lands exactly where an
+    unturned one does — which is the whole point.
+    """
+    w, h = sprite_img.width, sprite_img.height
+    tw = max(1, int(tp.get("tileWidth", 1)))
+    th = max(1, int(tp.get("tileHeight", 1)))
+    diamond_w, diamond_h = (tw + th) * 24, (tw + th) * 12
+    ax = ((tw - 1) * 24 + (w - diamond_w) / 2) / w
+    ay = (h - diamond_h) / (2 * h)
+    authored = flat_tile_fields(None, tp, sprite_img)
+    dx = abs(ax - authored["anchorX"]) * w
+    dy = abs(ay - authored["anchorY"]) * h
+    if max(dx, dy) > CENTERED_ANCHOR_TOLERANCE_PX:
+        raise SystemExit(
+            f"{tp.get('spriteSheet')}: centred anchor moves the art "
+            f"{dx:.1f}x{dy:.1f}px, past the {CENTERED_ANCHOR_TOLERANCE_PX}px "
+            "tolerance — its art is not centred on its footprint")
+    return {"flatTile": True, "anchorX": round(ax, 6), "anchorY": round(ay, 6)}
+
+
+def flat_tile_fields(tile, tp, sprite_img):
+    """`{}`, or the flat-tile anchor fields — the cocos anchor of a flatTile's art,
+    EXPRESSED AGAINST THE PNG WE SHIP.
+
+    GROUND TRUTH `-[Tile anchorPoint]` / `-[Tile loadBaseSprite]`: a tile positions
+    its node at the ground tile's own position and hangs the art off
+    `(pivotx, pivoty)` — cocos anchor, y-up, defaulting to (0.38, 0). Ordinary
+    objects survive being bottom-centered instead; flat road/pond art does not,
+    because its pieces only meet at the seams if every piece uses its own pivot.
+
+    An atlas frame is TRIMMED, and cocos applies the anchor to the UNtrimmed size
+    then shifts the quad by `offset + (untrimmed - trimmed)/2`. We ship the trimmed
+    crop, so fold both terms into one anchor against that crop.
+    """
+    if not tp.get("flatTile"):
+        return {}
+    # A hand-measured anchor outranks everything: it is someone saying they laid the
+    # piece next to the one it has to meet and read the number off (see
+    # ANCHOR_OVERRIDES). The centred rule below is a DERIVATION, and a derivation loses
+    # to a measurement.
+    if tile in CENTERED_FLAT_TILES and tile not in ANCHOR_OVERRIDES:
+        return centered_flat_tile_fields(tp, sprite_img)
+    return {"flatTile": True, **flat_tile_anchor(tp, sprite_img, tile=tile)}
+
+
+def flat_tile_anchor(tp, sprite_img, flip_y=False, tile=None):
+    """The anchor pair alone (see flat_tile_fields for the rule).
+
+    `flip_y` is for a tile whose TileProperties row carries `flipY` — cocos mirrors
+    the quad about the anchor's own horizontal line and negates the trim offset with
+    it (`-[CCSprite setTextureRect:]` flips `_unflippedOffsetPositionFromCenter`). We
+    bake the mirror into the PNG we ship, so only that negated offset has to be
+    folded in here.
+    """
+    ax = float(tp.get("pivotx", 0.38))
+    ay = float(tp.get("pivoty", 0.0))
+    w, h = sprite_img.width, sprite_img.height
+    w0, h0, offx, offy = w, h, 0.0, 0.0
+    fr = frames(tp["frameList"]) if tp.get("frameList") else None
+    f = fr.get(tp.get("frameName")) if fr else None
+    if f and "spriteSourceSize" in f:
+        w0, h0 = pair(f["spriteSourceSize"])
+        offx, offy = pair(f.get("spriteOffset", "{0,0}"))
+        offx += (w0 - w) / 2
+        offy = (-offy if flip_y else offy) + (h0 - h) / 2
+    over = ANCHOR_OVERRIDES.get(tile, {})
+    return {"anchorX": round(over.get("anchorX", (ax * w0 - offx) / w), 6),
+            "anchorY": round(over.get("anchorY", (ay * h0 - offy) / h), 6)}
+
+
+# ---- Road bends: the four corners are four SPRITES, not one mirrored one --------
+# GROUND TRUTH: `rotations: 3` appears on exactly six TileProperties entries, the two
+# road-bend families, and each state is its own entry with its own frame and pivot:
+#
+#   roadBend_01 roadbend2.png            pivot .30/.17   corner E+S (apex north)
+#   roadBend_03 roadbend2.png + flipY    pivot .31/.06   corner W+N (apex south)
+#   roadBend_04 roadbend1.png            pivot .22/.12   corner E+N (apex west)
+#
+# and the same shape for cobblestoneRoadBend_01/_03/_04 (__stonebend1/2/3.png).
+#
+# That is the whole bug this table exists to fix. Turning a placed object here is a
+# horizontal MIRROR, and in iso a mirror swaps the two grid axes — so it maps a bend's
+# arms E<->S and W<->N, i.e. every corner onto ITSELF. Shipping one bend art and
+# "rotating" it therefore never produced the other three corners: it redrew the same
+# corner from a mirrored pivot, a few px out of line, which is what a road that will
+# not meet its neighbour looks like.
+#
+# The fourth corner (W+S, apex east) is the one the source never authored — `rotations`
+# is 3, not 4. It comes free by mirroring _04, whose arms E+N mirror to S+W, and it
+# lands exactly (verified against the straights, see Field.roadTurns.test.ts). That
+# extra state is a deliberate divergence: with three corners a road cannot close a
+# loop, and the mirror is exact here because the piece is re-anchored by the binary's
+# own `1 - pivotx - 48/w` rule rather than assumed symmetric.
+#
+# This table is STRUCTURE only — which art, in which order, and which state is a
+# mirror. Where a state's art has to hang is a measurement, and every measurement in
+# this file lives in ANCHOR_OVERRIDES below.
+ROAD_TURNS = {
+    "roadBend_01": [
+        {"tile": "roadBend_01"},
+        {"tile": "roadBend_03"},
+        {"tile": "roadBend_04"},
+        {"tile": "roadBend_04", "flip": True},
+    ],
+    "cobblestoneRoadBend_01": [
+        {"tile": "cobblestoneRoadBend_01"},
+        {"tile": "cobblestoneRoadBend_03"},
+        {"tile": "cobblestoneRoadBend_04"},
+        {"tile": "cobblestoneRoadBend_04", "flip": True},
+    ],
+}
+
+# ---- Anchors that had to be measured rather than read -------------------------
+# Authored in tools/tile_lab.html: lay the piece next to the one it has to meet, drag
+# its art until the kerbs line up, and paste the block the tool prints. Keyed by TILE
+# key, so an entry reaches both a def's own art and any rotation state that draws that
+# tile. `anchorX`/`anchorY` replace the authored cocos pivot (already rebased onto the
+# trimmed PNG we ship, see flat_tile_fields); `dc`/`dr` shift only where the ART hangs,
+# in whole tiles, leaving the footprint the player places and blocks alone.
+#
+# Prefer the authored pivot. An entry here is a claim that the source's own number does
+# not lay the piece where its neighbours are, so say what was measured and against what.
+ANCHOR_OVERRIDES = {
+    # The apex-south road bend of both families draws one whole tile north of its
+    # footprint's front tile — 24px right, 10px up, exactly (HW, -HH). Measured against
+    # a straight run on each arm, both families independently; no reading of the
+    # authored pivot produces it (the stone one's pivotx is a bare 0.5).
+    "roadBend_03": {"dr": -1},
+    "cobblestoneRoadBend_03": {"dr": -1},
+
+    # Pond rims, measured in the lab against their neighbours 2026-08-18. These four
+    # OUTRANK the centred anchor CENTERED_FLAT_TILES derives for the pond set (0.34,
+    # 0.02) — pond1, pond4 and pond7 still take it, so the seven no longer share one
+    # anchor. Being tuned; expect these numbers to move.
+    #
+    # Know what that costs before trusting it: 0.34 is the fixed point of the mirror
+    # `1 - pivotx - 48/w`, which is why the set was centred in the first place — it is
+    # the only anchor at which a TURNED piece occupies the same pixels as an unturned
+    # one, and the SE/NW rims are the SW/NE ones turned. Off it, a turned piece lands
+    # 2*(0.34 - anchorX)*150 px away: pond6 6.3px, pond3 4.0px, pond2 3.3px, pond5
+    # 1.2px. So these lay a better UNTURNED pond and a worse turned one.
+    "pond2": {"anchorX": 0.329, "anchorY": -0.024},
+    "pond3": {"anchorX": 0.326667, "anchorY": 0.04},
+    "pond5": {"anchorX": 0.336, "anchorY": -0.036},
+    "pond6": {"anchorX": 0.319, "anchorY": -0.024},
+}
+
+
+def turn_fields(tile, tileprops):
+    """`{}`, or `turns`: the art each rotation state of this object draws.
+
+    One catalog key keeps its identity through a turn — the shop sells one Road Bend
+    and the server counts one — so the states live on the def and a placed object
+    stores only its index. See ROAD_TURNS for what the states are and why.
+    """
+    states = ROAD_TURNS.get(tile)
+    if not states:
+        return {}
+    out = []
+    for st in states:
+        tp = tileprops[st["tile"]]
+        img = extract_from_atlas(tp["frameList"], tp["frameName"])
+        if is_blank(img):
+            raise SystemExit(f"{st['tile']}: rotation-state art is missing")
+        flip_y = bool(tp.get("flipY"))
+        if flip_y:
+            from PIL import Image
+
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+        img = unpremultiply(img)  # flat art butts against its neighbour; see unpremultiply
+        hang = ANCHOR_OVERRIDES.get(st["tile"], {})
+        out.append({
+            "sprite": emit_sprite(st["tile"], img),
+            "nativeW": img.width,
+            "nativeH": img.height,
+            **flat_tile_anchor(tp, img, flip_y, st["tile"]),
+            **({"flip": True} if st.get("flip") else {}),
+            **({"dc": hang["dc"]} if hang.get("dc") else {}),
+            **({"dr": hang["dr"]} if hang.get("dr") else {}),
+        })
+    return {"turns": out}
+
+
 # ---- Variants that need their own de-coloured sprite (authored, NOT source art) --
 # A recolor family multiplies ONE sprite by each variant's tint, which assumes the
 # base art is neutral — every other family (hedge, crate, fence, balloon) is authored
@@ -411,9 +685,77 @@ def neutralize_petals(img):
     return out
 
 
+def unpremultiply(img):
+    """Divide out the alpha the source atlases baked into their colour channels.
+
+    The ZF2R atlases are stored PREMULTIPLIED: a half-covered edge pixel of the pond
+    water is (4,109,163,a=180), which is the opaque water (6,155,231) already scaled
+    by 180/255. PixiJS defaults its image textures to `premultiply-alpha-on-upload`
+    (TextureSource.defaultOptions), so it multiplies by alpha a SECOND time and every
+    antialiased edge composites `rgb*a^2 + dst*(1-a)` where the renderer meant
+    `rgb*a + dst*(1-a)`.
+
+    On art that stands alone that only costs a faint dark halo. On flat art it is
+    visible damage: pond pieces overlap by design, so each piece lays its darkened
+    fringe over the neighbour's opaque water and the pond comes out with a dark grid
+    of seams tracing the pieces. Undoing the bake makes the PNG straight-alpha, which
+    is what Pixi already assumes, and abutting pieces blend water into water.
+    """
+    out = img.copy()
+    pixels = out.load()
+    for y in range(out.height):
+        for x in range(out.width):
+            r, g, b, a = pixels[x, y]
+            if 0 < a < 255:
+                pixels[x, y] = (min(255, round(r * 255 / a)),
+                                min(255, round(g * 255 / a)),
+                                min(255, round(b * 255 / a)), a)
+    return out
+
+
 def is_blank(img):
     """True when every pixel is transparent — nothing would be drawn."""
     return img is None or img.getbbox() is None
+
+
+def loose_sprite(tp, sheet=None):
+    """Full-size in-world art for a tile that ships as a standalone tex*.png.
+
+    Some tiles are ONE frame of a SHARED sheet — the coloured graves (Blue/Red/
+    Silver) all live in tex2004.png as a 2x2 grid — so crop to this tile's own
+    rect when it sits at a nonzero offset in the sheet.
+    """
+    ss = sheet or (tp or {}).get("spriteSheet")
+    if not tp or not ss:
+        return None
+    img = image(ss)
+    if img is None:
+        return None
+    img = img.copy()
+    fw, fh = tp.get("width"), tp.get("height")
+    fx, fy = int(tp.get("x") or 0), int(tp.get("y") or 0)
+    if fw and fh and (fx > 0 or fy > 0):
+        img = img.crop((fx, fy, fx + int(fw), fy + int(fh)))
+    return img
+
+
+# Functional objects whose working state changes what they look like on the farm.
+# The source ships each state as its OWN TileProperties tile with the same
+# footprint and ground point, differing only in art: the Zombie Pot is bare while
+# idle, wears a clamped-down lid while a combine cooks, and sprouts the finished
+# zombie's arm once it is done. They ride along on the one catalog row as
+# alternate sprites (see `busySprite` / `readySprite` in assets.ts).
+STATE_SPRITE_TILES = (("cooking", "busySprite"), ("done", "readySprite"))
+
+
+def state_sprites(tileprops, tile):
+    """{"busySprite": file, ...} for `tile`'s working-state art (may be empty)."""
+    out = {}
+    for suffix, field in STATE_SPRITE_TILES:
+        img = loose_sprite(tileprops.get(f"{tile}_{suffix}"))
+        if not is_blank(img):
+            out[field] = emit_sprite(f"{tile}_{suffix}", img)
+    return out
 
 
 def extract_first_animated_frame(tp):
@@ -436,6 +778,98 @@ def extract_first_animated_frame(tp):
             if not is_blank(frame):
                 return frame
     return None
+
+
+# Tiles whose ANIMATION carries the object and whose declared `frameName` is only
+# the part that stands still.
+#
+# The Worm Holes (handled by extract_first_animated_frame above) rest on a fully BLANK
+# frame, which is easy to spot. The Solar System is the harder shape: frame
+# solarsystem_00 is a real drawing — the little grey plinth — and every planet and the
+# sun live in the 12 animation frames orbiting above it. So the extract succeeded, the
+# object shipped, and it shipped as a bare pedestal ("Solar System decor is not showing
+# the planets"). Measured against the source: its animation covers 11.7x the area of
+# its base frame, where the next-widest animated tile is 3.0x and every other one has
+# its subject in the base frame already — this is the only tile of its kind.
+#
+# The Pixel Campfire is the same shape at raid-reward scale: pixel_campfire_base.png is
+# the crossed logs alone and all three flame frames live in the animation, so it shipped
+# as an unlit fire pit ("Pixel campfire only shows the base"). Its area ratio is a mild
+# 1.5x — the subject-in-the-base test above does not catch it — but the missing piece is
+# the entire point of the object, and lighting.ts already carves a warm light out of the
+# night for it, which only made the unlit logs read as a bug.
+#
+# The reimplementation draws placeables as single static sprites, so the fix is to bake
+# the orbit's FIRST frame over the plinth, exactly as extract_multiplepieces bakes a
+# rigged object's layers. Frame 01 is also the widest spread of the twelve and the only
+# one the source itself starts on; the campfire's flame frames likewise start at fr00.
+ANIMATION_OVER_BASE = {"spaceSolarSystem", "pixelCampfire"}
+
+
+def extract_animated_over_base(tp):
+    """Base frame + the first frame of each animation, cropped around the base.
+
+    The crop is the fiddly half. A placed object is BOTTOM-CENTERED on its footprint
+    (Field.fitObjectSprite anchors at 0.5, 1), so whatever this returns has its bottom
+    centre pinned to the tile. Returning the composite's own bounds would pin the
+    ORBIT's centre there and hang the plinth off to one side and up in the air. Instead
+    the result keeps the BASE frame's bottom edge as its own bottom edge and is padded
+    symmetrically about the base frame's centre line, so the plinth lands exactly where
+    it lands today and the planets simply extend above and around it.
+    """
+    fl = tp.get("frameList")
+    fr = frames(fl)
+    base_name = tp.get("frameName")
+    if not fr or base_name not in fr:
+        return None
+    atlas = image(fl.replace(".plist", ".png"))
+    if atlas is None:
+        return None
+
+    from PIL import Image
+
+    names = [base_name]
+    for ad in tp.get("animationDictionaries", []) or []:
+        seq = ad.get("animationFrames") or []
+        first = ad.get("animationFrameName") or (seq[0] if seq else None)
+        if first and first in fr and first not in names:
+            names.append(first)
+    if len(names) < 2:
+        return None
+
+    # Every frame is trimmed out of one shared untrimmed canvas; spriteColorRect is
+    # its origin in that canvas, which is what makes the pieces line up.
+    sizes = [list(map(int, re.findall(r"-?\d+", fr[n]["spriteSourceSize"]))) for n in names]
+    canvas = Image.new("RGBA", (max(s[0] for s in sizes), max(s[1] for s in sizes)), (0, 0, 0, 0))
+    for n in names:
+        f = fr[n]
+        x, y, w, h = rect(f["textureRect"])
+        rotated = f.get("textureRotated", False)
+        cw, ch = (h, w) if rotated else (w, h)
+        piece = atlas.crop((x, y, x + cw, y + ch))
+        if rotated:
+            piece = piece.rotate(-90, expand=True)
+        cx, cy, _, _ = rect(f["spriteColorRect"])
+        canvas.alpha_composite(piece, (cx, cy))
+
+    content = canvas.getbbox()
+    if not content:
+        return None
+    bx, by, bw, bh = rect(fr[base_name]["spriteColorRect"])
+    centre = bx + bw / 2
+    bottom = by + bh
+    half = max(centre - content[0], content[2] - centre)
+    left = int(round(centre - half))
+    right = int(round(centre + half))
+    # Anything dipping below the base's ground line would be cut off by this crop.
+    # Frame 01 of the only tile that uses this does not; refuse rather than silently
+    # clip half a planet off a tile added here later.
+    if content[3] > bottom:
+        raise ValueError(
+            f"{tp.get('name')}: animation frame draws {content[3] - bottom}px below the "
+            f"base frame's ground line, which this crop would clip"
+        )
+    return canvas.crop((left, content[1], right, bottom))
 
 
 def extract_multiplepieces(tp):
@@ -614,6 +1048,9 @@ def main():
             if tp.get("multiplePieces"):
                 # frameName is only one fragment; assemble every piece.
                 sprite_img = extract_multiplepieces(tp)
+            elif tile in ANIMATION_OVER_BASE:
+                # frameName is only the part that stands still; bake the orbit on.
+                sprite_img = extract_animated_over_base(tp)
             else:
                 fl, fn = tp.get("frameList"), tp.get("frameName")
                 if fl and fn:
@@ -638,24 +1075,16 @@ def main():
         else:  # functional: prefer the full-size in-world sprite from
             # TileProperties (a standalone tex10xx.png); the market icon is tiny
             # and would look pixelated placed on the farm.
-            ss = tp.get("spriteSheet") or e.get("spriteSheet")
-            if ss:
-                sprite_img = image(ss)
-                if sprite_img is not None:
-                    sprite_img = sprite_img.copy()
-                    # Some tiles are ONE frame of a SHARED sheet: the colored graves
-                    # (Blue/Red/Silver) all live in tex2004.png as a 2x2 grid, so
-                    # using the whole sheet renders all four. Crop to this tile's
-                    # frame when it sits at a nonzero offset in the sheet.
-                    fw, fh = tp.get("width"), tp.get("height")
-                    fx, fy = int(tp.get("x") or 0), int(tp.get("y") or 0)
-                    if fw and fh and (fx > 0 or fy > 0):
-                        sprite_img = sprite_img.crop((fx, fy, fx + int(fw), fy + int(fh)))
+            sprite_img = loose_sprite(tp, tp.get("spriteSheet") or e.get("spriteSheet"))
 
         if is_blank(sprite_img):
             skipped += 1
             skipped_keys.append(key)
             continue
+        # Flat art is laid edge to edge and its pieces overlap, so a doubled
+        # premultiply paints a dark seam along every join. See unpremultiply.
+        if tp.get("flatTile"):
+            sprite_img = unpremultiply(sprite_img)
         out_name = emit_sprite(key, sprite_img)
         # A tile's childNodes ship as a SECOND image drawn behind it (Pet Pen far wall).
         back_img = extract_child_layer(tp)
@@ -694,13 +1123,24 @@ def main():
             "tileH": max(1, int(tp.get("tileHeight", 1))),
             "movable": bool(tp.get("movable", True)),
             "rotations": tp.get("rotations", 1),
+            # Art with writing on it: Rotate is a mirror, so it would read backwards.
+            **({"noMirror": True} if tile in NO_MIRROR_TILES else {}),
             "sprite": out_name,
             # Far-side art drawn BEHIND anything standing inside this object.
             **({"backSprite": back_name} if back_name else {}),
+            # Working-state art (Zombie Pot: lid on while cooking, arm out when done).
+            **state_sprites(tileprops, tile),
             "nativeW": sprite_img.width,
             "nativeH": sprite_img.height,
             "pivotX": tp.get("pivotx", 0.5),
             "pivotY": tp.get("pivoty", 0.0),
+            # Ground-hugging art (roads, ponds, the zombie patch) that has to line
+            # up seam-to-seam with its neighbours, so it is anchored by its authored
+            # pivot rather than bottom-centered. See flat_tile_fields.
+            **flat_tile_fields(tile, tp, sprite_img),
+            # A road bend's four corners are four separate pieces of art; Rotate
+            # picks between them instead of mirroring one. See ROAD_TURNS.
+            **turn_fields(tile, tileprops),
             # simple functional effects the game can apply on placement
             "armyMax": e.get("increaseArmyMaxBy", 0),
             "storageSlots": slots,  # >0 for storage sheds (item capacity)
@@ -746,6 +1186,10 @@ def main():
         sprite_img = None
         if tp.get("multiplePieces"):
             sprite_img = extract_multiplepieces(tp)
+        elif tile in ANIMATION_OVER_BASE:
+            # frameName is only the part that stands still (the Pixel Campfire's logs
+            # without its fire); bake the animation's first frame on.
+            sprite_img = extract_animated_over_base(tp)
         elif tp.get("frameList") and tp.get("frameName"):
             sprite_img = extract_from_atlas(tp["frameList"], tp["frameName"])
         else:
@@ -765,6 +1209,10 @@ def main():
             reward_skipped.append(name)
             continue
 
+        # Flat art is laid edge to edge and its pieces overlap, so a doubled
+        # premultiply paints a dark seam along every join. See unpremultiply.
+        if tp.get("flatTile"):
+            sprite_img = unpremultiply(sprite_img)
         out_name = emit_sprite(tile, sprite_img)
         seen.add(tile)
         reward_count += 1
@@ -782,11 +1230,17 @@ def main():
             "tileH": max(1, int(tp.get("tileHeight", 1))),
             "movable": bool(tp.get("movable", True)),
             "rotations": tp.get("rotations", 1),
+            # Art with writing on it: Rotate is a mirror, so it would read backwards.
+            **({"noMirror": True} if tile in NO_MIRROR_TILES else {}),
             "sprite": out_name,
             "nativeW": sprite_img.width,
             "nativeH": sprite_img.height,
             "pivotX": tp.get("pivotx", 0.5),
             "pivotY": tp.get("pivoty", 0.0),
+            # Ground-hugging art (roads, ponds, the zombie patch) that has to line
+            # up seam-to-seam with its neighbours, so it is anchored by its authored
+            # pivot rather than bottom-centered. See flat_tile_fields.
+            **flat_tile_fields(tile, tp, sprite_img),
             "armyMax": 0,
             "storageSlots": 0,
             "zombieSlots": 0,
@@ -819,10 +1273,34 @@ def main():
     # the Market offers one at a time above the placed building's capacity.
     base_mausoleum = next((c for c in catalog if c["key"] == "mausoleum3"), None)
     if base_mausoleum:
-        for key, name, cost, slots in MAUSOLEUM_TIERS:
+        for key, name, slots in MAUSOLEUM_TIERS:
             tier = dict(base_mausoleum)
-            tier.update({"key": key, "name": name, "cost": cost, "zombieSlots": slots})
+            tier.update({"key": key, "name": name,
+                         "cost": MAUSOLEUM_STEP_COST, "zombieSlots": slots})
             catalog.append(tier)
+
+    # Storage sheds above the source's top rung: clones of the biggest source shed
+    # (same sprite/footprint) that the Market offers one at a time above the placed
+    # shed's capacity, exactly like the Mausoleum ladder above.
+    base_shed = next((c for c in catalog if c["key"] == EXTRA_SHED_BASE), None)
+    if base_shed:
+        for key, name, cost, slots in EXTRA_SHED_TIERS:
+            tier = dict(base_shed)
+            tier.update({"key": key, "name": name, "cost": cost,
+                         "xp": cost // 100, "storageSlots": slots})
+            catalog.append(tier)
+
+    # Memorial Statue: a reimplementation addition with no source row, whose art is
+    # cut from the Tim Statue's plinth. Built AFTER the loop above so its source
+    # sprite is already in OBJDIR, and BEFORE the orphan sweep so its own PNG counts
+    # as referenced. See tools/memorial_statue.py.
+    catalog.append(memorial_statue.build(OBJDIR))
+
+    # Art drawn for this project rather than extracted from the source atlases, so
+    # it has neither a Market row nor an atlas frame — both halves are authored in
+    # tools/contributed_art.py. Appended here for the same reason as the Memorial
+    # Statue: before the orphan sweep, so its PNGs count as referenced.
+    catalog.extend(contributed_art.build(OBJDIR))
 
     catalog.sort(key=lambda c: (c["category"], c["level"], c["cost"]))
 
@@ -832,7 +1310,9 @@ def main():
     # directory look like it still holds art the game can reach.
     referenced = {c["sprite"] for c in catalog} | {
         c["growingSprite"] for c in catalog if c["growingSprite"]} | {
-        c["backSprite"] for c in catalog if c.get("backSprite")}
+        c["backSprite"] for c in catalog if c.get("backSprite")} | {
+        c[field] for c in catalog for _, field in STATE_SPRITE_TILES if c.get(field)} | {
+        t["sprite"] for c in catalog for t in c.get("turns", [])}
     orphans = sorted(f for f in os.listdir(OBJDIR)
                      if f.endswith(".png") and f not in referenced)
     for f in orphans:

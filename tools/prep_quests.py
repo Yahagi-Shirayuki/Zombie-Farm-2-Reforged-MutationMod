@@ -17,6 +17,8 @@ Run:  python tools/prep_quests.py
 """
 import os, re, io, json, plistlib, shutil
 
+import quest_xp_rebalance
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ = os.path.dirname(HERE)
 APP = os.path.normpath(os.path.join(
@@ -75,6 +77,26 @@ QUEST_LEVEL_OVERRIDES = {
     # Not a crop: The Perfect Yard requires the Lawnmower, which the Market does
     # not sell until level 45, while the quest shipped at 44.
     "61": (45, "Lawnmower unlocks at level 45"),
+    # Not a crop either: quest 22 ships with levelRequired -1, but its prerequisite
+    # (quest 21) is gated at 25, so 25 is where it actually unlocks. Spelling that
+    # out is what lets quest_xp_rebalance price it as the level-25 quest it is
+    # instead of a level-1 one.
+    "22": (25, "prerequisite quest 21 is gated at 25; the -1 was never the real gate"),
+}
+
+# ---- Objective sizes the shipped data gets wrong ------------------------------
+# Quests.plist sizes every objective for the front of the original game. A few ask
+# for so little that the quest is over before it registers — and because the XP
+# rule prices on `levelRequired` alone (see quest_xp_rebalance), asking for less
+# work never cost them anything. Resizing them here, in the generator, keeps a
+# regeneration from reverting it.
+#
+# Counts apply positionally to the quest's requirements list.
+QUEST_COUNT_OVERRIDES = {
+    # quest id: (counts per requirement, why)
+    "32": ((25, 25), "10 Broccoli + 10 Cauliflower for 900 XP at level 29 was 45 "
+                     "XP/harvest — an order above every other harvest quest"),
+    "59": ((50, 50), "25 + 25 for 3750 XP at the level cap was 75 XP/harvest"),
 }
 
 
@@ -143,6 +165,84 @@ def load_plist(path):
     return plistlib.load(io.BytesIO(raw))
 
 
+# ---- Epic ladder rescale -------------------------------------------------
+# Every Epic Boss event now runs 20 levels instead of 40 (see
+# tools/prep_all_epic_bosses.py MAX_LEVEL: ZF2 only ever authored 20 HP multipliers, so
+# levels 21-40 were a copy of level 20 and added grind rather than difficulty). The
+# quests that gate each event's prizes were authored against the 40-rung ladder, so a
+# "Defeat Loco Locust Level 40" objective would now be unreachable and every milestone
+# above 20 would sit off the end of the ladder.
+#
+# Each threshold is therefore halved, rounded up: 5 -> 3, 10 -> 5, 15 -> 8, 20 -> 10,
+# 25 -> 13, 30 -> 15, 35 -> 18, 40 -> 20. That keeps every quest, keeps their order, and
+# keeps each prize at the same FRACTION of its ladder as before. The top prize is
+# unaffected in difficulty: old level 40 and new level 20 are the same 107x fight.
+#
+# Dr. Groundhog's 1xxx quests are excluded — its ladder was authored at 20 rungs and its
+# thresholds already sit on it. (Note 10000/10011 are Mystical Mamba, NOT Groundhog: the
+# range test below is deliberate, a `startswith("1")` check silently skips them.)
+EPIC_LADDER_SCALE = (10, 40)  # new rungs, old rungs
+# Dr. Groundhog's 1xxx quests were authored against the 20-rung curve, not the 40-rung
+# advertisement, so they rescale from their own origin. (Note 10000/10011 are Mystical
+# Mamba, NOT Groundhog: the numeric range test below is deliberate, and a
+# `startswith("1")` check would silently sweep them up.)
+GROUNDHOG_LADDER_SCALE = (10, 20)
+EPIC_DEFEAT_NOTIFICATION = "kEpicStageEnemyDefeatedNotification"
+
+# Where the two headline prizes sit, PINNED rather than derived — the normal event zombie
+# on rung 5, the omega on rung 10. Keyed by quest-id suffix, which is the convention every
+# event follows (X000 is the ordinary prize, X011 the omega).
+#
+# Pinned because the arithmetic does not land where the design wants it. Rescaling from 40
+# rungs to 10 puts most ordinary prizes on rung 2, which hands a player the event's own
+# zombie almost before the event starts. Half-way and the top are the rungs that mean
+# something on a 10-rung ladder, so those are stated outright.
+EPIC_PRIZE_RUNGS = {"000": 5, "011": 10}
+
+
+def _retarget(quest, r, new):
+    """Move one defeat requirement to rung `new`, carrying its prose with it."""
+    old = int(r["notificationObject"])
+    if new == old:
+        return
+    r["notificationObject"] = str(new)
+    r["text"] = re.sub(rf"\b{old}\b", str(new), r["text"])
+    for field in ("title", "messageComplete", "tip"):
+        if field in quest:
+            quest[field] = re.sub(rf"(?i)(level\s+){old}\b", rf"\g<1>{new}", quest[field])
+
+
+def rescale_epic_ladder(out):
+    """Rescale every Epic Boss level threshold onto the current rung count."""
+    for qid, quest in out.items():
+        new_max, old_max = (GROUNDHOG_LADDER_SCALE if 1000 <= int(qid) < 2000
+                            else EPIC_LADDER_SCALE)
+        for r in quest.get("requirements", []):
+            if r.get("notificationID") != EPIC_DEFEAT_NOTIFICATION:
+                continue
+            # Floored at 1: quartering a low threshold can otherwise reach rung 0, which
+            # no clear ever satisfies and which would strand the prize behind it.
+            _retarget(quest, r, max(1, -(-int(r["notificationObject"]) * new_max // old_max)))
+
+
+def pin_epic_prize_rungs(out):
+    """Put each event's ordinary prize on rung 5 and its omega on rung 10.
+
+    Runs AFTER rescale_epic_ladder, and moves only the LAST defeat requirement — a prize
+    gated behind a collection chain (Skunkarella's Diva) keeps its earlier steps spread
+    below the pinned one rather than collapsing them all onto the same rung.
+    """
+    for qid, quest in out.items():
+        target = EPIC_PRIZE_RUNGS.get(str(qid)[-3:])
+        if target is None:
+            continue
+        defeats = [r for r in quest.get("requirements", [])
+                   if r.get("notificationID") == EPIC_DEFEAT_NOTIFICATION]
+        if not defeats:
+            continue
+        _retarget(quest, max(defeats, key=lambda r: int(r["notificationObject"])), target)
+
+
 def main():
     os.makedirs(UI, exist_ok=True)
     quests = load_plist(os.path.join(APP, "Quests.plist"))
@@ -205,6 +305,20 @@ def main():
             raise SystemExit(f"quest gate override names unknown quest {qid}")
         out[qid]["levelRequired"] = level
 
+    # Re-size the objectives that ask for too little (see QUEST_COUNT_OVERRIDES).
+    # The displayed text carries the count too, so it moves with the requirement.
+    for qid, (counts, _why) in QUEST_COUNT_OVERRIDES.items():
+        if qid not in out:
+            raise SystemExit(f"quest count override names unknown quest {qid}")
+        reqs = out[qid]["requirements"]
+        if len(counts) != len(reqs):
+            raise SystemExit(
+                f"quest {qid} count override has {len(counts)} counts "
+                f"for {len(reqs)} requirements")
+        for r, n in zip(reqs, counts):
+            r["countTotal"] = n
+            r["text"] = LEADING_COUNT.sub(str(n), r["text"], count=1)
+
     # Bully Frog's only surviving quest definitions are embedded in its
     # EpicEventEnemy row rather than Quests.plist. Import the unambiguous 3xxx
     # records; several middle milestones incorrectly reuse Groundhog's 1xxx IDs
@@ -218,22 +332,43 @@ def main():
             if 3000 <= qid < 4000:
                 add_quest(str(qid), q)
 
+    # MUST run before the recovered rewards below are added: this halves every epic
+    # threshold it finds, and those entries are already authored on the 20-rung ladder
+    # (see their comment). Running it afterwards halved them a SECOND time — 20 -> 10,
+    # 5 -> 3 — silently demoting six prize quests on any regeneration.
+    rescale_epic_ladder(out)
+    pin_epic_prize_rungs(out)
+
     # Bosses 8-10 shipped after the last complete quest table. Their art catalogs
     # and named prize rigs survived, so restore the unambiguous milestone rewards.
     # Skunkarella likewise names Madame Zombie as its epic prize even though only
     # the earlier Diva collection quest survived in Quests.plist.
+    # Levels are the CURRENT ladder's, and follow the same pinning as every other event
+    # (EPIC_PRIZE_RUNGS): the ordinary prize on rung 5, the omega on rung 10. These are
+    # added after rescale_epic_ladder and pin_epic_prize_rungs have run, so they are
+    # written at their final values rather than passed through either.
     recovered_epic_rewards = [
-        (5011, 40, "Madame Zombie", "ZombieActorMadame", "questicon_skunkarella.png"),
-        (8000, 10, "Brock Coley", "ZombieActorBrockColey", "questicon_rockyrhino.png"),
+        (5011, 10, "Madame Zombie", "ZombieActorMadame", "questicon_skunkarella.png"),
+        (8000, 5, "Brock Coley", "ZombieActorBrockColey", "questicon_rockyrhino.png"),
+        # Rocky Rhino is the one event whose only recovered prize sat on rung 5, so its
+        # top five rungs paid nothing at all. It pays a SECOND Brock Coley on rung 10
+        # rather than a new named zombie: Brock is already the reason the event is
+        # gated at level 30 (see EPIC_BOSS_UNLOCK_LEVELS), and inventing an eighth
+        # omega prize would price the ladder against a zombie ZF2 never authored.
+        (8011, 10, "Brock Coley", "ZombieActorBrockColey", "questicon_rockyrhino.png"),
         (9000, 5, "Proto Zombie", "ZombieActorProto", "questicon_generallarvaelus.png"),
-        (9011, 40, "Zombug", "ZombieActorZombug", "questicon_generallarvaelus.png"),
+        (9011, 10, "Zombug", "ZombieActorZombug", "questicon_generallarvaelus.png"),
         (10000, 5, "Zomdini", "ZombieActorZomdini", "questicon_mysticalmamba.png"),
-        (10011, 40, "Zomtar", "ZombieActorZomtar", "questicon_mysticalmamba.png"),
+        (10011, 10, "Zomtar", "ZombieActorZomtar", "questicon_mysticalmamba.png"),
     ]
+    # A boss that pays the SAME zombie on both rungs needs its second quest to read as
+    # a second one in the rail, where only the title is shown.
+    repeat_prize_titles = {8011: ("Another Brock Coley", "A second Brock Coley joins the farm!")}
     for qid, level, name, key, sprite in recovered_epic_rewards:
+        title, message = repeat_prize_titles.get(qid, (name, f"You earned {name}!"))
         add_quest(str(qid), {
-            "questID": qid, "title": name,
-            "messageComplete": f"You earned {name}!",
+            "questID": qid, "title": title,
+            "messageComplete": message,
             "tip": f"Defeat the Epic Boss at level {level}.", "sprite": sprite,
             "levelRequired": -1, "prerequisiteQuest": -1,
             "requirements": [{
@@ -254,12 +389,19 @@ def main():
         "3000": "ZombieActorCaptain", "3011": "ZombieActorAdmiral",
         "4000": "ZombieActorChristmasGhost", "4011": "ZombieActorScrooge",
         "5000": "ZombieActorDiva", "5011": "ZombieActorMadame",
-        "8000": "ZombieActorBrockColey", "9000": "ZombieActorProto",
+        "8000": "ZombieActorBrockColey", "8011": "ZombieActorBrockColey",
+        "9000": "ZombieActorProto",
         "9011": "ZombieActorZombug", "10000": "ZombieActorZomdini",
         "10011": "ZombieActorZomtar",
     }
     for qid, key in epic_reward_keys.items():
         out[qid]["rewardItemKey"] = key
+
+    # Reprice every XP reward against the level it unlocks at. The imported values were
+    # authored for the front of the original game and are worth ~1% of a level by the
+    # forties; see tools/quest_xp_rebalance.py for the bands. Applied HERE so a
+    # regeneration cannot silently restore the source numbers.
+    repriced = quest_xp_rebalance.apply(out)
 
     for boss_dir, icon in [
         ("skunkarella", "questicon_skunkarella.png"),
@@ -283,7 +425,8 @@ def main():
         elif not os.path.exists(os.path.join(UI, s)):
             print(f"  WARN missing quest icon: {s}")
 
-    print(f"quests: wrote {len(out)} quests + copied {copied}/{len(icons)} rail icons")
+    print(f"quests: wrote {len(out)} quests ({len(repriced)} XP rewards repriced)"
+          f" + copied {copied}/{len(icons)} rail icons")
 
 
 if __name__ == "__main__":

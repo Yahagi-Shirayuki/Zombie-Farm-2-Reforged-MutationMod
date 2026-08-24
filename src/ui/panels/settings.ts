@@ -12,10 +12,24 @@ import {
   getSpriteSet,
   setShowDamageNumbers,
   setSpriteSet,
+  getRightClickMode,
+  setRightClickMode,
+  getShowHealthNumbers,
+  setShowHealthNumbers,
 } from "../../prefs";
 import { ABILITY_POOL, ABILITY_TIER, TIER_BOSS, raidIdForAbilityTier } from "../../zombie/traits";
+
+import { recallOneOf, remember } from "../viewState";
+
 import { otherPlayMode, playModeDestinationLabel } from "../../playMode";
 import { updateCheckMessage, type UpdateCheckResult } from "../../updateCheck";
+import {
+  checkShellUpdate,
+  openReleasePage,
+  releasesUrl,
+  shellInfo,
+  shellUpdateMessage,
+} from "../../shellUpdate";
 
 export async function confirmLocalFarmReset(
   hud: Pick<Hud, "confirmInGame" | "onResetLocal">,
@@ -113,9 +127,20 @@ function relTime(ts: number): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-// Settings modal: Music / Sound Effects / Ambience toggles plus the account
-// block. The Developer section now lives in its own menu (openDevMenu), reached
-// via the invisible hotspot beside the nameplate.
+/** The Settings tabs, in display order. Grown past one screenful, the panel is
+ *  split by topic: Game (farm/save/account plumbing), Audio, Display (how things
+ *  look), Controls (what the inputs do). */
+export type SettingsTab = "game" | "audio" | "display" | "controls";
+const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: "game", label: "Game" },
+  { id: "audio", label: "Audio" },
+  { id: "display", label: "Display" },
+  { id: "controls", label: "Controls" },
+];
+
+// Settings modal, split across tabs (see SETTINGS_TABS). The Developer section
+// lives in its own menu (openDevMenu), reached via the invisible hotspot beside
+// the nameplate. Reopening returns to whichever tab was last read.
 export function openSettings(hud: Hud): void {
   // The fullscreen listener is torn down via onClose so it detaches whether the
   // panel is dismissed by the close button or a backdrop click.
@@ -267,6 +292,16 @@ export function openSettings(hud: Hud): void {
     );
   }
 
+  // What an invasion shows on top of its health bars. Both default OFF — ZF2 printed
+  // neither, and the bars alone are the look most players expect — so this is opt-in
+  // detail for anyone who wants to see the arithmetic. Neither changes the fight.
+  const combatBlock: HTMLElement[] = [
+    settingRow("Health Bar Numbers", getShowHealthNumbers(), (v) => setShowHealthNumbers(v)),
+    noteEl("Prints the HP left over each health bar in a raid, like “27/40”."),
+    settingRow("Damage Numbers", getShowDamageNumbers(), (v) => setShowDamageNumbers(v)),
+    noteEl("Floats the damage of each hit off the unit that took it. Both apply from your next invasion, and neither changes the fight."),
+  ];
+
   const ambienceBlock: HTMLElement[] = [];
   if (hud.getDayNightMode && hud.onSetDayNightMode) {
     ambienceBlock.push(
@@ -283,6 +318,39 @@ export function openSettings(hud: Hud): void {
         }
       ),
       noteEl("Auto follows this device's local clock (night from 7pm to 7am).")
+    );
+  }
+  if (hud.getFarmerLantern && hud.onSetFarmerLantern) {
+    ambienceBlock.push(
+      settingRow("Farmer's Lantern", hud.getFarmerLantern(),
+        (v) => hud.onSetFarmerLantern?.(v)),
+      noteEl("Off puts the lamp away and leaves the farm dark after sunset, lit only by whatever you have placed."),
+    );
+  }
+  // What the inputs do, as opposed to what things look like. The right-click row is
+  // mouse-only in effect (touch long-press never opens the menu) but shown always —
+  // a tablet with a mouse attached is a real player.
+  const controlsBlock: HTMLElement[] = [
+    settingChoiceRow(
+      "Right-Click",
+      [
+        { id: "menu", label: "Tool Menu" },
+        { id: "select", label: "Select Tool" },
+      ],
+      getRightClickMode(),
+      (v) => setRightClickMode(v),
+    ),
+    noteEl("Tool Menu opens the quick-switch tool menu at the cursor. Select Tool goes straight back to the Select tool, like it used to."),
+  ];
+  // Whether the farmer himself is a lantern switch. Only offered alongside the
+  // lantern feature itself — on its own it would read as a setting for a feature
+  // that isn't there.
+  if (hud.getFarmerLantern && hud.onSetFarmerLantern
+      && hud.getFarmerLanternTap && hud.onSetFarmerLanternTap) {
+    controlsBlock.push(
+      settingRow("Tap Farmer for Lantern", hud.getFarmerLanternTap(),
+        (v) => hud.onSetFarmerLanternTap?.(v)),
+      noteEl("On, tapping the farmer at night switches his lantern. Off, that tap goes to the ground under him instead — the Display tab's Farmer's Lantern row still switches it."),
     );
   }
   const farmMode = document.createElement("div");
@@ -372,7 +440,7 @@ export function openSettings(hud: Hud): void {
   const captured = diagnosticsCount();
   copyButton.textContent = captured ? `Copy (${captured})` : "Copy";
   copyButton.onclick = async () => {
-    const text = diagnosticsReport({ mode: hud.playMode });
+    const text = diagnosticsReport({ mode: hud.playMode, ...hud.getDiagnosticExtras?.() });
     try {
       await navigator.clipboard.writeText(text);
       hud.showToast("Diagnostics copied. Paste them into your bug report.");
@@ -411,53 +479,115 @@ export function openSettings(hud: Hud): void {
   const updatesButton = document.createElement("button");
   updatesButton.className = "set-action";
   updatesButton.textContent = "Check for Updates";
-  const updatesNote = noteEl("Look for a newer version of the game.");
+  // In a downloaded package there is no service worker to ask (it is disabled so
+  // it can't mask modded files), so the shell that serves the game tells us which
+  // repository it came from and we ask that for its newest release.
+  const shell = shellInfo();
+  const updatesNote = noteEl(shell
+    ? `Ask ${shell.repo} whether a newer version has been released. Nothing is downloaded or changed without asking you.`
+    : "Look for a newer version of the game.");
   updatesButton.onclick = async () => {
     updatesButton.disabled = true;
     updatesButton.textContent = "Checking…";
     updatesNote.textContent = "Checking for updates…";
-    let result: UpdateCheckResult;
     try {
-      result = (await hud.onCheckForUpdate?.()) ?? "unavailable";
-    } catch {
-      result = "error";
+      if (shell) {
+        const result = await checkShellUpdate(shell);
+        updatesNote.textContent = shellUpdateMessage(result);
+        if (result.status === "update-available") {
+          // Deliberately a question, and deliberately the end of our involvement:
+          // replacing game/ would delete the player's mods, so accepting opens the
+          // download page and leaves the files alone.
+          const wanted = await hud.confirmInGame(
+            `${result.latest} is available`,
+            `You're playing ${result.current}. Opening the download page won't change anything on this PC — you'll get a new zip to extract yourself, and your current copy, saves and mods stay exactly as they are.`,
+            "Open download page",
+          );
+          if (wanted && !(await openReleasePage(shell))) {
+            updatesNote.textContent = `Couldn't open a browser. The download is at ${releasesUrl(shell)}`;
+          }
+        }
+      } else {
+        let result: UpdateCheckResult;
+        try {
+          result = (await hud.onCheckForUpdate?.()) ?? "unavailable";
+        } catch {
+          result = "error";
+        }
+        updatesNote.textContent = updateCheckMessage(result);
+      }
+    } finally {
+      updatesButton.textContent = "Check for Updates";
+      updatesButton.disabled = false;
     }
-    updatesNote.textContent = updateCheckMessage(result);
-    updatesButton.textContent = "Check for Updates";
-    updatesButton.disabled = false;
   };
   updates.append(updatesLabel, updatesButton);
 
-  panel.append(
-    farmMode,
-    farmModeNote,
-    ...localStorageControls,
-    row("All Audio", hud.audio.masterOn, (v) => hud.audio.setMaster(v)),
-    volumeRow("Master Volume", hud.audio.masterVolume, (v) => hud.audio.setMasterVolume(v)),
-    row("Music", hud.audio.musicOn, (v) => hud.audio.setMusic(v)),
-    volumeRow("Music Volume", hud.audio.musicVolume, (v) => hud.audio.setMusicVolume(v)),
-    row("Sound Effects", hud.audio.sfxOn, (v) => hud.audio.setSfx(v)),
-    volumeRow("Effects Volume", hud.audio.sfxVolume, (v) => hud.audio.setSfxVolume(v)),
-    row("Ambience", hud.audio.ambienceOn, (v) => hud.audio.setAmbience(v)),
-    volumeRow("Ambience Volume", hud.audio.ambienceVolume, (v) => hud.audio.setAmbienceVolume(v)),
-    row("Mute When Unfocused", hud.audio.muteWhenUnfocused,
-      (v) => hud.audio.setMuteWhenUnfocused(v)),
-    noteEl("Silence the game while its tab or window is in the background."),
-    row("Show Damage", getShowDamageNumbers(), setShowDamageNumbers),
-    fullscreenRow,
-    noteEl(canFullscreen
-      ? "Press F to toggle fullscreen. Escape also exits."
-      : "This browser doesn't support app-controlled fullscreen."),
-    ...accountBlock,
-    ...ambienceBlock,
-    ...bgBlock,
-    ...appearanceBlock,
-    spriteRow, spriteNote,
-    diagnostics,
-    noteEl("Copies this build's id, your browser, and any recorded errors. Nothing is sent anywhere — paste it into a bug report."),
-    updates,
-    updatesNote,
-  );
+  // The tab bar (the Market's screen-toggle look) and the body it swaps. Every
+  // block above is built once; showing a tab just re-parents its elements, so
+  // controls keep their state and handlers across switches.
+  const tabs = document.createElement("div");
+  tabs.className = "pm-screens set-tabs";
+  const body = document.createElement("div");
+  body.className = "set-body";
+  panel.append(tabs, body);
+
+  const tabContent: Record<SettingsTab, HTMLElement[]> = {
+    game: [
+      farmMode,
+      farmModeNote,
+      ...localStorageControls,
+      ...accountBlock,
+      diagnostics,
+      noteEl("Copies this build's id, your browser, a short list of what the game has just been doing, and any recorded errors. No save data, no account details, nothing you have typed. Nothing is sent anywhere — paste it into a bug report."),
+      updates,
+      updatesNote,
+    ],
+    audio: [
+      row("All Audio", hud.audio.masterOn, (v) => hud.audio.setMaster(v)),
+      volumeRow("Master Volume", hud.audio.masterVolume, (v) => hud.audio.setMasterVolume(v)),
+      row("Music", hud.audio.musicOn, (v) => hud.audio.setMusic(v)),
+      volumeRow("Music Volume", hud.audio.musicVolume, (v) => hud.audio.setMusicVolume(v)),
+      row("Sound Effects", hud.audio.sfxOn, (v) => hud.audio.setSfx(v)),
+      volumeRow("Effects Volume", hud.audio.sfxVolume, (v) => hud.audio.setSfxVolume(v)),
+      row("Ambience", hud.audio.ambienceOn, (v) => hud.audio.setAmbience(v)),
+      volumeRow("Ambience Volume", hud.audio.ambienceVolume,
+        (v) => hud.audio.setAmbienceVolume(v)),
+      row("Mute When Unfocused", hud.audio.muteWhenUnfocused,
+        (v) => hud.audio.setMuteWhenUnfocused(v)),
+      noteEl("Silence the game while its tab or window is in the background."),
+    ],
+    display: [
+      fullscreenRow,
+      noteEl(canFullscreen
+        ? "Press F to toggle fullscreen. Escape also exits."
+        : "This browser doesn't support app-controlled fullscreen."),
+      ...ambienceBlock,
+      ...bgBlock,
+      ...appearanceBlock,
+      ...combatBlock,
+      spriteRow, spriteNote,
+    ],
+    controls: controlsBlock,
+  };
+
+  const tabButtons: Record<SettingsTab, HTMLButtonElement> = {} as never;
+  const show = (tab: SettingsTab) => {
+    for (const t of SETTINGS_TABS) tabButtons[t.id].classList.toggle("sel", t.id === tab);
+    body.innerHTML = "";
+    body.append(...tabContent[tab]);
+    remember("settings.tab", tab);
+  };
+  for (const t of SETTINGS_TABS) {
+    const b = document.createElement("button");
+    b.className = "pm-screen";
+    b.textContent = t.label;
+    b.onclick = () => show(t.id);
+    tabButtons[t.id] = b;
+    tabs.appendChild(b);
+  }
+  show(recallOneOf("settings.tab", SETTINGS_TABS.map((t) => t.id), "game"));
+
   const version = document.createElement("div");
   version.className = "set-version";
   version.textContent = `Version ${BUILD_ID}`;
@@ -599,7 +729,13 @@ export function buildAccountBlock(hud: Hud): HTMLElement | null {
   info.className = "set-acct-info";
   const who = document.createElement("div");
   who.className = "set-acct-who";
-  who.innerHTML = `Signed in as <b>${acct.name}</b>`;
+  // textContent for the display name, never innerHTML — the same rule the friends
+  // list and the nameplate follow. The server's username allowlist happens to exclude
+  // markup today, so this was building HTML from account-controlled text and getting
+  // away with it; the safety then lived in a regex three modules away rather than here.
+  const whoName = document.createElement("b");
+  whoName.textContent = acct.name;
+  who.append("Signed in as ", whoName);
   info.append(who);
   const out = document.createElement("button");
   out.className = "set-signout";
@@ -666,3 +802,4 @@ export function buildDevicesBlock(hud: Hud): HTMLElement | null {
   void render();
   return block;
 }
+

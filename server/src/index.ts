@@ -55,12 +55,13 @@ import {
   type PinnedRaidConfig,
   type RaidReplayInput,
 } from "./raidVerifier";
+import { MAX_FUNCTIONAL_OBJECTS } from "./v3/engine";
 import type { BattleSimSnapshot } from "../../src/raid/BattleSim";
 import plantCatalog from "../../public/assets/plants.json";
 import zombieCatalog from "../../public/assets/zombies.json";
 import boostCatalog from "../../public/assets/boosts.json";
 import objectCatalog from "../../public/assets/placeables.json";
-import { CLIENT_INTEGRITY_VERSION, COMMAND_BATCH_LIMIT, GAMEPLAY_PROTOCOL, type CommandBatchRequest, type GameplayCommand, type PresentationRequest } from "../../src/net/protocol";
+import { CLIENT_INTEGRITY_VERSION, COMMAND_BATCH_LIMIT, EPIC_BOSS_TOKEN_GRANT_LIMIT, FARM_BULK_LIMIT, GAMEPLAY_PROTOCOL, type CommandBatchRequest, type GameplayCommand, type PresentationRequest } from "../../src/net/protocol";
 import * as v3 from "./v3/db";
 import * as v3Raid from "./v3/raid";
 import * as v3EpicBoss from "./v3/epicBoss";
@@ -431,18 +432,74 @@ app.use("/writer/*", requireAuth);
 app.use("/black-market", requireAuth);
 app.use("/black-market/*", requireAuth);
 
+/** Every `/dev/*` route in one gate, registered BEFORE any of them so it runs first.
+ *
+ *  These fixtures set balances to 100M gold and mint arbitrary rosters — a production
+ *  Worker must not expose one. Each route used to carry its own copy of this check as
+ *  its first line: eight identical lines, all correct, and nothing at all stopping the
+ *  ninth route from being added without one. The gate belongs to the PREFIX, not to
+ *  each handler, so omission stops being possible.
+ *
+ *  Ahead of the route-level `requireAuth` too, deliberately: with DEV_AUTH off these
+ *  paths should be indistinguishable from any other unrouted URL, rather than
+ *  answering 401 and confirming something is there. Covered by devRoutes.test.ts.
+ *
+ *  NOTE for anything added near here: this module is the Worker ENTRY, so workerd
+ *  treats every named export as a handler and refuses to boot on one it cannot call
+ *  ("Incorrect type for map entry ... not of type 'function or ExportedHandler'").
+ *  Exporting a plain constant from this file kills the Worker at startup — which is
+ *  invisible to the unit suite and caught only by the integration harness. */
+app.use("/dev/*", async (c, next) => {
+  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
+  await next();
+});
+
 // Local integration fixture. This route is inert in production (DEV_AUTH=0) and
 // exists so tests can establish trusted authoritative state without reopening the
 // permanently-closed client import endpoints.
 app.post("/dev/fixture/roster", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
-  const body = await c.req.json<{ units?: unknown }>().catch(() => ({ units: [] }));
+  const body = await c.req.json<{ units?: unknown; remove?: unknown }>()
+    .catch(() => ({ units: [], remove: [] }));
+  // `remove` deletes roster rows outright — the fixture stand-in for a zombie lost,
+  // sold, or perished elsewhere, so tests can exercise a defense whose members are
+  // gone (or go missing MID-invasion) without staging the raid that kills them.
+  const remove = Array.isArray(body.remove)
+    ? body.remove.filter((id): id is string => typeof id === "string" && !!id).slice(0, 200)
+    : [];
+  if (remove.length) {
+    const placeholders = remove.map(() => "?").join(",");
+    await c.env.DB.prepare(
+      `DELETE FROM roster_v3 WHERE account_id = ? AND unit_id IN (${placeholders})`)
+      .bind(c.get("accountId"), ...remove).run();
+  }
   const count = await db.grantRosterFixture(c.env.DB, c.get("accountId"), body.units);
   return c.json({ count });
 });
 
+// Bury zombies directly. The only production path into fallen_v3 is losing a raid,
+// which needs a full verified replay that actually kills someone — far more moving
+// parts than the memorial behaviour under test.
+app.post("/dev/fixture/fallen", requireAuth, async (c) => {
+  const body = await c.req.json<{ units?: unknown }>().catch(() => ({ units: [] }));
+  const units = Array.isArray(body.units) ? body.units.slice(0, 200) : [];
+  const accountId = c.get("accountId");
+  let count = 0;
+  for (const entry of units) {
+    const unit = entry as Record<string, unknown>;
+    if (typeof unit.id !== "string" || typeof unit.key !== "string") continue;
+    await c.env.DB.prepare(`INSERT INTO fallen_v3
+      (account_id, unit_id, zombie_key, name, mutation, invasions, color, died_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, unit_id) DO UPDATE SET name = excluded.name`)
+      .bind(accountId, unit.id, unit.key, typeof unit.name === "string" ? unit.name : null,
+        Number(unit.mutation ?? 0), Number(unit.invasions ?? 0), null,
+        Number(unit.diedAt ?? Date.now())).run();
+    count++;
+  }
+  return c.json({ count });
+});
+
 app.post("/dev/fixture/balance", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ gold?: number; brains?: number; xp?: number }>()
     .catch((): { gold?: number; brains?: number; xp?: number } => ({}));
   const gold = Math.max(0, Math.min(100_000_000, Math.floor(Number(body.gold ?? 400))));
@@ -455,7 +512,6 @@ app.post("/dev/fixture/balance", requireAuth, async (c) => {
 });
 
 app.post("/dev/fixture/orphan-gift-grant", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ giftId?: string; settled?: boolean }>()
     .catch((): { giftId?: string; settled?: boolean } => ({}));
   const accountId = c.get("accountId");
@@ -485,7 +541,6 @@ app.post("/dev/fixture/orphan-gift-grant", requireAuth, async (c) => {
 // at zero friends so they never perturb the other side of a cap check. Dev-only:
 // absent when DEV_AUTH="0" (the deployed value).
 app.post("/dev/fixture/friends-fill", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ count?: number }>().catch((): { count?: number } => ({}));
   const me = c.get("accountId");
   const want = Number.isFinite(body.count) ? Math.max(0, Math.floor(body.count as number)) : 0;
@@ -510,7 +565,6 @@ app.post("/dev/fixture/friends-fill", requireAuth, async (c) => {
 // the once-a-day rule without waiting for midnight and check that the unopened-gift
 // rule still holds on its own. Dev-only: absent when DEV_AUTH="0" (the deployed value).
 app.post("/dev/fixture/gift-backdate", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ toAccountId?: string; days?: number }>()
     .catch((): { toAccountId?: string; days?: number } => ({}));
   const accountId = c.get("accountId");
@@ -524,11 +578,26 @@ app.post("/dev/fixture/gift-backdate", requireAuth, async (c) => {
   return c.json({ ok: true, moved: res.meta.changes ?? 0, days });
 });
 
+// Age one of MY OWN open Black Market posts, so the suite can exercise the three-day
+// expiry and the repost cooldown without waiting for them. `created_at` is the single
+// column both rules read, which is exactly why this fixture is one UPDATE. Dev-only:
+// with DEV_AUTH="0" (the deployed value) this route does not exist.
+app.post("/dev/fixture/market-backdate", requireAuth, async (c) => {
+  const body = await c.req.json<{ orderId?: string; ageMs?: number }>()
+    .catch((): { orderId?: string; ageMs?: number } => ({}));
+  if (typeof body.orderId !== "string") return c.json({ error: "bad_request" }, 400);
+  const ageMs = Math.max(0, Math.floor(Number(body.ageMs ?? 0)));
+  if (!Number.isSafeInteger(ageMs)) return c.json({ error: "bad_request" }, 400);
+  const res = await c.env.DB.prepare(
+    `UPDATE black_market_orders SET created_at = ? WHERE id = ? AND creator_account_id = ?`
+  ).bind(Date.now() - ageMs, body.orderId, c.get("accountId")).run();
+  return c.json({ ok: true, moved: res.meta.changes ?? 0 });
+});
+
 // Overwrite the contents a gift in MY inbox was sent with, so the integration suite can
 // exercise a known payout instead of whatever the send-time roll produced. Dev-only:
 // with DEV_AUTH="0" (the deployed value) this route does not exist.
 app.post("/dev/fixture/gift-reward", requireAuth, async (c) => {
-  if (c.env.DEV_AUTH !== "1") return c.json({ error: "not_found" }, 404);
   const body = await c.req.json<{ giftId?: string; kind?: string; amount?: number }>()
     .catch((): { giftId?: string; kind?: string; amount?: number } => ({}));
   const accountId = c.get("accountId");
@@ -574,6 +643,7 @@ app.use("/friends/code/rotate", rateLimit("RL_WRITE", "code_rotate", 5, 60_000))
 app.use("/gifts", rateLimit("RL_WRITE", "gift_send", 60, 60_000));
 app.use("/gifts/claim", rateLimit("RL_WRITE", "gift_claim", 120, 60_000));
 app.use("/raid/start", rateLimit("RL_WRITE", "raid_start", 60, 60_000));
+// Preview builds a full defense snapshot from D1 — read-only but not free.
 app.use("/raid/checkpoint", rateLimit("RL_WRITE", "raid_checkpoint", 30, 60_000));
 app.use("/raid/finish", rateLimit("RL_WRITE", "raid_finish", 60, 60_000));
 app.use("/raid/revive", rateLimit("RL_WRITE", "raid_revive", 60, 60_000));
@@ -619,6 +689,108 @@ app.use("/friends/requests", rateLimit("RL_READ", "friends_reqs", 300, 60_000));
 app.use("/friends/:id/save", rateLimit("RL_READ", "friend_farm", 120, 60_000));
 app.use("/gifts/inbox", rateLimit("RL_READ", "inbox", 300, 60_000));
 app.use("/session/refresh", rateLimit("RL_READ", "refresh", 60, 60_000));
+
+/** How many fallen zombies one account may park in its presentation blob. Mirrors
+ *  MAX_REMEMBERED_FALLEN on the client. The blob is capped at 128 KB in total, so
+ *  the graveyard gets a hard ceiling of its own rather than being allowed to crowd
+ *  out object positions and roster names. */
+const MAX_PRESENTATION_FALLEN = 60;
+
+/** One entry of a LEGACY client's graveyard.
+ *
+ *  The graveyard is server-owned now (fallen_v3, migration 0047): current clients
+ *  read it from the bootstrap and never write it here. This check survives only so
+ *  a client built before that table — which still puts `fallen` and
+ *  `objectLayout[].memorial` in its presentation blob — is not rejected wholesale,
+ *  which would stop its object positions and zombie names from saving too. The
+ *  contents are ignored on read; only shape and size are enforced. */
+function validFallenEntry(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const str = (v: unknown, max: number) =>
+    typeof v === "string" && [...v].length <= max && !/[\u0000-\u001f\u007f]/.test(v);
+  const num = (v: unknown, max: number) =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= max;
+  return /^[A-Za-z0-9_-]{1,80}$/.test(String(row.id ?? "")) &&
+    /^[A-Za-z0-9_-]{1,80}$/.test(String(row.key ?? "")) &&
+    (row.name === undefined || str(row.name, 24)) &&
+    (row.color === undefined || (Array.isArray(row.color) && row.color.length === 3 &&
+      row.color.every((channel) => num(channel, 255)))) &&
+    num(row.mutation, Number.MAX_SAFE_INTEGER) && num(row.invasions, 1e9) &&
+    num(row.diedAt, Number.MAX_SAFE_INTEGER);
+}
+
+/** The client's saved farm line-ups (`ui.teams`): a name plus the account's own
+ *  zombie ids. Cosmetic and client-authored — assembling a team only issues the
+ *  ordinary roster.status commands this Worker validates one by one, so there is
+ *  nothing here to check against. Bounded like every other client-authored shape
+ *  purely so it cannot crowd out the rest of a 128 KB blob. Absent, or written by
+ *  a client that predates teams, is fine. */
+function validTeamList(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > 16) return false;
+  return value.every((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    const row = entry as { id?: unknown; name?: unknown; members?: unknown };
+    return typeof row.id === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(row.id) &&
+      typeof row.name === "string" && [...row.name].length <= 24 &&
+      !/[\u0000-\u001f\u007f]/.test(row.name) &&
+      Array.isArray(row.members) && row.members.length <= 64 &&
+      row.members.every((id) => typeof id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(id));
+  });
+}
+
+/** The client's lifetime statistics tally (see the client's src/stats.ts). Cosmetic
+ *  and client-authored like the Almanac: nothing on the server reads it back, and no
+ *  price, gate or reward consults it. Bounded here for the same reason the Almanac is
+ *  — a presentation blob must not be a place to park unbounded data. */
+export function validStatsBlob(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const stats = value as Record<string, unknown>;
+  const counter = (n: unknown) =>
+    n === undefined || (typeof n === "number" && Number.isSafeInteger(n) && n >= 0);
+  for (const [key, entry] of Object.entries(stats)) {
+    if (key === "harvested") continue;
+    if (!/^[A-Za-z][A-Za-z0-9]{0,31}$/.test(key) || !counter(entry)) return false;
+  }
+  const harvested = stats.harvested;
+  if (harvested === undefined) return true;
+  if (!harvested || typeof harvested !== "object" || Array.isArray(harvested)) return false;
+  const crops = Object.entries(harvested as Record<string, unknown>);
+  return crops.length <= 512 && crops.every(([key, n]) =>
+    /^[A-Za-z0-9_.-]{1,80}$/.test(key) &&
+    typeof n === "number" && Number.isSafeInteger(n) && n >= 0);
+}
+
+/**
+ * The lifetime tally to splice into an incoming presentation write, or undefined to
+ * store the write as it stands.
+ *
+ * The blob is stored WHOLESALE, and a client built before the tally existed sends a
+ * `ui` object with no `stats` in it. That write is otherwise perfectly good and must
+ * keep being accepted — but taken verbatim it erases the account's counters, and the
+ * next updated client to sign in reads the silence as a farm that has never harvested
+ * anything. So a write that says nothing about the tally leaves the stored one alone,
+ * rather than deleting it. A client that DOES send one is authoritative over it (the
+ * counters are client-authored; see the client's src/stats.ts).
+ *
+ * Only "no opinion" is protected. Nothing here can raise a counter, and nothing reads
+ * these numbers back as truth.
+ */
+export function statsToCarryForward(
+  incoming: Record<string, unknown>,
+  stored: Record<string, unknown> | null
+): unknown {
+  const sent = (incoming.ui as { stats?: unknown } | undefined)?.stats;
+  if (sent !== undefined) return undefined;
+  return (stored?.ui as { stats?: unknown } | undefined)?.stats;
+}
+
+function validFallenList(value: unknown): boolean {
+  return value === undefined || (Array.isArray(value) &&
+    value.length <= MAX_PRESENTATION_FALLEN && value.every(validFallenEntry));
+}
 
 const minProtocolVersion = (env: Bindings): number => {
   const value = Number(env.MIN_PROTOCOL_VERSION ?? GAMEPLAY_PROTOCOL);
@@ -749,6 +921,25 @@ export const validGameplayCommand = (value: unknown): value is GameplayCommand =
       return commandInt(command.oc) && commandInt(command.or) && commandString(command.cropKey) &&
         (command.fertilized === undefined || typeof command.fertilized === "boolean") &&
         (command.variant === undefined || commandInt(command.variant));
+    // Bulk forms. FARM_BULK_LIMIT is the whole board (289 plots), so the cap bounds the
+    // payload without ever refusing a legitimate full-farm stroke. An empty list is
+    // accepted and applies nothing — a length floor here would turn a harmless
+    // client-side edge into `bad_command_batch`, which pauses the farm permanently.
+    case "farm.plow_many":
+      return Array.isArray(command.plots) && command.plots.length <= FARM_BULK_LIMIT &&
+        command.plots.every((plot) => !!plot && typeof plot === "object" &&
+          commandInt((plot as Record<string, unknown>).oc) &&
+          commandInt((plot as Record<string, unknown>).or));
+    case "farm.plant_many":
+      return commandString(command.cropKey) && Array.isArray(command.plots) &&
+        command.plots.length <= FARM_BULK_LIMIT &&
+        command.plots.every((entry) => {
+          if (!entry || typeof entry !== "object") return false;
+          const plot = entry as Record<string, unknown>;
+          return commandInt(plot.oc) && commandInt(plot.or) &&
+            (plot.fertilized === undefined || typeof plot.fertilized === "boolean") &&
+            (plot.variant === undefined || commandInt(plot.variant));
+        });
     case "power.buy": return commandString(command.key);
     case "power.use":
       return commandString(command.key) && (command.oc === undefined || commandInt(command.oc)) &&
@@ -770,6 +961,16 @@ export const validGameplayCommand = (value: unknown): value is GameplayCommand =
     case "storage.move":
       return commandString(command.itemKey) && (command.direction === "store" || command.direction === "take") &&
         commandInt(command.quantity);
+    // This fork's Powder Machine. Colours mirror the dye door below; counts are
+    // bounded so a crafted payload cannot make the engine loop on a huge map.
+    case "powder.grind_start":
+      return commandString(command.machineId) && !!command.crystals &&
+        typeof command.crystals === "object" && !Array.isArray(command.crystals) &&
+        Object.entries(command.crystals as Record<string, unknown>).every(([color, count]) =>
+          ["red", "green", "blue", "white", "black"].includes(color) &&
+          commandInt(count) && (count as number) >= 0 && (count as number) <= 65535);
+    case "powder.grind_collect":
+      return commandString(command.machineId);
     case "roster.sell": return commandString(command.unitId);
     case "roster.status": return commandString(command.unitId) && typeof command.stored === "boolean";
     case "roster.dye_start":
@@ -797,6 +998,17 @@ export const validGameplayCommand = (value: unknown): value is GameplayCommand =
     case "pet.pen":
       return Array.isArray(command.petKeys) && command.petKeys.length <= 4 &&
         command.petKeys.every((key) => commandString(key));
+    case "memorial.enshrine":
+      return commandString(command.instanceId) && commandString(command.unitId) &&
+        (command.name === undefined || commandString(command.name, 64));
+    case "memorial.clear": return commandString(command.instanceId);
+    case "quest.periodic_claim":
+      return (command.scope === "daily" || command.scope === "weekly") &&
+        commandString(command.questId, 64);
+    case "epicBoss.token":
+      return commandString(command.runId) &&
+        (command.count === undefined ||
+          (commandInt(command.count) && command.count >= 1 && command.count <= EPIC_BOSS_TOKEN_GRANT_LIMIT));
     case "tutorial.complete": return true;
     default: return false;
   }
@@ -814,6 +1026,65 @@ const validCommandBatch = (body: unknown): body is CommandBatchRequest => {
     validGameplayCommand(entry.command)
   );
 };
+
+/** Why a batch failed `validCommandBatch`, in a form that is safe to log.
+ *
+ *  This is the one rejection in the system with no recovery: the client returns the
+ *  commands to its outbox, rebuilds an identical envelope, and is refused again — so a
+ *  single unacceptable command pauses that farm across reloads, for good. It was also
+ *  the ONLY rejection path with no `slog` line, which meant the failure mode we most
+ *  need to see left no trace on the server at all; the player's own toast was the only
+ *  evidence anywhere.
+ *
+ *  Deliberately shape-only. Command TYPES are named (that is what identifies the
+ *  offending client build), but no field values are read out — a batch that reached
+ *  here is by definition untrusted input, and its payload is nobody's business. */
+export function describeInvalidBatch(body: unknown): Record<string, unknown> {
+  if (!body || typeof body !== "object") return { reason: "not_an_object" };
+  const b = body as Partial<CommandBatchRequest>;
+  const commands = Array.isArray(b.commands) ? b.commands : null;
+  const label = (entry: unknown): string => {
+    if (!entry || typeof entry !== "object") return "<malformed>";
+    const command = (entry as { command?: unknown }).command;
+    if (!command || typeof command !== "object") return "<no-command>";
+    const type = (command as { type?: unknown }).type;
+    return typeof type === "string" ? type.slice(0, 64) : "<untyped>";
+  };
+  // Envelope problems come first: with a bad envelope the command list has not been
+  // judged at all, so naming a command as the culprit would be a guess.
+  const envelope =
+    b.protocolVersion !== GAMEPLAY_PROTOCOL ? "protocol_version"
+    : typeof b.deviceId !== "string" || b.deviceId.length < 8 || b.deviceId.length > 128 ? "device_id"
+    : typeof b.batchId !== "string" || b.batchId.length < 8 || b.batchId.length > 128 ? "batch_id"
+    : !Number.isSafeInteger(b.firstSequence) ? "first_sequence"
+    : !Number.isSafeInteger(b.expectedAccountVersion) ? "expected_account_version"
+    : !Number.isSafeInteger(b.writerGeneration) ? "writer_generation"
+    : !commands ? "commands_not_array"
+    : commands.length < 1 ? "commands_empty"
+    : commands.length > COMMAND_BATCH_LIMIT ? "commands_too_many"
+    : null;
+  if (envelope || !commands) {
+    return { reason: "envelope", field: envelope ?? "commands_not_array",
+      protocolVersion: typeof b.protocolVersion === "number" ? b.protocolVersion : null,
+      commandCount: commands?.length ?? null };
+  }
+  const index = commands.findIndex((entry, at) =>
+    !entry || typeof entry !== "object" || entry.sequence !== (b.firstSequence as number) + at ||
+    !validGameplayCommand(entry.command));
+  const offender = index >= 0 ? commands[index] : null;
+  return {
+    reason: "command",
+    index,
+    // The refused command, plus the whole batch's shape: a type that is valid on its
+    // own but arrives in an order the server does not expect looks identical to an
+    // unknown type unless the neighbours are visible too.
+    commandType: label(offender),
+    sequenceOk: !!offender && typeof offender === "object" &&
+      offender.sequence === (b.firstSequence as number) + index,
+    commandCount: commands.length,
+    types: [...new Set(commands.map(label))].slice(0, 12),
+  };
+}
 
 // The single "is the economy accepting writes?" question, asked by every mutation
 // route. Two independent levers, either of which halts writes: MUTATIONS_DISABLED (a
@@ -872,8 +1143,12 @@ app.post("/bootstrap", async (c) => {
     minProtocolVersion(c.env),
     writerState
   );
-  metric("bootstrap", accountId, started, { payloadBytes: JSON.stringify(response).length });
-  return c.json(response);
+  // Feature capability, not state: the client shows its Invasions surfaces only when
+  // this Worker will accept /raid/pvp/start, so launching PvP is ONE Worker-var flip
+  // with no client redeploy and no dead button in the meantime.
+  const payload = { ...response, pvpEnabled: pvpEnabled(c.env) };
+  metric("bootstrap", accountId, started, { payloadBytes: JSON.stringify(payload).length });
+  return c.json(payload);
 });
 
 app.post("/commands", async (c) => {
@@ -881,7 +1156,17 @@ app.post("/commands", async (c) => {
   const accountId = c.get("accountId");
   if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body = await c.req.json<unknown>().catch(() => null);
-  if (!validCommandBatch(body)) return c.json({ error: "bad_command_batch" }, 400);
+  if (!validCommandBatch(body)) {
+    // "alert", not "warn": this is unrecoverable for the account that hit it (see
+    // describeInvalidBatch), so it wants to be findable without knowing to look.
+    slog("command_batch_invalid", {
+      account: accountHash(accountId),
+      build: c.req.header("X-Client-Build") ?? "unknown",
+      integrityVersion: c.req.header("X-Integrity-Version") ?? "none",
+      ...describeInvalidBatch(body),
+    }, "alert");
+    return c.json({ error: "bad_command_batch" }, 400);
+  }
   const credential = writerCredential(c);
   if (c.req.header("X-Integrity-Version") === String(CLIENT_INTEGRITY_VERSION) &&
       (!credential || body.deviceId !== credential.clientId || body.takeWriter)) {
@@ -922,7 +1207,7 @@ app.put("/presentation", async (c) => {
       !body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
     return c.json({ error: "bad_presentation" }, 400);
   }
-  const presentationKeys = new Set(["player", "farm", "objectLayout", "rosterLayout", "zombiePot", "zombiePots", "tutorial", "ui", "settings", "camera", "selections", "almanac"]);
+  const presentationKeys = new Set(["player", "farm", "objectLayout", "rosterLayout", "zombiePot", "zombiePots", "tutorial", "ui", "settings", "camera", "selections", "almanac", "fallen"]);
   const pot = body.data.zombiePot as Record<string, unknown> | undefined;
   const validPot = pot === undefined || (!!pot && typeof pot === "object" && !Array.isArray(pot) &&
     typeof pot.parentAId === "string" && pot.parentAId.length <= 80 &&
@@ -959,24 +1244,65 @@ app.put("/presentation", async (c) => {
           /^[A-Za-z0-9_-]{1,80}$/.test(key) &&
           typeof count === "number" && Number.isSafeInteger(count) && count >= 1 && count <= 1_000_000));
     })());
+  // The graveyard: zombies lost in an invasion, kept only so a Memorial Statue can
+  // show one. Client-authored and cosmetic like the Almanac — the server deletes a
+  // casualty outright and keeps no record of it, so there is nothing here to check
+  // against. Bounded the same way: a hostile client must not be able to inflate the
+  // blob, and none of these fields is ever read back as gameplay truth.
+  const validFallen = validFallenList(body.data.fallen);
+  // Saved farm line-ups ride the `ui` blob (see the client's SaveManager).
+  const ui = body.data.ui as { teams?: unknown; stats?: unknown } | undefined;
+  const validUi = ui === undefined ||
+    (!!ui && typeof ui === "object" && !Array.isArray(ui) &&
+      validTeamList(ui.teams) && validStatsBlob(ui.stats));
   const objectLayout = body.data.objectLayout as unknown;
+  // Derived, NOT a literal 512, and one MORE than the object cap. A farm may hold
+  // MAX_FUNCTIONAL_OBJECTS server objects, and the layout carries one thing the object
+  // document never does: the free starter shed, which is presentation-only until it is
+  // upgraded (`adoptsFreeStarterShed`) and which `reconcileObjectLayouts` deliberately
+  // exempts from tombstone pruning for exactly that reason. So a player who fills their
+  // farm to the cap sends 513 layouts against a bound of 512, and the whole presentation
+  // write is refused — every zombie name, team, Almanac entry, camera position and
+  // lifetime counter stops saving, silently and for good, for the most decorated farms
+  // in the game. Two independently-written copies of one number is what made that
+  // possible; there is now one.
   const validObjectLayout = objectLayout === undefined || (Array.isArray(objectLayout) &&
-    objectLayout.length <= 512 && objectLayout.every((entry) => {
+    objectLayout.length <= MAX_FUNCTIONAL_OBJECTS + 1 && objectLayout.every((entry) => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-      const row = entry as { id?: unknown; key?: unknown; oc?: unknown; or?: unknown; rotation?: unknown };
+      const row = entry as { id?: unknown; key?: unknown; oc?: unknown; or?: unknown;
+        rotation?: unknown; turn?: unknown; memorial?: unknown };
       return typeof row.id === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(row.id) &&
         (row.key === undefined || row.key === "storage01") &&
         Number.isSafeInteger(row.oc) && Number(row.oc) >= 0 && Number(row.oc) < 128 &&
         Number.isSafeInteger(row.or) && Number(row.or) >= 0 && Number(row.or) < 128 &&
-        (row.rotation === undefined || row.rotation === 0 || row.rotation === 1);
+        (row.rotation === undefined || row.rotation === 0 || row.rotation === 1) &&
+        // A road bend stores which corner it is turned to instead of a mirror flag.
+        (row.turn === undefined ||
+          (Number.isSafeInteger(row.turn) && Number(row.turn) >= 0 && Number(row.turn) < 8)) &&
+        // A Memorial Statue carries the one zombie carved on it.
+        (row.memorial === undefined || validFallenEntry(row.memorial));
     }));
   if (!Object.keys(body.data).every((key) => presentationKeys.has(key)) ||
-      !validObjectLayout || !validRosterLayout || !validPot || !validPots || !validAlmanac) {
+      !validObjectLayout || !validRosterLayout || !validPot || !validPots || !validAlmanac ||
+      !validFallen || !validUi) {
     return c.json({ error: "bad_presentation" }, 400);
   }
-  const encoded = JSON.stringify(body.data);
+  // Carry a lifetime tally past a client too old to send one. The extra read happens
+  // ONLY for such a client — an up-to-date one always sends the field, so the common
+  // path is unchanged. Not atomic with the write, and it does not need to be: the
+  // version CAS below rejects anything that landed in between, and the client retries.
+  let data = body.data;
+  if ((body.data.ui as { stats?: unknown } | undefined)?.stats === undefined) {
+    const carried = statsToCarryForward(
+      body.data, await v3.readPresentationData(c.env.DB, accountId)
+    );
+    if (carried !== undefined) {
+      data = { ...body.data, ui: { ...(body.data.ui as Record<string, unknown> ?? {}), stats: carried } };
+    }
+  }
+  const encoded = JSON.stringify(data);
   if (encoded.length > 128 * 1024) return c.json({ error: "too_large" }, 413);
-  const saved = await v3.writePresentation(c.env.DB, accountId, body.expectedVersion, body.data, Date.now());
+  const saved = await v3.writePresentation(c.env.DB, accountId, body.expectedVersion, data, Date.now());
   if (!saved) return c.json({ error: "presentation_conflict" }, 409);
   metric("presentation", accountId, started, { payloadBytes: encoded.length });
   return c.json(saved);
@@ -984,13 +1310,40 @@ app.put("/presentation", async (c) => {
 
 const marketEnabled = (env: Bindings): boolean => env.BLACK_MARKET_ENABLED === "1";
 
+// Posts expire after three days. The board hides a stale one from everybody the
+// moment it ages out; this is where its OWNER's escrow comes back, so it runs on the
+// reads they make on the way in. Failing to sweep must never fail the read itself —
+// the worst case is that the escrow waits for the next visit.
+//
+// It is deliberately NOT run from POST /black-market/orders. The sweep bumps
+// `account_version`, and create() CAS-checks the version the client fetched moments
+// earlier — so sweeping there would make the very post that triggered it fail with
+// `state_conflict`. Nothing is lost by leaving it out: both active-limit checks
+// already ignore stale posts, so one can never block a new listing.
+const sweepStaleMarketPosts = async (
+  c: Context<{ Bindings: Bindings; Variables: Vars }>
+): Promise<void> => {
+  // The sweep returns escrow and bumps the account version — it is a MUTATION that
+  // happens to hang off a read, so the closedown switch has to stop it too. Without
+  // this, a frozen service would still be moving zombies and currency around, and a
+  // player's export could stop matching their account.
+  if (await mutationsHalted(c)) return;
+  try {
+    await blackMarket.expireStalePosts(c.env.DB, c.get("accountId"), Date.now());
+  } catch (error) {
+    slog("black_market_sweep_failed", { error: String(error) }, "warn");
+  }
+};
+
 app.get("/black-market/orders", async (c) => {
   if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
+  await sweepStaleMarketPosts(c);
   return c.json(await blackMarket.list(c.env.DB, c.get("accountId"), c.req.query(), Date.now()));
 });
 
 app.get("/black-market/summary", async (c) => {
   if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
+  await sweepStaleMarketPosts(c);
   return c.json(await blackMarket.summary(c.env.DB, c.get("accountId"), Date.now()));
 });
 
@@ -1011,6 +1364,16 @@ app.post("/black-market/orders/:id/collect", async (c) => {
   if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const result = await blackMarket.collect(c.env.DB, c.get("accountId"), c.req.param("id"), Date.now());
   if (!("ok" in result)) return c.json({ error: result.error }, result.status);
+  return c.json(result);
+});
+
+app.post("/black-market/orders/:id/repost", async (c) => {
+  if (!marketEnabled(c.env)) return c.json({ error: "black_market_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
+  const started = performance.now();
+  const result = await blackMarket.repost(c.env.DB, c.get("accountId"), c.req.param("id"), Date.now());
+  if (!("ok" in result)) return c.json({ error: result.error }, result.status);
+  metric("black_market_repost", c.get("accountId"), started);
   return c.json(result);
 });
 
@@ -1093,6 +1456,13 @@ app.post("/raid/revive", async (c) => {
   return c.json(result.body, 409);
 });
 
+// ---- Friend invasions (PvP). Under /raid/ so requireAuth + writer fencing apply.
+// Friend invasions (PvP) are UPSTREAM-ONLY in this fork. They are built on upstream's
+// raid verifier, and this build keeps its own raid ruleset (see MERGE_REVIEW.md), so
+// the routes and server/src/v3/pvp.ts are removed rather than left uncompilable.
+// Restore both from upstream if the raid stack is ever re-ported.
+const pvpEnabled = (_env: Bindings): boolean => false;
+
 app.post("/epic-boss/activate", async (c) => {
   if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
   const body: { activationId?: unknown; bossId?: unknown } =
@@ -1119,13 +1489,18 @@ app.post("/epic-boss/end", async (c) => {
 
 app.post("/epic-boss/start", async (c) => {
   if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
-  const body: { orderedUnitIds?: unknown; payment?: unknown } =
-    await c.req.json<{ orderedUnitIds?: unknown; payment?: unknown }>().catch(() => ({}));
+  const body: { orderedUnitIds?: unknown; payment?: unknown; rulesetVersion?: unknown } =
+    await c.req.json<{ orderedUnitIds?: unknown; payment?: unknown; rulesetVersion?: unknown }>().catch(() => ({}));
   const now = Date.now();
   await v3Raid.expireLiveRaid(c.env.DB, c.get("accountId"), now);
-  const result = await v3EpicBoss.start(c.env.DB, c.get("accountId"), body.orderedUnitIds, body.payment, now);
+  const result = await v3EpicBoss.start(
+    c.env.DB, c.get("accountId"), body.orderedUnitIds, body.payment, now, body.rulesetVersion
+  );
   if (result.status === 200) return c.json({ ...result.body, serverTime: now });
   if (result.status === 400) return c.json(result.body, 400);
+  // Not folded into the 409 default: the client's reload prompt is keyed on the status as
+  // well as the code, and a 409 reads as "try again", which a stale bundle never can.
+  if (result.status === 426) return c.json(result.body, 426);
   if (result.status === 429) return c.json(result.body, 429);
   return c.json(result.body, 409);
 });
@@ -1426,11 +1801,18 @@ app.get("/friends/:id/save", async (c) => {
   const targetAccount = await db.accountById(c.env.DB, target);
   const p = boot.presentation.data as {
     farm?: { climate?: string; background?: string; zombiePatchGathered?: boolean };
-    objectLayout?: { id: string; key?: string; oc: number; or: number; rotation?: number }[];
+    objectLayout?: { id: string; key?: string; oc: number; or: number; rotation?: number;
+      turn?: number }[];
     rosterLayout?: { id: string; name?: string; pos?: { col: number, row: number }; color?: [number, number, number] }[];
   };
   const objectLayout = new Map((p.objectLayout ?? []).map((o) => [o.id, o]));
   const rosterLayout = new Map((p.rosterLayout ?? []).map((u) => [u.id, u]));
+  // Statue occupants only. The rest of the graveyard is this account's private list
+  // of its dead and is deliberately not disclosed to a visitor — what a memorial
+  // shows is what standing on the farm shows.
+  const enshrined = new Map((boot.gameplay.fallen ?? [])
+    .filter((unit) => !!unit.memorialObjectId)
+    .map((unit) => [unit.memorialObjectId!, unit]));
   const background = p.farm?.background;
   const safeBackground = background === "deep-forest" || background === "woodland" || background === "light-meadow"
     ? background
@@ -1462,11 +1844,17 @@ app.get("/friends/:id/save", async (c) => {
       if (obj.status !== "placed") return [];
       const layout = objectLayout.get(obj.instanceId);
       return [{ id: obj.instanceId, key: obj.catalogKey, oc: layout?.oc ?? 0, or: layout?.or ?? 0,
-        rotation: layout?.rotation, readyAt: obj.readyAt }];
+        rotation: layout?.rotation, turn: layout?.turn, readyAt: obj.readyAt,
+        // A visitor sees the zombie carved on each Memorial Statue. This comes from
+        // the authoritative graveyard rather than the owner's presentation blob,
+        // which is the reason the graveyard is server-side at all: the blob is not
+        // consulted here, so a client-held occupant would show every visitor a bare
+        // plinth — and would let a tampered client display a zombie that never was.
+        ...(enshrined.has(obj.instanceId) ? { memorial: enshrined.get(obj.instanceId) } : {}) }];
     }).concat([...objectLayout.values()].flatMap((layout) =>
       layout.key === "storage01" && !boot.gameplay.objects.objects.some((obj) => obj.instanceId === layout.id)
         ? [{ id: layout.id, key: layout.key, oc: layout.oc, or: layout.or,
-          rotation: layout.rotation, readyAt: undefined }]
+          rotation: layout.rotation, turn: layout.turn, readyAt: undefined }]
         : [])),
     ownedZombies: boot.gameplay.roster.map((unit) => {
       const layout = rosterLayout.get(unit.id);

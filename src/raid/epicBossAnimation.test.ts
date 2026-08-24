@@ -127,6 +127,8 @@ describe("epicAttackFrameIndex", () => {
   // the attack cycle it belongs to, so playback-driven one-shots could never keep up.
   // The clock-driven index must, whatever the ratio.
   it("keeps up with every animated Epic Boss's real cadence", () => {
+    // All eight: the five ZF2 defined, plus the three whose strips are hand-ordered
+    // from a recovered atlas (tools/art/epic-boss-frames/*/animations.json).
     const animated = EPIC_BOSSES.filter((boss) => boss.animations.attack);
     expect(animated.length).toBe(EPIC_BOSSES.length);
     for (const boss of animated) {

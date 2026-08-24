@@ -88,7 +88,7 @@ describe("planStore / planRetrieve — the shed", () => {
 describe("shed capacity catalog", () => {
   it("mirrors placeables.json storageSlots, 8 per tier", () => {
     expect(SHED_SLOTS.storage01).toBe(BASE_SHED_SLOTS); // the free starter shed
-    expect(SHED_SLOTS.storage08).toBe(64); // the biggest
-    expect(Object.keys(SHED_SLOTS)).toHaveLength(8);
+    expect(SHED_SLOTS.storage09).toBe(72); // the biggest (a Reforged rung above the source ladder)
+    expect(Object.keys(SHED_SLOTS)).toHaveLength(9);
   });
 });

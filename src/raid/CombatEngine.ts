@@ -381,6 +381,27 @@ export function buildEnemyUnits(
   attacks: Record<string, AttackDef>,
   opts: { raidId?: number; playerLevel?: number; elite?: EliteProfile | null } = {}
 ): CombatUnit[] {
+  const keys =
+    stage.enemyKeys && stage.enemyKeys.length
+      ? stage.enemyKeys
+      : weightedPopulation(stage);
+  return buildUnitsForKeys(keys, stage.bossKey ?? null, stats, attacks, opts);
+}
+
+/** Build combat units for an explicit list of unit keys — the shared body of
+ *  `buildEnemyUnits` and of the alien boss's abductee roster (BattleSim's summonBoss).
+ *  Everything an abducted human brings to the fight is derived exactly as a wave
+ *  minion's is, so the same elite/pace context applies to both.
+ *
+ *  Extracted verbatim from buildEnemyUnits — same body, same order, no behaviour
+ *  change — so the stage modules can build a roster without a RaidStage in hand. */
+export function buildUnitsForKeys(
+  keys: string[],
+  bossKey: string | null,
+  stats: Record<string, EnemyStat>,
+  attacks: Record<string, AttackDef>,
+  opts: { raidId?: number; playerLevel?: number; elite?: EliteProfile | null } = {}
+): CombatUnit[] {
   const out: CombatUnit[] = [];
   const pace = farmRaidEnemyPace(opts.raidId, opts.playerLevel);
   const add = (key: string, boss: boolean) => {
@@ -409,12 +430,8 @@ export function buildEnemyUnits(
     u.attackDamageTiming = primaryDamageTiming(st.attacks, attacks);
     out.push(u);
   };
-  const keys =
-    stage.enemyKeys && stage.enemyKeys.length
-      ? stage.enemyKeys
-      : weightedPopulation(stage);
   for (const k of keys) add(k, false);
-  if (stage.bossKey) add(stage.bossKey, true);
+  if (bossKey) add(bossKey, true);
   return out;
 }
 

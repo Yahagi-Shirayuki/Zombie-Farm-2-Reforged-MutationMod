@@ -3,6 +3,8 @@ import * as api from "../net/api";
 import { SaveManager } from "./SaveManager";
 import { activeSaveKey } from "./profiles";
 import { SAVE_VERSION } from "./schema";
+import { MAX_REMEMBERED_FALLEN } from "../zombie/memorial";
+import { mergeFarmStats, newFarmStats } from "../stats";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -243,6 +245,46 @@ describe("SaveManager mode isolation", () => {
     ]);
   });
 
+  // The graveyard cap counts the zombies WAITING for a statue. Capping the projection
+  // as one list dropped whatever was oldest, and a statue's occupant is exactly the
+  // record most likely to be old — so a memorial bought long ago hydrated as a bare
+  // plinth once MAX_REMEMBERED_FALLEN more zombies had died behind it, and the client
+  // would then let the player re-enshrine a plinth the server refuses as occupied.
+  it("keeps a statue's occupant however far past the graveyard cap it died", () => {
+    vi.spyOn(Date, "now").mockReturnValue(20_000);
+    const manager = new SaveManager(
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "online",
+    );
+    // The occupant is the OLDEST loss on the account, buried under a full graveyard.
+    const occupant = { id: "old-friend", key: "ZombieActorRegularTier1", name: "Rufus",
+      mutation: 0, invasions: 7, diedAt: 1, memorialObjectId: "statue-1" };
+    const recent = Array.from({ length: MAX_REMEMBERED_FALLEN + 5 }, (_, i) => ({
+      id: `z${i}`, key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, diedAt: 1_000 + i,
+    }));
+    const save = (manager as any).fromBootstrap({
+      serverTime: 10_000,
+      presentation: { data: { objectLayout: [{ id: "statue-1", oc: 2, or: 3 }] } },
+      gameplay: {
+        balance: { gold: 0, brains: 0, xp: 0 }, zombieMax: 16, zombiePotBought: false,
+        farmerHeads: [1], farmerHeadId: 1, ownedPets: [], activePet: null, penPets: [],
+        farmSize: 30, climates: ["grass"], inventory: {},
+        storage: { stored: {}, received: {} }, farm: { plots: {} },
+        objects: { objects: [
+          { status: "placed", instanceId: "statue-1", catalogKey: "memorialStatue" },
+        ] },
+        roster: [], fallen: [occupant, ...recent], quests: { progress: [], completed: [] },
+        raids: { progress: {}, lastRaidAt: 0 }, epicBoss: null, tutorialRewarded: false,
+      },
+      social: { friends: [] },
+    });
+
+    expect(save.objects[0].memorial).toMatchObject({ id: "old-friend", name: "Rufus" });
+    // …and the graveyard is still capped, with the enshrined one kept out of it.
+    expect(save.fallen).toHaveLength(MAX_REMEMBERED_FALLEN);
+    expect(save.fallen.map((unit: { id: string }) => unit.id)).not.toContain("old-friend");
+  });
+
   it("keeps online farmer intentions in an account-scoped device journal", () => {
     vi.stubGlobal("localStorage", memoryStorage());
     vi.spyOn(api, "getSession").mockReturnValue({ accountId: "queue-owner" } as never);
@@ -421,5 +463,148 @@ describe("SaveManager mode isolation", () => {
       kind: "local-unavailable",
       reason: "storage_unavailable",
     });
+  });
+});
+
+// The lifetime tally (src/stats.ts) is counted by this client and stored by nobody
+// else: there is no server table it could be rebuilt from, so if it does not ride
+// the presentation blob it is simply lost at every online sign-in.
+describe("SaveManager lifetime statistics", () => {
+  it("carries the tally in the presentation blob", () => {
+    const manager = new SaveManager(
+      {} as never, { serializeObjects: () => [] } as never, {} as never, {} as never,
+      {} as never, new Map(), new Map(), async () => undefined, "online",
+    );
+    const stats = newFarmStats(1_800_000_000_000);
+    stats.harvested = { carrot: 412 };
+    stats.plowed = 480;
+    vi.spyOn(manager, "serialize").mockReturnValue({
+      version: SAVE_VERSION,
+      savedAt: 1,
+      player: { name: "Tester", farmerAppearance: {} },
+      farm: { fieldId: "default", w: 30, h: 30, climate: "grass", plots: [] },
+      objects: [],
+      stats,
+    } as never);
+
+    const ui = ((manager as any).presentation() as { ui: { stats?: unknown } }).ui;
+
+    expect(ui.stats).toEqual(stats);
+  });
+
+  // The blob is written WHOLESALE. Losing the version CAS means another device wrote
+  // in between — the one case where the server holds counts this device has never
+  // seen — so re-pushing our own tally verbatim would roll the account back to
+  // whatever this browser happened to have counted.
+  it("keeps the other device's higher counts when a write loses the CAS", async () => {
+    const mine = newFarmStats(2_000);
+    mine.plowed = 40;
+    mine.harvested = { carrot: 100 };
+    const theirs = newFarmStats(1_000);
+    theirs.plowed = 12;         // this device is ahead here…
+    theirs.raidsWon = 7;        // …and behind here
+    theirs.harvested = { carrot: 90, pumpkin: 60 };
+    const state = { stats: mine, mergeStats: (incoming: never) => (state.stats = mergeFarmStats(state.stats, incoming)) };
+    const manager = new SaveManager(
+      state as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "online",
+    );
+    const put = vi.spyOn(api, "putPresentationV3")
+      .mockRejectedValueOnce(new api.ApiError(409, "presentation_conflict"))
+      .mockResolvedValueOnce({ version: 6, data: {} } as never);
+    vi.spyOn(api, "bootstrap").mockResolvedValue({
+      presentation: { version: 5, data: { camera: { x: 9 }, ui: { stats: theirs } } },
+    } as never);
+
+    await (manager as any).push({ ui: { attackOrder: [], teams: [], stats: mine } });
+
+    const sent = put.mock.calls[1][0].data as { ui: { stats: typeof mine } };
+    expect(sent.ui.stats).toMatchObject({
+      startedAt: 1_000, // the earlier claim: counting began then
+      plowed: 40,       // ours survives
+      raidsWon: 7,      // theirs is adopted
+      harvested: { carrot: 100, pumpkin: 60 },
+    });
+  });
+
+  // A blob written by a client older than the tally has no `ui.stats` at all. There is
+  // nothing to merge, and treating its silence as zeroes would be the very rollback
+  // the merge exists to prevent.
+  it("does not read an older client's silence as a reset", async () => {
+    const mine = newFarmStats(2_000);
+    mine.plowed = 40;
+    const state = { stats: mine, mergeStats: vi.fn() };
+    const manager = new SaveManager(
+      state as never, {} as never, {} as never, {} as never, {} as never,
+      new Map(), new Map(), async () => undefined, "online",
+    );
+    const put = vi.spyOn(api, "putPresentationV3")
+      .mockRejectedValueOnce(new api.ApiError(409, "presentation_conflict"))
+      .mockResolvedValueOnce({ version: 6, data: {} } as never);
+    vi.spyOn(api, "bootstrap").mockResolvedValue({
+      presentation: { version: 5, data: { ui: { attackOrder: [], teams: [] } } },
+    } as never);
+
+    await (manager as any).push({ ui: { attackOrder: [], teams: [], stats: mine } });
+
+    expect(state.mergeStats).not.toHaveBeenCalled();
+    const sent = put.mock.calls[1][0].data as { ui: { stats: typeof mine } };
+    expect(sent.ui.stats.plowed).toBe(40);
+  });
+});
+
+// The other half of the round trip. Signing in on a second device rebuilds the farm
+// from `/bootstrap`, and the tally rides that response's presentation blob — nothing
+// on the server can reconstruct it, so a read path that quietly dropped it would lose
+// the account's whole history the first time it was opened somewhere else.
+describe("SaveManager online statistics round trip", () => {
+  const boot = (presentation: Record<string, unknown>) => ({
+    serverTime: 1_800_000_000_000,
+    presentation: { version: 3, data: presentation },
+    gameplay: {
+      balance: { gold: 400, brains: 1, xp: 0 },
+      zombieMax: 16, zombiePotBought: false, farmSize: 30, climates: ["grass"],
+      farmerHeads: [1], farmerHeadId: 1, farmerBonusHeadId: null,
+      ownedPets: [], activePet: null, penPets: [],
+      farm: { plots: {} }, objects: { objects: [] }, roster: [], fallen: [],
+      storage: { stored: {}, received: {} }, inventory: {},
+      quests: { progress: [], completed: [] },
+      raids: { progress: { "1": 4, "2": 2 }, lastRaidAt: 0 },
+      epicBoss: null, tutorialRewarded: false,
+    },
+    social: { friends: [] },
+  });
+  const manager = () => new SaveManager(
+    {} as never, {} as never, {} as never, {} as never, {} as never,
+    new Map(), new Map(), async () => undefined, "online",
+  );
+
+  it("restores the tally the last device wrote", () => {
+    const stats = newFarmStats(1_700_000_000_000);
+    stats.harvested = { carrot: 412 };
+    stats.plowed = 480;
+
+    const blob = (manager() as any).fromBootstrap(boot({ ui: { attackOrder: [], teams: [], stats } }));
+
+    expect(blob.stats).toEqual(stats);
+  });
+
+  it("leaves an account that has never had one to be seeded on apply", () => {
+    // `undefined` is not the same as an all-zero tally: only the absence tells
+    // applySave that this farm predates the field and should be seeded (see the
+    // invasions-won backfill there).
+    const blob = (manager() as any).fromBootstrap(boot({ ui: { attackOrder: [], teams: [] } }));
+
+    expect(blob.stats).toBeUndefined();
+    expect(blob.raids.completed).toEqual({ "1": 4, "2": 2 });
+  });
+
+  it("reads a damaged tally back as a usable one", () => {
+    const blob = (manager() as any).fromBootstrap(
+      boot({ ui: { stats: { plowed: "many", harvested: { carrot: 9 } } } })
+    );
+
+    expect(blob.stats.plowed).toBe(0);
+    expect(blob.stats.harvested).toEqual({ carrot: 9 });
   });
 });

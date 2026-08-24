@@ -12,13 +12,21 @@ declare module "node:sqlite" {
   export class DatabaseSync {
     constructor(path: string);
     exec(sql: string): void;
-    prepare(sql: string): { get(...params: unknown[]): unknown };
+    prepare(sql: string): {
+      get(...params: unknown[]): unknown;
+      /** Widened for migration0049.test.ts, which binds a JSON board into an UPDATE
+       *  rather than inlining it into an exec() string. */
+      run(...params: unknown[]): { changes: number };
+    };
     close(): void;
   }
 }
 
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: "utf8"): string;
+  /** Widened for spentFightConfig.test.ts, which reads the v3 sources back to assert a
+   *  rule about the SQL in them rather than about any one code path's behaviour. */
+  export function readdirSync(path: string): string[];
 }
 
 declare module "node:url" {

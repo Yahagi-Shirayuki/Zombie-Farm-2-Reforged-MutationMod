@@ -48,6 +48,9 @@ export interface PotResult {
   mutation: number;
   mutationIds?: string[];
   color?: [number, number, number];
+  /** Slot 1's name, carried onto the child (see ZombiePotSave.nameA). Undefined
+   *  leaves naming to the caller's usual id-derived roll. */
+  name?: string;
 }
 
 type ZombieSnapshot = Pick<OwnedZombieSave, "key"> & {
@@ -55,6 +58,8 @@ type ZombieSnapshot = Pick<OwnedZombieSave, "key"> & {
   mutation: number;
   mutationIds?: string[];
   color?: [number, number, number];
+  /** This parent's display name. Only slot 1's is kept — it becomes the child's. */
+  name?: string;
   /** Combat tier (0..5). No longer used for species selection (slot 1 decides);
    *  persisted so a job started by an older client still round-trips. */
   tier?: number;
@@ -164,6 +169,7 @@ export class ZombiePot {
       ...(a.id && b.id ? { parentAId: a.id, parentBId: b.id } : {}),
       keyA: a.key,
       keyB: b.key,
+      ...(a.name ? { nameA: a.name } : {}),
       maskA: a.mutation,
       ...(a.mutationIds?.length ? { mutationIdsA: [...a.mutationIds] } : {}),
       maskB: b.mutation,
@@ -228,6 +234,9 @@ export class ZombiePot {
       mutation: mutations.mask,
       ...(mutations.ids.length ? { mutationIds: mutations.ids } : {}),
       color: mixColors(j.colorA, j.colorB),
+      // Slot 1 supplies the species; it supplies the name with it, so the zombie the
+      // player chose to keep still answers to the same name after the combine.
+      ...(j.nameA ? { name: j.nameA } : {}),
     };
   }
 

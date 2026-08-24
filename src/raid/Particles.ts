@@ -71,6 +71,38 @@ export function leafTexture(): Texture {
   return Texture.from(c);
 }
 
+/** A single cherry blossom petal: a rounded wedge with the notched tip a sakura
+ *  petal has, drawn once and reused. Tinted per-particle like every other texture
+ *  here, so the blossom pink lives in the config rather than in the art.
+ *
+ *  The notch is the whole point — an un-notched petal at this size is a pink oval,
+ *  indistinguishable from the soft dot, and a screen of them reads as snow. */
+export function petalTexture(): Texture {
+  const c = document.createElement("canvas");
+  c.width = c.height = 32;
+  const g = c.getContext("2d")!;
+  g.translate(16, 16);
+  g.fillStyle = "rgba(255,255,255,0.96)";
+  g.beginPath();
+  // Narrow base at the bottom, flaring out to a wide tip at the top...
+  g.moveTo(0, 13);
+  g.bezierCurveTo(-10, 6, -11, -6, -6, -12);
+  // ...where the two lobes meet in a shallow V.
+  g.lineTo(0, -7);
+  g.lineTo(6, -12);
+  g.bezierCurveTo(11, -6, 10, 6, 0, 13);
+  g.fill();
+  // A touch of shading down the fold, so a tumbling petal still has a front and a
+  // back rather than flashing as a flat shape.
+  g.strokeStyle = "rgba(0,0,0,0.16)";
+  g.lineWidth = 1.1;
+  g.beginPath();
+  g.moveTo(0, 11);
+  g.lineTo(0, -6);
+  g.stroke();
+  return Texture.from(c);
+}
+
 const rand = (v: number) => (Math.random() * 2 - 1) * v;
 
 export class ParticleField {

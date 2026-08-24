@@ -1,4 +1,5 @@
 ﻿// The live raid battle scene (Phase 1). A full-screen Pixi layer that renders a
+import type { SummonConfig, WaveCadence } from "./types";
 // BattleSim: a cover-fit stage background, a token per combatant (zombie
 // portrait / enemy icon / boss portrait) with a health bar, and top-corner team
 // bars (total HP + unit count). Zombies march in, the fight plays out live, and
@@ -48,6 +49,13 @@ type RaidInputDraft =
 import { BASE } from "../base";
 
 export interface RaidSceneParams {
+  /** Present so upstream's HUD and launch code type-check against this fork's raid
+   *  stack, which kept its own ruleset (see MERGE_REVIEW.md). This fork never sets
+   *  it, so the code reading it is simply inert. */
+  summon?: SummonConfig | null;
+  playback?: unknown;
+  turnedTemplate?: unknown;
+  waveCadence?: WaveCadence | null;
   raid: RaidDef;
   assets: GameAssets; // for the per-type zombie models + enemy sprites
   playerUnits: CombatUnit[];

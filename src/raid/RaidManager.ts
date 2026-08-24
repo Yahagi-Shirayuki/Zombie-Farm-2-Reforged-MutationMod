@@ -1,4 +1,5 @@
 ﻿// Raid orchestration: turns the raid catalog + owned-zombie roster into the
+import type { SummonConfig, WaveCadence } from "./types";
 // view-models the HUD renders, commits a raid (beginRaid) for the live scene to play
 // out, and applies win rewards (finishRaid) through GameState + roster (veterancy) + save.
 //
@@ -72,6 +73,10 @@ const RESCUE_HAZARD_HP = 667;
 // ---- HUD-facing view models ----
 
 export interface RaidCardView {
+  /** Present so upstream's HUD and launch code type-check against this fork's raid
+   *  stack, which kept its own ruleset (see MERGE_REVIEW.md). This fork never sets
+   *  it, so the code reading it is simply inert. */
+  repeatXp?: number;
   id: number;
   name: string;
   bossName: string;
@@ -153,6 +158,10 @@ export function lootDropLabel(drop: LootDrop): string {
 
 /** The end-of-raid tally, matching the real "ZOMBIES WIN" results panel. */
 export interface RaidResultView {
+  /** Present so upstream's HUD and launch code type-check against this fork's raid
+   *  stack, which kept its own ruleset (see MERGE_REVIEW.md). This fork never sets
+   *  it, so the code reading it is simply inert. */
+  firstClear?: boolean;
   win: boolean;
   title: string; // "ZOMBIES WIN" / "ZOMBIES LOSE"
   enemiesBeaten: number;
@@ -207,6 +216,12 @@ export interface RaidLaunchOpts {
  *  resolver). The cooldown/voucher gates have passed and the combat lines are
  *  built; rewards are applied later via finishRaid(). */
 export interface RaidSetup {
+  /** Present so upstream's HUD and launch code type-check against this fork's raid
+   *  stack, which kept its own ruleset (see MERGE_REVIEW.md). This fork never sets
+   *  it, so the code reading it is simply inert. */
+  turnedTemplate?: unknown;
+  summon?: SummonConfig | null;
+  waveCadence?: WaveCadence | null;
   raid: RaidDef;
   party: OwnedZombie[];
   playerUnits: CombatUnit[];

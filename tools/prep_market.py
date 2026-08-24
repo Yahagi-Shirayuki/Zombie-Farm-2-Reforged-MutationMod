@@ -27,8 +27,10 @@ import re
 import sys
 
 from reforge_economy import (
-    CROP_REBALANCE, MUTANT_CLASS_REBALANCE, MUTANT_REBALANCE,
-    brain_price, rebalance_crop, rebalance_mutant, rebalance_mutant_class,
+    CROP_REBALANCE, MUTANT_BIT_REBALANCE, MUTANT_CLASS_REBALANCE, MUTANT_REBALANCE,
+    SPECIAL_STAT_REBALANCE,
+    brain_price, rebalance_crop, rebalance_mutant, rebalance_mutant_bit,
+    rebalance_mutant_class, rebalance_special_stats,
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -148,6 +150,7 @@ def main():
     # ---- zombies: join by unitKey (== catalog key) ----
     zombies = load(ZOMBIES)
     remutanted = 0
+    rebit = 0
     reclassed = 0
     named = load(SPECIAL_ZOMBIES)["Entries"]
     # Named specials use dedicated rigs rather than the shared ZombieSheet model.
@@ -213,6 +216,9 @@ def main():
             "mutation": 0, "tier": stats["tier"], "specialSprite": sprite,
             "rewardOnly": reward_only,
         }
+        # Applied after the source unitStats read, for the same reason the crop and
+        # mutant rebalances are: the join above would otherwise revert it.
+        rebalance_special_stats(key, data)
         if row: row.update(data)
         else: zombies.append(data)
     for z in zombies:
@@ -243,13 +249,15 @@ def main():
         # source `mutation` field (e.g. Carrot=4, Tomato=1). Bake it so a grown
         # market mutant gets its mutation guaranteed. Non-mutants have no bit (0).
         z["mutation"] = int(s.get("mutation") or 0)
+        # ...except for the two Tier-4 mutants, whose source bit belongs to a LOWER
+        # tier's mutation. Applied after the source read for the same reason the level
+        # rebalance is: the join above would otherwise revert it.
+        rebit += rebalance_mutant_bit(z["key"], z)
         # NOTE: Market.json's authored bonus line ("+3 speed") is deliberately NOT
         # baked. It is in RAW stat points, while the game shows every stat normalized
         # against a fixed reference (see traits.STAT_DISPLAY_MAX) — "+1 speed" reads as
-        # +23 Speed on the card. It also disagrees with the shipped mutation flag for
-        # the two Tier-4 mutants that reuse a lower tier's bit (Eyebiscus carries
-        # Carrot's +1 dex despite advertising +3). The client derives the displayed
-        # bonus from the mask instead: zombie/statDisplay.mutationMarketDescription.
+        # +23 Speed on the card. The client derives the displayed bonus from the mask
+        # instead: zombie/statDisplay.mutationMarketDescription.
         z.pop("marketInfo", None)
         # Taxonomy (group + colour class) derived from the key.
         group, cls, color = classify(z["key"])
@@ -302,6 +310,13 @@ def main():
             z["brainsNeeded"] = True
             z["rewardOnly"] = False
 
+    unknown_specials = set(SPECIAL_STAT_REBALANCE) - {z["key"] for z in zombies}
+    if unknown_specials:
+        # A renamed key would otherwise silently leave that special on its ZF2 stats.
+        print("ERROR special stat rebalance keys not in zombies.json:",
+              *sorted(unknown_specials), sep="\n  ")
+        sys.exit(1)
+
     unknown_mutants = (set(MUTANT_REBALANCE) | set(MUTANT_CLASS_REBALANCE)) - {z["key"] for z in zombies}
     if unknown_mutants:
         # A typo or a renamed key would otherwise silently leave that mutant on its
@@ -327,7 +342,8 @@ def main():
           f"(levels {min(p['level'] for p in plants)}"
           f"-{max(p['level'] for p in plants)})")
     print(f"zombies: {len(zombies)} enriched, {remutanted} mutants re-levelled, "
-          f"{reclassed} re-classed (levels {min(z['level'] for z in zombies)}"
+          f"{reclassed} re-classed, {rebit} re-bitted "
+          f"(levels {min(z['level'] for z in zombies)}"
           f"-{max(z['level'] for z in zombies)})")
     if missing:
         print("WARNING unmatched (left unchanged):", *missing, sep="\n  ")

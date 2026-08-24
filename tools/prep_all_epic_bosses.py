@@ -22,6 +22,11 @@ EXTRACTED = (ROOT / ".." / "ZF2R_extracted").resolve()
 APP = EXTRACTED / "raw" / "ios-1.0" / "1.0" / "Payload" / "ZF2R.app"
 GAMEPLAY = EXTRACTED / "data" / "json" / "gameplay"
 OUT_ROOT = ROOT / "public" / "assets" / "epic-bosses"
+# Hand-authored frame orderings for the three bosses whose atlases shipped without
+# frame metadata. Written against the numbering in tools/dump_epic_boss_frames.py.
+FRAMES_ROOT = ROOT / "tools" / "art" / "epic-boss-frames"
+ATTACKS = json.loads(
+    (EXTRACTED / "data" / "json" / "gameplay" / "Attacks.json").read_text(encoding="utf-8"))
 RECT = re.compile(r"\{\{\s*(-?\d+),\s*(-?\d+)\s*\},\s*\{\s*(\d+),\s*(\d+)\s*\}\}")
 SIZE = re.compile(r"\{\s*(\d+),\s*(\d+)\s*\}")
 POINT = re.compile(r"\{\s*(-?[\d.]+),\s*(-?[\d.]+)\s*\}")
@@ -40,7 +45,27 @@ QUEST_ICONS = {
     4: "Icon_Quest_FoulOwl.png",
     5: "questIcon_EP_Boss7.png",
 }
-MAX_LEVELS = {1: 20, 2: 40, 3: 40, 4: 40, 5: 40}
+# Every event runs 10 rungs, PAIR-COMPRESSED from the 20 HP multipliers ZF2 authored
+# (EpicBossHP.json LevelMultiplier) — see multipliers() for why, and for the measurements.
+# Total ladder HP is unchanged; there are simply half as many fights to divide it into.
+#
+# Two earlier cuts led here. The bosses that advertised 40 rungs were getting levels 21-40
+# padded with a copy of level 20's multiplier, so the back half of those ladders was 20
+# more fights that never got any harder — that padding went first. What remained was 20
+# real rungs whose bottom half any competent army one-shots, and a rung costs an attempt
+# however far you overkill it; merging pairs is what removes that floor.
+#
+# Everything keyed to a rung follows: loot thresholds (scale_loot_levels), quest
+# thresholds and the two pinned prize rungs (prep_quests.py), and the brain/gold schedule
+# (src/epicBoss/rewards.ts).
+MAX_LEVEL = 10
+# The authored curve's own length. Dr. Groundhog placed its loot against this; the other
+# bosses used SOURCE_MAX_LEVEL. Both are rescaled onto MAX_LEVEL.
+AUTHORED_MAX_LEVEL = 20
+# What the 40-rung bosses used to advertise. Only used to rescale the loot/quest
+# thresholds that were authored against it.
+SOURCE_MAX_LEVEL = 40
+MAX_LEVELS = {1: MAX_LEVEL, 2: MAX_LEVEL, 3: MAX_LEVEL, 4: MAX_LEVEL, 5: MAX_LEVEL}
 QUEST_IDS = {
     1: ["1000", "1001", "1002", "1003", "1010", "1011"],
     2: ["2000", "2001", "2002", "2003", "2004", "2005", "2006", "2010", "2011"],
@@ -51,22 +76,24 @@ QUEST_IDS = {
     5: ["5000", "5011"],
 }
 SKUNK_LOOT = [
-    {"level": 5, "name": "Skunkarella's Perfume", "tile": "perfumeVat", "sprite": "Perfume_Vat.png"},
-    {"level": 10, "name": "Skunkarella's Scarecrow", "tile": "fashionableScarecrow", "sprite": "Fashionable_Scarecrow.png"},
-    {"level": 15, "name": "Skunkarella's Mirror", "tile": "evilMirror", "sprite": "Fancy_Evil_Mirror.png"},
-    {"level": 20, "name": "Skunkarella's Gravestone", "tile": "bedazzledGravestone", "sprite": "blingn_Gravestone.png"},
-    {"level": 25, "name": "Skunkarella's Fountain", "tile": "fancyFountain", "sprite": "fancyChocoFountain_default.png"},
-    {"level": 30, "name": "Skunkarella's Gazebo", "tile": "crystalGazebo", "sprite": "Crystal_Gazebo.png"},
-    {"level": 35, "name": "Skunkarella's Car", "tile": "diamondCar", "sprite": "Diamond_Car.png"},
-    {"level": 37, "name": "Skunkarella's Home", "tile": "jewelHome", "sprite": "Jewel_Home.png"},
-    {"level": 39, "name": "Tame Skunk", "stageActor": "skunkPetActor", "sprite": "skunkPet_default.png"},
+    {"level": 3, "name": "Skunkarella's Perfume", "tile": "perfumeVat", "sprite": "Perfume_Vat.png"},
+    {"level": 5, "name": "Skunkarella's Scarecrow", "tile": "fashionableScarecrow", "sprite": "Fashionable_Scarecrow.png"},
+    {"level": 8, "name": "Skunkarella's Mirror", "tile": "evilMirror", "sprite": "Fancy_Evil_Mirror.png"},
+    {"level": 10, "name": "Skunkarella's Gravestone", "tile": "bedazzledGravestone", "sprite": "blingn_Gravestone.png"},
+    {"level": 13, "name": "Skunkarella's Fountain", "tile": "fancyFountain", "sprite": "fancyChocoFountain_default.png"},
+    {"level": 15, "name": "Skunkarella's Gazebo", "tile": "crystalGazebo", "sprite": "Crystal_Gazebo.png"},
+    {"level": 18, "name": "Skunkarella's Car", "tile": "diamondCar", "sprite": "Diamond_Car.png"},
+    {"level": 19, "name": "Skunkarella's Home", "tile": "jewelHome", "sprite": "Jewel_Home.png"},
+    {"level": 20, "name": "Tame Skunk", "stageActor": "skunkPetActor", "sprite": "skunkPet_default.png"},
 ]
 
 LATE_BOSSES = [
     {
         "id": "rocky-rhino", "sourceId": 8, "name": "Rocky Rhino",
-        "questIds": ["8000"],
-        "sheet": "rockyRhino_default.png", "portrait": "epb8_portrait_intro.png",
+        # Both rungs pay Brock Coley — see prep_quests.py recovered_epic_rewards.
+        "questIds": ["8000", "8011"],
+        "sheet": "rockyRhino_default.png", "staticFrame": (1596, 374, 221, 175),
+        "portrait": "epb8_portrait_intro.png",
         "lootIcon": "epb8_loot_icon.png", "questIcon": "epb8_quest_icon.png",
         "intros": ["epb8_INTRO1.png", "epb8_INTRO2.png", "epb8_INTRO3.png"],
         "support": ["EPB8_BANNER1.png", "EPB8_CAVE.png", "ROCKY_RHINO_GONG.png",
@@ -75,17 +102,18 @@ LATE_BOSSES = [
                     "Rocky_Beetle_MarketIcons.png", "rockyRhinoPet_default.png",
                     "rockyRhinoPet_default.plist", "rockyrhinogong.mp3"],
         "loot": [
-            (10, "Rocky Rhino's Banner", "rockyRhinosBanner", "EPB8_BANNER1.png", None),
-            (20, "Rocky Rhino's Cave", "rockyRhinosCave", "EPB8_CAVE.png", None),
-            (30, "Rocky Rhino's Gong", "rockyRhinosGong", "ROCKY_RHINO_GONG.png", None),
-            (35, "Rocky Rhino's Sculpture", "rockyRhinosSculpture", "Rocky_Beetle.png", None),
-            (40, "Tame Rhino", None, "rockyRhinoPet_default.png", "rockyRhinoPetActor"),
+            (5, "Rocky Rhino's Banner", "rockyRhinosBanner", "EPB8_BANNER1.png", None),
+            (10, "Rocky Rhino's Cave", "rockyRhinosCave", "EPB8_CAVE.png", None),
+            (15, "Rocky Rhino's Gong", "rockyRhinosGong", "ROCKY_RHINO_GONG.png", None),
+            (18, "Rocky Rhino's Sculpture", "rockyRhinosSculpture", "Rocky_Beetle.png", None),
+            (20, "Tame Rhino", None, "rockyRhinoPet_default.png", "rockyRhinoPetActor"),
         ],
     },
     {
         "id": "general-larvaelus", "sourceId": 9, "name": "General Larvaelus",
         "questIds": ["9000", "9011"],
-        "sheet": "generalLarvaelus_default.png", "portrait": "EpicBoss9_PORTRAIT_INTRO.png",
+        "sheet": "generalLarvaelus_default.png", "staticFrame": (514, 937, 230, 280),
+        "portrait": "EpicBoss9_PORTRAIT_INTRO.png",
         "lootIcon": "EpicBoss9_LOOT_ICON.png", "questIcon": "EpicBoss9_QUEST_ICON.png",
         "intros": ["EpicBoss9_INTRO1.png", "EpicBoss9_INTRO2.png", "EpicBoss9_INTRO3.png"],
         "support": ["EPB_9_Banner.png", "EPB_9Teleporter_A.png", "EPB_9Teleporter_B.png",
@@ -94,17 +122,18 @@ LATE_BOSSES = [
                     "Icon_MarketItems_EPB9_B_TELEPORTER.png", "Icon_MarketItems_EPB9_MAIN_TELEPORTER.png",
                     "generalLarvaelusPet_default.png", "generalLarvaelusPet_default.plist"],
         "loot": [
-            (10, "General Larvaelus' Banner", "generalLarvaelusBanner", "EPB_9_Banner.png", None),
-            (20, "General Larvaelus' Blue Portal", "generalLarvaelusTeleporterA", "EPB_9Teleporter_A.png", None),
-            (30, "General Larvaelus' Red Portal", "generalLarvaelusTeleporterB", "EPB_9Teleporter_B.png", None),
-            (35, "General Larvaelus' Portal", "teleporter", "teleporter_default.png", None),
-            (40, "Tame Larva", None, "generalLarvaelusPet_default.png", "generalLarvaelusPetActor"),
+            (5, "General Larvaelus' Banner", "generalLarvaelusBanner", "EPB_9_Banner.png", None),
+            (10, "General Larvaelus' Blue Portal", "generalLarvaelusTeleporterA", "EPB_9Teleporter_A.png", None),
+            (15, "General Larvaelus' Red Portal", "generalLarvaelusTeleporterB", "EPB_9Teleporter_B.png", None),
+            (18, "General Larvaelus' Portal", "teleporter", "teleporter_default.png", None),
+            (20, "Tame Larva", None, "generalLarvaelusPet_default.png", "generalLarvaelusPetActor"),
         ],
     },
     {
         "id": "mystical-mamba", "sourceId": 10, "name": "Mystical Mamba",
         "questIds": ["10000", "10011"],
-        "sheet": "mysticalMamba_default.png", "portrait": "EPB_10_portrait_intro.png",
+        "sheet": "mysticalMamba_default.png", "staticFrame": (400, 1054, 193, 167),
+        "portrait": "EPB_10_portrait_intro.png",
         "lootIcon": "EPB_10_loot_Icon.png", "questIcon": "EPB_10_Quest_Icon.png",
         "intros": ["EPB_10_INTRO_1.png", "EPB_10_INTRO_2.png", "EPB_10_INTRO_3.png"],
         "support": ["EPB_10_IPHONE_ns_icon.png", "EPB_10_BANNER.png",
@@ -113,9 +142,9 @@ LATE_BOSSES = [
                     "ZOMTAR_EPB10_default.png", "ZOMTAR_EPB10_default.plist",
                     "ZOMTAR_PARTICLE.plist", "tameMamba_default.png", "tameMamba_default.plist"],
         "loot": [
-            (15, "Mystical Mamba Banner", "mysticalMambaBanner", "EPB_10_BANNER.png", None),
-            (30, "Mystical Mamba's Wish Machine", "mysticalMambasWishMachineLeft", "zomtarMachine_default.png", None),
-            (40, "Tame Mamba", None, "tameMamba_default.png", "tameMamba"),
+            (8, "Mystical Mamba Banner", "mysticalMambaBanner", "EPB_10_BANNER.png", None),
+            (15, "Mystical Mamba's Wish Machine", "mysticalMambasWishMachineLeft", "zomtarMachine_default.png", None),
+            (20, "Tame Mamba", None, "tameMamba_default.png", "tameMamba"),
         ],
     },
 ]
@@ -140,18 +169,79 @@ def compose(sheet: Image.Image, frame: dict) -> Image.Image:
     return canvas
 
 
-def write_strip(out: Path, name: str, names: list[str], frames: dict, sheet: Image.Image) -> dict:
-    images = [compose(sheet, frames[frame]) for frame in names]
-    cell_w = max(image.width for image in images)
-    cell_h = max(image.height for image in images)
+# Frame rate for a strip whose animation authored no `duration`. Only `attack` ever
+# omits one, and its duration is the fight clock rather than a fixed rate (the runtime
+# drives that strip off the attack cycle — see src/raid/epicBossAnimation.ts), so this
+# is a fallback that nothing authored actually depends on.
+DEFAULT_FRAME_SECONDS = 1 / 12
+
+
+def pack_strip(out: Path, name: str, images: list[Image.Image], duration: float | None,
+               cell: tuple[int, int] | None = None) -> dict:
+    """Lay `images` left to right in equal cells, feet on the cell's bottom edge.
+
+    `cell` forces a size shared with this boss's other strips. That matters because the
+    renderer scales an Epic Boss token ONCE, from the first strip it builds, and never
+    recomputes it — so strips that disagree about cell height make the boss change size
+    when it changes state. Every boss ZF2 cut itself uses a single cell for all six.
+    """
+    cell_w = cell[0] if cell else max(image.width for image in images)
+    cell_h = cell[1] if cell else max(image.height for image in images)
     strip = Image.new("RGBA", (cell_w * len(images), cell_h), (0, 0, 0, 0))
     for index, image in enumerate(images):
         strip.alpha_composite(image, (index * cell_w + (cell_w - image.width) // 2,
                                       cell_h - image.height))
     filename = f"{name}.png"
     strip.save(out / filename, optimize=True)
+    # The authored value is the strip's TOTAL run time, not a per-frame rate. Only
+    # `attack` ever lacks one, and it is fitted to the fight clock at runtime, so its
+    # rate here is a placeholder nothing reads (see src/raid/epicBossAnimation.ts).
+    seconds = duration / len(images) if duration else DEFAULT_FRAME_SECONDS
     return {"file": filename, "cellWidth": cell_w, "cellHeight": cell_h,
-            "frameCount": len(images), "frameSeconds": 1 / 12}
+            "frameCount": len(images), "frameSeconds": seconds}
+
+
+def write_strip(out: Path, name: str, animation: dict, frames: dict, sheet: Image.Image) -> dict:
+    """A strip for a boss whose .plist names its frames (EpicEventEnemy.json order)."""
+    images = [compose(sheet, frames[frame]) for frame in animation["frames"]]
+    return pack_strip(out, name, images, animation.get("duration"))
+
+
+def hand_ordered_strips(out: Path, boss: dict) -> dict:
+    """Strips for a boss whose frame metadata did NOT survive.
+
+    Their atlases shipped with no .plist, and the packer's layout carries no clue to
+    the original order (see dump_epic_boss_frames.py), so the ordering is authored by
+    hand in tools/art/epic-boss-frames/<boss>/animations.json against the frame numbers
+    that tool assigns. This reads that manifest back and cuts the strips from the rects
+    it recorded, so the cut PNGs are review material only — the manifest is the source.
+
+    A state with no frames is skipped rather than written empty; the renderer falls back
+    to idle for anything a boss does not have.
+    """
+    manifest_path = FRAMES_ROOT / boss["id"] / "animations.json"
+    if not manifest_path.is_file():
+        print(f"  no hand-ordered manifest for {boss['id']} — shipping a static actor")
+        return {}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rects = manifest["rects"]
+    ordered = {state: authored["frames"] for state, authored in manifest["animations"].items()
+               if authored.get("frames")}
+    if not ordered:
+        return {}
+    # One cell for every strip this boss has — see pack_strip.
+    used = {number for numbers in ordered.values() for number in numbers}
+    cell = (max(rects[str(n)][2] for n in used), max(rects[str(n)][3] for n in used))
+    animations = {}
+    with Image.open(APP / boss["sheet"]).convert("RGBA") as sheet:
+        for state, numbers in ordered.items():
+            images = []
+            for number in numbers:
+                x, y, w, h = rects[str(number)]
+                images.append(sheet.crop((x, y, x + w, y + h)))
+            duration = manifest["animations"][state].get("durationSeconds")
+            animations[state] = pack_strip(out, state, images, duration, cell)
+    return animations
 
 
 def copy(out: Path, source: str, target: str | None = None) -> str | None:
@@ -165,18 +255,269 @@ def copy(out: Path, source: str, target: str | None = None) -> str | None:
 
 
 def multipliers(raw: list[float], max_level: int) -> list[float]:
-    return raw[:max_level] + [raw[-1]] * max(0, max_level - len(raw))
+    """The HP curve for a `max_level`-rung ladder, PAIR-COMPRESSED from the authored one.
+
+    ZF2 authored 20 multipliers. Each rung here is two of them added together, so ten
+    rungs carry exactly the HP the twenty did (645x baseHp either way) — the ladder is
+    re-cut, not shortened.
+
+    WHY. A rung costs at least one attempt however far you overkill it, and the bottom
+    half of the authored curve is tiny next to any real army's damage: nine of the first
+    twenty rungs were one-attempt formalities for a starter party and all twenty were for
+    a maxed one. Merging pairs deletes that floor without touching the part of the ladder
+    where HP genuinely gates progress, because the merged rung costs the sum of what its
+    two halves cost. Measured, a full clear goes 52 -> 47 attempts for a starter party,
+    29 -> 21 for a solid one, and 20 -> 10 for a maxed one: all of the saving lands where
+    the fights were formalities and none of it where they were not.
+
+    The odd tail case (an authored curve of odd length) keeps its last rung uncompressed
+    rather than pairing it with nothing; no shipped boss hits it, since all eight use the
+    same 20-value curve.
+    """
+    want = max_level * 2
+    src = raw[:want] + [raw[-1]] * max(0, want - len(raw))
+    return [round(sum(src[i:i + 2]), 4) for i in range(0, len(src), 2)]
+
+
+# ---- Per-boss damage ramp -------------------------------------------------
+# Every epic boss shipped dealing exactly 40 DPS (str 2 / dex 2, or Skunkarella's
+# str 1 / dex 4 — the same rate with faster, smaller hits), at every level of every
+# ladder. Boss HP scales, boss damage never did, so the eight events were identical
+# in threat and differed only in how many attempts they took.
+#
+# HP is the wrong difficulty knob here: a fight is capped at 30 s and damage carries
+# over between attempts, so more HP buys only more attempts, and each attempt costs a
+# harvest token or a brain. That is grind, not difficulty. Incoming damage is the one
+# lever that raises the bar without adding a single attempt.
+#
+# So damage ramps with the boss's unlock level (see src/epicBoss/catalog.ts
+# EPIC_BOSS_UNLOCK_LEVELS). `dex` is deliberately untouched — it is each boss's
+# hit-rhythm character, and Skunkarella's fast small hits are its signature.
+#
+# CALIBRATION: measured in BattleSim with the fight PLAYED CORRECTLY (brain bubbles
+# released), not modelled. Two properties break any closed-form estimate:
+#   * only a handful of zombies are engaged at once, so a 20-strong army does not bring
+#     20 zombies' worth of damage and incoming damage concentrates on the front slot;
+#   * a level takes many attempts and damage carries over, so nearly every attempt runs
+#     the full 30 s. Casualties are permanent and a full clear is 40+ attempts, so a boss
+#     that can kill the front unit kills one PER ATTEMPT, not one per level.
+# THE RAMP IS FITTED TO ONE QUESTION: does a level-appropriate best-mutated HEADLESS wall
+# survive the event with two level-appropriate healers behind it, and does it struggle
+# without them? Measured, the unaided wall's death line sits at 100 DPS, so the ladder is
+# built to CROSS that line partway up:
+#
+#                       str   dex   DPS   with 2 healers   unaided
+#   Dr. Groundhog      2.400   2     48      100% HP       alive, 48%
+#   Bully Frog         3.000   2     60      100% HP       alive, 36%
+#   Rocky Rhino        3.600   2     72      100% HP       alive, 23%
+#   General Larvaelus  4.200   2     84      100% HP       alive, 17%
+#   Mystical Mamba     4.800   2     96      100% HP       DEAD
+#   Foul Owl           5.500   2    110      100% HP       DEAD
+#   Skunkarella        3.125   4    125      100% HP       DEAD   (dex carries its rung)
+#   Loco Locust        7.000   2    140      100% HP       DEAD
+#
+# That crossing is the design. The first four events can be brute-forced by a wall alone,
+# on a margin that visibly narrows; from Mystical Mamba (level 34) up, an army that brings
+# nothing but damage loses its front-liner every attempt, and casualties are permanent. It
+# is the ramp's job to make bringing support a real decision rather than a nicety, and a
+# ladder that sat entirely below the death line — as the previous fit did — could not.
+#
+# What it is NOT fitted to: how many of the 46 obtainable specials can hold the front slot.
+# That was the old metric and it measured one zombie's HP, not what a player can field.
+# The current rule lives in src/epicBoss/combat.test.ts and is stated on the ARMY: Silver-
+# grade for events unlocking through 30, specials from 30-35, epic prizes and specials
+# above that. Raising the ramp past ~200 DPS starts to threaten even the SUPPORTED wall
+# (measured: it holds to 240 and dies at 800), which is the real ceiling here.
+#
+# THESE ARE RUNG-1 VALUES, NOT THE WHOLE LADDER. Damage compounds 5% for every rung
+# climbed (epicBossDamage in src/epicBoss/catalog.ts, raid ruleset v29), so the DPS noted
+# against each boss is what its FIRST fight deals and the tenth deals 1.55x that. The
+# entry fight of every event is therefore exactly what it was; only the deep rungs moved.
+# Rung-10 DPS runs 74 (Dr. Groundhog) to 217 (Loco Locust).
+EPIC_BOSS_DAMAGE = {
+    1: 2.4,     # Dr. Groundhog       48 DPS at rung 1 ->  74 at rung 10
+    2: 7.0,     # Loco Locust        140 DPS at rung 1 -> 217 at rung 10
+    3: 3.0,     # Bully Frog          60 DPS at rung 1 ->  93 at rung 10
+    4: 5.5,     # Foul Owl           110 DPS at rung 1 -> 171 at rung 10
+    5: 3.125,   # Skunkarella        125 DPS at rung 1 -> 194 at rung 10 (dex 4)
+    8: 3.6,     # Rocky Rhino         72 DPS at rung 1 -> 112 at rung 10
+    9: 4.2,     # General Larvaelus   84 DPS at rung 1 -> 130 at rung 10
+    10: 4.8,    # Mystical Mamba      96 DPS at rung 1 -> 149 at rung 10
+}
+
+
+def ramp_damage(unit_stats: dict, source_id: int) -> dict:
+    """Apply this boss's authored attack power from EPIC_BOSS_DAMAGE.
+
+    Returns a copy — the caller's source dict is left alone. Raises if the boss has
+    no entry, so a newly added event has to make a deliberate difficulty choice
+    rather than silently inheriting the flat 40 DPS every boss used to share.
+    """
+    if source_id not in EPIC_BOSS_DAMAGE:
+        raise SystemExit(f"epic boss {source_id} has no EPIC_BOSS_DAMAGE entry")
+    return {**unit_stats, "str": EPIC_BOSS_DAMAGE[source_id],
+            "attacks": [with_damage_timing(attack) for attack in unit_stats["attacks"]]}
+
+
+def with_damage_timing(attack: dict) -> dict:
+    """Attach the attack's authored damage timing from Attacks.json.
+
+    Where in the swing the blow connects, 0..1. It is presentation-only — the sim's
+    clock decides WHEN a hit lands, this decides which frame is on screen when it does —
+    but it has to travel with the catalog, because both the client and the Worker build
+    the boss from that catalog and would otherwise each need their own copy.
+
+    It is per-ATTACK, not per-boss, and the two differ: the six bosses that swing
+    `EpicBossAttack` connect at 0.88, while Dr. Groundhog and Loco Locust bite
+    (`VideoGameZombieBite`) and connect at 0.25, a quarter into the swing.
+    """
+    authored = ATTACKS.get(attack["name"])
+    if authored is None:
+        print(f"  warning: {attack['name']} is not in Attacks.json — timing left to the default")
+        return dict(attack)
+    return {**attack, "damageTiming": float(authored["damageTiming"])}
+
+
+def scale_loot_levels(loot: list[dict], origin: int) -> list[dict]:
+    """Move loot thresholds authored against an `origin`-rung ladder onto MAX_LEVEL.
+
+    THREE source scales are in play and all of them need this: Dr. Groundhog's source loot
+    sits on the authored 20 rungs, the other shipped bosses' on 40, and the hand-restored
+    tables in this file (SKUNK_LOOT, LATE_BOSSES) were written against 20. Rescaling from
+    the right origin keeps each prize at the same FRACTION of its ladder it always had, and
+    on the same rung as the quest that announces it (prep_quests.py applies the matching
+    transform, including the same pinning of the two headline prizes).
+
+    Rounded UP, and floored at rung 1: quartering a 40-rung threshold can otherwise produce
+    a rung 0 that no clear ever satisfies, which would strand the prize behind it.
+    """
+    return [{**item, "level": max(1, -(-int(item["level"]) * MAX_LEVEL // origin))}
+            for item in loot]
+
+
+# The attempt window, overriding the source's 30 s (`epicBossFightTimeBeforeFleeing`).
+#
+# WHY THIS IS NOT THE SOURCE VALUE. Zombies enter the fight strictly one at a time, one
+# every CHARGE_MS (3.6 s), so the window decides how much of the army ever reaches the
+# boss at all: 6 zombies get there in 30 s, 10 in 45 s, 13 in 60 s, all 20 by 90 s. That
+# makes damage per attempt STRONGLY super-linear in the window — measured, 30 s -> 60 s is
+# about 4x, not 2x — and it is why a 20-rung ladder took 304 attempts at 30 s for an
+# ordinary army. The event read as a grind rather than a fight.
+#
+# 60 s, and it should be read together with the pair-compressed ladder and the per-boss
+# damage ramp — the three landed as one change:
+#   * GRIND. Attempts fall to between a quarter and a third at every army tier: a moderate
+#     army goes 304 -> 64 and a best army 52 -> 14, against a hard floor of 10 (one attempt
+#     per rung, however far you overkill it).
+#   * CASUALTIES. The extra time is spent on the front slot, which is what finally makes
+#     the damage ramp visible at all. Before this, a full clear killed NOTHING at any tier;
+#     a moderate army now loses 0.9-1.8 zombies per attempt up the ladder.
+#   * WHY DAMAGE IS NOT THE GRIND DIAL. Boss damage is regressive — doubling it costs a
+#     best army 3 extra attempts on a full ladder and DOUBLES a moderate army's. Past about
+#     x4 the boss kills the queue faster than the queue deals damage and a moderate army is
+#     worse off than the 30 s window left it. Hence a ramp at x1 with per-boss variation
+#     rather than a global multiplier (EPIC_BOSS_DAMAGE), and hence HP — not damage — as the
+#     per-event grind dial (EPIC_BOSS_BASE_HP).
+#
+# The bounding rule lives in src/epicBoss/combat.test.ts — a level-appropriate best-mutated
+# headless survives its event with two level-appropriate healers. It passes here with real
+# margin (the tank survives every boss even unsupported), so the window is not pressed
+# against its limit.
+EPIC_BOSS_FIGHT_MS = 60_000
+
+# What activating an event costs, in brains. The source charged 100; post-brainflation-
+# revert a brain is worth ~10x what it was, so these are revert-scaled prices and NOT the
+# source's. (The catalogs on disk had already drifted from this generator — 5 and 10
+# against the 100 that used to be here — so the numbers now live in the tool.)
+#
+# Banded by position on the unlock ladder rather than set flat: the two entry events cost
+# 3, the four middle ones 4, the two hardest 5. Brain income barely moves across the game
+# by design (~1.6/day at level 4 to ~2.9/day at 44), so a flat price would mean the entry
+# event and the endgame event cost the same share of a very slowly growing budget. The
+# band is keyed by SOURCE ID here and annotated with the unlock level it corresponds to —
+# the two orders are not the same, so read the comments rather than the keys.
+EPIC_BOSS_COST_BRAINS = {
+    1: 3,     # Dr. Groundhog      unlock 24
+    3: 3,     # Bully Frog         unlock 28
+    8: 4,     # Rocky Rhino        unlock 30
+    9: 4,     # General Larvaelus  unlock 32
+    10: 4,    # Mystical Mamba     unlock 34
+    4: 4,     # Foul Owl           unlock 38
+    5: 5,     # Skunkarella        unlock 40
+    2: 5,     # Loco Locust        unlock 42
+}
+
+
+def cost_brains(source_id: int) -> int:
+    """This event's activation price. Raises on an unknown boss so a newly added event
+    has to make a deliberate pricing choice rather than inherit one silently."""
+    if source_id not in EPIC_BOSS_COST_BRAINS:
+        raise SystemExit(f"epic boss {source_id} has no EPIC_BOSS_COST_BRAINS entry")
+    return EPIC_BOSS_COST_BRAINS[source_id]
+
+
+# ---- Per-boss HP ---------------------------------------------------------
+# Every event used to share one HP ladder — the source's BaseHP 2000 against the same
+# multipliers — so all eight cost the same total damage to walk. Measured, that made the
+# ENTRY event the grindiest: a moderate army needs 91 attempts on Dr. Groundhog against
+# 63-64 on every boss above him. Nothing about the boss causes that. Total ladder HP is
+# identical, so the only variable is the army of the day, and a level-24 roster deals about
+# a third less damage than a level-30 one. The ladder was flat while the player was not.
+#
+# So baseHp now ramps with the unlock ladder, +/-25% end to end, symmetric about the two
+# middle events (General Larvaelus and Mystical Mamba), which keep the source's 2000 and
+# are therefore the fixed point everything else is stated against. The bottom comes down to
+# meet the weak roster that fights it; the top goes up because a level-42 army has three
+# more zombie tiers, mutations and veterancy behind it than a level-24 one does.
+#
+# WHY baseHp AND NOT THE MULTIPLIERS. The multiplier curve is ZF2's authored SHAPE and is
+# shared ground truth (see multipliers()); scaling it per boss would fork eight copies of
+# recovered data to express one number. baseHp is the per-event dial the source already
+# had. Rung HP stays baseHp x multiplier everywhere — src/epicBoss/catalog.ts epicBossHp,
+# the Worker's clampRun, and migration 0052 all read it that way.
+#
+# Keyed by SOURCE ID, annotated with unlock level — the two orders differ, so read the
+# comments. Values are round-50 so a rung's HP stays a legible number.
+EPIC_BOSS_BASE_HP = {
+    1: 1500,   # Dr. Groundhog      unlock 24   0.75x
+    3: 1650,   # Bully Frog         unlock 28   0.825x
+    8: 1850,   # Rocky Rhino        unlock 30   0.925x
+    9: 2000,   # General Larvaelus  unlock 32   1.0x  <- source value
+    10: 2000,  # Mystical Mamba     unlock 34   1.0x  <- source value
+    4: 2150,   # Foul Owl           unlock 38   1.075x
+    5: 2350,   # Skunkarella        unlock 40   1.175x
+    2: 2500,   # Loco Locust        unlock 42   1.25x
+}
+
+
+def base_hp(source_id: int, source_value: int) -> int:
+    """This event's baseHp. Raises on an unknown boss for the same reason the damage and
+    brain-cost tables do: a new event must place itself on the ladder deliberately.
+
+    `source_value` is ZF2's own BaseHP, passed in only to assert the fixed point — if the
+    recovered data ever changes, the two middle events must move with it or this ramp is
+    silently stated against a number that no longer exists."""
+    if source_id not in EPIC_BOSS_BASE_HP:
+        raise SystemExit(f"epic boss {source_id} has no EPIC_BOSS_BASE_HP entry")
+    middle = [key for key, value in EPIC_BOSS_BASE_HP.items() if value == source_value]
+    if sorted(middle) != [9, 10]:
+        raise SystemExit(
+            f"EPIC_BOSS_BASE_HP is anchored on the source BaseHP ({source_value}); expected "
+            f"exactly bosses 9 and 10 to carry it, got {sorted(middle)}"
+        )
+    return EPIC_BOSS_BASE_HP[source_id]
 
 
 def common_catalog(source_id: int, slug: str, name: str, max_level: int,
                    hp: dict, params: dict) -> dict:
     return {
         "id": slug, "sourceId": source_id, "name": name,
-        "costBrains": 100, "durationMs": 14 * 24 * 60 * 60 * 1000,
-        "fightMs": int(params["epicBossFightTimeBeforeFleeing"]) * 1000,
+        "costBrains": cost_brains(source_id),
+        "durationMs": 14 * 24 * 60 * 60 * 1000,
+        "fightMs": EPIC_BOSS_FIGHT_MS,
         "retryMs": int(params["epicBossEscapeTime"]) * 60 * 1000,
         "encounterMs": int(params["epicBossAvailabilityTime"]) * 60 * 1000,
-        "baseHp": int(hp["BaseHP"]),
+        "baseHp": base_hp(source_id, int(hp["BaseHP"])),
         "multipliers": multipliers(hp["LevelMultiplier"], max_level),
         "maxLevel": max_level,
         "music": "music.wav", "punchSfx": "punch.wav",
@@ -193,9 +534,9 @@ def prepare_authored(boss: dict, hp: dict, params: dict) -> None:
     animations = {}
     with Image.open(APP / boss["bossSpriteSheeetImage"]).convert("RGBA") as sheet:
         for state in ("idle", "enter", "attack", "defeat", "escape", "fly"):
-            names = boss.get(f"{state}Animation", {}).get("frames", [])
-            if names:
-                animations[state] = write_strip(out, state, names, atlas, sheet)
+            animation = boss.get(f"{state}Animation", {})
+            if animation.get("frames"):
+                animations[state] = write_strip(out, state, animation, atlas, sheet)
         compose(sheet, atlas[boss["initialFrame"]]).save(out / "boss.png", optimize=True)
 
     intro = boss["IntroMovieAssets"]
@@ -209,7 +550,12 @@ def prepare_authored(boss: dict, hp: dict, params: dict) -> None:
         (boss["bossSpriteSheeetData"], "source-sheet.plist"),
     ]
     copied = [x for source, target in mappings if (x := copy(out, source, target))]
-    loot = SKUNK_LOOT if source_id == 5 else boss.get("loot", [])
+    # Each table is rescaled from the rung count it was WRITTEN against: SKUNK_LOOT by
+    # hand on the authored 20, Dr. Groundhog's source loot likewise, every other shipped
+    # boss on the advertised 40.
+    loot = (scale_loot_levels(SKUNK_LOOT, AUTHORED_MAX_LEVEL) if source_id == 5
+            else scale_loot_levels(boss.get("loot", []),
+                                   AUTHORED_MAX_LEVEL if source_id == 1 else SOURCE_MAX_LEVEL))
     for item in loot:
         if item.get("sprite"):
             copied_name = copy(out, item["sprite"])
@@ -229,7 +575,8 @@ def prepare_authored(boss: dict, hp: dict, params: dict) -> None:
     catalog = common_catalog(source_id, slug, boss["bossName"], MAX_LEVELS[source_id], hp, params)
     catalog.update({
         "introText": boss["introText"], "successText": boss["invasionSuccessText"],
-        "failedText": boss["invasionFailedText"], "unitStats": boss["UnitStats"],
+        "failedText": boss["invasionFailedText"],
+        "unitStats": ramp_damage(boss["UnitStats"], source_id),
         "animations": animations, "levelAssets": layers, "loot": loot,
         "questIds": QUEST_IDS[source_id],
         "portrait": "portrait.png", "lootIcon": "loot-icon.png", "questIcon": "quest-icon.png",
@@ -247,7 +594,7 @@ def prepare_late(boss: dict, hp: dict, params: dict) -> None:
         (boss["portrait"], "portrait.png"), (boss["lootIcon"], "loot-icon.png"),
         (boss["questIcon"], "quest-icon.png"), (boss["intros"][0], "intro-1.png"),
         (boss["intros"][1], "intro-2.png"), (boss["intros"][2], "intro-3.png"),
-        (boss["intros"][2], "boss.png"), (boss["sheet"], "source-sheet.png"),
+        (boss["sheet"], "source-sheet.png"),
         ("epicEventBGM.wav", "music.wav"), ("epicPunch.wav", "punch.wav"),
         ("epicEventIntroSFX.caf", "intro.caf"),
     ]
@@ -259,6 +606,30 @@ def prepare_late(boss: dict, hp: dict, params: dict) -> None:
         name = copy(out, source)
         if name:
             copied.append(name)
+
+    # The combat actor, cut from the boss's own 2048x2048 atlas.
+    #
+    # These three events shipped their art WITHOUT the .plist that names and locates
+    # each frame — the only such gap in the extraction, and it is total: no frame list
+    # in the bundle, none in the binary's strings, and the packer does not lay frames
+    # out in name order (checked against foulowl.plist, whose reading order and
+    # alphabetical order disagree), so the animations cannot be reassembled from
+    # geometry. The frames themselves are all there as pixels, though, so ONE standing
+    # pose per boss is recoverable and that is exactly what a static actor needs.
+    #
+    # `staticFrame` is that pose's rect in the atlas, chosen by eye from a segmentation
+    # of the sheet (largest opaque island plus anything inside its box — validated
+    # against foulowl.png, where it recovers all 39 real rects at a median IoU of
+    # 0.99). It replaces what used to stand in here: the boss's revealed INTRO CARD,
+    # which is a menu illustration, not combat art.
+    with Image.open(APP / boss["sheet"]).convert("RGBA") as sheet:
+        x, y, w, h = boss["staticFrame"]
+        sheet.crop((x, y, x + w, y + h)).save(out / "boss.png", optimize=True)
+    copied.append("boss.png")
+
+    # …and the hand-authored animation strips, when an ordering has been written.
+    animations = hand_ordered_strips(out, boss)
+
     # Late definitions use the shared battle scene. Preserve its authored layer layout.
     layers = []
     for index in range(1, 13):
@@ -266,22 +637,35 @@ def prepare_late(boss: dict, hp: dict, params: dict) -> None:
         copy(out, f"bg_{index:02d}.png", target)
         layers.append({"anchor": "{0,0}", "position": "{0,0}",
                        "sprite": target, "z": index - 13})
-    loot = [{"level": level, "name": name, "sprite": sprite,
-             **({"tile": tile} if tile else {}), **({"stageActor": actor} if actor else {})}
-            for level, name, tile, sprite, actor in boss["loot"]]
-    catalog = common_catalog(boss["sourceId"], boss["id"], boss["name"], 40, hp, params)
+    # LATE_BOSSES levels are hand-authored against the 20-rung ladder, so they rescale
+    # exactly like every other table rather than being written straight through.
+    loot = scale_loot_levels(
+        [{"level": level, "name": name, "sprite": sprite,
+          **({"tile": tile} if tile else {}), **({"stageActor": actor} if actor else {})}
+         for level, name, tile, sprite, actor in boss["loot"]],
+        AUTHORED_MAX_LEVEL)
+    catalog = common_catalog(boss["sourceId"], boss["id"], boss["name"], MAX_LEVEL, hp, params)
     catalog.update({
         "introText": f"{boss['name']} is here",
         "successText": f"You beat {boss['name']}. They'll be back stronger than before!",
         "failedText": f"{boss['name']} beat you",
-        "unitStats": {"str": 2, "dex": 2, "con": 20,
-                      "attacks": [{"name": "EpicBossAttack", "frequency": 100}]},
-        "animations": {}, "levelAssets": layers, "loot": loot, "questIds": boss["questIds"],
+        "unitStats": ramp_damage(
+            {"str": 2, "dex": 2, "con": 20,
+             "attacks": [{"name": "EpicBossAttack", "frequency": 100}]}, boss["sourceId"]),
+        "animations": animations, "levelAssets": layers, "loot": loot,
+        "questIds": boss["questIds"],
         "portrait": "portrait.png", "lootIcon": "loot-icon.png", "questIcon": "quest-icon.png",
-        "bossTexture": "boss.png", "reconstructed": True, "copied": sorted(set(copied)),
+        "bossTexture": "boss.png", "reconstructed": True,
+        # Where boss.png was cut from, in the boss's own atlas. Recorded so the
+        # provenance is checkable from data: this used to be a copy of the revealed
+        # INTRO CARD, a menu illustration that had never been near the battlefield.
+        "staticFrame": list(boss["staticFrame"]),
+        "copied": sorted(set(copied)),
     })
     (out / "catalog.json").write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
-    print(f"prepared {boss['name']}: static reconstructed actor")
+    print(f"prepared {boss['name']}: reconstructed actor, "
+          f"{len(animations)} hand-ordered animations "
+          f"({', '.join(sorted(animations)) or 'static'})")
 
 
 def main() -> None:

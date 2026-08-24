@@ -6,6 +6,12 @@
 // refund credits floor(cost * SELL_BACK_RATIO). Object ownership is tracked as a COUNT
 // per key (like boosts) — placement/position stays client-side layout.
 //
+// The table below is GENERATED from that asset: `npm run catalogs` (server/
+// scripts/gen-catalogs.mjs) rewrites the `#region generated:` block, and
+// `npm run catalogs:check` fails CI and the deploy:prod gate when the two drift.
+// Edit the ASSET, not the region. Everything outside the region is hand-written
+// and is not touched.
+//
 // NOTE: the Zombie Pot has dynamic client pricing (500 first / 30 after) and stays a
 // client-side purchase; it is still listed here for completeness but the client does
 // not route its buy/refund through the server.
@@ -15,6 +21,8 @@
 // is absent cannot be SOLD at all (`bad_item`). They are priced at cost 0 like the
 // other earned decorations — see objectRefund on why a free item must not refund the
 // source's brain price.
+
+import { awardedSellValue } from "../../src/awardSellValue";
 
 export const SELL_BACK_RATIO = 0.2; // mirrors src/economy.ts ECONOMY.SELL_BACK_RATIO
 export const BRAIN_SELL_GOLD_RATE = 1_000; // mirrors src/economy.ts
@@ -31,7 +39,8 @@ export interface ObjectEcon {
 }
 
 export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
-  // Mausoleum upgrade tiers (bought only as an object.upgrade of the placed one).
+  // #region generated:OBJECTS
+  // Source: public/assets/placeables.json — regenerate with `npm run catalogs` (server/scripts/gen-catalogs.mjs) — do not hand-edit
   "alienBanner": { cost: 0, brains: false, xp: 0, level: -1 },
   "antiHolidayIncinerator": { cost: 0, brains: false, xp: 0, level: -1 },
   "antiHolidayVault": { cost: 0, brains: false, xp: 0, level: -1 },
@@ -118,9 +127,9 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "crate_yellow": { cost: 750, brains: false, xp: 5, level: 28 },
   "croquet": { cost: 10000, brains: false, xp: 100, level: 42 },
   "crystalGazebo": { cost: 0, brains: false, xp: 0, level: -1 },
-  "cupidStatueA": { cost: 50, brains: true, xp: 3000, level: 0 },
-  "cupidStatueB": { cost: 50, brains: true, xp: 3000, level: 0 },
-  "cupidTopiary": { cost: 5000, brains: false, xp: 100, level: 0 },
+  "cupidStatueA": { cost: 50, brains: true, xp: 3000, level: 1 },
+  "cupidStatueB": { cost: 50, brains: true, xp: 3000, level: 1 },
+  "cupidTopiary": { cost: 5000, brains: false, xp: 100, level: 1 },
   "cursedChest": { cost: 2, brains: true, xp: 0, level: 1 },
   "cypressTree": { cost: 500, brains: false, xp: 5, level: 3 },
   "daisy": { cost: 10, brains: false, xp: 0, level: 6 },
@@ -222,10 +231,10 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "hauntedHouse": { cost: 3, brains: true, xp: 0, level: -1 },
   "haystack": { cost: 2500, brains: false, xp: 25, level: 11 },
   "hazardFence": { cost: 0, brains: false, xp: 0, level: -1 },
-  "heartCandle": { cost: 5000, brains: false, xp: 100, level: 0 },
+  "heartCandle": { cost: 5000, brains: false, xp: 100, level: 1 },
   "heartFountain": { cost: 10, brains: true, xp: 6000, level: 1 },
-  "heartGravestone": { cost: 15, brains: true, xp: 1750, level: 0 },
-  "heartHedge": { cost: 5000, brains: false, xp: 100, level: 0 },
+  "heartGravestone": { cost: 15, brains: true, xp: 1750, level: 1 },
+  "heartHedge": { cost: 5000, brains: false, xp: 100, level: 1 },
   "hedge_01": { cost: 1000, brains: false, xp: 10, level: 7 },
   "hedge_01_black": { cost: 2000, brains: false, xp: 18, level: 18 },
   "hedge_01_blue": { cost: 1800, brains: false, xp: 18, level: 10 },
@@ -270,13 +279,19 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "loveShack": { cost: 0, brains: false, xp: 0, level: -1 },
   "luckPlant": { cost: 1000, brains: false, xp: 10, level: 1 },
   "mailboxNormal": { cost: 950, brains: false, xp: 9, level: 8 },
+  "mausoleum10": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum11": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum12": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum3": { cost: 8, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum4": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum5": { cost: 6, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum6": { cost: 8, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mausoleum7": { cost: 10, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum8": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
+  "mausoleum9": { cost: 4, brains: true, xp: 300, level: 1, purchaseLimit: 1 },
   "mayflower": { cost: 5, brains: true, xp: 0, level: 1 },
   "mechanicalBull": { cost: 0, brains: false, xp: 0, level: -1 },
+  "memorialStatue": { cost: 3000, brains: false, xp: 30, level: 1 },
   "monkeyBars": { cost: 4000, brains: false, xp: 40, level: 40 },
   "monolithBusted": { cost: 3, brains: true, xp: 800, level: 25 },
   "monolithCombine": { cost: 12, brains: true, xp: 6000, level: 25, purchaseLimit: 1 },
@@ -342,8 +357,8 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "pond6": { cost: 800, brains: false, xp: 8, level: 18 },
   "pond7": { cost: 800, brains: false, xp: 8, level: 13 },
   "postalMailBox": { cost: 3000, brains: false, xp: 30, level: 40 },
-  "powderMachine": { cost: 25000, brains: false, xp: 0, level: 23, purchaseLimit: 4 },
   "powderKeg": { cost: 1, brains: true, xp: 0, level: 1 },
+  "powderMachine": { cost: 25000, brains: false, xp: 0, level: 23, purchaseLimit: 4 },
   "pumpkin": { cost: 1000, brains: false, xp: 10, level: 1 },
   "pumpkinAngry": { cost: 9000, brains: false, xp: 90, level: 31 },
   "pumpkinHappy": { cost: 9000, brains: false, xp: 90, level: 29 },
@@ -371,6 +386,9 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "rubberTree": { cost: 7500, brains: false, xp: 45, level: 20 },
   "rumBarrel": { cost: 2000, brains: false, xp: 20, level: 1 },
   "saddle": { cost: 0, brains: false, xp: 0, level: -1 },
+  "sakuraTree": { cost: 3000, brains: false, xp: 30, level: 12 },
+  "sakuraTreeFlowering": { cost: 6000, brains: false, xp: 60, level: 24 },
+  "sakuraTreeWeeping": { cost: 4500, brains: false, xp: 45, level: 18 },
   "saloon": { cost: 0, brains: false, xp: 0, level: -1 },
   "sandCastle": { cost: 5, brains: true, xp: 0, level: 1 },
   "sandDollar": { cost: 0, brains: false, xp: 0, level: -1 },
@@ -384,7 +402,7 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "skeletonCouple": { cost: 3, brains: true, xp: 0, level: -1 },
   "skullCandle": { cost: 4500, brains: false, xp: 45, level: 28 },
   "skullWithSnake": { cost: 4000, brains: false, xp: 40, level: 27 },
-  "sleigh": { cost: 2, brains: true, xp: 1000, level: 0 },
+  "sleigh": { cost: 2, brains: true, xp: 1000, level: 1 },
   "smallCactus": { cost: 3300, brains: false, xp: 7, level: 12 },
   "smallDragonBoat": { cost: 2, brains: true, xp: 0, level: 1 },
   "snowBalls": { cost: 1500, brains: false, xp: 15, level: 1 },
@@ -393,7 +411,7 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "snowFort": { cost: 7500, brains: false, xp: 75, level: 1 },
   "snowHedge_01": { cost: 5000, brains: false, xp: 50, level: 30 },
   "snowLumberjack": { cost: 0, brains: false, xp: 0, level: -1 },
-  "snowMan": { cost: 3, brains: true, xp: 1500, level: 0 },
+  "snowMan": { cost: 3, brains: true, xp: 1500, level: 1 },
   "snowOlMcDonnell": { cost: 0, brains: false, xp: 0, level: -1 },
   "snowOwl": { cost: 0, brains: false, xp: 0, level: -1 },
   "snowZombie": { cost: 0, brains: false, xp: 0, level: -1 },
@@ -425,6 +443,7 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "storage06": { cost: 145000, brains: false, xp: 1450, level: 1, purchaseLimit: 1 },
   "storage07": { cost: 225000, brains: false, xp: 2250, level: 1, purchaseLimit: 1 },
   "storage08": { cost: 350000, brains: false, xp: 3500, level: 1, purchaseLimit: 1 },
+  "storage09": { cost: 525000, brains: false, xp: 5250, level: 1, purchaseLimit: 1 },
   "streetLight": { cost: 3000, brains: false, xp: 30, level: 28 },
   "sugarSkull": { cost: 4000, brains: false, xp: 40, level: -1 },
   "sundial": { cost: 2, brains: true, xp: 0, level: 37 },
@@ -477,7 +496,7 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "windmill": { cost: 0, brains: false, xp: 0, level: -1 },
   "winterSnowWoman": { cost: 2, brains: true, xp: 0, level: 1 },
   "witchsCauldron": { cost: 0, brains: false, xp: 0, level: -1 },
-  "xmasArch": { cost: 1, brains: true, xp: 500, level: 0 },
+  "xmasArch": { cost: 1, brains: true, xp: 500, level: 1 },
   "xmasCandle": { cost: 3000, brains: false, xp: 30, level: 1 },
   "xmasFence": { cost: 5000, brains: false, xp: 50, level: 1 },
   "xmasGifts": { cost: 2000, brains: false, xp: 20, level: 1 },
@@ -487,11 +506,12 @@ export const OBJECTS: Readonly<Record<string, ObjectEcon>> = {
   "yellowGift": { cost: 0, brains: false, xp: 0, level: -1 },
   "yellowSatchet": { cost: 1, brains: true, xp: 0, level: 1 },
   "zenGarden": { cost: 2, brains: true, xp: 300, level: 44 },
-  "zombieCombiner": { cost: 500, brains: false, xp: 5, level: 3, purchaseLimit: 3 },
   "zombieColorMixerBucket": { cost: 5000, brains: false, xp: 50, level: 23, purchaseLimit: 3 },
+  "zombieCombiner": { cost: 500, brains: false, xp: 5, level: 3, purchaseLimit: 3 },
   "zombieGift": { cost: 5, brains: true, xp: 0, level: -1 },
   "zombieTopiaryNormal": { cost: 1750, brains: false, xp: 18, level: 15 },
   "zombieXingSign": { cost: 1, brains: true, xp: 500, level: 15 },
+  // #endregion generated:OBJECTS
 };
 
 export function objectEcon(key: string): ObjectEcon | undefined {
@@ -504,6 +524,26 @@ export function objectEcon(key: string): ObjectEcon | undefined {
 export function objectRefund(cost: number, brains = false): number {
   if (brains) return Math.max(0, Math.trunc(cost)) * BRAIN_SELL_GOLD_RATE;
   return Math.max(1, Math.floor(cost * SELL_BACK_RATIO));
+}
+
+/** Gold paid for selling ONE placeable of `key`, priced the way the client prices it.
+ *
+ *  An award-only invasion prize was never bought, so it has no `cost` to take a
+ *  fraction of and `objectRefund` floors it at one gold. Those carry an authored
+ *  value instead (src/raidDropValue.ts — the single definition both sides read).
+ *  `purchaseCost` is the price actually paid where the object records one (the Zombie
+ *  Pot's dual pricing); it always wins, since a bought object is not an award. */
+export function objectSellGold(
+  key: string,
+  econ: ObjectEcon,
+  purchaseCost?: number | null,
+  boughtWithBrains = econ.brains
+): number {
+  if (purchaseCost == null) {
+    const awarded = awardedSellValue(key);
+    if (awarded !== undefined) return awarded;
+  }
+  return objectRefund(purchaseCost ?? econ.cost, boughtWithBrains);
 }
 
 /** XP granted for buying a placeable. Binary ground truth
@@ -533,6 +573,8 @@ export const MAX_OBJECT_COUNT = 8192;
  *  object_counts rather than stored — an editable save can't declare it.
  *  KEEP IN SYNC with placeables.json. */
 export const SHED_SLOTS: Readonly<Record<string, number>> = {
+  // #region generated:SHED_SLOTS
+  // Source: public/assets/placeables.json — regenerate with `npm run catalogs` (server/scripts/gen-catalogs.mjs) — do not hand-edit
   storage01: 8,
   storage02: 16,
   storage03: 24,
@@ -541,6 +583,8 @@ export const SHED_SLOTS: Readonly<Record<string, number>> = {
   storage06: 48,
   storage07: 56,
   storage08: 64,
+  storage09: 72,
+  // #endregion generated:SHED_SLOTS
 };
 
 /** The starter shed's capacity — what an account holds before buying a bigger one. Every

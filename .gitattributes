@@ -1,0 +1,8 @@
+# The Windows launcher is shipped to players as-is, so its line endings matter:
+# cmd.exe can mis-parse multi-line blocks in an LF-only .cmd, and the plain-text
+# instructions should open cleanly in any Windows editor. Force CRLF for those,
+# regardless of anyone's core.autocrlf.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+"launcher/package/HOW TO PLAY.txt" text eol=crlf
+"desktop/package/HOW TO PLAY.txt" text eol=crlf

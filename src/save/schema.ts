@@ -26,13 +26,41 @@
 import type { Friend } from "../social/friends";
 import type { FarmBackground } from "../prefs";
 import type { EpicBossRun } from "../epicBoss/types";
+import type { PeriodicQuestState } from "../quest/periodic/types";
+import type { ZombieTeam } from "../zombie/teams";
+import type { FarmStats } from "../stats";
 import type { PowderColor, PowderGrindJob } from "../powderMachine";
 import type { ZombieColorDyeJob, ZombiePowderStatProgress, ZombiePowderStats } from "../zombieColorMixerBucket";
-import type { ZombieTeam } from "../zombie/teams";
-import type { PeriodicQuestState } from "../quest/periodic/types";
 
 /** Bump when the shape changes in a way that needs a migration. */
 export const SAVE_VERSION = 1;
+
+/** Bring a save written by an older build up to `SAVE_VERSION`, or return null if it
+ *  cannot be read at all.
+ *
+ *  There is nothing to migrate yet — every field added since launch was made optional
+ *  with a default precisely so the version never had to move. That is exactly why this
+ *  exists NOW rather than later: every reader compared `version !== SAVE_VERSION` and
+ *  treated any difference as damage, so the first person to bump the constant would
+ *  have made every Local Farm in existence unreadable, and the recovery dialog those
+ *  players land on offers "Start a New Local Farm" — it deletes the save AND its
+ *  backup. A one-line constant change was one click away from wiping every offline
+ *  player, with the bytes on disk perfectly intact the whole time.
+ *
+ *  A save from the FUTURE is still refused: this build cannot know what a later one
+ *  meant, and guessing would corrupt it for the build that can read it.
+ *
+ *  To add a migration: handle the old version here, return the upgraded blob, and add
+ *  a case to schema.migrate.test.ts. `migrateSave` is the ONLY place allowed to know
+ *  what an old save looked like. */
+export function migrateSave(data: SaveGame | null | undefined): SaveGame | null {
+  if (!data || typeof data !== "object") return null;
+  const version = (data as SaveGame).version;
+  if (!Number.isInteger(version) || version > SAVE_VERSION) return null;
+  if (!data.player || !data.farm) return null;
+  // if (version === 1) { ...upgrade in place, then fall through... }
+  return version === SAVE_VERSION ? data : null;
+}
 
 /** Legacy mixed-purpose key. Retained only for safe migration. */
 export const SAVE_KEY = "zf2r.v3.presentation-cache";
@@ -80,7 +108,9 @@ export interface SaveGame {
   zombieColorDyes?: Record<string, ZombieColorDyeJob>;
   /** Real quest engine progress (active per-requirement counts + completed ids). */
   quests?: QuestSave;
-  /** Local daily / weekly quest board. Online state is projected by the server. */
+  /** Daily/weekly quests. OFFLINE ONLY — online these are server-owned and projected,
+   *  never round-tripped through the save. Absent on saves written before the feature,
+   *  and on every online save; both are read as "generate a fresh board". */
   periodicQuests?: PeriodicQuestState;
   /** Phase 5: raid/invasion progress (lifetime win count per raid id). */
   raids?: RaidProgressSave;
@@ -98,13 +128,56 @@ export interface SaveGame {
   /** Zombie Almanac: lifetime obtained count per species key. Absent in saves
    *  written before the Almanac existed — backfilled from ownedZombies on load. */
   almanac?: AlmanacSave;
-  /** Saved farm line-ups. Presentation only; assembling runs ordinary roster moves. */
+  /** Zombies lost for good, kept only so a Memorial Statue can enshrine one.
+   *  Absent = nothing has died yet (or the save predates memorials). */
+  fallen?: FallenZombieSave[];
+  /** Saved farm line-ups (a name + owned zombie ids). Pure client-side
+   *  presentation — assembling one only issues ordinary store/deploy moves.
+   *  Absent = no teams (or a save written before the feature). */
   teams?: ZombieTeam[];
+  /** Lifetime statistics (the Account menu's Statistics panel). A kept tally that
+   *  cannot be recovered from a save after the fact — see stats.ts. Absent in saves
+   *  written before it existed; those start counting from the load, with the one
+   *  figure that IS derivable (invasions won) seeded from the raid progress. */
+  stats?: FarmStats;
+}
+
+/** A zombie that perished and was not revived — what a Memorial Statue remembers.
+ *
+ *  Deliberately the SAME minimal shape as OwnedZombieSave: species, mask, veterancy
+ *  and tint, with the whole card (type name, body type, class, stats) derived from
+ *  the catalog by key, exactly as it is for a unit that is still alive. Only two
+ *  things cannot be derived once the unit is gone, and only those are stored: when
+ *  it died, and the name its owner gave it.
+ *
+ *  It is display data. A fallen zombie can never fight, be sold, or come back — the
+ *  one chance to keep it was the revival offer made when the raid settled. Mirrored
+ *  by FallenUnitProjection on the wire and fallen_v3 on the server. */
+export interface FallenZombieSave {
+  id: string;
+  key: string;
+  /** Absent = the deterministic default name, same as an unnamed living unit. */
+  name?: string;
+  mutation: number;
+  invasions: number;
+  color?: [number, number, number];
+  /** Epoch ms the unit was lost. Shown on the memorial. */
+  diedAt: number;
+  /** Epoch ms this zombie was last taken OFF a statue, if it ever has been. It ranks
+   *  the graveyard in place of `diedAt` (see graveyardRank) so someone just released
+   *  goes back to the top of the list rather than to whatever position their date of
+   *  death earns — they still age out, just not the instant the statue is sold. Never
+   *  shown: the plaque's date is always `diedAt`. */
+  releasedAt?: number;
 }
 
 /** Zombie Almanac collection progress (cosmetic; counts never decrease). */
 export interface AlmanacSave {
   discovered: Record<string, number>;
+  /** Mutation Almanac: lifetime count per mutation key. Absent in saves written before
+   *  that tab existed — backfilled from the owned roster's masks on load, which is
+   *  lossy only for mutations the player owned and has since sold. */
+  mutations?: Record<string, number>;
 }
 
 export interface FarmJobSave {
@@ -278,11 +351,19 @@ export interface PlacedObjectSave {
   /** Footprint origin tile (north corner). */
   oc: number;
   or: number;
-  /** Optional orientation for rotatable objects. */
+  /** Optional orientation for rotatable objects: 1 = mirrored on the vertical axis. */
   rotation?: number;
+  /** Orientation of an object whose corners are separate pieces of art (the road
+   *  bends): an index into the def's `turns`. Written INSTEAD of `rotation` for
+   *  those, since for them a mirror is not what turning means — see savedTurn. */
+  turn?: number;
   /** Fruit trees: epoch ms when the fruit next becomes harvestable (offline
    *  growth — fruit ripens while the game is closed). */
   readyAt?: number;
+  /** Memorial Statue only: the perished zombie enshrined on this plinth. Carried
+   *  on the object rather than in `fallen` so the statue and its occupant move,
+   *  save and load as one thing. */
+  memorial?: FallenZombieSave;
 }
 
 /** Phase 3: an owned zombie unit. */
@@ -334,6 +415,12 @@ export interface ZombiePotSave {
   keyA: string;
   /** Species key of parent B. */
   keyB: string;
+  /** Parent A's display NAME at combine time. Slot 1 already decides the child's
+   *  species, so it decides its name too: the zombie you fed into the first slot
+   *  comes back out, renamed only if the player renamed it. Absent on jobs started
+   *  before this (and on any job whose slot-1 parent had no name), which fall back
+   *  to the usual id-derived random name. */
+  nameA?: string;
   /** Parent A's mutation mask at combine time. */
   maskA: number;
   /** Parent A's local modded mutation ids at combine time. */
@@ -423,11 +510,21 @@ export interface TileRef {
 }
 
 /** Device settings — persisted separately from game progress (SETTINGS_KEY).
- * Managed by AudioManager, which reads/writes this key directly. */
+ * Managed by AudioManager, which reads/writes this key directly; the authoritative
+ * shape is its `StoredSettings`, and every field here is optional in storage (a
+ * missing one takes the default noted beside it). Documented rather than imported
+ * so this file stays the one place the save's storage keys are described. */
 export interface Settings {
+  master: boolean;   // "All Audio" kill switch over every channel — defaults on
   music: boolean;    // farm BGM loop — defaults on
   sfx: boolean;      // action + menu one-shots — defaults on
   ambience: boolean; // ambient farm bed (birds/rooster) — defaults on
+  // Per-channel levels, 0..1. Each channel's final gain is its own level times the
+  // master level times the clip's authored volume.
+  masterVolume: number;
+  musicVolume: number;
+  sfxVolume: number;
+  ambienceVolume: number;
   muteWhenUnfocused: boolean; // also pause while a visible desktop window lacks focus
 }
 

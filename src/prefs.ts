@@ -41,13 +41,33 @@ const DAY_NIGHT_KEY = "zf2r.dayNight";
 const FRIEND_SORT_KEY = "zf2r.friendSort";
 const ZOMBIE_SORT_KEY = "zf2r.zombieSort";
 const HAZARD_TIP_KEY = "zf2r.seenHazardTip";
+const RAID_TIP_KEY = "zf2r.seenRaidTip."; // + raid id
 const BODY_COLOR_KEY = "zf2r.zombieBodyColor";
 const SHOW_MUTATIONS_KEY = "zf2r.showZombieMutations";
-const SHOW_DAMAGE_KEY = "zf2r.showDamageNumbers";
+const HEALTH_NUMBERS_KEY = "zf2r.showHealthNumbers";
+const DAMAGE_NUMBERS_KEY = "zf2r.showDamageNumbers";
+const LANTERN_KEY = "zf2r.farmerLantern";
+const LANTERN_TAP_KEY = "zf2r.farmerLanternTap";
+const RIGHT_CLICK_KEY = "zf2r.rightClick";
+
+/** Raised the first time this device refuses to KEEP a preference, so a player whose
+ *  settings quietly reset is told why instead of re-making the same change every
+ *  launch. Wired to a HUD toast in main, exactly like SaveManager.onStorageError and
+ *  AudioManager.onStorageError — a refused write is invisible from inside the game
+ *  (the toggle moves, the setting applies, and it is gone at the next start), which is
+ *  precisely the report this exists to answer. */
+let onPrefStorageError: ((message: string) => void) | null = null;
+let storageWarned = false;
+
+export function setPrefStorageErrorHandler(fn: ((message: string) => void) | null): void {
+  onPrefStorageError = fn;
+}
 
 /** localStorage.getItem that survives a browser with storage denied (private mode,
  *  blocked third-party context). Appearance prefs are read while DRAWING, so a throw
- *  here would take the frame with it. */
+ *  here would take the frame with it — and `getFarmBackground` is read at module scope
+ *  during boot, where a throw takes the whole launch. EVERY read in this file goes
+ *  through here for that reason; none may touch `localStorage` directly. */
 function readPref(key: string): string | null {
   try {
     return localStorage.getItem(key);
@@ -56,11 +76,19 @@ function readPref(key: string): string | null {
   }
 }
 
+/** The write half of the same rule. A failure is reported once rather than swallowed:
+ *  a full quota and a blocked storage both look identical to the player otherwise. */
 function writePref(key: string, value: string): void {
   try {
     localStorage.setItem(key, value);
-  } catch {
-    /* preference is optional */
+  } catch (error) {
+    console.warn("[prefs] write failed", key, error);
+    if (storageWarned) return;
+    storageWarned = true;
+    onPrefStorageError?.(
+      "Settings can't be saved in this browser, so they'll reset when you come back. " +
+      "Private browsing or a full storage quota is the usual cause.",
+    );
   }
 }
 
@@ -84,28 +112,85 @@ export function setShowZombieMutations(on: boolean): void {
   writePref(SHOW_MUTATIONS_KEY, on ? "1" : "0");
 }
 
+/** Whether an invasion prints the numbers behind its bars: the exact HP left on a
+ *  health bar, and a floating figure for each hit as it lands.
+ *
+ *  BOTH DEFAULT OFF, deliberately. ZF2 never showed either — the battlefield reads as
+ *  a fight, not a spreadsheet, and a screen of rising numbers is the sort of thing a
+ *  player either wants badly or does not want at all. The bars themselves are unchanged
+ *  either way, and neither switch touches the simulation: the numbers are read off the
+ *  same HP the bar is drawn from, so a raid plays out identically with them on. */
+export function getShowHealthNumbers(): boolean {
+  return readPref(HEALTH_NUMBERS_KEY) === "1";
+}
+
+export function setShowHealthNumbers(on: boolean): void {
+  writePref(HEALTH_NUMBERS_KEY, on ? "1" : "0");
+}
+
+export function getShowDamageNumbers(): boolean {
+  return readPref(DAMAGE_NUMBERS_KEY) === "1";
+}
+
+export function setShowDamageNumbers(on: boolean): void {
+  writePref(DAMAGE_NUMBERS_KEY, on ? "1" : "0");
+}
+
+/** Whether the farmer carries a lit lantern at night. Defaults to on — that is what
+ *  ZF2 does, and it is how you see anything after dark.
+ *
+ *  Off puts the farm back under the full darkness mask with only the placed objects'
+ *  own glows carved out of it, which is the look some players actually want. It also
+ *  takes the lamp out of the farmer's hand, so the two agree. */
+export function getFarmerLantern(): boolean {
+  return readPref(LANTERN_KEY) !== "0";
+}
+
+export function setFarmerLantern(on: boolean): void {
+  writePref(LANTERN_KEY, on ? "1" : "0");
+}
+
+/** Whether tapping the farmer after dark toggles his lantern. Defaults to on.
+ *
+ *  Off makes the lantern a Settings-only switch: the tap falls through to whatever
+ *  is under him, so a farmer standing on a ripe plot can never eat the harvest and
+ *  the lantern can't be flipped by a stray tap. The Settings row above still works
+ *  either way, so turning this off can't strand the lantern in a state you can't
+ *  change. */
+export function getFarmerLanternTap(): boolean {
+  return readPref(LANTERN_TAP_KEY) !== "0";
+}
+
+export function setFarmerLanternTap(on: boolean): void {
+  writePref(LANTERN_TAP_KEY, on ? "1" : "0");
+}
+
+/** What right-clicking the farm does.
+ *  • "menu"   — opens the quick-switch tool menu (the default).
+ *  • "select" — equips the Select tool, the pre-menu reflex some players kept.
+ *  Either way the browser's own context menu stays suppressed. */
+export type RightClickMode = "menu" | "select";
+
+export function getRightClickMode(): RightClickMode {
+  return readPref(RIGHT_CLICK_KEY) === "select" ? "select" : "menu";
+}
+
+export function setRightClickMode(mode: RightClickMode): void {
+  writePref(RIGHT_CLICK_KEY, mode);
+}
+
 /** Both appearance choices at once, for the render sites that apply them. */
 export function zombieAppearancePrefs(): ZombieAppearancePrefs {
   return { bodyColor: getZombieBodyColorMode(), showMutations: getShowZombieMutations() };
 }
 
-/** Whether raids show floating damage numbers. Visual only; combat/replay math does
- *  not read this preference. Defaults off so normal play keeps the original look. */
-export function getShowDamageNumbers(): boolean {
-  return readPref(SHOW_DAMAGE_KEY) === "1";
-}
-
-export function setShowDamageNumbers(on: boolean): void {
-  writePref(SHOW_DAMAGE_KEY, on ? "1" : "0");
-}
-
 /** Which sprite pack to render with. Defaults to ZF2 (the only pack wired today). */
 export function getSpriteSet(): SpriteSet {
-  return localStorage.getItem(SPRITE_KEY) === "zf1" ? "zf1" : "zf2";
+  return readPref(SPRITE_KEY) === "zf1" ? "zf1" : "zf2";
 }
 
 export function setSpriteSet(set: SpriteSet): void {
-  localStorage.setItem(SPRITE_KEY, set);
+  writePref(SPRITE_KEY, set);
 }
 
 // Foliage density per background, as a fraction of the base (Deep Forest) tree
@@ -127,44 +212,44 @@ export const FARM_BACKGROUNDS: { id: FarmBackground; label: string }[] = [
 
 /** How lush the farm's foliage ring is. Defaults to Woodland (the medium density). */
 export function getFarmBackground(): FarmBackground {
-  const v = localStorage.getItem(FARM_BG_KEY);
+  const v = readPref(FARM_BG_KEY);
   return isFarmBackground(v) ? v : DEFAULT_FARM_BACKGROUND;
 }
 
 export function setFarmBackground(bg: FarmBackground): void {
-  localStorage.setItem(FARM_BG_KEY, bg);
+  writePref(FARM_BG_KEY, bg);
 }
 
 /** Player lighting preference. Auto follows the browser/device's local clock. */
 export function getDayNightMode(): DayNightMode {
-  const value = localStorage.getItem(DAY_NIGHT_KEY);
+  const value = readPref(DAY_NIGHT_KEY);
   return value === "day" || value === "night" ? value : "auto";
 }
 
 export function setDayNightMode(mode: DayNightMode): void {
-  localStorage.setItem(DAY_NIGHT_KEY, mode);
+  writePref(DAY_NIGHT_KEY, mode);
 }
 
 /** How the friends list is ordered. Purely a display choice, so it lives here with
  *  the other view preferences rather than in the save. */
 export function getFriendSort(): FriendSort {
-  const value = localStorage.getItem(FRIEND_SORT_KEY);
+  const value = readPref(FRIEND_SORT_KEY);
   return isFriendSort(value) ? value : DEFAULT_FRIEND_SORT;
 }
 
 export function setFriendSort(sort: FriendSort): void {
-  localStorage.setItem(FRIEND_SORT_KEY, sort);
+  writePref(FRIEND_SORT_KEY, sort);
 }
 
 /** How the "My Zombies" roster is ordered. Like the friends sort this is a view
  *  preference, not progression, so it stays device-local instead of in the save. */
 export function getZombieSort(): ZombieSort {
-  const value = localStorage.getItem(ZOMBIE_SORT_KEY);
+  const value = readPref(ZOMBIE_SORT_KEY);
   return isZombieSort(value) ? value : DEFAULT_ZOMBIE_SORT;
 }
 
 export function setZombieSort(sort: ZombieSort): void {
-  localStorage.setItem(ZOMBIE_SORT_KEY, sort);
+  writePref(ZOMBIE_SORT_KEY, sort);
 }
 
 /** Whether the player has been shown the "tap/click hazards to damage them" tip,
@@ -174,24 +259,50 @@ export function setZombieSort(sort: ZombieSort): void {
  *  hint about THIS device's input, not account progression. A browser that can't
  *  write storage simply sees the tip again — cheaper than failing the launch. */
 export function hasSeenHazardTip(): boolean {
-  try {
-    return localStorage.getItem(HAZARD_TIP_KEY) === "1";
-  } catch {
-    return false;
-  }
+  return readPref(HAZARD_TIP_KEY) === "1";
 }
 
 export function markHazardTipSeen(): void {
-  try {
-    localStorage.setItem(HAZARD_TIP_KEY, "1");
-  } catch {
-    /* preference is optional */
-  }
+  writePref(HAZARD_TIP_KEY, "1");
 }
 
-/** Local-clock night window. This avoids requesting precise location permission:
- * 7pm through 6:59am in the device's own timezone. */
+/** Whether Tim's one-off briefing for a particular invasion has been given yet. Some
+ *  raids run on a rule the battlefield never states — the Pirates' Scallywag mirrors
+ *  whatever attack speed you bring, so a fast army is answered by a fast enemy — and
+ *  the game only ever admitted it in the DEFEAT text, after the lesson had already
+ *  cost a fight. Stored per raid id, and device-local for the same reason as the
+ *  hazard tip: it is a hint about how to play, not account progression, so a browser
+ *  that cannot write storage simply hears Tim out again. */
+export function hasSeenRaidTip(raidId: number): boolean {
+  return readPref(RAID_TIP_KEY + raidId) === "1";
+}
+
+export function markRaidTipSeen(raidId: number): void {
+  writePref(RAID_TIP_KEY + raidId, "1");
+}
+
+/** When the local-clock night window opens and closes, in the device's own
+ *  timezone. Whole hours, and deliberately not derived from real sunset: that
+ *  would need precise location permission. */
+export const NIGHT_START_HOUR = 19;
+export const NIGHT_END_HOUR = 7;
+/** How far either side of nightfall counts as dusk. */
+export const DUSK_HOURS = 2;
+
+/** Local-clock night window: 7pm through 6:59am. */
 export function isLocalNight(at = new Date()): boolean {
   const hour = at.getHours();
-  return hour >= 19 || hour < 7;
+  return hour >= NIGHT_START_HOUR || hour < NIGHT_END_HOUR;
+}
+
+/** The hours either side of nightfall — 5pm to 8:59pm by default.
+ *
+ *  Derived from NIGHT_START_HOUR rather than written out, so the two can never
+ *  drift apart: a dusk window that no longer straddles the moment the lights go
+ *  down is worse than none, because the sunset backdrop would show while the sky
+ *  is plainly still day. Half of this window is also night, which is intended —
+ *  the sunset art carries on under the darkness for the first couple of hours. */
+export function isLocalDusk(at = new Date()): boolean {
+  const hour = at.getHours();
+  return hour >= NIGHT_START_HOUR - DUSK_HOURS && hour < NIGHT_START_HOUR + DUSK_HOURS;
 }

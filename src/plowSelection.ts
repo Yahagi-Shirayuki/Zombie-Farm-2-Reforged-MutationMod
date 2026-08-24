@@ -15,12 +15,26 @@ export function snapPlowOrigin(anchor: PlowOrigin, current: PlowOrigin): PlowOri
   };
 }
 
-/** Pick the plot origin a drag-plow stroke should lay under this pointer.
+/** Where a drag-plow stroke should actually lay a plot for a pointer on (col,row).
  *
- * The stroke still prefers the lattice established by its starting tile, but if
- * that square collides with existing soil, try nearby origins that still cover
- * the tile under the pointer. That keeps a swipe from leaving holes beside an
- * already-plowed row just because its original lattice was offset by one tile.
+ *  First choice is `snapPlowOrigin`, which keeps a swipe's plots edge-to-edge instead of a
+ *  smeared overlap per tile crossed. But that lattice comes from wherever the finger
+ *  happened to go down, and it is NOT shared with the plots already on the farm — so
+ *  taking it as the only answer meant a swipe running alongside an existing row failed for
+ *  exactly the stretch beside it and worked at both ends. That is the reported "it leaves
+ *  3-4 pieces unplowed around the centre of my selection": measured on a real save, the
+ *  SAME swipe laid 12 plots or 5 depending only on which tile it started from, one row
+ *  apart.
+ *
+ *  So when the lattice square will not fit, nudge instead of dropping the plot: consider
+ *  every origin whose 4x4 still covers the tile under the pointer — the player asked for
+ *  soil HERE — and take whichever fits and sits closest to the lattice. The plot stays
+ *  under the finger, the run stays as aligned as the ground allows, and it relaxes back
+ *  onto the lattice the moment the obstruction is past.
+ *
+ *  `fits` answers whether a 4x4 at that origin can be laid right now — free ground, and
+ *  not already claimed earlier in this same stroke. Returns null when nothing fits, which
+ *  is the honest answer for a pointer over ground that is genuinely full.
  */
 export function choosePlowOrigin(
   anchor: PlowOrigin,

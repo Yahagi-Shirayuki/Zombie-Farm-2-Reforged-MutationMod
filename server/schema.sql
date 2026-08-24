@@ -321,7 +321,7 @@ CREATE TABLE IF NOT EXISTS roster_actions (
   created_at  INTEGER NOT NULL
 );
 
--- Server-owned farm size (a scalar, upgraded 30→40→50→60 in sequence). Seeded once
+-- Server-owned farm size (a scalar, upgraded 30→40→50→60→70 in sequence). Seeded once
 -- from the save; thereafter the server owns it (a `sizeUpgrade` debits the exact tier
 -- price + bumps it), so an edited save can't fabricate a bigger farm.
 -- Per-account farm state — and, by history, the account's import-flag row (the *_seeded
@@ -491,6 +491,14 @@ CREATE TABLE IF NOT EXISTS quest_documents_v3 (
   current_json  TEXT NOT NULL DEFAULT '{"completed":[],"progress":[]}',
   updated_at    INTEGER NOT NULL
 );
+-- Daily/weekly quests. Deliberately a separate document from quest_documents_v3 —
+-- see migrations/0049_periodic_quests.sql for why.
+CREATE TABLE IF NOT EXISTS periodic_quest_documents_v3 (
+  account_id    TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  version       INTEGER NOT NULL DEFAULT 0,
+  current_json  TEXT NOT NULL DEFAULT '{"daily":null,"weekly":null}',
+  updated_at    INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS gameplay_documents_v3 (
   account_id    TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
   current_json  TEXT NOT NULL,
@@ -561,6 +569,33 @@ CREATE TABLE IF NOT EXISTS raid_revivals_v3 (
 );
 CREATE INDEX IF NOT EXISTS idx_raid_revivals_pending
   ON raid_revivals_v3(account_id, resolved_at);
+-- The graveyard: casualties that were not revived, so a Memorial Statue can carve
+-- one in stone. Same minimal shape as roster_v3 (the card is derived from the
+-- catalog by key + mutation) plus the two things that cannot be derived once the
+-- roster row is gone: when it died, and its individual name. See migration 0047.
+CREATE TABLE IF NOT EXISTS fallen_v3 (
+  account_id         TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  unit_id            TEXT NOT NULL,
+  zombie_key         TEXT NOT NULL,
+  name               TEXT,
+  mutation           INTEGER NOT NULL DEFAULT 0,
+  invasions          INTEGER NOT NULL DEFAULT 0,
+  color              TEXT,
+  died_at            INTEGER NOT NULL,
+  -- When this zombie last came OFF a statue. Ordering reads
+  -- COALESCE(released_at, died_at), so a released zombie rejoins the graveyard at the
+  -- top and ages out from there instead of being evicted by its old date of death.
+  -- Never displayed — the plaque's date is `died_at`. See migration 0048.
+  released_at        INTEGER,
+  memorial_object_id TEXT,
+  PRIMARY KEY (account_id, unit_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fallen_v3_recent
+  ON fallen_v3(account_id, died_at DESC);
+-- One zombie per plinth, enforced in the database rather than in application code.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fallen_v3_statue
+  ON fallen_v3(account_id, memorial_object_id)
+  WHERE memorial_object_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS epic_boss_runs_v3 (
   account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
   run_id TEXT NOT NULL UNIQUE, boss_id TEXT NOT NULL,
@@ -568,7 +603,10 @@ CREATE TABLE IF NOT EXISTS epic_boss_runs_v3 (
   level INTEGER NOT NULL, max_hp INTEGER NOT NULL, current_hp INTEGER NOT NULL,
   encounter_started_at INTEGER NOT NULL DEFAULT 0, retry_ready_at INTEGER NOT NULL DEFAULT 0,
   token_count INTEGER NOT NULL DEFAULT 0,
-  completed_at INTEGER NOT NULL DEFAULT 0, attack_order_json TEXT NOT NULL DEFAULT '[]'
+  completed_at INTEGER NOT NULL DEFAULT 0, attack_order_json TEXT NOT NULL DEFAULT '[]',
+  -- '' when the event was bought; a plants.json crop key when a harvest lured the boss
+  -- (migration 0054, src/epicBoss/favoriteCrops.ts).
+  started_crop TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS epic_boss_sessions_v3 (
   id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -586,8 +624,8 @@ CREATE TABLE IF NOT EXISTS audit_events_v3 (
   created_at  INTEGER NOT NULL
 );
 
--- Asynchronous cross-account zombie/brain exchange. Assets represented by an OPEN
--- row are escrowed: sell zombies are absent from roster_v3 and buy-order brains have
+-- Asynchronous cross-account zombie/currency exchange. Assets represented by an OPEN
+-- row are escrowed: sell zombies are absent from roster_v3 and a buy order's payment has
 -- already been deducted from balances.
 CREATE TABLE IF NOT EXISTS black_market_orders (
   id TEXT PRIMARY KEY,
@@ -603,7 +641,13 @@ CREATE TABLE IF NOT EXISTS black_market_orders (
     mutation_required > 0
     AND kind='BUY_ZOMBIE'
   )),
-  price_brains INTEGER NOT NULL CHECK (price_brains BETWEEN 1 AND 1000000),
+  -- THE PRICE, denominated in `currency` below — a gold post stores its gold here. The
+  -- brains in the name is historical (migration 0045 added the currency; renaming the
+  -- column would have broken migration 0044's SQL, which names it).
+  price_brains INTEGER NOT NULL CHECK (price_brains BETWEEN 1 AND 10000000),
+  -- What the price is paid in. Every row that existed before migration 0045 is 'BRAINS',
+  -- which is also the default, so an old post keeps behaving exactly as it did.
+  currency TEXT NOT NULL DEFAULT 'BRAINS' CHECK (currency IN ('BRAINS', 'GOLD')),
   status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'FULFILLED', 'CANCELLED')),
   created_day INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
@@ -613,6 +657,8 @@ CREATE TABLE IF NOT EXISTS black_market_orders (
   source_unit_id TEXT,
   escrow_mutation INTEGER,
   escrow_invasions INTEGER,
+  -- The escrowed payment of a BUY_ZOMBIE post, in the row's `currency` — same historical
+  -- name, same meaning as price_brains above.
   escrow_brains INTEGER NOT NULL DEFAULT 0,
   -- The escrowed zombie's body tint, so a cancel hands back the same-looking unit
   -- and a buyer receives the one they saw listed (migration 0041).
@@ -631,7 +677,7 @@ CREATE TABLE IF NOT EXISTS black_market_orders (
   -- owed; delivered_unit_id records which unit it became.
   claimed_at INTEGER,
   delivered_unit_id TEXT,
-  -- Payout of the traded brains. A SALE's brains are held by the market after
+  -- Payout of the traded currency. A SALE's payment is held by the market after
   -- settlement and credited to its creator when they collect; a filled REQUEST pays
   -- its fulfiller inside the fulfil batch and is stamped there. NULL on a FULFILLED
   -- sale means the market is still holding them (migration 0043).
@@ -671,3 +717,45 @@ CREATE TABLE IF NOT EXISTS service_state (
   updated_at INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO service_state (id, mode, notice, updated_at) VALUES (1, 'open', NULL, 0);
+
+-- Friend invasions (PvP) — see migrations/0055_pvp_invasions.sql for the field notes.
+CREATE TABLE IF NOT EXISTS pvp_sessions_v3 (
+  id TEXT PRIMARY KEY,
+  attacker_id TEXT NOT NULL REFERENCES accounts(id),
+  defender_id TEXT NOT NULL REFERENCES accounts(id),
+  config_json TEXT NOT NULL,
+  ruleset_version INTEGER NOT NULL,
+  attack_score INTEGER NOT NULL,
+  defense_score INTEGER NOT NULL,
+  boosts_json TEXT NOT NULL DEFAULT '{}',
+  started_at INTEGER NOT NULL,
+  earliest_finish_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  result_json TEXT,
+  win INTEGER,
+  final_tick INTEGER,
+  inputs_json TEXT,
+  defense_claimed_at INTEGER,
+  -- Daily income caps (0057): stamped at settlement; only flagged rows pay.
+  attacker_rewarded INTEGER,
+  defense_rewarded INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pvp_live ON pvp_sessions_v3(attacker_id) WHERE finished_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_pvp_pair_day ON pvp_sessions_v3(attacker_id, defender_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_pvp_defender ON pvp_sessions_v3(defender_id, finished_at);
+CREATE INDEX IF NOT EXISTS idx_pvp_attacker ON pvp_sessions_v3(attacker_id, finished_at);
+
+-- PvP rework (0057): authored defense line-up + server-authored lifetime counters.
+CREATE TABLE IF NOT EXISTS pvp_defense_v3 (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id),
+  loadout_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pvp_stats_v3 (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id),
+  attack_wins INTEGER NOT NULL DEFAULT 0,
+  attack_losses INTEGER NOT NULL DEFAULT 0,
+  defense_wins INTEGER NOT NULL DEFAULT 0,
+  defense_losses INTEGER NOT NULL DEFAULT 0
+);

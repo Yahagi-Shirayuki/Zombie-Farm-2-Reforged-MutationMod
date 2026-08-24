@@ -1,18 +1,22 @@
 // The Zombie Teams panel (opened from the Mausoleum): saved farm line-ups.
 //
 // Two screens, both rendered here:
-//   ? the team list ? every saved team with who is in it and an Assemble button
-//   ? the team editor ? the whole owned roster as a numbered picker, so a team
+//   • the team list — every saved team with who is in it and an Assemble button
+//   • the team editor — the whole owned roster as a numbered picker, so a team
 //     records an ORDER as well as a membership (it becomes the raid attack order)
 //
 // The panel only ever asks the Hud hooks for things: it never touches the roster
 // itself. Assembling is a single call into main.ts, which performs the moves
 // through the same authoritative store/deploy path the Mausoleum's own buttons
-// use ? see hud.onTeamAssemble.
+// use — see hud.onTeamAssemble.
 import type { Hud } from "../../hud";
 import { markPrimary, openModal } from "../Modal";
 import { onFirstVisible } from "../onFirstVisible";
 import type { RosterEntry } from "../../zombie/types";
+import { visibleMutations } from "../../zombie/mutationVisibility";
+import {
+  compactOrder, selectedCount, toggleSlot, type OrderSlots,
+} from "../../raid/attackOrderSlots";
 import {
   assembleReport, MAX_TEAMS, MAX_TEAM_NAME_LENGTH, nextTeamId, normalizeTeamName,
   planTeamAssembly, shortfallNotice, type ZombieTeam,
@@ -20,21 +24,23 @@ import {
 
 /** Portrait tile for one roster entry: the species art first, replaced by this
  *  individual's mutation-aware render once it is available (deferred, like every
- *  other grid ? each render is a blocking GPU readback). */
+ *  other grid — each render is a blocking GPU readback). */
 function paintPortrait(el: HTMLElement, hud: Hud, z: RosterEntry): void {
   const portrait = hud.zombiePortraitOf ? hud.zombiePortraitOf(z.key) : "";
   if (portrait) el.style.backgroundImage = `url(${portrait})`;
   if (!hud.zombieMutationPortraitOf) return;
   onFirstVisible(el, () => {
-    void hud.zombieMutationPortraitOf?.(z.key, z.mutation, z.color, z.mutationIds)
+    void hud.zombieMutationPortraitOf?.(
+      z.key, visibleMutations(z.id, z.mutation), z.color, undefined, () => el.isConnected,
+    )
       .then((image) => { if (el.isConnected) el.style.backgroundImage = `url(${image})`; })
       .catch(() => { /* retain the static species portrait */ });
   });
 }
 
-/** "6 on farm ? 2 resting ? 1 missing" ? what this team would field right now. */
+/** "6 on farm · 2 resting · 1 missing" — what this team would field right now. */
 function teamSummary(team: ZombieTeam, roster: RosterEntry[]): string {
-  if (!team.members.length) return "Empty ? nobody picked yet";
+  if (!team.members.length) return "Empty — nobody picked yet";
   const owned = new Map(roster.map((z) => [z.id, z]));
   let onFarm = 0;
   let stored = 0;
@@ -48,7 +54,7 @@ function teamSummary(team: ZombieTeam, roster: RosterEntry[]): string {
   const parts = [`${onFarm + stored} zombie${onFarm + stored === 1 ? "" : "s"}`];
   if (stored) parts.push(`${stored} resting`);
   if (missing) parts.push(`${missing} missing`);
-  return parts.join(" ? ");
+  return parts.join(" · ");
 }
 
 export function openTeamsPanel(hud: Hud, onClose?: () => void) {
@@ -88,7 +94,7 @@ export function openTeamsPanel(hud: Hud, onClose?: () => void) {
       empty.className = "zr-empty";
       empty.textContent =
         "No teams yet. Save your garden crew, a raiding party, or a line-up for one " +
-        "particular invasion ? then swap between them with a single tap.";
+        "particular invasion — then swap between them with a single tap.";
       list.appendChild(empty);
     }
     for (const team of teams) list.appendChild(buildTeamRow(hud, team, roster, render));
@@ -126,7 +132,7 @@ function buildTeamRow(
   info.append(name, sub);
 
   // The strip shows the line-up in ATTACK ORDER, with anyone no longer owned kept
-  // as an empty frame rather than silently dropped ? the count above says "1
+  // as an empty frame rather than silently dropped — the count above says "1
   // missing", and this is where the player sees which slot it was.
   const strip = document.createElement("div");
   strip.className = "zteam-strip";
@@ -137,7 +143,7 @@ function buildTeamRow(
     tile.className = "zteam-pip";
     if (!unit) {
       tile.classList.add("gone");
-      tile.title = "This zombie is no longer in your roster ? the team assembles without it.";
+      tile.title = "This zombie is no longer in your roster — the team assembles without it.";
     } else {
       tile.title = unit.stored ? `${unit.name} (resting in the Mausoleum)` : unit.name;
       if (unit.stored) tile.classList.add("resting");
@@ -199,11 +205,11 @@ function buildTeamRow(
   remove.onclick = async () => {
     const ok = await hud.confirmInGame(
       "Delete this team?",
-      `"${team.name}" will be forgotten. Your zombies are not affected ? only the saved line-up.`,
+      `"${team.name}" will be forgotten. Your zombies are not affected — only the saved line-up.`,
       "Delete",
     );
     if (!ok) return;
-    hud.onTeamsChange?.((hud.getTeams?.() ?? []).filter((t: ZombieTeam) => t.id !== team.id));
+    hud.onTeamsChange?.((hud.getTeams?.() ?? []).filter((t) => t.id !== team.id));
     refresh();
   };
 
@@ -214,7 +220,7 @@ function buildTeamRow(
 
 // The picker. Every owned zombie is a card; tapping it appends to the line-up
 // (the number on the card is its attack position), tapping again removes it and
-// renumbers the rest ? deliberately the same interaction as the raid Army screen,
+// renumbers the rest — deliberately the same interaction as the raid Army screen,
 // down to the CSS, because it is the same decision being made in advance.
 function openTeamEditor(hud: Hud, team: ZombieTeam | null, afterSave: () => void) {
   const roster = hud.getRoster?.() ?? [];
@@ -238,7 +244,10 @@ function openTeamEditor(hud: Hud, team: ZombieTeam | null, afterSave: () => void
   // an invisible slot in the order. It is dropped from the saved team on the next
   // save, which is the one moment the player can see what they are losing.
   const ownedIds = new Set(roster.map((z) => z.id));
-  const order: string[] = (team?.members ?? []).filter((id) => ownedIds.has(id)).slice(0, cap);
+  // Slotted, like the invasion picker: un-picking a member leaves its slot EMPTY and
+  // the next card tapped fills the lowest one, so replacing whoever leads a saved
+  // line-up doesn't renumber the rest. Saving closes the gaps (see attackOrderSlots).
+  let order: OrderSlots = (team?.members ?? []).filter((id) => ownedIds.has(id)).slice(0, cap);
 
   const title = document.createElement("h2");
   title.textContent = team ? "Edit team" : "New team";
@@ -257,15 +266,16 @@ function openTeamEditor(hud: Hud, team: ZombieTeam | null, afterSave: () => void
   markPrimary(save);
 
   const refresh = () => {
-    counter.textContent = `${order.length} / ${cap} picked`;
-    counter.classList.toggle("short", !order.length);
+    const n = selectedCount(order);
+    counter.textContent = `${n} / ${cap} picked`;
+    counter.classList.toggle("short", !n);
     for (const card of grid.querySelectorAll<HTMLElement>(".army-card")) {
       const at = order.indexOf(card.dataset.id!);
       card.classList.toggle("sel", at >= 0);
       const tick = card.querySelector<HTMLElement>(".tick");
       if (tick) tick.textContent = at >= 0 ? String(at + 1) : "";
     }
-    save.textContent = order.length ? `Save team of ${order.length}` : "Save empty team";
+    save.textContent = n ? `Save team of ${n}` : "Save empty team";
   };
 
   if (!roster.length) {
@@ -296,38 +306,39 @@ function openTeamEditor(hud: Hud, team: ZombieTeam | null, afterSave: () => void
     tick.className = "tick";
     card.append(tick, por, nm, ty, where);
     card.onclick = () => {
-      const at = order.indexOf(z.id);
-      if (at >= 0) order.splice(at, 1);
-      else if (order.length < cap) order.push(z.id);
+      order = toggleSlot(order, z.id, cap);
       refresh();
     };
     grid.appendChild(card);
   }
 
   // "Use current farm" captures the line-up standing on the farm right now, in
-  // roster order ? the fastest way to record a team you have already arranged.
+  // roster order — the fastest way to record a team you have already arranged.
   const capture = document.createElement("button");
   capture.className = "raid-quick";
   capture.textContent = "Use current farm";
   capture.onclick = () => {
-    order.splice(0, order.length, ...roster.filter((z) => !z.stored).slice(0, cap).map((z) => z.id));
+    order = roster.filter((z) => !z.stored).slice(0, cap).map((z) => z.id);
     refresh();
   };
 
   const clear = document.createElement("button");
   clear.className = "raid-quick";
   clear.textContent = "Clear";
-  clear.onclick = () => { order.splice(0, order.length); refresh(); };
+  clear.onclick = () => { order = []; refresh(); };
 
   save.onclick = () => {
     const teams = hud.getTeams?.() ?? [];
     const fallback = team?.name ?? `Team ${teams.length + 1}`;
     const name = normalizeTeamName(nameInput.value) ?? fallback;
+    // A saved team is a continuous line-up: empty slots are a picking aid only, and a
+    // hole in `members` would carry straight into the raid attack order it becomes.
+    const members = compactOrder(order);
     const next: ZombieTeam = team
-      ? { ...team, name, members: [...order] }
-      : { id: nextTeamId(teams), name, members: [...order] };
+      ? { ...team, name, members }
+      : { id: nextTeamId(teams), name, members };
     hud.onTeamsChange?.(team
-      ? teams.map((t: ZombieTeam) => (t.id === team.id ? next : t))
+      ? teams.map((t) => (t.id === team.id ? next : t))
       : [...teams, next].slice(0, MAX_TEAMS));
     close();
     afterSave();

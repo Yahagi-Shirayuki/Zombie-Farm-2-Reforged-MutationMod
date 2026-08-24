@@ -26,6 +26,15 @@
    "brains": 12,
    "info": "60x60",
    "icon": "upgrade_farmsize.png"
+  },
+  {
+   "name": "Colossal 'ol Farm",
+   "size": 70,
+   "level": 41,
+   "gold": 1250000,
+   "brains": 20,
+   "info": "70x70",
+   "icon": "upgrade_farmsize.png"
   }
  ],
  "climate": [
@@ -76,6 +85,22 @@
    "gold": 10000,
    "icon": "upgrade_ground_lunar.png",
    "terrain": "water"
+  },
+  {
+   "name": "Autumn Ground",
+   "climateGID": 0,
+   "level": 1,
+   "gold": 3000,
+   "icon": "upgrade_ground_autumn.png",
+   "terrain": "autumn"
+  },
+  {
+   "name": "Sakura Ground",
+   "climateGID": 0,
+   "level": 1,
+   "gold": 7500,
+   "icon": "upgrade_ground_sakura.png",
+   "terrain": "sakura"
   }
  ]
 }

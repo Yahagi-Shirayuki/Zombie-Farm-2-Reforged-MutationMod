@@ -91,6 +91,16 @@ GitHub Pages subpath, which is a nasty class of bug to catch late.
 path rather than breaking players' farms; the online build additionally has to stay
 compatible with server-held state.
 
+**Server catalogs must not drift from their asset.** Several tables under `server/src/`
+mirror a `public/assets/*.json` the client reads — the server charges and grants from its
+copy, so a divergence means the Market shows one rule and the player gets another, silently.
+Prefer **deriving** the table from the asset at module load (`rosterCatalog`,
+`zombieCropCatalog`, `questCatalog` do this — drift becomes impossible). If it has to be
+hand-typed, it needs a sync test: `catalog`→`farm.test.ts`, and `objectCatalogSync` /
+`boostCatalogSync` / `raidCatalogSync` / `shopCatalogSync` for the rest. Copy the nearest
+one. This is not hypothetical — the Brain Ticket shipped level-gated on the client and
+ungated on the server because its table had no test.
+
 **Server and security.** The server is authoritative for the economy, raids, and
 gifting, and that's load-bearing anti-cheat rather than an implementation detail. Read
 [SECURITY.md](SECURITY.md) before changing anything under `server/`. Never trust a
@@ -112,9 +122,11 @@ or online mode — that last one narrows things down fast. Browser and device ma
 rendering and touch issues. Console errors are the single most useful thing you can
 paste.
 
-`window.ZF` exposes debug handles (app, world, field, farmer, zombies, state, HUD,
-jobs, audio, save manager, quests, quest bus, raids, and helpers like `ZF.runRaid`) if
-you want to poke at live state.
+In a dev build (`npm run dev`), `window.ZF` exposes debug handles (app, world, field,
+farmer, zombies, state, HUD, jobs, audio, save manager, quests, quest bus, periodic
+quests, raids, and helpers like `ZF.runRaid`) if you want to poke at live state. It is
+compiled out of production bundles, so it won't be there on the deployed site — for a
+report from a player, Settings → Diagnostics is the equivalent.
 
 Security-relevant bugs — anything letting a client forge currency, items, raid
 outcomes, or another player's state — should not be filed as a public issue. See

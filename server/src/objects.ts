@@ -5,7 +5,7 @@
 // Ownership is a COUNT per object key (like boosts); placement/position is client-side
 // layout. There is no public "grant" — objects enter only through a priced `buy`.
 import type { Balance } from "./economy";
-import { type ObjectEcon, objectRefund, objectBuyXp, MAX_OBJECT_COUNT } from "./objectCatalog";
+import { type ObjectEcon, objectSellGold, objectBuyXp, MAX_OBJECT_COUNT } from "./objectCatalog";
 import { levelAllows } from "./farm";
 
 export type ObjectAction =
@@ -51,12 +51,15 @@ export type ObjectRefundPlan =
   | { ok: false; error: string };
 
 /** A refund: must own at least one and always credits gold. Brain costs convert
- * at 1,000 gold each. Server-granted free rewards use the one-gold minimum. */
-export function planObjectRefund(econ: ObjectEcon | undefined, have: number): ObjectRefundPlan {
+ * at 1,000 gold each. Server-granted free rewards use the one-gold minimum, except
+ * invasion prizes, which carry an authored sell value (see objectSellGold). */
+export function planObjectRefund(
+  key: string, econ: ObjectEcon | undefined, have: number
+): ObjectRefundPlan {
   if (!econ) return { ok: false, error: "bad_item" };
   if (econ.purchaseLimit !== undefined) return { ok: false, error: "not_sellable" };
   if (have < 1) return { ok: false, error: "none_owned" };
-  return { ok: true, currency: "gold", refund: objectRefund(econ.cost, econ.brains) };
+  return { ok: true, currency: "gold", refund: objectSellGold(key, econ) };
 }
 
 export type ObjectUpgradePlan =

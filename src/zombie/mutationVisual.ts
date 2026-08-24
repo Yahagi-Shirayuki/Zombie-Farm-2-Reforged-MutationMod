@@ -128,3 +128,19 @@ export function matchesMutationReplacement(
   return /(?:Head|UpperTeeth|Scar)(?:\.png)?$/i.test(file)
     && !isMutationForegroundPart(file);
 }
+
+/** Species whose authored art already covers the face, so head-slot mutations are still
+ *  WORN (they keep paying their stats) but contribute no artwork — otherwise a Carrot-eye
+ *  attachment lands on top of a mask. Ported from upstream: assets.mergeSpecialZombieModel
+ *  reads it while assembling a special actor, and it is pure art assembly, independent of
+ *  this fork's mutation rules. Add a masked actor once, here. */
+const MASKED_FACE_KEYS: ReadonlySet<string> = new Set([
+  "ZombieActorOldMcZombie",
+  "ZombieActorZastronaut",
+  "ZombieActorForest",
+]);
+
+/** Does this species hide (but still wear) head-slot mutations? */
+export function hidesHeadMutationArt(key: string): boolean {
+  return MASKED_FACE_KEYS.has(key);
+}

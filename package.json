@@ -1,12 +1,13 @@
 {
   "name": "zombiefarm",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.3",
   "license": "MIT",
   "type": "module",
   "description": "Zombie Farm Reforged - browser reimplementation with optional online mode",
   "scripts": {
     "dev": "vite",
+    "review:zombies": "vite --open /zombie-review.html",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
