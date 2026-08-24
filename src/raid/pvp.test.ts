@@ -20,6 +20,7 @@ import {
   PVP_WAVE_CADENCE,
   armyScore,
   buildPvpRaidDef,
+  orderedDefenseUnits,
   pvpRewardsForTier,
   pvpTierForScore,
   toDefenseUnits,
@@ -81,6 +82,33 @@ describe("toDefenseUnits", () => {
   it("is deterministic", () => {
     const built = army(12, 2);
     expect(toDefenseUnits(built)).toEqual(toDefenseUnits(built));
+  });
+});
+
+describe("orderedDefenseUnits (authored defenses)", () => {
+  it("keeps the authored order as the emergence order, with the same per-unit flip", () => {
+    const built = army(6, 1);
+    const defense = orderedDefenseUnits(built);
+    expect(defense).toHaveLength(6);
+    // Authored slot 1 emerges first — no strongest ranking, no weakest-first reverse.
+    expect(defense.map((u) => u.sourceKey)).toEqual(built.map((u) => u.sourceKey));
+    expect(defense.map((u) => u.id)).toEqual(defense.map((_, i) => `d${i}`));
+    for (let i = 0; i < defense.length; i++) {
+      expect(defense[i].team).toBe("enemy");
+      expect(defense[i].abilities).toEqual([]);
+      expect(defense[i].teamAuraStats).toBeUndefined();
+      expect(defense[i].attackCooldownMs).toBe(built[i].attackCooldownMs);
+      expect(defense[i].maxHp).toBe(built[i].maxHp);
+      expect(defense[i].str).toBe(built[i].str);
+    }
+  });
+
+  it("caps at PVP_DEFENSE_CAP without re-ranking", () => {
+    const built = army(20, 1);
+    const defense = orderedDefenseUnits(built);
+    expect(defense).toHaveLength(PVP_DEFENSE_CAP);
+    expect(defense.map((u) => u.sourceKey))
+      .toEqual(built.slice(0, PVP_DEFENSE_CAP).map((u) => u.sourceKey));
   });
 });
 

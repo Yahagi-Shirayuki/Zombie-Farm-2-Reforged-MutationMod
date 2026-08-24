@@ -41,9 +41,11 @@ import { levelForXp } from "./levels";
 import { activeBonusHeadId, farmerMultiplier } from "../../src/farmer";
 import {
   PVP_ARMY_SIZE,
+  PVP_MIN_LEVEL,
   PVP_RAID_ID,
   PVP_WAVE_CADENCE,
   armyScore,
+  orderedDefenseUnits,
   pvpTierForScore,
   toDefenseUnits,
   type PvpConfigInfo,
@@ -482,8 +484,114 @@ async function accountFightContext(db: D1Database, accountId: string) {
   return { level, abilityUnlocked, bonusHead };
 }
 
+const toParty = (rows: PvpRosterRow[], names: Map<string, string>) => rows.map((row) => {
+  const def = zombieDefs.get(row.zombie_key);
+  if (!def) return null;
+  return makeOwned(
+    row.unit_id, def as Parameters<typeof makeOwned>[1], 0, 0, row.invasions, row.mutation,
+    parseRosterColor(row.color), names.get(row.unit_id)
+  );
+});
+
+/** One defender in the scout preview: display fields only, never stats. */
+export interface PvpDefenderPreview {
+  key: string;
+  name: string;
+  mutation?: number;
+  color?: [number, number, number];
+}
+
+export type DefenseSnapshotResult =
+  | {
+      ok: true;
+      /** Enemy-side units in EMERGENCE order, ready for the pinned config. */
+      units: CombatUnit[];
+      score: number;
+      defenderName: string;
+      defenders: PvpDefenderPreview[];
+      /** True when the line-up came from the defender's saved defense, not the
+       *  strongest-16 auto pick. */
+      authored: boolean;
+    }
+  | { ok: false; error: string };
+
+/** Snapshot a defender's PvP defense from D1 alone (nothing here mutates their
+ *  account). Prefers the AUTHORED defense saved in pvp_defense_v3 — the saved order
+ *  is the emergence order, and a zombie sold or perished since it was saved simply
+ *  drops out — falling back to the strongest-16 auto pick (weakest emerging first)
+ *  for defenders who never arranged one. Authored defenses may field crypt-stored
+ *  zombies: a defense is a plan, not who happens to stand on the lawn. */
+export async function buildDefenseSnapshot(
+  db: D1Database,
+  defenderId: string
+): Promise<DefenseSnapshotResult> {
+  const [account, context, names, loadoutRow] = await Promise.all([
+    db.prepare("SELECT username FROM accounts WHERE id = ?").bind(defenderId)
+      .first<{ username: string | null }>(),
+    accountFightContext(db, defenderId),
+    rosterNames(db, defenderId),
+    db.prepare("SELECT loadout_json FROM pvp_defense_v3 WHERE account_id = ?")
+      .bind(defenderId).first<{ loadout_json: string }>(),
+  ]);
+  if (!account) return { ok: false, error: "bad_defender" };
+  if (context.level < PVP_MIN_LEVEL) return { ok: false, error: "defender_level" };
+
+  let loadoutIds: string[] = [];
+  try {
+    const parsed = JSON.parse(loadoutRow?.loadout_json ?? "{}") as { unitIds?: unknown };
+    if (Array.isArray(parsed.unitIds)) {
+      loadoutIds = parsed.unitIds.filter((id): id is string => typeof id === "string");
+    }
+  } catch { /* a bad loadout blob falls back to the auto snapshot */ }
+
+  // The snapshot ignores raid locks either way: a defender zombie mid-raid elsewhere
+  // still stands on the farm being copied.
+  let party: ReturnType<typeof makeOwned>[] = [];
+  let authored = false;
+  if (loadoutIds.length) {
+    const placeholders = loadoutIds.map(() => "?").join(",");
+    const rows = await db.prepare(`SELECT unit_id,zombie_key,mutation,invasions,color
+      FROM roster_v3 WHERE account_id=? AND unit_id IN (${placeholders})`)
+      .bind(defenderId, ...loadoutIds).all<PvpRosterRow>();
+    const byId = new Map((rows.results ?? []).map((row) => [row.unit_id, row]));
+    const ordered = loadoutIds.map((id) => byId.get(id)).filter((row): row is PvpRosterRow => !!row);
+    party = toParty(ordered, names).filter((unit): unit is NonNullable<typeof unit> => unit !== null);
+    authored = party.length > 0;
+  }
+  if (!party.length) {
+    const rows = await db.prepare(`SELECT unit_id,zombie_key,mutation,invasions,color
+      FROM roster_v3 WHERE account_id=? AND stored=0`).bind(defenderId).all<PvpRosterRow>();
+    party = toParty(rows.results ?? [], names).filter(
+      (unit): unit is NonNullable<typeof unit> => unit !== null
+    );
+  }
+  if (!party.length) return { ok: false, error: "no_defense" };
+
+  const built = buildPlayerUnits(party, {
+    concentration: true,
+    abilityUnlocked: context.abilityUnlocked,
+    playerLevel: context.level,
+    farmerStrengthMult: farmerMultiplier(context.bonusHead, "zombieStrength"),
+    farmerLifeMult: farmerMultiplier(context.bonusHead, "zombieLife"),
+  });
+  const units = authored ? orderedDefenseUnits(built) : toDefenseUnits(built);
+  return {
+    ok: true,
+    units,
+    score: armyScore(units),
+    defenderName: account.username?.trim() || "A friend",
+    defenders: units.map((u) => ({
+      key: u.sourceKey,
+      name: u.name,
+      ...(u.mutation !== undefined ? { mutation: u.mutation } : {}),
+      ...(u.color ? { color: u.color } : {}),
+    })),
+    authored,
+  };
+}
+
 /** Build a friend invasion's pinned config exclusively from D1: the attacker's chosen
- *  eight against a snapshot of the defender's deployed roster. Neither account has to
+ *  eight against a snapshot of the defender's PvP defense. Neither account has to
  *  be online, and nothing here mutates either one. */
 export async function buildPinnedPvpRaid(
   db: D1Database,
@@ -499,40 +607,21 @@ export async function buildPinnedPvpRaid(
     return { ok: false, error: "bad_roster" };
   }
   const placeholders = ids.map(() => "?").join(",");
-  const [attackerRows, defenderRows, defenderAccount, attacker, defender, attackerNames, defenderNames] =
-    await Promise.all([
-      db.prepare(`SELECT unit_id,zombie_key,mutation,invasions,color FROM roster_v3
-        WHERE account_id=? AND stored=0 AND locked_by_raid IS NULL AND unit_id IN (${placeholders})`)
-        .bind(attackerId, ...ids).all<PvpRosterRow>(),
-      // The defense is a SNAPSHOT: a defender zombie mid-raid elsewhere still stands
-      // on the farm being copied, so locks are deliberately not filtered here.
-      db.prepare(`SELECT unit_id,zombie_key,mutation,invasions,color FROM roster_v3
-        WHERE account_id=? AND stored=0`).bind(defenderId).all<PvpRosterRow>(),
-      db.prepare("SELECT username FROM accounts WHERE id = ?").bind(defenderId).first<{ username: string | null }>(),
-      accountFightContext(db, attackerId),
-      accountFightContext(db, defenderId),
-      rosterNames(db, attackerId),
-      rosterNames(db, defenderId),
-    ]);
+  const [attackerRows, attacker, attackerNames, defense] = await Promise.all([
+    db.prepare(`SELECT unit_id,zombie_key,mutation,invasions,color FROM roster_v3
+      WHERE account_id=? AND stored=0 AND locked_by_raid IS NULL AND unit_id IN (${placeholders})`)
+      .bind(attackerId, ...ids).all<PvpRosterRow>(),
+    accountFightContext(db, attackerId),
+    rosterNames(db, attackerId),
+    buildDefenseSnapshot(db, defenderId),
+  ]);
+  if (attacker.level < PVP_MIN_LEVEL) return { ok: false, error: "attacker_level" };
+  if (!defense.ok) return defense;
   const attackerById = new Map((attackerRows.results ?? []).map((row) => [row.unit_id, row]));
   if (attackerById.size !== ids.length) return { ok: false, error: "unit_not_owned" };
 
-  const toParty = (rows: PvpRosterRow[], names: Map<string, string>) => rows.map((row) => {
-    const def = zombieDefs.get(row.zombie_key);
-    if (!def) return null;
-    return makeOwned(
-      row.unit_id, def as Parameters<typeof makeOwned>[1], 0, 0, row.invasions, row.mutation,
-      parseRosterColor(row.color), names.get(row.unit_id)
-    );
-  });
-
   const attackParty = toParty(ids.map((id) => attackerById.get(id)!), attackerNames);
   if (attackParty.some((unit) => unit === null)) return { ok: false, error: "bad_roster" };
-  const defenseRows = (defenderRows.results ?? []);
-  const defenseParty = toParty(defenseRows, defenderNames).filter(
-    (unit): unit is NonNullable<typeof unit> => unit !== null
-  );
-  if (!defenseParty.length) return { ok: false, error: "no_defense" };
 
   // Both sides fight at full focus (concentration): the minigame is skipped in PvP,
   // and a snapshot defense has nobody home to pop bubbles for it anyway.
@@ -543,17 +632,10 @@ export async function buildPinnedPvpRaid(
     farmerStrengthMult: farmerMultiplier(attacker.bonusHead, "zombieStrength"),
     farmerLifeMult: farmerMultiplier(attacker.bonusHead, "zombieLife"),
   });
-  const defenseBuilt = buildPlayerUnits(defenseParty, {
-    concentration: true,
-    abilityUnlocked: defender.abilityUnlocked,
-    playerLevel: defender.level,
-    farmerStrengthMult: farmerMultiplier(defender.bonusHead, "zombieStrength"),
-    farmerLifeMult: farmerMultiplier(defender.bonusHead, "zombieLife"),
-  });
-  const enemyUnits = toDefenseUnits(defenseBuilt);
+  const enemyUnits = defense.units;
   const attackScore = armyScore(playerUnits);
-  const defenseScore = armyScore(enemyUnits);
-  const defenderName = defenderAccount?.username?.trim() || "A friend";
+  const defenseScore = defense.score;
+  const defenderName = defense.defenderName;
   return {
     ok: true,
     config: {

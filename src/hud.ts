@@ -46,17 +46,10 @@ import {
   compactOrder, fillSlots, selectedCount, toggleSlot, type OrderSlots,
 } from "./raid/attackOrderSlots";
 import { PVP_ARMY_SIZE, PVP_UI_ENABLED } from "./raid/pvp";
-
-/** One row of the Friends panel's invasion history (see net/api.PvpHistoryEntry). */
-export interface PvpHistoryHudEntry {
-  sessionId: string;
-  role: "attacker" | "defender";
-  otherName: string;
-  finishedAt: number;
-  attackerWon: boolean;
-  /** Set when this row is a still-unclaimed successful defense of YOURS. */
-  claimableTier?: number;
-}
+import { openInvasionsPanel } from "./ui/panels/invasions";
+import type {
+  PvpDefenseInfoView, PvpOverviewView, PvpRewardView, PvpScoutView,
+} from "./ui/panels/invasions";
 import { otherPlayMode, playModeDestinationLabel, type PlayMode } from "./playMode";
 import type { UpdateCheckResult } from "./updateCheck";
 import type {
@@ -1702,13 +1695,27 @@ export class Hud {
   /** Launch a friend invasion against this friend (online only): opens the PvP army
    *  picker, then the battle. Nobody risks anything; the winner takes boosts. */
   onInvadeFriend: ((friendId: string, name: string) => void) | null = null;
-  /** Friend-invasion history: attacks by and against this account (online only). */
-  getPvpHistory: (() => Promise<PvpHistoryHudEntry[]>) | null = null;
-  /** Claim a successful defense's boost reward. Resolves to the granted bundles, or
-   *  null when nothing was granted (already claimed / offline). */
-  onCollectPvpDefense:
-    | ((sessionId: string) => Promise<{ key: string; qty: number }[] | null>)
+  // ---- Invasions panel hooks (online only; see ui/panels/invasions.ts) ----
+  /** Whether the deployed Worker accepts friend invasions (bootstrap capability).
+   *  The Social hub shows the Invasions entry only when this is true, so the whole
+   *  feature launches (and parks) with the Worker's PVP_ENABLED var alone. */
+  pvpAvailable: (() => boolean) | null = null;
+  /** The player's current level, for the invasion level gate's client-side face. */
+  getPlayerLevel: (() => number) | null = null;
+  /** History + stats + claim backlog, in one server round trip. */
+  getPvpOverview: (() => Promise<PvpOverviewView | null>) | null = null;
+  /** Scout one friend's defense before attacking (score, tier, line-up). */
+  onScoutPvpDefense: ((friendId: string) => Promise<PvpScoutView | null>) | null = null;
+  /** The player's own defense loadout + how attackers would meet it. */
+  getPvpDefense: (() => Promise<PvpDefenseInfoView | null>) | null = null;
+  /** Save (or clear, with []) the authored defense order. Error code or null. */
+  onSavePvpDefense: ((unitIds: string[]) => Promise<string | null>) | null = null;
+  /** Claim every outstanding defense reward. Null = nothing granted. */
+  onClaimAllPvpDefense:
+    | (() => Promise<{ claimed: number; rewards: PvpRewardView[] } | null>)
     | null = null;
+  /** Open the replay viewer for one recorded fight. */
+  onWatchPvpReplay: ((sessionId: string) => void) | null = null;
   /** Pull the gift inbox from the server into the cache. */
   refreshInbox: (() => Promise<void>) | null = null;
   /** Cached unclaimed gifts addressed to me. */
@@ -3216,6 +3223,19 @@ export class Hud {
     market.appendChild(marketNote);
     market.onclick = () => { close(); this.openBlackMarket(); };
     choices.append(friends, market);
+    // Friend invasions — shown only when the deployed Worker accepts them, so the
+    // feature launches with a single Worker-var flip (PVP_ENABLED) and no client
+    // redeploy. PVP_UI_ENABLED stays as the hard client-side kill switch.
+    if (PVP_UI_ENABLED && (this.pvpAvailable?.() ?? false)) {
+      const invasions = document.createElement("button");
+      invasions.className = "social-choice";
+      invasions.append("Invasions");
+      const invasionsNote = document.createElement("span");
+      invasionsNote.textContent = "Raid friends' farms, arrange your defense";
+      invasions.appendChild(invasionsNote);
+      invasions.onclick = () => { close(); openInvasionsPanel(this); };
+      choices.appendChild(invasions);
+    }
     panel.append(choices);
   }
 
@@ -4114,12 +4134,11 @@ export class Hud {
     acctBar.className = "fr-acct";
     const requestsWrap = document.createElement("div");
     const inboxWrap = document.createElement("div");
-    const pvpWrap = document.createElement("div");
     const toolbar = document.createElement("div");
     toolbar.className = "fr-toolbar";
     const list = document.createElement("div");
     list.className = "prof-list";
-    panel.append(x, h, note, acctBar, requestsWrap, inboxWrap, pvpWrap, toolbar, list);
+    panel.append(x, h, note, acctBar, requestsWrap, inboxWrap, toolbar, list);
 
     const canOnline = this.onlineAvailable?.() ?? false;
     const online = () => this.socialOnline?.() ?? false;
@@ -4642,19 +4661,8 @@ export class Hud {
           visit.title = `Look around ${f.name}'s farm (read-only)`;
           visit.onclick = () => this.onVisitFriend?.(f.id, f.name);
           acts.appendChild(visit);
-          // Friend invasion: fight a snapshot of their deployed zombies. Zero risk on
-          // both sides; the winner takes boosts scaled by the opposing army's strength.
-          // PARKED behind PVP_UI_ENABLED while the interface is redesigned.
-          if (PVP_UI_ENABLED) {
-          const invade = document.createElement("button");
-          invade.className = "prof-btn play fr-invade";
-          invade.textContent = "Invade ⚔";
-          invade.title =
-            `Send ${PVP_ARMY_SIZE} zombies against ${f.name}'s defenders. ` +
-            "Nobody loses zombies — win boosts scaled by their army's strength.";
-          invade.onclick = () => { bg.remove(); this.onInvadeFriend?.(f.id, f.name); };
-          acts.appendChild(invade);
-          }
+          // Friend invasions launch from the Invasions panel (Social → Invasions),
+          // not from this drawer — see ui/panels/invasions.ts.
           // Unfriend / block (online). Remove tears down the edge; Block also
           // prevents re-adding and future gifts.
           const del = document.createElement("button");
@@ -4742,70 +4750,15 @@ export class Hud {
           : "Sign in to connect with friends online. You can still keep a local list below.";
     };
 
-    // ---- Friend invasions: recent attacks by/against this account, and the Claim
-    // button for a successful defense's reward. Loaded once per panel open (plus on
-    // refresh); rendered from the cache so renderAll stays synchronous.
-    let pvpEntries: PvpHistoryHudEntry[] = [];
-    const boostName = (key: string) =>
-      this.boosts.find((b) => b.key === key)?.name ?? key;
-    const rewardLabel = (rewards: { key: string; qty: number }[]) =>
-      rewards.map((r) => (r.qty > 1 ? `${boostName(r.key)} x${r.qty}` : boostName(r.key))).join(", ");
-    const renderPvp = () => {
-      pvpWrap.innerHTML = "";
-      if (!PVP_UI_ENABLED || !online() || !pvpEntries.length) return;
-      const hd = document.createElement("div");
-      hd.className = "fr-inbox-h";
-      hd.textContent = `⚔ Friend invasions (${pvpEntries.length})`;
-      pvpWrap.appendChild(hd);
-      for (const entry of pvpEntries) {
-        const row = document.createElement("div");
-        row.className = "prof-row fr-inbox-row";
-        const nm = document.createElement("div");
-        nm.className = "prof-name";
-        const who = document.createElement("b");
-        who.textContent = entry.otherName; // account-controlled → textContent
-        if (entry.role === "attacker") {
-          nm.append("⚔ You invaded ", who, entry.attackerWon ? " — victory!" : " — repelled");
-        } else {
-          nm.append("🛡 ", who, entry.attackerWon ? " raided your farm" : " was repelled by your farm!");
-        }
-        row.appendChild(nm);
-        if (entry.claimableTier) {
-          const claim = document.createElement("button");
-          claim.className = "prof-btn play";
-          claim.textContent = "Claim reward";
-          claim.title = "Your zombies held the farm — collect the defense reward.";
-          claim.onclick = async () => {
-            claim.disabled = true;
-            const rewards = await (this.onCollectPvpDefense?.(entry.sessionId) ?? Promise.resolve(null));
-            if (rewards?.length) {
-              this.showToast(`Defense reward: ${rewardLabel(rewards)}!`, 6000);
-              entry.claimableTier = undefined;
-              renderPvp();
-            } else {
-              this.showToast("That reward couldn't be claimed.");
-              claim.disabled = false;
-            }
-          };
-          row.appendChild(claim);
-        }
-        pvpWrap.appendChild(row);
-      }
-    };
-    const loadPvp = async () => {
-      if (!PVP_UI_ENABLED || !online()) return;
-      try {
-        pvpEntries = (await this.getPvpHistory?.()) ?? [];
-      } catch { return; /* keep whatever was rendered */ }
-      renderPvp();
-    };
+    // (Friend-invasion history and defense claims moved to the Invasions panel —
+    // Social → Invasions, ui/panels/invasions.ts.)
 
     // The toolbar's "Gift all (N)" count and the rows both read the same cooldown
     // state, so gifting one friend has to repaint BOTH — repainting only the list
     // left the count one gift stale.
     const renderFriends = () => { renderToolbar(); renderList(); };
     const renderAll = () => {
-      renderNote(); renderAcct(); renderRequests(); renderInbox(); renderPvp(); renderFriends();
+      renderNote(); renderAcct(); renderRequests(); renderInbox(); renderFriends();
     };
     const refresh = async () => {
       if (online()) {
@@ -4814,7 +4767,6 @@ export class Hud {
           await this.refreshRequests?.();
           await this.refreshInbox?.();
         } catch { /* stay on cached data */ }
-        void loadPvp(); // fire-and-forget: the section paints itself when it lands
       }
       renderAll();
     };

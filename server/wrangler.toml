@@ -62,10 +62,10 @@ INTEGRITY_V2_ENFORCE_AFTER_MS = "1"
 MIN_PROTOCOL_VERSION = "3"
 MUTATIONS_DISABLED = "0"
 BLACK_MARKET_ENABLED = "1"
-# Friend invasions: built and verified, PARKED while the interface is redesigned.
-# Flip to "1" together with PVP_UI_ENABLED (src/raid/pvp.ts) to bring it back —
-# see docs/FRIEND_INVASIONS.md.
-PVP_ENABLED = "0"
+# Friend invasions: ON for the staging test stack (interface rework of 2026-08-23).
+# This is now the ONE launch switch: the client's Invasions surfaces follow it via
+# the bootstrap's `pvpEnabled` capability — see docs/FRIEND_INVASIONS.md.
+PVP_ENABLED = "1"
 WRITER_LEASE_MODE = "enforce"
 
 # Staging rate limiters use distinct namespace_ids from prod (1001-1003):
@@ -134,9 +134,11 @@ INTEGRITY_V2_ENFORCE_AFTER_MS = "1"
 MIN_PROTOCOL_VERSION = "3"
 MUTATIONS_DISABLED = "0"
 BLACK_MARKET_ENABLED = "1"
-# Friend invasions: built and verified, PARKED while the interface is redesigned.
-# Flip to "1" together with PVP_UI_ENABLED (src/raid/pvp.ts) to bring it back —
-# see docs/FRIEND_INVASIONS.md.
+# Friend invasions: PARKED in production while the feature is finished on staging.
+# This var is the ONE launch switch — the client's Invasions surfaces follow it via
+# the bootstrap's `pvpEnabled` capability, so flipping it to "1" and deploying this
+# Worker launches the feature with no client redeploy (docs/FRIEND_INVASIONS.md).
+# Deploy order still matters for the ruleset handshake: Worker first.
 PVP_ENABLED = "0"
 WRITER_LEASE_MODE = "enforce"
 # Server-owned raid cooldown in ms. Omit to use the 2h default (see src/index.ts

@@ -5032,6 +5032,10 @@ async function main() {
             hud.setRaiding(false);
             audio.exitRaid();
           });
+          // A win past the daily rewarded-wins cap counts everywhere except the wallet.
+          if (res.win && res.rewarded === false) {
+            hud.showToast("Past today's rewarded wins — this one was for the glory (and the stats).", 6000);
+          }
         }).catch((error) => {
           const code = error instanceof api.ApiError ? error.code : "unknown_error";
           hud.showToast(
@@ -5118,20 +5122,144 @@ async function main() {
       }
     });
   };
-  hud.getPvpHistory = async () => {
-    if (!onlineFarm) return [];
-    const res = await api.pvpHistory();
-    return res.entries ?? [];
+  // ---- Invasions panel hooks (ui/panels/invasions.ts) ----
+  hud.pvpAvailable = () => !!economy?.serverPvpEnabled;
+  hud.getPlayerLevel = () => state.level;
+  hud.getPvpOverview = async () => {
+    if (!onlineFarm) return null;
+    try { return await api.pvpHistory(); } catch { return null; }
   };
-  hud.onCollectPvpDefense = async (sessionId) => {
+  hud.onScoutPvpDefense = async (friendId) => {
     if (!onlineFarm) return null;
     try {
-      const res = await api.pvpCollect(sessionId);
-      if (res.inventory) economy?.adoptRaidStartInventory(res.inventory);
-      return res.rewards ?? [];
+      return await api.pvpPreview(friendId);
+    } catch (error) {
+      // The gate refusals (no_defense, defender_level) arrive as API errors; the
+      // panel renders them as explanations, not failures.
+      if (error instanceof api.ApiError && error.code) return { error: error.code };
+      return null;
+    }
+  };
+  hud.getPvpDefense = async () => {
+    if (!onlineFarm) return null;
+    try { return await api.pvpDefenseGet(); } catch { return null; }
+  };
+  hud.onSavePvpDefense = async (unitIds) => {
+    if (!onlineFarm) return "offline";
+    try {
+      // Loadout ids must be the server's ids: settle any pending roster mutations
+      // first so a freshly combined/bought zombie's local id doesn't leak into it.
+      await economy?.settleBeforeDependency();
+      const mapped = unitIds.map((id) => economy?.authoritativeUnitId(id) ?? id);
+      const res = await api.pvpDefenseSet(mapped);
+      return res.ok ? null : res.error ?? "unknown";
+    } catch (error) {
+      return error instanceof api.ApiError ? error.code ?? "unknown" : "offline";
+    }
+  };
+  hud.onClaimAllPvpDefense = async () => {
+    if (!onlineFarm) return null;
+    try {
+      let claimed = 0;
+      const rewards = new Map<string, number>();
+      // Bounded slices server-side; loop until the backlog is drained.
+      for (let guard = 0; guard < 20; guard++) {
+        const res = await api.pvpCollectAll();
+        if (!res.ok) break;
+        claimed += res.claimed;
+        for (const r of res.rewards) rewards.set(r.key, (rewards.get(r.key) ?? 0) + r.qty);
+        if (res.inventory) economy?.adoptRaidStartInventory(res.inventory);
+        if (!res.remaining) break;
+      }
+      return claimed
+        ? { claimed, rewards: [...rewards.entries()].map(([key, qty]) => ({ key, qty })) }
+        : null;
     } catch {
       return null;
     }
+  };
+  hud.onWatchPvpReplay = (sessionId) => {
+    if (!onlineFarm || raidActive) return;
+    void (async () => {
+      try {
+        const res = await api.pvpReplay(sessionId);
+        if (!res.ok || !res.config) {
+          hud.showToast("That recording is no longer available.");
+          return;
+        }
+        launchPvpReplay(res.config, res.finalTick ?? 0, res.inputs ?? [], res.attackerName ?? "A friend");
+      } catch (error) {
+        const code = error instanceof api.ApiError ? error.code : null;
+        hud.showToast(
+          code === "replay_expired" ? "That recording has been retired — only the last 10 fights keep theirs."
+          : code === "stale_replay" ? "That fight was recorded under an older game version and can't be replayed."
+          : "That recording could not be loaded."
+        );
+      }
+    })();
+  };
+  /** Watch a recorded invasion: the same battle scene, fed the verified transcript,
+   *  with every control disabled (see RaidScene's playback mode). Settles nothing. */
+  const launchPvpReplay = (
+    config: NonNullable<Awaited<ReturnType<typeof api.pvpStart>>["config"]>,
+    finalTick: number,
+    inputs: api.RaidReplayInput[],
+    attackerName: string
+  ) => {
+    const raidDef = buildPvpRaidDef(
+      { raidName: config.raidName, defenderName: config.pvp.defenderName },
+      assets.raids.find((r) => r.id === MCDONNELL_ID)
+    );
+    pauseFarmJobs();
+    raidActive = true;
+    world.visible = false;
+    hud.setRaiding(true);
+    hud.setBattleLoading(true, `Replaying ${attackerName}'s invasion…`);
+    crumb("battle:launch", `pvp-replay:${attackerName}`);
+    audio.enterRaid(raidDef.music);
+    const closeReplay = () => {
+      if (raidScene) { app.stage.removeChild(raidScene.container); raidScene.destroy(); raidScene = null; }
+      raidActive = false;
+      resumeFarmJobs();
+      world.visible = true;
+      hud.setRaiding(false);
+      audio.exitRaid();
+    };
+    withBattleLoadTimeout(RaidScene.create(app, {
+      raid: raidDef,
+      assets,
+      playerUnits: config.playerUnits,
+      enemyUnits: config.enemyUnits,
+      bossThrow: null,
+      waveCadence: config.waveCadence,
+      concentration: true,
+      playback: { finalTick, inputs },
+      onStrike: (strike) => audio.fightStrike(strike),
+      onBrainRelease: (sourceKey) => audio.brainForZombie(sourceKey),
+      onVictory: () => audio.playRaidVictory(),
+      // onFinish fires DURING scene.update (the outro's last frame); destroying the
+      // scene synchronously there leaves the rest of that frame touching destroyed
+      // Pixi objects. Defer the teardown out of the update call.
+      onFinish: () => { setTimeout(closeReplay, 0); },
+    })).then((scene) => {
+      hud.setBattleLoading(false);
+      crumb("battle:ready", `replay:${raidDef.name}`);
+      if (!raidActive) return scene.destroy();
+      raidScene = scene;
+      app.stage.addChild(scene.container);
+      if (import.meta.env.DEV) {
+        (window as unknown as { ZF?: Record<string, unknown> }).ZF!.raidScene = scene;
+      }
+    }).catch((error) => {
+      recordDiagnostic({
+        at: Date.now(), kind: "error", where: "pvp-replay",
+        message: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      crumb("battle:failed", `replay:${raidDef.name}`);
+      closeReplay();
+      hud.showToast("The recording could not be loaded.", 6000);
+    });
   };
 
   hud.onLaunchRaid = async (raidId, partyIds, opts) => {

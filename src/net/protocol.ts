@@ -355,6 +355,11 @@ export interface BootstrapResponse {
    *  `426 stale_ruleset`. Surfacing it here lets the client prompt a reload up front
    *  instead of failing at the Invade button. */
   raidRulesetVersion: number;
+  /** Whether this Worker accepts friend invasions (`PVP_ENABLED`). The client shows
+   *  its Invasions surfaces only when true, so launching PvP is one Worker-var flip:
+   *  no client redeploy, no dead button while the feature is parked. Optional —
+   *  an older Worker simply doesn't send it, which reads as "off". */
+  pvpEnabled?: boolean;
   mutationsEnabled: boolean;
   accountVersion: number;
   writerGeneration: number;

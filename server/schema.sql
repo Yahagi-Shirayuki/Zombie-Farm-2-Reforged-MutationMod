@@ -736,9 +736,26 @@ CREATE TABLE IF NOT EXISTS pvp_sessions_v3 (
   win INTEGER,
   final_tick INTEGER,
   inputs_json TEXT,
-  defense_claimed_at INTEGER
+  defense_claimed_at INTEGER,
+  -- Daily income caps (0057): stamped at settlement; only flagged rows pay.
+  attacker_rewarded INTEGER,
+  defense_rewarded INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pvp_live ON pvp_sessions_v3(attacker_id) WHERE finished_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_pvp_pair_day ON pvp_sessions_v3(attacker_id, defender_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_pvp_defender ON pvp_sessions_v3(defender_id, finished_at);
 CREATE INDEX IF NOT EXISTS idx_pvp_attacker ON pvp_sessions_v3(attacker_id, finished_at);
+
+-- PvP rework (0057): authored defense line-up + server-authored lifetime counters.
+CREATE TABLE IF NOT EXISTS pvp_defense_v3 (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id),
+  loadout_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pvp_stats_v3 (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id),
+  attack_wins INTEGER NOT NULL DEFAULT 0,
+  attack_losses INTEGER NOT NULL DEFAULT 0,
+  defense_wins INTEGER NOT NULL DEFAULT 0,
+  defense_losses INTEGER NOT NULL DEFAULT 0
+);

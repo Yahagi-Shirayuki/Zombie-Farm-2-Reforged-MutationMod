@@ -212,6 +212,10 @@ export class EconomyClient {
       this.queue.adoptBootstrap(bootstrap);
       this.ready = true;
       this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
+      // Feature capability: whether this Worker accepts friend invasions. Read at
+      // boot only — the client's Invasions surfaces follow the Worker's PVP_ENABLED
+      // flag, so launching (or parking) PvP never needs a client redeploy.
+      this.serverPvpEnabled = bootstrap.pvpEnabled === true;
       if (bootstrap.raidRulesetVersion !== RAID_RULESET_VERSION) {
         this.onRulesetSkew?.(bootstrap.raidRulesetVersion, RAID_RULESET_VERSION);
       }
@@ -231,6 +235,10 @@ export class EconomyClient {
   }
 
   get available(): boolean { return this.ready && this.queue.available; }
+
+  /** Whether the deployed Worker accepts friend invasions (bootstrap `pvpEnabled`).
+   *  False until the first successful bootstrap. */
+  serverPvpEnabled = false;
 
   /** A compact description of WHY gameplay is unavailable, read live at the moment
    *  it's shown rather than remembered from a callback — several paths pause the

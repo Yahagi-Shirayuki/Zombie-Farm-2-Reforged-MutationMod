@@ -1086,8 +1086,11 @@ export interface PvpFinishResult {
   settlementId?: string;
   win: boolean;
   outcome?: RaidOutcome;
-  /** Boost bundles credited on a win ([] on a loss). */
+  /** Boost bundles credited on a win ([] on a loss OR a win past the daily cap). */
   rewards: { key: string; qty: number }[];
+  /** False on a win that fell past the daily rewarded-wins cap: it counts in the
+   *  stats and the history, it just doesn't pay. */
+  rewarded?: boolean;
   rewardTier: number | null;
   attackScore: number;
   defenseScore: number;
@@ -1109,24 +1112,105 @@ export const pvpFinish = (sessionId: string, finalTick: number, inputs: RaidRepl
 
 export interface PvpHistoryEntry {
   sessionId: string;
-  role: "attacker" | "defender";
   otherName: string;
   finishedAt: number;
   attackerWon: boolean;
   attackScore: number;
   defenseScore: number;
-  /** Set when this row is a still-unclaimed successful defense of YOURS. */
+  /** Whether this row paid (win inside the daily cap / defense that parked a reward). */
+  rewarded: boolean;
+  /** Set when this row is a still-unclaimed rewarded defense of YOURS. */
   claimableTier?: number;
+  /** The stored recording still exists and matches the live ruleset. */
+  replayAvailable?: boolean;
 }
 
-export const pvpHistory = () =>
-  req<{ ok: boolean; entries: PvpHistoryEntry[] }>("GET", "/raid/pvp/history");
+export interface PvpStatLine {
+  attackWins: number;
+  attackLosses: number;
+  defenseWins: number;
+  defenseLosses: number;
+}
+
+export interface PvpOverview {
+  ok: boolean;
+  /** Newest-first, capped at the replay window (10 per role). */
+  attacks: PvpHistoryEntry[];
+  defenses: PvpHistoryEntry[];
+  stats: { lifetime: PvpStatLine; week: PvpStatLine };
+  /** The whole outstanding defense-reward backlog, however old. */
+  claim: { count: number; rewards: { key: string; qty: number }[]; more?: boolean };
+  rewardedWinsToday: number;
+  rewardedDefensesToday: number;
+  rewardedWinsPerDay: number;
+  rewardedDefensesPerDay: number;
+}
+
+export const pvpHistory = () => req<PvpOverview>("GET", "/raid/pvp/history");
 
 /** Claim a successful defense's reward (one time, defender only). */
 export const pvpCollect = (sessionId: string) =>
   req<{ ok: boolean; rewards: { key: string; qty: number }[]; tier: number; inventory?: Record<string, number>; serverTime?: number }>(
     "POST", "/raid/pvp/collect", { sessionId }
   );
+
+/** Claim every outstanding defense reward at once. `remaining: true` = call again. */
+export const pvpCollectAll = () =>
+  req<{ ok: boolean; error?: string; claimed: number; rewards: { key: string; qty: number }[]; remaining?: boolean; inventory?: Record<string, number>; serverTime?: number }>(
+    "POST", "/raid/pvp/collect-all", {}
+  );
+
+export interface PvpDefenderPreview {
+  key: string;
+  name: string;
+  mutation?: number;
+  color?: [number, number, number];
+}
+
+export interface PvpDefenseView {
+  score: number;
+  /** The reward tier an attacker earns by beating this defense. */
+  tier: number;
+  defenders: PvpDefenderPreview[];
+  authored: boolean;
+}
+
+/** The caller's own defense line-up + how an attacker would meet it. */
+export const pvpDefenseGet = () =>
+  req<{ ok: boolean; unitIds: string[]; defense: PvpDefenseView | null; error?: string }>(
+    "GET", "/raid/pvp/defense"
+  );
+
+/** Save (or clear, with []) the authored defense order. */
+export const pvpDefenseSet = (unitIds: string[]) =>
+  req<{ ok: boolean; error?: string; unitIds: string[] }>("POST", "/raid/pvp/defense", { unitIds });
+
+/** Scout a friend's defense before attacking. */
+export const pvpPreview = (defenderId: string) =>
+  req<{
+    ok: boolean;
+    error?: string;
+    defenderName?: string;
+    defenseScore?: number;
+    attackerTier?: number;
+    defenders?: PvpDefenderPreview[];
+    authored?: boolean;
+    pairAttacksToday?: number;
+    pairAttackLimit?: number;
+  }>("POST", "/raid/pvp/preview", { defenderId });
+
+/** Fetch one fight's stored recording for the playback viewer. */
+export const pvpReplay = (sessionId: string) =>
+  req<{
+    ok: boolean;
+    error?: string;
+    config?: PvpFightConfig;
+    finalTick?: number;
+    inputs?: RaidReplayInput[];
+    attackerWon?: boolean;
+    attackerName?: string;
+    role?: "attacker" | "defender";
+  }>("GET", `/raid/pvp/replay/${encodeURIComponent(sessionId)}`);
 
 export interface EpicBossFinishResult {
   serverTime?: number;

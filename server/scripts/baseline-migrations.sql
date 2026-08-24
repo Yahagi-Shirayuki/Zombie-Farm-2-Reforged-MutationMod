@@ -81,4 +81,5 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0055_pvp_invasions.sql'),
   -- Data repair only (empties the pinned config of already-finished raid and Epic Boss
   -- sessions); a fresh database has no finished sessions, so baselining it is a no-op.
-  ('0056_release_spent_fight_configs.sql');
+  ('0056_release_spent_fight_configs.sql'),
+  ('0057_pvp_rework.sql');

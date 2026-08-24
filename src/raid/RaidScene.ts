@@ -93,6 +93,11 @@ export interface RaidSceneParams {
   bossEngageDistance?: number;
   bossGroundOffset?: { x: number; y: number };
   confirmRetreat?: () => Promise<boolean>;
+  /** Watch-a-recording mode: the verified transcript is injected at its recorded
+   *  ticks and every fight control is disabled, so the deterministic sim re-fights
+   *  the exact stored fight. The retreat button becomes "End Replay". Used by the
+   *  PvP replay viewer — the config must be the fight's PINNED config, same ruleset. */
+  playback?: { finalTick: number; inputs: RaidReplayInput[] };
   onCheckpoint?: (finalTick: number, inputs: RaidReplayInput[]) => Promise<void>;
   /** Presentation-only authored attack cue; combat remains deterministic without it. */
   onStrike?: (strike: {
@@ -646,9 +651,30 @@ export class RaidScene {
   private simTick = 0;
   private inputSeq = 0;
   private replayInputs: RaidReplayInput[] = [];
+  /** Watch-a-recording mode (see RaidSceneParams.playback). */
+  private playback: { finalTick: number; inputs: RaidReplayInput[] } | null = null;
+  private playbackCursor = 0;
 
   private recordInput(input: RaidInputDraft): void {
+    if (this.playback) return; // a replayed fight records nothing
     this.replayInputs.push({ ...input, seq: ++this.inputSeq, tick: this.simTick } as RaidReplayInput);
+  }
+
+  /** Feed the recorded transcript into the sim exactly where the verifier would:
+   *  every input stamped `tick` applies before that tick is stepped. Refusals are
+   *  ignored the same way the finish-path replay drops them. */
+  private applyPlaybackInputs(): void {
+    if (!this.playback) return;
+    const inputs = this.playback.inputs;
+    while (this.playbackCursor < inputs.length && inputs[this.playbackCursor].tick <= this.simTick) {
+      const input = inputs[this.playbackCursor++];
+      if (input.type === "bubble") this.sim.popBubble(input.unitId);
+      else if (input.type === "ability") this.sim.activate(input.abilityKey);
+      else if (input.type === "wallTap") this.sim.tapWall(input.unitId);
+      else if (input.type === "fireTap") this.sim.tapFire(input.unitId);
+      else if (input.type === "turnedTap") this.sim.tapTurned(input.unitId);
+      else if (input.type === "retreat") this.retreatRequested = true;
+    }
   }
 
   /** Hazard taps — on a boss WALL, on a burning zombie, on a converted pixel zombie — are
@@ -742,6 +768,7 @@ export class RaidScene {
     this.bossGroundOffset = params.bossGroundOffset ?? { x: 0, y: 0 };
     this.bossFallsFromSky = !!params.bossFallsFromSky;
     this.confirmRetreat = params.confirmRetreat ?? (() => Promise.resolve(true));
+    this.playback = params.playback ?? null;
     this.brainDrop = Math.max(0, Math.floor(params.brainDrop ?? 0));
     this.sim = new BattleSim(
       params.playerUnits,
@@ -765,7 +792,8 @@ export class RaidScene {
     // times faster than that gate, so most of a click-spamming player's clicks landed
     // inside the cooldown and were dropped — which is what "there is a delay before my
     // clicks register" was. Client-only hazards, so this cannot reach the verifier.
-    this.sim.hazardTapCooldownMs = hazardTapProfile().cooldownMs;
+    // A PLAYBACK sim must accept the recorded taps unpaced, like the verifier's does.
+    this.sim.hazardTapCooldownMs = this.playback ? 0 : hazardTapProfile().cooldownMs;
   }
 
   /** Build a ready-to-add scene, preloading all textures first. */
@@ -1001,7 +1029,7 @@ export class RaidScene {
     this.bubble.visible = false;
     this.setBubbleInteractive(false);
     this.bubble.on("pointertap", () => {
-      if (this.sim.finished) return;
+      if (this.sim.finished || this.playback) return;
       const bubble = this.sim.chargingBubble();
       if (this.bubbleUnitId && this.sim.popBubble(this.bubbleUnitId)) {
         this.recordInput({ type: "bubble", unitId: this.bubbleUnitId });
@@ -1127,7 +1155,7 @@ export class RaidScene {
       cell.eventMode = "static";
       cell.cursor = "pointer";
       cell.on("pointertap", () => {
-        if (this.sim.finished) return;
+        if (this.sim.finished || this.playback) return;
         // Resolved at TAP TIME, not from the drawn face: the face refreshes on a 150 ms
         // throttle, so between refreshes it can be one move stale. Asking the sim now
         // means the tap always fires the move that is actually available — and the
@@ -1406,7 +1434,7 @@ export class RaidScene {
       root.eventMode = "static";
       root.cursor = "pointer";
       root.on("pointertap", () => {
-        if (this.sim.finished || !this.canRecordHazardTap()) return;
+        if (this.sim.finished || this.playback || !this.canRecordHazardTap()) return;
         if (this.sim.tapWall(u.id)) this.recordInput({ type: "wallTap", unitId: u.id });
       });
     }
@@ -1418,7 +1446,7 @@ export class RaidScene {
       root.eventMode = "static";
       root.cursor = "pointer";
       root.on("pointertap", () => {
-        if (this.sim.finished || !this.canRecordHazardTap()) return;
+        if (this.sim.finished || this.playback || !this.canRecordHazardTap()) return;
         if (this.sim.tapTurned(u.id)) this.recordInput({ type: "turnedTap", unitId: u.id });
       });
     }
@@ -1487,21 +1515,29 @@ export class RaidScene {
   }
 
   /** A "Retreat" button (bottom-right) that ends the raid as a
-   *  loss — the army flees, so no rewards and no veterancy credit. */
+   *  loss — the army flees, so no rewards and no veterancy credit.
+   *  In playback it is "End Replay": close the viewer, nothing to concede. */
   private buildRetreatButton() {
     const label = new Text({
-      text: "⚑ Retreat",
+      text: this.playback ? "✕ End Replay" : "⚑ Retreat",
       style: { fontFamily: "sans-serif", fontSize: 14, fontWeight: "700", fill: 0xffffff },
     });
     label.position.set(12, 6);
     const bg = new Graphics()
       .roundRect(0, 0, label.width + 24, label.height + 12, 6)
-      .fill({ color: 0x8c2a2a, alpha: 0.92 })
-      .stroke({ width: 2, color: 0x3a0d0d });
+      .fill({ color: this.playback ? 0x3a4a63 : 0x8c2a2a, alpha: 0.92 })
+      .stroke({ width: 2, color: this.playback ? 0x141d2c : 0x3a0d0d });
     this.retreatBtn.addChild(bg, label);
     this.retreatBtn.eventMode = "static";
     this.retreatBtn.cursor = "pointer";
     this.retreatBtn.on("pointertap", async () => {
+      if (this.playback) {
+        // The viewer bails out of the recording; the outcome was settled long ago.
+        if (this.resultFired) return;
+        this.resultFired = true;
+        this.onFinish({ ...this.sim.outcome(), win: false, survivors: [] }, this.simTick, []);
+        return;
+      }
       if (this.retreatRequested || this.resultFired || this.sim.finished) return;
       if (!await this.confirmRetreat()) return;
       if (this.retreatRequested || this.resultFired || this.sim.finished) return;
@@ -2417,7 +2453,7 @@ export class RaidScene {
       let fire = this.fires.get(u.id);
       if (!fire) {
         fire = new PixelFire(() => {
-          if (this.sim.finished || !this.canRecordHazardTap()) return;
+          if (this.sim.finished || this.playback || !this.canRecordHazardTap()) return;
           if (this.sim.tapFire(u.id)) this.recordInput({ type: "fireTap", unitId: u.id });
         });
         this.fireLayer.addChild(fire.view);
@@ -3091,6 +3127,11 @@ export class RaidScene {
         let catchup = 0;
         let stepped = false;
         while (this.simAccumulatorMs >= RAID_TICK_MS && !this.sim.finished && catchup++ < 5) {
+          // Playback: inject the recorded transcript exactly where the verifier does —
+          // inputs stamped with this tick apply BEFORE this tick is stepped, and a
+          // recorded retreat stops the stepping the same way a live one does.
+          this.applyPlaybackInputs();
+          if (this.retreatRequested) break;
           this.sim.step(RAID_TICK_MS);
           this.simAccumulatorMs -= RAID_TICK_MS;
           this.simTick++;

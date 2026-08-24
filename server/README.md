@@ -77,8 +77,10 @@ concession field.
   between accounts. Keep it behind `BLACK_MARKET_ENABLED` in any environment where the
   release gates in `../SECURITY.md` have not been confirmed.
 - Paid currency, competitive rankings, and PvP must remain disabled until those gates pass.
-  Friend invasions (zero-stakes PvP-lite) are built and parked behind `PVP_ENABLED`
-  ("0" in every deployed environment) — see `../docs/FRIEND_INVASIONS.md`.
+  Friend invasions (zero-stakes PvP-lite) are gated behind the `PVP_ENABLED` Worker var —
+  "1" on staging for playtesting, "0" in production. The client's surfaces follow the
+  bootstrap's `pvpEnabled` capability, so that one var is the whole launch switch —
+  see `../docs/FRIEND_INVASIONS.md`.
 - A raid and an Epic Boss fight are mutually exclusive: `/raid/start` rejects with
   `409 raid_in_progress` while an Epic Boss session is live, and vice versa.
 

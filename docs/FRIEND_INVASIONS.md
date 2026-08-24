@@ -1,55 +1,88 @@
 # Friend Invasions (PvP)
 
-**Status: BUILT, VERIFIED, PARKED.** The whole feature — server, client, tests — shipped
-to staging on 2026-08-23 and was played end-to-end there. It is currently switched OFF
-in every deployed environment while the interface is redesigned; nothing was removed.
-This document is the record of what exists, why it is shaped the way it is, and the
-open questions for the redesign.
+**Status: REWORKED, LIVE ON STAGING, PARKED IN PRODUCTION.** The v1 feature shipped and
+was parked on 2026-08-23; the interface/progression rework landed the same week: a
+dedicated Invasions panel (Social → Invasions), defender-authored defenses, a level-7
+gate, daily income caps, lifetime + weekly stats, an accumulate-forever claim backlog
+with Claim-all, and a watch-the-replay viewer. The staging Worker runs it ON for
+playtesting and reward tuning; production keeps it OFF. This document is the record of
+what exists, why it is shaped the way it is, and what remains.
 
-## How to turn it back on (and off)
+## How to turn it on (and off)
 
-Two switches, flipped together:
+**One switch**: the Worker var `PVP_ENABLED` (`server/wrangler.toml` — `[vars]` is the
+staging block, `[env.production.vars]` is prod), then deploy that Worker. The client
+needs no redeploy: the bootstrap response carries a `pvpEnabled` capability flag, and
+every client surface (the Social-hub entry, the panel, the launch hook) follows it —
+off means no dead buttons, on means the feature simply appears.
 
-| Switch | Where | Off | On |
-|---|---|---|---|
-| `PVP_ENABLED` | `server/wrangler.toml` `[vars]` (staging) **and** `[env.production]` — then deploy | `"0"` | `"1"` |
-| `PVP_UI_ENABLED` | `src/raid/pvp.ts` | `false` | `true` |
+`PVP_UI_ENABLED` (`src/raid/pvp.ts`) still exists but is now a **client-side emergency
+kill switch**, normally `true`: set it `false` and redeploy the client only if the
+client half itself must be hidden regardless of what the server says.
 
-Deploy the **Worker first** (the client handshake tolerates a newer server; a newer
-client against an old server refuses cleanly). Local dev and the integration suite keep
-the flag ON (`server/.dev.vars`, `server/test/integration/wrangler.test.env`), so the
-feature stays tested while parked.
+Local dev and the integration suite keep the Worker flag ON (`server/.dev.vars`,
+`server/test/integration/wrangler.test.env`), so the feature stays tested wherever the
+deployed state is off.
 
 Asymmetries built into the off state, on purpose:
-- `/raid/pvp/start` refuses with `503 pvp_disabled`; **`/finish`, `/collect` and
-  `/history` stay live**, so a fight in flight at switch-off still settles, an earned
-  defense reward stays claimable, and history stays readable.
-- The client hides every surface (`PVP_UI_ENABLED`): the Invade button in the friend
-  drawer, the "⚔ Friend invasions" section of the Friends panel, and the launch hook.
+- `/raid/pvp/start`, `/defense` and `/preview` refuse with `503 pvp_disabled`;
+  **`/finish`, `/collect`, `/collect-all`, `/history` and `/replay` stay live**, so a
+  fight in flight at switch-off still settles, earned rewards stay claimable, and
+  history/recordings stay readable.
 
 ## What the feature is (as built)
 
-- From the Friends panel, each friend's drawer has **Invade ⚔**. The attacker picks
-  **exactly 8** zombies in attack order (`Hud.openPvpArmy` — a trimmed cousin of the
-  raid army screen: no cooldown, no vouchers, no battle boosts).
-- The fight runs on **Old McDonnell's stage** (backdrop, barn, music) against a
-  **snapshot of the defender's deployed roster**: their strongest 16 non-crypt zombies,
-  emerging weakest-first under a mild swarm cadence (3 on the field, +1 every 5 s).
-  Defenders render with their real farm rigs — mutations, tints, names — mirrored to
-  face the attackers.
+- **The Invasions panel** (Social → Invasions, `src/ui/panels/invasions.ts`) is the
+  whole feature's home, in three market-styled tabs:
+  - **Attack** — the friends list with a **Scout** step per friend: defender count,
+    arranged-vs-auto defense, the line-up's portraits, and the reward tier beating it
+    pays, all BEFORE committing. Invade opens the exactly-8 ordered army picker
+    (`Hud.openPvpArmy`) and launches. The tab shows today's rewarded-wins pips.
+  - **Defense** — the defender AUTHORS their defense: any owned zombies (crypt-resting
+    ones included — a defense is a plan, not who stands on the lawn), in an explicit
+    order where **slot 1 emerges first** (teams-style numbered picker, up to 16).
+    Accounts that never arrange one fall back to the automatic strongest-16 pick,
+    weakest emerging first. The tab shows your defense as attackers will meet it.
+  - **History** — the last 10 attacks and 10 defenses (rewarded/unrewarded marked,
+    **▶ Watch** where the recording survives), lifetime + trailing-7-day win/loss
+    stats for both roles, and the claim backlog banner with **Claim all**.
+- **Level gate**: both sides must be **level 7+** (`PVP_MIN_LEVEL`) — new farms are
+  neither attackers nor targets.
+- The fight runs on **Old McDonnell's stage** against the defense snapshot under a mild
+  swarm cadence (3 on the field, +1 every 5 s). Defenders render with their real farm
+  rigs — mutations, tints, names — mirrored to face the attackers.
 - **Nobody loses anything.** The defender is only ever a snapshot; the settlement path
   touches no roster row, no balance, no cooldown, and offers no revival. There is no
   gold/XP/loot — the reward is **boost bundles**, priced by the difficulty of the
   OPPOSING army (attacker paid from the defense score, defender from the attack score).
   Only tier 5 pays a Brain Ticket.
+- **Daily income caps, not fight caps** (`PVP_DAILY_REWARDED_WINS` /
+  `_DEFENSES`, both 3): any number of fights happen, count in the stats, and are
+  recorded — but only the first 3 verified wins per UTC day pay the attacker, and only
+  the first 3 held defenses per UTC day park a defender reward. Stamped at settlement
+  (`attacker_rewarded` / `defense_rewarded`, migration 0057) so a claim can never
+  re-litigate them. This is also the anti-collusion lever; the per-pair cap
+  (`PVP_DAILY_ATTACKS_PER_PAIR`, now 10) is just a spam guard.
+- **Rewards accumulate forever, recordings do not**: every finish sweeps the heavy
+  replay payload (config + transcript) off rows outside both participants' newest
+  **10** finished fights (`PVP_REPLAYS_KEPT`); the result rows, their rewards and the
+  stats survive indefinitely. Someone back after a month with 50 held defenses claims
+  all 50 in one tap and can watch the last 10.
+- **Watch the replay**: `/raid/pvp/replay/:id` returns the pinned config + verified
+  transcript; the client runs the ordinary `RaidScene` in **playback mode** (inputs
+  injected at their recorded ticks exactly where the verifier injects them, every
+  control disabled, retreat button becomes ✕ End Replay). Deterministic — the replay
+  reaches the recorded fight's exact final tick. A recording only replays on the
+  ruleset it was recorded under; older ones show the record without a Watch button.
+- **Stats are server-authored**: lifetime counters live in `pvp_stats_v3`, incremented
+  only inside the guarded settlement batch; trailing-week numbers are computed from
+  the session rows.
 - PvP always fights at **full focus** (concentration pinned on both sides): no
   focus-bubble minigame, so a transcript is just ability taps + retreat.
-- A held defense parks a **claim-on-login reward** for the defender, surfaced in the
-  Friends panel's invasions section with a Claim button (Black-Market `collect` shape —
-  the defender's account is never written while they are away).
-- Anti-collusion for a zero-risk mode: attacks are **friends-only**, capped at
-  **3 OPENED attacks per friend per UTC day** (starts count, not wins), one live
-  session per attacker, 15-minute TTL on an abandoned one.
+- A held defense parks a **claim-on-login reward** for the defender (Black-Market
+  `collect` shape — the defender's account is never written while they are away).
+  `/collect` claims one row; `/collect-all` drains the whole rewarded backlog in
+  bounded slices, each slice's row-stamps and inventory grant committed atomically.
 
 ## The architecture (read before touching)
 
@@ -91,15 +124,17 @@ difficulty via the turned pixel zombie. Elite profiles did not move.
 
 | Piece | File |
 |---|---|
-| Shared rules: switch, scores, tiers, defense conversion, synthetic RaidDef | `src/raid/pvp.ts` (+ `src/raid/pvp.test.ts`) |
-| Server config builder (both armies from D1, offline-safe) | `server/src/raidVerifier.ts` `buildPinnedPvpRaid` |
-| Server routes' logic: start / finish / history / collect | `server/src/v3/pvp.ts` |
-| Route wiring, rate limits, `PVP_ENABLED` gate | `server/src/index.ts` (`/raid/pvp/*` — under `/raid/` so auth + writer fencing apply) |
-| Session/result/transcript table | `pvp_sessions_v3` — migration `0055`, mirrored in `schema.sql` |
-| Client API calls | `src/net/api.ts` (`pvpStart/pvpFinish/pvpHistory/pvpCollect`) |
-| Launch + settlement flow | `src/main.ts` (`hud.onInvadeFriend` → `launchPvpBattle`) |
-| Army picker, Invade button, invasions section | `src/hud.ts` (`openPvpArmy`, friend drawer, `renderPvp`) |
-| Defender-rig rendering + mirrored facing + art-loader gate | `src/raid/RaidScene.ts` (the `zombieRig` test in `makeToken`) |
+| Shared rules: switches, level gate, caps, scores, tiers, defense conversions, synthetic RaidDef | `src/raid/pvp.ts` (+ `src/raid/pvp.test.ts`) |
+| Server config + defense-snapshot builders (from D1, offline-safe) | `server/src/raidVerifier.ts` `buildPinnedPvpRaid` / `buildDefenseSnapshot` |
+| Server routes' logic: start / finish / defense / preview / history / collect(-all) / replay | `server/src/v3/pvp.ts` |
+| Route wiring, rate limits, `PVP_ENABLED` gate, bootstrap `pvpEnabled` capability | `server/src/index.ts` (`/raid/pvp/*` — under `/raid/` so auth + writer fencing apply) |
+| Session/result/transcript table + reward flags | `pvp_sessions_v3` — migrations `0055` + `0057`, mirrored in `schema.sql` |
+| Authored defense + lifetime stat counters | `pvp_defense_v3` / `pvp_stats_v3` — migration `0057` |
+| Client API calls | `src/net/api.ts` (`pvpStart/pvpFinish/pvpHistory/pvpCollect/pvpCollectAll/pvpDefenseGet/pvpDefenseSet/pvpPreview/pvpReplay`) |
+| The Invasions panel (Attack / Defense / History tabs) | `src/ui/panels/invasions.ts` |
+| Launch, settlement, replay-viewer flows + hook wiring | `src/main.ts` (`hud.onInvadeFriend` → `launchPvpBattle`; `hud.onWatchPvpReplay` → `launchPvpReplay`) |
+| Army picker + Social-hub entry | `src/hud.ts` (`openPvpArmy`, `openSocial`) |
+| Defender-rig rendering + mirrored facing + art-loader gate + playback mode | `src/raid/RaidScene.ts` (the `zombieRig` test in `makeToken`; `RaidSceneParams.playback`) |
 | End-to-end server tests | `server/test/integration/pvp.spec.ts` |
 
 The audit that preceded the build (subsystem map, phase plan) is in the session
@@ -108,48 +143,58 @@ history of 2026-08-23; the phases below are its remainder.
 ## Verified behaviour (what the tests pin)
 
 - Start gates: friendship, ruleset handshake, exactly-8 owned deployed units,
-  `no_defense` for an empty farm, one live session, the daily pair cap.
+  `no_defense` for an empty farm, one live session, the pair spam guard, and the
+  **level-7 gate on both sides** (`attacker_level` / `defender_level`).
+- Defense authoring: loadout validation (ownership, size), a **resting zombie
+  standing in an authored defense**, the authored order arriving in the pinned
+  config as the emergence order, the preview endpoint (friends-only), and the
+  clear-to-auto fallback.
 - A finish with `finalTick 0, inputs []` settles by pure server simulation (the
-  overrun path) — the integration spec wins a fight that way and checks the boost
+  overrun path) — the integration spec wins fights that way and checks the boost
   grant lands in inventory; idempotent replays return the same settlement.
-- A retreat holds the defense; the defender's history row is claimable exactly once,
-  only by the defender, only for a held defense.
-- The pacing gate (`future_finish`) was tripped live by a time-compressed submission
-  during verification — the anti-cheat works against real speed-ups.
-- Sim-level: defense conversion preserves per-unit combat numbers; a
+- **Daily caps**: the (cap+1)-th win of the day settles `win: true, rewarded: false`
+  with no grant; held defenses past the defender cap are recorded but `not_rewarded`;
+  today-counters and the claim backlog come back correct from `/history`.
+- **Claim-all** drains exactly the rewarded backlog once; single-claims stay
+  one-time, defender-only, rewarded-rows-only.
+- **Stats**: `pvp_stats_v3` lifetime counters match the fights fought, per role.
+- The stored recording is fetchable by both parties and only them.
+- Structural guard (`server/test/spentFightConfig.test.ts`): exactly ONE statement
+  may clear a PvP config — the windowed sweep — and it must carry both participants'
+  keep-window guards.
+- Sim-level: both defense conversions preserve per-unit combat numbers; a
   defense-vs-attack fight is deterministic from an empty transcript and finishes
   inside the replay cap.
+- **Played live** (local stack, 2026-08-23): full loop through the real UI — scout,
+  authored defense in a real fight, win with tier rewards, history/stats, claim-all
+  landing in D1 inventory, and the replay viewer reaching the recorded fight's exact
+  final tick, plus a clean ✕ End Replay early exit.
 
-## Known rough edges (part of why it is parked)
+## Known rough edges
 
-- **The interface is minimal.** Invade lives in a friend-row drawer; the history +
-  claim UI is a plain list block in the Friends panel; the result panel is the raid
-  results panel with zeroed rows; the enemy team badge is an empty circle (no
-  defender portrait).
-- A fight whose last survivor is a **true healer** stalemates to the 4-minute cap
-  and scores as a loss (the healer stations out of everyone's reach; same behaviour
-  as normal raids — the cap handles it, but it reads poorly).
-- No "you were invaded" notification — the defender discovers history only by
-  opening the Friends panel.
-- Reward tier thresholds (`PVP_TIER_THRESHOLDS`) are first guesses. Measured
-  reference: a level-18 8-zombie attack ≈ 190k, its 10-zombie defense ≈ 268k →
-  tier 3 of 5.
+- A fight whose last survivor is a **true healer** stalemates to the 4-minute cap and
+  scores as a defense win (owner's ruling: stalling is the attacker's own choice and
+  buys them nothing — the timeout IS the defense holding).
+- No "you were invaded" notification — the defender discovers history by opening the
+  Invasions panel.
+- Reward tier thresholds (`PVP_TIER_THRESHOLDS`) and the tier bundles are first
+  guesses — **reward tuning is the explicit next step** once staging play data
+  exists. Measured references: a level-18 8-zombie attack ≈ 190k, its 10-defense
+  ≈ 268k → tier 3; a fresh level-8 pair scores ≈ 66k (tier 2) / ≈ 200k (tier 3).
 - Fights are semi-auto (concentration pinned): the attacker's inputs are ability
-  taps and retreat only. Fine for v1, thin as a game.
+  taps and retreat only.
+- The replay is watched from the ATTACKER's camera (it is the attacker's transcript);
+  a defender-flavoured presentation would be cosmetic work on the same playback mode.
 
-## Design space for the rework (from the original audit + playtest)
+## Design space still open (audit Phases 3–4 + owner's wishlist)
 
-- **Interface**: a dedicated invasion panel (pick a friend → see their defense and
-  its difficulty score/tier BEFORE committing; attack history and defense claims in
-  one place) instead of the friend-drawer + list blocks.
-- **Defense authoring**: let the defender arrange their defense (order, who's in it),
-  rather than auto-snapshotting the strongest 16.
-- **Watch the replay**: transcripts + configs are already stored; needs a RaidScene
-  playback mode (inject recorded inputs at their ticks, interaction off). Mind
-  ruleset staleness — a stored v40 replay is only re-playable on a v40 client.
-- **Attacker kit** (audit Phases 3–4): the purchasable/upgradable ability; upgradable
-  projectiles including mini-zombie throws (all-new sim mechanic — projectiles are
-  boss-only today; the alien summon machinery is the precedent for
-  spawn-on-landing).
-- **Reward loop**: preview the tier before attacking; defender reward notification;
-  whether attacking should cost something (a ticket?) once rewards are tuned.
+- **Defender customization beyond the line-up** — maps almost entirely onto config
+  fields that already exist and get pinned: chosen **projectiles** (`bossThrow`, the
+  whole throw machinery exists), **deploy-rate / max-out upgrades** (`waveCadence`,
+  defense cap), **obstacles** like the carrot wall (`wallTemplate`). Upgrades must be
+  server-owned purchase records; only the CHOICE among owned options is loadout data.
+- **Exploding mini-zombie projectiles** — the one genuinely new sim mechanic
+  (spawn-on-landing precedent: the alien summons); needs a ruleset bump when it lands.
+- **The purchasable/upgradable attacker ability** (gold/brains).
+- **Reward loop**: tune thresholds/bundles from staging play; defender reward
+  notification; whether tier 5 should stay the only Brain Ticket source.

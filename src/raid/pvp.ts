@@ -15,12 +15,13 @@
 import type { CombatUnit, RaidDef, WaveCadence } from "./types";
 import { POWER_PER_STR } from "./combatStats";
 
-/** FEATURE SWITCH — friend invasions are fully built and verified but PARKED while the
- *  interface is redesigned (see docs/FRIEND_INVASIONS.md). This constant hides every
- *  client surface (the Invade button, the Friends-panel invasions section, the launch
- *  hook); the Worker independently refuses new attacks unless its PVP_ENABLED var is
- *  "1" (wrangler.toml). Flip both together to bring the feature back. */
-export const PVP_UI_ENABLED = false;
+/** CLIENT KILL SWITCH — normally leave this true: the Invasions surfaces already
+ *  follow the WORKER's capability flag (`PVP_ENABLED` in wrangler.toml, surfaced to
+ *  the client via the bootstrap's `pvpEnabled`), so the feature launches and parks
+ *  with that one Worker var and no client redeploy. This constant exists for the
+ *  emergency where the client side itself must be hidden regardless of the server —
+ *  set false and redeploy the client (see docs/FRIEND_INVASIONS.md). */
+export const PVP_UI_ENABLED = true;
 
 /** Synthetic raid id for friend invasions. Negative like the Epic Boss's -101, so no
  *  catalog rule (stage ladders, alien/video-game specials, McDonnell pacing) matches. */
@@ -30,17 +31,39 @@ export const PVP_RAID_ID = -2;
 export const PVP_ARMY_SIZE = 8;
 
 /** How many defenders the snapshot fields: the strongest N of the defender's deployed
- *  (non-crypt) roster. Matches the base farm army cap. */
+ *  (non-crypt) roster, or up to N of an AUTHORED defense line-up. Matches the base
+ *  farm army cap. */
 export const PVP_DEFENSE_CAP = 16;
+
+/** Both sides of a friend invasion must be past the opening arc of the game: level 7
+ *  keeps brand-new farms out of the matchmaking pool in either role. */
+export const PVP_MIN_LEVEL = 7;
+
+/** Daily income caps, one per role. Fights beyond these still HAPPEN (any number per
+ *  day — they are recorded, replayable, and count in the stats), but only the first N
+ *  verified wins per UTC day pay the attacker, and only the first N held defenses per
+ *  UTC day park a reward for the defender. Capping the income rather than the fights
+ *  is what keeps a zero-risk mode from becoming a grind treadmill — and it caps what
+ *  collusion can farm, which is why the per-pair attack cap below could relax into a
+ *  plain spam guard. */
+export const PVP_DAILY_REWARDED_WINS = 3;
+export const PVP_DAILY_REWARDED_DEFENSES = 3;
+
+/** How many finished fights keep their pinned config + transcript (per role, per
+ *  account) for the replay viewer. Older rows keep their RESULT and reward forever —
+ *  someone returning after a month sees and claims everything — but the heavy replay
+ *  payload is swept, which is most of a session row's weight. */
+export const PVP_REPLAYS_KEPT = 10;
 
 /** Defense wave cadence: a mild swarm (up to 3 on the field, one more every 5 s), so a
  *  16-zombie defense doesn't fight one-at-a-time into the 4-minute sim cap. Pinned into
  *  the config like the alien stage's cadence, so both simulations agree by construction. */
 export const PVP_WAVE_CADENCE: WaveCadence = { maxActive: 3, dripMs: 5000 };
 
-/** Attacks one account may open against the SAME friend per UTC day. The whole reward
- *  loop is zero-risk, so the pair cap is what keeps two friends from farming each other. */
-export const PVP_DAILY_ATTACKS_PER_PAIR = 3;
+/** Attacks one account may open against the SAME friend per UTC day. Income is capped
+ *  by PVP_DAILY_REWARDED_WINS / _DEFENSES above, so this is only a spam guard now —
+ *  it keeps one pair from generating unbounded session rows, not from farming. */
+export const PVP_DAILY_ATTACKS_PER_PAIR = 10;
 
 /** Per-hit damage exactly as BattleSim.toSim derives it (finalPower × attackMult). */
 function unitHitDamage(u: CombatUnit): number {
@@ -62,7 +85,7 @@ export function armyScore(units: CombatUnit[]): number {
   return Math.round(units.reduce((sum, u) => sum + unitScore(u), 0));
 }
 
-/** Convert a defender's `buildPlayerUnits` output into the enemy-side snapshot.
+/** The per-unit flip both defense builders share:
  *
  *  - team flips to "enemy"; abilities are cleared (nobody is home to tap them) and
  *    `teamAuraStats` is dropped so the sim never re-derives the aura from "deployed
@@ -71,22 +94,32 @@ export function armyScore(units: CombatUnit[]): number {
  *  - `attackCooldownMs` is kept as built (the player-side 2 s/dex clock), so a zombie
  *    is exactly as fast defending as it is attacking — slotting it onto the enemy
  *    side must not halve its swing interval.
- *  - The strongest PVP_DEFENSE_CAP survive, ordered WEAKEST FIRST so the wave ramps
- *    up the way an authored stage does; ids are re-minted `d0..dN` like a wave's so
- *    nothing downstream confuses them with the attacker's roster ids.
+ *  - ids are re-minted `d0..dN` like a wave's so nothing downstream confuses them
+ *    with the attacker's roster ids.
  */
+function toEnemyCopy(u: CombatUnit, i: number): CombatUnit {
+  const copy: CombatUnit = { ...u, id: `d${i}`, team: "enemy", abilities: [] };
+  delete copy.teamAuraStats;
+  delete copy.walkingSpeedMult;
+  return copy;
+}
+
+/** The AUTO snapshot (no authored defense): the strongest PVP_DEFENSE_CAP survive,
+ *  ordered WEAKEST FIRST so the wave ramps up the way an authored stage does. */
 export function toDefenseUnits(units: CombatUnit[]): CombatUnit[] {
   const ranked = units
     .map((u) => ({ u, score: unitScore(u) }))
     .sort((a, b) => b.score - a.score || a.u.id.localeCompare(b.u.id))
     .slice(0, PVP_DEFENSE_CAP)
     .reverse();
-  return ranked.map(({ u }, i) => {
-    const copy: CombatUnit = { ...u, id: `d${i}`, team: "enemy", abilities: [] };
-    delete copy.teamAuraStats;
-    delete copy.walkingSpeedMult;
-    return copy;
-  });
+  return ranked.map(({ u }, i) => toEnemyCopy(u, i));
+}
+
+/** An AUTHORED defense: the defender's saved order IS the emergence order — slot 1
+ *  walks out first. Capped at PVP_DEFENSE_CAP; the caller has already filtered the
+ *  loadout to still-owned zombies. */
+export function orderedDefenseUnits(units: CombatUnit[]): CombatUnit[] {
+  return units.slice(0, PVP_DEFENSE_CAP).map((u, i) => toEnemyCopy(u, i));
 }
 
 // ---------------------------------------------------------------------------

@@ -55,14 +55,27 @@ describe("a spent fight config is released with the fight", () => {
     }
   });
 
-  // The exemption is load-bearing and worth failing on if someone "fixes" it for
-  // consistency: a PvP config outlives its fight on purpose, so the defender can
-  // re-simulate the attack on their farm (migration 0055).
-  it("leaves a PvP config alone, because the defender still has to watch it", () => {
+  // A PvP config OUTLIVES its fight on purpose — the defender still has to watch it —
+  // but only inside the rolling replay window (PVP_REPLAYS_KEPT per role, 0057). So
+  // the rule here is different from the raid tables': the settlement path must NOT
+  // clear the config, and the ONE statement allowed to (the sweep) must carry both
+  // keep-window guards, or a "simplification" quietly deletes live recordings.
+  it("only the windowed sweep may clear a PvP config, and it must keep both replay windows", () => {
     const pvp = updateStatements().filter((s) => s.table === "pvp_sessions_v3");
     expect(pvp.length).toBeGreaterThan(0);
-    for (const statement of pvp) {
-      expect(statement.set).not.toMatch(/config_json\s*=/);
+    const clearing = pvp.filter((s) => /config_json\s*=/.test(s.set));
+    // Exactly one clearing statement: the sweep. A second one is a settlement path
+    // that has started eating recordings.
+    expect(clearing.length).toBe(1);
+    for (const statement of clearing) {
+      // The sweep must strip the transcript with the config (they are one recording)…
+      expect(statement.set).toMatch(/inputs_json\s*=\s*NULL/i);
+      // …and the full statement must protect BOTH participants' newest recordings.
+      const source = readFileSync(`${root}src/v3/${statement.file}`, "utf8");
+      const sweep = source.match(/UPDATE pvp_sessions_v3 SET config_json[\s\S]*?LIMIT \?2\)`\)/);
+      expect(sweep, "the sweep statement has been reshaped — re-verify its guards").toBeTruthy();
+      const windows = sweep![0].match(/id NOT IN/g) ?? [];
+      expect(windows.length, "the sweep must keep the attacker's AND the defender's windows").toBe(2);
     }
   });
 });

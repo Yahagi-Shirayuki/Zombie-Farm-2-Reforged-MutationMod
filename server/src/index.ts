@@ -634,7 +634,12 @@ app.use("/raid/start", rateLimit("RL_WRITE", "raid_start", 60, 60_000));
 app.use("/raid/pvp/start", rateLimit("RL_WRITE", "pvp_start", 30, 60_000));
 app.use("/raid/pvp/finish", rateLimit("RL_WRITE", "pvp_finish", 30, 60_000));
 app.use("/raid/pvp/collect", rateLimit("RL_WRITE", "pvp_collect", 60, 60_000));
+app.use("/raid/pvp/collect-all", rateLimit("RL_WRITE", "pvp_collect_all", 30, 60_000));
 app.use("/raid/pvp/history", rateLimit("RL_READ", "pvp_history", 120, 60_000));
+app.use("/raid/pvp/replay/*", rateLimit("RL_READ", "pvp_replay", 60, 60_000));
+app.use("/raid/pvp/defense", rateLimit("RL_WRITE", "pvp_defense", 60, 60_000));
+// Preview builds a full defense snapshot from D1 — read-only but not free.
+app.use("/raid/pvp/preview", rateLimit("RL_READ", "pvp_preview", 60, 60_000));
 app.use("/raid/checkpoint", rateLimit("RL_WRITE", "raid_checkpoint", 30, 60_000));
 app.use("/raid/finish", rateLimit("RL_WRITE", "raid_finish", 60, 60_000));
 app.use("/raid/revive", rateLimit("RL_WRITE", "raid_revive", 60, 60_000));
@@ -1116,8 +1121,12 @@ app.post("/bootstrap", async (c) => {
     minProtocolVersion(c.env),
     writerState
   );
-  metric("bootstrap", accountId, started, { payloadBytes: JSON.stringify(response).length });
-  return c.json(response);
+  // Feature capability, not state: the client shows its Invasions surfaces only when
+  // this Worker will accept /raid/pvp/start, so launching PvP is ONE Worker-var flip
+  // with no client redeploy and no dead button in the meantime.
+  const payload = { ...response, pvpEnabled: pvpEnabled(c.env) };
+  metric("bootstrap", accountId, started, { payloadBytes: JSON.stringify(payload).length });
+  return c.json(payload);
 });
 
 app.post("/commands", async (c) => {
@@ -1457,8 +1466,42 @@ app.post("/raid/pvp/collect", async (c) => {
   return c.json(result.body, result.status as 200);
 });
 
+app.post("/raid/pvp/collect-all", async (c) => {
+  // Same reasoning: an earned defense reward stays claimable after the switch-off.
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
+  const result = await v3Pvp.collectAllPvp(c.env.DB, c.get("accountId"), Date.now());
+  return c.json(result.body, result.status as 200);
+});
+
 app.get("/raid/pvp/history", async (c) => {
-  const result = await v3Pvp.historyPvp(c.env.DB, c.get("accountId"));
+  const result = await v3Pvp.historyPvp(c.env.DB, c.get("accountId"), Date.now());
+  return c.json(result.body, result.status as 200);
+});
+
+app.get("/raid/pvp/replay/:sessionId", async (c) => {
+  // Reads a stored recording — stays live when the feature is off, like history.
+  const result = await v3Pvp.replayPvp(c.env.DB, c.get("accountId"), c.req.param("sessionId"));
+  return c.json(result.body, result.status as 200);
+});
+
+app.post("/raid/pvp/defense", async (c) => {
+  if (!pvpEnabled(c.env)) return c.json({ error: "pvp_disabled" }, 503);
+  if (await mutationsHalted(c)) return c.json({ error: "mutations_disabled" }, 503);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const result = await v3Pvp.setDefensePvp(c.env.DB, c.get("accountId"), body, Date.now());
+  return c.json(result.body, result.status as 200);
+});
+
+app.get("/raid/pvp/defense", async (c) => {
+  if (!pvpEnabled(c.env)) return c.json({ error: "pvp_disabled" }, 503);
+  const result = await v3Pvp.getDefensePvp(c.env.DB, c.get("accountId"));
+  return c.json(result.body, result.status as 200);
+});
+
+app.post("/raid/pvp/preview", async (c) => {
+  if (!pvpEnabled(c.env)) return c.json({ error: "pvp_disabled" }, 503);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+  const result = await v3Pvp.previewPvp(c.env.DB, c.get("accountId"), body, Date.now());
   return c.json(result.body, result.status as 200);
 });
 
