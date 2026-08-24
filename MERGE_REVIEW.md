@@ -113,8 +113,9 @@ mutation stack, which is out of scope for a merge.
   `(key, mutation, color, wanted, mutationIds, forceMutation)` and thread it through
   `src/hud.ts` and `src/ui/panels/zombies.ts`.
 - **`mutationLabelFor(key, mask)`.** Upstream names a mutation by the species wearing it,
-  so an Eyebiscus is not called a Carrot. It only matters for the Tier-4 variants, which
-  this fork's catalog does not carry; the fork's `mutationLabel(mask, ids)` is used instead.
+  so an Eyebiscus is not called a Carrot. The fork's `mutationLabel(mask, ids)` is used
+  instead. This mattered only for the Tier-4 variants riding a shared bit, and they no
+  longer do (see below), so it is now cosmetic rather than load-bearing.
 
 ## Upstream tests removed with the raid/mutation stacks
 
@@ -135,11 +136,30 @@ means something. **Restore all twelve if the raid or mutation stack is ever re-p
 - src/zombie/mutationAlmanac.test.ts
 - src/zombie/mutationVisibility.test.ts
 - src/zombie/specialPortrait.test.ts
-- src/zombie/variantMutations.test.ts   (Tier-4 variants — not in this catalog)
-- src/zombie/mutationRedundancy.test.ts (same)
+- src/zombie/mutationRedundancy.test.ts (restorable NOW — but it fails on real findings:
+    Tomatohead dominates Onionhead and Broccohair dominates Cauli-hair while sitting
+    LOWER in CATALOG, so the Zombie Pot discards the better of each pair. Fixing it
+    means retuning those stats, which is a balance call, not a merge one.)
 - src/raid/BattleSim.feats.test.ts      (upstream's RaidFeats)
 - src/raid/BattleSim.formation.test.ts  (upstream's formation model)
-- src/quest/reforgedQuests.test.ts       (upstream's Tier-4 mutant quest subjects)
+- src/quest/reforgedQuests.test.ts       (restorable NOW except for one finding: quest
+    20005 names the subject "Rare Invasion Zombie", which nothing in this build posts.)
 - src/zombie/ZombieField.fertilize.test.ts (upstream's patch rest-spot on teleportTo)
 - src/raid/videoGameStage.ts + .test.ts  (upstream's stage module + test)
 - src/raid/alienStage.ts                 (ditto — this fork's RaidScene stages these itself)
+
+## Settled after the merge (commit "Make the test suite describe this build")
+
+- **Tier-4 mutations are IN the catalog now.** Eyebiscus and Heartichoke were listed
+  above as "not in this catalog", but the build already shipped their art, their crops
+  (levels 44 and 45), their quests, `CROP_MUTATIONS` entries and server migration 0050 —
+  only the two `CATALOG` rows were missing. The level-45 capstone crop therefore grew
+  nothing at all, and the level-44 one granted Carrot-eyed's Tier-1 bonus. Appended at
+  bits 16384/32768, matching upstream, so bits 0-13 and every existing save are
+  untouched. `src/zombie/variantMutations.test.ts` is restored with them.
+- **Portrait cancellation is wired.** The note above about `wanted` not being threaded
+  is stale: `get` takes both `mutationIds` and `wanted`, and hud.ts and the zombies panel
+  pass them.
+- **`upgradeVariantMutations` now runs on BOTH sides.** It was imported only by
+  `server/src/rosterCatalog.ts`; the client's `makeOwned` did not call it. With the
+  Tier-4 bits live that would have desynced a raid replay on the first legacy unit.
