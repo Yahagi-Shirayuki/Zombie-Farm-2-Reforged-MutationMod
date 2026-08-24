@@ -29,7 +29,6 @@ interface RuntimeRow {
   active_batch_id: string | null;
   last_batch_id: string | null;
   last_first_sequence: number | null;
-  last_result_json: string | null;
   command_window_start: number;
   command_window_count: number;
 }
@@ -37,8 +36,6 @@ interface RuntimeRow {
 interface DocumentRow {
   version: number;
   current_json: string;
-  previous_version?: number | null;
-  previous_json?: string | null;
 }
 
 interface CoreRow { current_json: string }
@@ -144,15 +141,36 @@ async function ensureV3(db: D1Database, accountId: string, now: number): Promise
   ]);
 }
 
-async function loadRows(db: D1Database, accountId: string, now: number) {
-  await ensureV3(db, accountId, now);
+/** Every row a projection is built from, fanned out in one round of reads.
+ *
+ *  Columns are named rather than `SELECT *`, and that is the whole point rather than a
+ *  style preference. These tables carry the player's save as JSON, so a `*` bills every
+ *  read for whatever the widest column happens to hold — and two of them are dead weight
+ *  on this path:
+ *
+ *    account_runtime_v3.last_result_json   avg 9.4 KB, max 67 KB in production
+ *    farm_documents_v3.previous_json       avg 3.9 KB, max 38 KB in production
+ *
+ *  Neither is read here. `last_result_json` has exactly one consumer — the idempotent
+ *  replay in applyBatch, which now fetches it only when the batch ids actually match —
+ *  and `previous_json` is written by the farm document update and read by nothing at all,
+ *  anywhere in the repo. Together they were roughly 13 KB per request of pure carry.
+ *
+ *  This is also why cost per request GREW through the beta rather than staying flat: both
+ *  columns are copies of the player's own save, so every request got more expensive as the
+ *  farm it belonged to got bigger. A `SELECT *` on a save table is a per-request cost that
+ *  scales with how much the player has played. */
+async function readAll(db: D1Database, accountId: string) {
   const [runtime, balance, farm, objects, quests, periodic, core, presentation, roster, fallen, raid, raidState, raidRevival, epicBoss] = await Promise.all([
-    db.prepare("SELECT * FROM account_runtime_v3 WHERE account_id = ?").bind(accountId).first<RuntimeRow>(),
+    db.prepare(`SELECT account_version, writer_device_id, writer_generation, writer_last_activity_at,
+        active_batch_expires_at, active_batch_id, last_batch_id, last_first_sequence,
+        command_window_start, command_window_count
+      FROM account_runtime_v3 WHERE account_id = ?`).bind(accountId).first<RuntimeRow>(),
     db.prepare("SELECT gold, brains, xp FROM balances WHERE account_id = ?").bind(accountId).first<BalanceRow>(),
-    db.prepare("SELECT * FROM farm_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
-    db.prepare("SELECT * FROM object_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
-    db.prepare("SELECT * FROM quest_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
-    db.prepare("SELECT * FROM periodic_quest_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
+    db.prepare("SELECT version, current_json FROM farm_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
+    db.prepare("SELECT version, current_json FROM object_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
+    db.prepare("SELECT version, current_json FROM quest_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
+    db.prepare("SELECT version, current_json FROM periodic_quest_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<CoreRow>(),
     db.prepare("SELECT version, current_json FROM presentations_v3 WHERE account_id = ?").bind(accountId).first<PresentationRow>(),
     db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, locked_by_raid, from_escrow, color
@@ -181,9 +199,36 @@ async function loadRows(db: D1Database, accountId: string, now: number) {
     db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id = ?")
       .bind(accountId).first<EpicRunRow>(),
   ]);
+  return { runtime, balance, farm, objects, quests, periodic, core, presentation, roster, fallen,
+    raid, raidState, raidRevival, epicBoss };
+}
+
+/** Whether the rows `ensureV3` seeds are all present. */
+const seeded = (r: Awaited<ReturnType<typeof readAll>>): boolean =>
+  !!(r.runtime && r.balance && r.farm && r.objects && r.quests && r.periodic && r.core
+    && r.presentation && r.raidState);
+
+async function loadRows(db: D1Database, accountId: string, now: number) {
+  // Read FIRST, seed only if something is actually missing.
+  //
+  // `ensureV3` is a nine-statement INSERT OR IGNORE batch, and it used to run ahead of
+  // every single read — 689k executions of its first statement alone in a month of beta,
+  // the fourth most expensive query on the server by total time, every one of them a no-op
+  // after the account's first ever request. Now an established account pays nothing, and a
+  // brand-new one pays a single extra round of reads, once in its life.
+  //
+  // The inversion is safe under concurrency because the seeding is INSERT OR IGNORE: two
+  // requests racing a new account both find rows missing, both seed, and the second one's
+  // inserts are ignored rather than conflicting.
+  let rows = await readAll(db, accountId);
+  if (!seeded(rows)) {
+    await ensureV3(db, accountId, now);
+    rows = await readAll(db, accountId);
+  }
+  const { runtime, balance, farm, objects, quests, periodic, core, presentation, raidState } = rows;
   if (!runtime || !balance || !farm || !objects || !quests || !periodic || !core || !presentation || !raidState) throw new Error("v3_state_init_failed");
-  return { runtime, balance, farm, objects, quests, periodic, core, presentation, roster: roster.results ?? [],
-    fallen: fallen.results ?? [], raid, raidState, raidRevival, epicBoss };
+  return { runtime, balance, farm, objects, quests, periodic, core, presentation, roster: rows.roster.results ?? [],
+    fallen: rows.fallen.results ?? [], raid: rows.raid, raidState, raidRevival: rows.raidRevival, epicBoss: rows.epicBoss };
 }
 
 function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection {
@@ -359,8 +404,16 @@ export async function applyBatch(
 ): Promise<BatchFailure> {
   const rows = await loadRows(db, accountId, now);
   const runtime = rows.runtime;
-  if (runtime.last_batch_id === body.batchId && runtime.last_result_json) {
-    const cached = parse<CommandBatchResponse>(runtime.last_result_json, null as never);
+  // Fetched here rather than carried by loadRows: this is the ONLY reader of
+  // last_result_json, it averages 9.4 KB (peaking at 67 KB), and it matters only when a
+  // client actually retries a batch id. Reading it on the id match instead of on every
+  // request trades one rare extra query for ~9 KB off the cost of all of them.
+  const replay = runtime.last_batch_id === body.batchId
+    ? await db.prepare("SELECT last_result_json FROM account_runtime_v3 WHERE account_id = ?")
+        .bind(accountId).first<{ last_result_json: string | null }>()
+    : null;
+  if (replay?.last_result_json) {
+    const cached = parse<CommandBatchResponse>(replay.last_result_json, null as never);
     // The projection timestamps are absolute server epochs, but serverTime is the
     // response-time clock anchor used to translate them into the browser's clock
     // domain. Refresh only that anchor when replaying an idempotent result; reusing
