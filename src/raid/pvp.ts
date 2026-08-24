@@ -160,21 +160,22 @@ export function orderedDefenseUnits(units: CombatUnit[]): CombatUnit[] {
 // Calibration (measured through the real buildPlayerUnits — see pvp.test.ts pins):
 // L7 starter greens 29k · L15 mid normals 31k · L20 tier-3 normals 75k · the
 // THEORETICAL max 5-slot mutation set on greens 253k (tier 3 starts above it) ·
-// tier-4 normals 327k · tier-5 commons 457k (764k well-mutated) · a lone top epic
-// 1.28M · the well-mutated top-shop shelf 2.02M (1.93M carrying a healer) · the
-// epic shelf — which CANNOT carry mutations (reward-only zombies are barred from
-// the Pot and mutations never grow on bought zombies) — 3.75M, and still 2.55M
-// fielding TWO healers. Tier 5 sits at 1.5M so a five-star defense can afford its
-// support slots — high-tier healers score almost nothing on hp×dps but make the
-// fight harder, so the top tier must not punish fielding them — while the
-// strongest possible lone zombie (1.28M) still can't solo into five stars.
-// Pinned: plain greens tier 1 at any count, max-mutated greens tier 2 (never 3),
-// a top epic group tier 5 unmutated even with two healers in the line.
+// tier-4 normals 327k (556k well-mutated) · plain tier-5/shop specials 457k–1.38M —
+// Special-class zombies NEVER carry mutations (owner's rule: barred from the Pot as
+// parents, promotion children arrive clean, every trusted write strips the mask —
+// see server rosterCatalog.legalMutation) — · a lone top epic 1.28M · the epic
+// shelf 3.75M plain, and still 2.55M fielding TWO healers. Tier 5 sits at 1.5M so
+// a five-star defense can afford its support slots — high-tier healers score
+// almost nothing on hp×dps but make the fight harder, so the top tier must not
+// punish fielding them — while the strongest possible lone zombie (1.28M) still
+// can't solo into five stars. Pinned: plain greens tier 1 at any count,
+// max-mutated greens tier 2 (never 3), a top epic group tier 5 even with two
+// healers in the line.
 export const PVP_TIER_POINT_THRESHOLDS: ReadonlyArray<number> = [
   60_000, // below: tier 1 (starter farms, outleveled lawns)
   300_000, // below: tier 2 (mid/late normals; mutation-maxed greens top out at 253k)
   700_000, // below: tier 3 (tier-4 normals, heavy mutants, plain tier-5 commons)
-  1_500_000, // below: tier 4 (mutated tier-5s, plain shop shelf, lone epics); above: tier 5
+  1_500_000, // below: tier 4 (top shop specials, lone epics); at/above: tier 5 (epic shelf)
 ];
 
 /** One zombie's tier points: its built hp × dps, with Protect's damage reduction
