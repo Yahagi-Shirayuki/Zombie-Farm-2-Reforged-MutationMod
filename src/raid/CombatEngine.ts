@@ -33,9 +33,10 @@ import {
   farmRaidEnemyPace,
   lineupDamageBand,
   lineupSpeedBand,
+  MIRROR_SPEED_KEYS,
   mirroredAttackIntervalSec,
   POWER_PER_STR,
-  SCALLYWAG_KEY,
+  protectReduction,
 } from "./combatStats";
 import type {
   AttackDef,
@@ -272,11 +273,13 @@ export function buildPlayerUnits(
     // Distraction resistance keys off the unit's real focus stat. Damage abilities
     // are already part of finalPower (`str`) so lasers and healing see them too.
     const mult = focusFactor(focus, conc);
+    const supportsFromRear = z.group === "Garden" &&
+      ["heal", "healAOE", "ressurect"].some((ability) => keys.includes(ability));
     const u = unit(
       z.id, z.key, "player", z.name,
       str, dex, con, focus,
       mult, false,
-      z.group === "Garden", z.group === "Headless"
+      supportsFromRear, z.group === "Headless"
     );
     u.group = z.group;
     u.visualGroup = z.visualGroup;
@@ -285,8 +288,10 @@ export function buildPlayerUnits(
     u.mutation = z.mutation;
     u.mutationIds = z.mutationIds;
     u.color = z.color;
-    const protectReduction = z.group === "Headless" ? 0 : protect * 0.20;
-    u.damageReduction = Math.min(0.95, protectReduction + eff.selfDamageReduction);
+    u.damageReduction = Math.min(
+      0.95,
+      protectReduction(protect, keys.includes("protect")) + eff.selfDamageReduction
+    );
     u.teamAuraStats = {
       baseStr: auraBaseStr + mut.str,
       baseDex: auraBaseDex + mut.dex,
@@ -397,7 +402,7 @@ export function buildEnemyUnits(
       false,
       avgField(st.attacks, attacks, "speedMultiplier") * pace
     );
-    u.mirrorsOpponentSpeed = key === SCALLYWAG_KEY;
+    u.mirrorsOpponentSpeed = MIRROR_SPEED_KEYS.has(key);
     const fx = attackEffects(st.attacks, attacks);
     u.knockBack = fx.knockBack;
     u.stunMs = fx.stunMs;

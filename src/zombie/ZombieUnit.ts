@@ -11,7 +11,8 @@ import { GameAssets, ZombieModel } from "../assets";
 import { Field } from "../Field";
 import { depth, screenToGrid, tileCenter } from "../iso";
 import { setFootprint } from "../depthSort";
-import { findEscape, findPath } from "../pathfind";
+import { findEscape, findPath, type Cell } from "../pathfind";
+import { RouteWalker, walkRoute, type Waypoint } from "../walkRoute";
 import { OwnedZombie } from "./types";
 import {
   matchesMutationReplacement,
@@ -35,6 +36,7 @@ import {
 import { SpecialHeadFx, specialHeadFxKind } from "./specialHeadFx";
 import { zombiePartTextureForFacing } from "./facingPartTexture";
 import { zombieFarmScale } from "./displayScale";
+import { visibleMutationSet } from "./mutationVisibility";
 
 // Head replacements draw over the base skull but under facial parts, so eyes stay
 // visible on Onion/Tomato/etc. Hair/eye mutations draw above the face.
@@ -103,9 +105,10 @@ export class ZombieUnit {
   private mutationArmSwap: boolean | null = null;
   private renderScale = 1;
 
-  private wx = 0;
-  private wy = 0;
-  private path: { x: number; y: number }[] = []; // remaining tile-center waypoints
+  private walker = new RouteWalker(0, 0, {
+    onLeg: (dx) => { this.facing = dx > 0 ? -1 : 1; },
+    onFinish: () => { this.pauseMs = this.nextIdlePause(); },
+  });
   private pauseMs = IDLE_PAUSE_MIN_MS;
   private sleeping = false; // gathered on the Zombie Patch: stay put, don't wander
   private facing = 1;
@@ -119,6 +122,11 @@ export class ZombieUnit {
   private fertilizeCloud = new Graphics();
   private invasionBubble!: Sprite;
   private specialHeadFx: SpecialHeadFx | null = null;
+
+  private get wx(): number { return this.walker.x; }
+  private set wx(v: number) { this.walker.x = v; }
+  private get wy(): number { return this.walker.y; }
+  private set wy(v: number) { this.walker.y = v; }
 
   constructor(assets: GameAssets, field: Field, data: OwnedZombie) {
     this.field = field;
@@ -157,9 +165,7 @@ export class ZombieUnit {
   /** Instantly move to a world spot and pause there a beat â€” a Garden zombie
    *  "teleports" to a crop it fertilizes, then resumes wandering. */
   teleportTo(wx: number, wy: number) {
-    this.wx = wx;
-    this.wy = wy;
-    this.path = [];
+    this.walker.moveTo(wx, wy);
     this.sleeping = false;
     this.setEyesClosed(false);
     this.pauseMs = 100;
@@ -209,8 +215,9 @@ export class ZombieUnit {
       assets.zombieModels["ZombieActorRegularTier1"];
     // What this unit LOOKS like on the farm, after the device's display prefs. The
     // data keeps its real mask and inherited tint; only the drawing changes.
-    const shown = displayedAppearance(this.data.mutation, this.data.color);
-    const shownMutationIds = displayedMutationIds(this.data.mutationIds);
+    const visible = visibleMutationSet(this.data.id, this.data.mutation, this.data.mutationIds);
+    const shown = displayedAppearance(visible.mutation, this.data.color);
+    const shownMutationIds = displayedMutationIds(visible.mutationIds);
     const [r, g, b] = shown.color ?? m.color;
     const tint = (r << 16) | (g << 8) | b; // authentic Market colour
     const scale = zombieFarmScale(this.data.visualGroup ?? this.data.group, this.data.className, this.data.key)
@@ -471,20 +478,20 @@ export class ZombieUnit {
     return depth(g.col, g.row);
   }
 
-  // Walk to a specific tile and stay there â€” the Zombie Patch "calls" units to
+  // Walk to a specific tile and stay there - the Zombie Patch "calls" units to
   // nap on it. Stops wandering until woken.
-  sleepAt(col: number, row: number) {
-    this.sleeping = true;
-    // Stay awake for the walk over; the eyes close once the final tile is reached.
-    this.setEyesClosed(false);
+  sleepAt(col: number, row: number): boolean {
     const g = screenToGrid(this.wx, this.wy);
     const from = { col: Math.round(g.col), row: Math.round(g.row) };
     const cells = findPath(
       from, { col, row }, (c, r) => this.field.isPassable(c, r), this.pathOpts()
     );
-    this.path = cells.length
-      ? cells.map((c) => tileCenter(c.col, c.row))
-      : [tileCenter(col, row)];
+    if (!cells.length && (from.col !== col || from.row !== row)) return false;
+    this.sleeping = true;
+    // Stay awake for the walk over; the eyes close once the final tile is reached.
+    this.setEyesClosed(false);
+    this.walker.setRoute(this.route(from, cells));
+    return true;
   }
   // Wake up and resume wandering.
   wake() {
@@ -507,26 +514,30 @@ export class ZombieUnit {
     if (!this.field.isPassable(from.col, from.row)) {
       const escape = findEscape(from, (c, r) => this.field.isPassable(c, r), this.pathOpts());
       if (escape.length) {
-        this.path = escape.map((c) => tileCenter(c.col, c.row));
+        this.walker.setRoute(this.route(from, escape));
         return;
       }
     }
     for (let tries = 0; tries < 12; tries++) {
       const col = Math.round(from.col + (Math.random() * 2 - 1) * WANDER_RADIUS);
       const row = Math.round(from.row + (Math.random() * 2 - 1) * WANDER_RADIUS);
-      if (!this.field.isPassable(col, row)) continue;
+      if (!this.field.isOpenGround(col, row)) continue;
       const cells = findPath(
         from, { col, row }, (c, r) => this.field.isPassable(c, r), this.pathOpts()
       );
       if (cells.length) {
-        this.path = cells.map((c) => tileCenter(c.col, c.row));
+        this.walker.setRoute(this.route(from, cells));
         return;
       }
     }
   }
 
+  private route(from: Cell, cells: Cell[]): Waypoint[] {
+    return walkRoute(this.field, from, { x: this.wx, y: this.wy }, cells);
+  }
+
   private pathOpts() {
-    return { inBounds: (c: number, r: number) => this.field.inBounds(c, r) };
+    return this.field.pathOptions();
   }
 
   private nextIdlePause(): number {
@@ -608,7 +619,7 @@ export class ZombieUnit {
     // Animation follows the route, not displacement in just this frame. Reaching a
     // waypoint can consume a frame without translating; treating that as idle made
     // the arms and feet flash down between every pair of path cells.
-    let walking = this.path.length > 0;
+    let walking = this.walker.walking;
     if (this.fertilizeCastMs > 0) {
       this.fertilizeCloud.visible = true;
       this.fertilizeCastMs = Math.max(0, this.fertilizeCastMs - dt * 1000);
@@ -626,32 +637,17 @@ export class ZombieUnit {
       if (this.fertilizeCastMs <= 0) {
         for (const arm of this.arms) arm.sp.rotation = arm.baseRotation;
       }
-    } else if (this.path.length) {
-      const t = this.path[0];
-      const dx = t.x - this.wx;
-      const dy = t.y - this.wy;
-      const dist = Math.hypot(dx, dy);
-      const step = SPEED_PX * dt;
-      if (dist <= step || dist === 0) {
-        this.wx = t.x;
-        this.wy = t.y;
-        this.path.shift();
-        if (!this.path.length) this.pauseMs = this.nextIdlePause();
-      } else {
-        this.wx += (dx / dist) * step;
-        this.wy += (dy / dist) * step;
-        if (dx > 0.1) this.facing = -1;
-        else if (dx < -0.1) this.facing = 1;
-      }
+    } else if (this.walker.walking) {
+      this.walker.advance(SPEED_PX * dt);
     } else if (!this.sleeping) {
       // Napping units stay put; only wandering units pick a new destination.
       this.pauseMs -= dt * 1000;
       if (this.pauseMs <= 0) {
         this.repath();
-        walking = this.path.length > 0;
+        walking = this.walker.walking;
       }
     }
-    this.setEyesClosed(this.sleeping && this.path.length === 0);
+    this.setEyesClosed(this.sleeping && !this.walker.walking);
     this.syncBasePartFacing();
     this.syncMutationArmFacing();
     this.tilt(dt, walking);

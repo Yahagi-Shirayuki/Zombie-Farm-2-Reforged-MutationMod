@@ -11,7 +11,7 @@
 // portraits, not side-view stage actors.
 import { AnimatedSprite, Application, Assets, Container, Graphics, Rectangle, Sprite, Text, Texture } from "pixi.js";
 import { GameAssets, raidImage } from "../assets";
-import { BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX, type SimDamageEvent } from "./BattleSim";
+import { ALIEN_LASER_SPRITE, BattleSim, BOSS_STRUCT_X, BOSS_STRUCT_Y, CHARGE_X, ENEMY_HOLD_X, ENEMY_SPAWN_X, EPIC_BOSS_LAND_MS, FIELD_H, FIELD_W, SimUnit, TELEPORT_PX, THROW_WINDUP_MS, type SimDamageEvent } from "./BattleSim";
 import { RaidActor } from "./RaidActor";
 import { EnemyActor, type EnemyAttackPose } from "./EnemyActor";
 import { ParticleField, ParticleConfig } from "./Particles";
@@ -25,6 +25,13 @@ import {
   playerStagingOffset,
   visualCountdown,
 } from "./renderInterpolation";
+import {
+  epicAttackFrameIndex,
+  epicBossAnimationLoops,
+  epicStripFrameIndex,
+  selectEpicBossAnimation,
+  type EpicBossAnimationName,
+} from "./epicBossAnimation";
 import { advanceRaidArmy, raidArmyHasExited } from "./raidOutro";
 import { zombieRaidHeightScale } from "../zombie/displayScale";
 import { zombieBasicAttackName } from "./zombieAttackPresentation";
@@ -711,6 +718,9 @@ export class RaidScene {
     for (const opt of this.bossThrow?.options ?? []) {
       if (this.projTex.has(opt.sprite)) continue;
       this.projTex.set(opt.sprite, await loadTex(raidImage(opt.sprite)));
+    }
+    if (this.sim.units.some((u) => u.isBoss && u.sourceKey === ALIEN_BOSS_KEY)) {
+      this.projTex.set(ALIEN_LASER_SPRITE, await loadTex(raidImage(`${ALIEN_LASER_SPRITE}.png`)));
     }
     // Trapeze Artist art; its layer was inserted behind the zombies above.
     if (this.grabberSprite) {
@@ -1405,7 +1415,7 @@ export class RaidScene {
       tok.root.visible = true;
       if (u.team === "enemy") {
         const tint = (u.freezeMs ?? 0) > 0 ? FREEZE_TINT : 0xffffff;
-        tok.enemyActor?.setTint(tint);
+        tok.enemyActor?.applyTint(tint);
         for (const sp of tok.tintSprites) sp.tint = tint;
       }
 
@@ -1666,12 +1676,12 @@ export class RaidScene {
           const summon = this.sim.bossWallSummonProgress();
           if (summon !== null) {
             // Slow raise/hold across the full authored (~3 s) wall summon.
-            attack = { atkProg: 0.28 + 0.64 * summon, damageTiming: 0.98 };
+            attack = { atkProg: 0.28 + 0.64 * summon, damageTiming: 0.98, clip: "ability" };
           } else {
-            const sw = this.sim.bossThrowSwing(550, visualLeadMs);
+            const sw = this.sim.bossThrowSwing(THROW_WINDUP_MS, visualLeadMs);
             attack = sw === null
               ? null
-              : { atkProg: 0.28 + 0.72 * sw, damageTiming: 0.9 };
+              : { atkProg: 0.28 + 0.72 * sw, damageTiming: 0.9, clip: "throw" };
           }
         }
         const jumpingFromPerch = u.state === "descending" && u.sourceKey === CIRCUS_BOSS_KEY;
@@ -1697,22 +1707,33 @@ export class RaidScene {
         }
       }
       if (tok.epicActor) {
-        const attackDef = this.bossAnimationDefs?.attack;
-        const attackLeadMs = attackDef
-          ? attackDef.frameCount * attackDef.frameSeconds * 1000 * u.attackDamageTiming
-          : 0;
-        const attackStarting = u.state === "fight" && attackLeadMs > 0 && visualAttackMs <= attackLeadMs;
-        // One-shot strips must be allowed to finish. The old struckThisTick switch
-        // selected attack for one render frame, then reset to idle; on a killing hit
-        // the frozen flag made the attack appear only after combat had ended.
-        const attackPlaying = tok.epicAnim === "attack" && tok.epicActor.playing;
-        const wanted = !u.alive ? "defeat" : bossLeaving ? "escape"
-          : u.state === "falling" ? "fly" : u.state === "landing" ? "enter"
-          : attackPlaying || attackStarting ? "attack" : "idle";
-        const wantedLoop = wanted === "fly" || wanted === "idle";
-        if (wanted && (tok.epicAnim !== wanted || tok.epicActor.loop !== wantedLoop)) {
+        const hasEpic = (name: EpicBossAnimationName) => !!this.bossFrames.get(name)?.length;
+        const wanted = selectEpicBossAnimation({
+          alive: u.alive,
+          leaving: bossLeaving,
+          state: u.state,
+          has: hasEpic,
+        });
+        const wantedLoop = epicBossAnimationLoops(wanted);
+        const clockDriven = wanted === "attack" || wanted === "enter";
+        if (tok.epicAnim !== wanted || tok.epicActor.loop !== wantedLoop) {
           tok.epicAnim = wanted;
           this.playEpic(tok.epicActor, wanted, wantedLoop);
+          if (clockDriven) tok.epicActor.stop();
+        }
+        if (clockDriven) {
+          const index = wanted === "attack"
+            ? epicAttackFrameIndex(
+              visualAttackMs,
+              u.cooldownMs,
+              u.attackDamageTiming,
+              tok.epicActor.totalFrames,
+            )
+            : epicStripFrameIndex(
+              1 - visualAttackMs / EPIC_BOSS_LAND_MS,
+              tok.epicActor.totalFrames,
+            );
+          if (tok.epicActor.currentFrame !== index) tok.epicActor.gotoAndStop(index);
         }
       }
 
@@ -2263,6 +2284,9 @@ export class RaidScene {
         if (!tex) sp.tint = 0xff7a3c;
         this.projLayer.addChild(sp);
         this.projSprites.set(pr.id, sp);
+        if (pr.sprite === ALIEN_LASER_SPRITE) {
+          this.onStrike?.({ team: "enemy", sfxFile: "alienLaser.wav" });
+        }
       }
       // Rendered ~2Ã— the old size (the collision radius in BattleSim is unchanged â€”
       // this is a visual-legibility bump so thrown items read clearly).
@@ -2412,7 +2436,10 @@ export class RaidScene {
           // Collapse simultaneous hits to one cue so a large army does not stack
           // a painfully loud group of identical one-shots.
           if (this.sim.projectileImpactsThisTick > 0) {
-            this.onStrike?.({ team: "enemy", impact: "projectile" });
+            const sfxFile = this.sim.lastProjectileImpactSprite === ALIEN_LASER_SPRITE
+              ? "stun.wav"
+              : undefined;
+            this.onStrike?.({ team: "enemy", impact: "projectile", sfxFile });
           } else if (strike) {
             this.onStrike?.({
               team: strike.unit.team,

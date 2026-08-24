@@ -46,6 +46,7 @@ import {
   mirroredAttackIntervalSec,
   physicalCritResult,
   POWER_PER_STR,
+  protectReduction,
 } from "./combatStats";
 
 /** Logical field the sim runs in; RaidScene scales this to the viewport. */
@@ -69,7 +70,7 @@ export const BOSS_STRUCT_Y = -150;
 /** Epic Boss entry starts well above the visible stage, then falls to ground. */
 export const EPIC_BOSS_FALL_Y = -4_000;
 const EPIC_BOSS_FALL_SPEED = 4_800;
-const EPIC_BOSS_LAND_MS = 500;
+export const EPIC_BOSS_LAND_MS = 500;
 const BAND_TOP = 90;
 const BAND_BOT = FIELD_H - 70;
 const CENTER_Y = FIELD_H / 2;
@@ -162,6 +163,7 @@ export const TELEPORT_PX = 40;
 // actions faster, and hits ~1.5Ã— harder (chip â†’ threat if you stall).
 const DEFAULT_ROUND_MS = 3 * 60 * 1000; // 3:00
 const ENRAGE_THROW_MULT = 0.5; // throw interval halves
+export const THROW_WINDUP_MS = 550;
 const ENRAGE_SPECIAL_MULT = 0.6; // special cooldowns shorten
 const ENRAGE_DMG_MULT = 1.5; // boss melee damage grows
 
@@ -262,6 +264,8 @@ function laserInterval(abilities: readonly string[], attackCooldownMs: number): 
   if (abilities.includes("laserBeam")) return attackCooldownMs / 3;
   return 0;
 }
+
+export const ALIEN_LASER_SPRITE = "alienLaser";
 
 /** Zombie advance speed scales with DEX (quicker zombies reach the front sooner). */
 function advanceSpeed(dex: number): number {
@@ -611,6 +615,8 @@ export class BattleSim {
   readonly damageEvents: SimDamageEvent[] = [];
   /** Presentation-only count; reset at the start of every fixed simulation step. */
   projectileImpactsThisTick = 0;
+  /** Presentation-only sprite key for the latest projectile impact in this tick. */
+  lastProjectileImpactSprite = "";
   private players: SimUnit[];
   private enemies: SimUnit[];
   private boss: SimUnit | null;
@@ -949,9 +955,11 @@ export class BattleSim {
     const fortitude = counts.get("tankHitPointsBuff") ?? 0;
     for (const p of this.players) {
       const stats = p.teamAuraStats;
-      const protectReduction = p.group === "Headless" ? 0 : protect * 0.20;
       const selfReduction = p.abilities.includes("castle") ? 0.5 : 0;
-      p.damageReduction = Math.min(0.95, protectReduction + selfReduction);
+      p.damageReduction = Math.min(
+        0.95,
+        protectReduction(protect, p.abilities.includes("protect")) + selfReduction
+      );
       if (!stats) continue;
       const statCarriers = p.group === "Female" ? chivalry : p.group === "Regular" ? grace : 0;
       const lifeCarriers = statCarriers + (p.group === "Headless" ? fortitude : 0);
@@ -1412,7 +1420,7 @@ export class BattleSim {
       (foe.hp - applied) / foe.maxHp < ONE_SHOT_FLOOR
     ) {
       const actual = foe.hp - 1;
-      this.recordDamageEvent(foe, actual, false, 0);
+      this.recordDamageEvent(foe, applied, false, 0);
       foe.hp = 1;
       foe.oneShotProtectionUsed = true;
       this.reflectTakenDamage(foe, attacker, actual);
@@ -1437,7 +1445,7 @@ export class BattleSim {
     if (!foe.alive || dmg <= 0) return;
     if (fromPlayer && foe.team !== "enemy") return;
     if (!fromPlayer && foe.team !== "player") return;
-    const amount = Math.min(foe.hp, dmg);
+    const amount = Math.round(dmg);
     if (amount <= 0) return;
     this.damageEvents.push({ targetId: foe.id, amount, fromPlayer, critLayers });
   }
@@ -1618,6 +1626,7 @@ export class BattleSim {
     if (this.finished) return false;
     this.elapsed += dtMs;
     this.projectileImpactsThisTick = 0;
+    this.lastProjectileImpactSprite = "";
     this.damageEvents.length = 0;
     for (const u of this.units) {
       u.struckThisTick = false;
@@ -1866,7 +1875,7 @@ export class BattleSim {
    *  the last `windowMs` before the next throw releases (the arm cocks and swings), or
    *  null when the boss isn't perched-and-throwing / has no target. The projectile
    *  launches as this reaches 1, so the renderer can time the arm to the release. */
-  bossThrowSwing(windowMs = 550, visualLeadMs = 0): number | null {
+  bossThrowSwing(windowMs = THROW_WINDUP_MS, visualLeadMs = 0): number | null {
     if (!this.bossThrow || !this.boss || !this.boss.alive || this.boss.state !== "structure") {
       return null;
     }
@@ -1942,6 +1951,10 @@ export class BattleSim {
     }
     const next = this.nextAction;
     if (!next) return;
+    if (next.kind === "throw" && this.actionCd <= THROW_WINDUP_MS && !this.throwTarget()) {
+      this.actionCd = THROW_WINDUP_MS;
+      return;
+    }
     this.actionCd -= dtMs;
     if (this.actionCd > 0) return;
     // The source checks each action's `allowedToâ€¦` gate AFTER the roll but BEFORE arming
@@ -1955,7 +1968,7 @@ export class BattleSim {
     if (next.kind === "throw") {
       const target = this.throwTarget();
       if (!target) {
-        this.actionCd = 0; // hold the slot until someone is in the lane
+        this.actionCd = THROW_WINDUP_MS; // hold the slot, then telegraph before release
         return;
       }
       this.launchProjectile(target, next.option.damage, next.option.sprite, next.option.spriteSize);
@@ -2024,7 +2037,9 @@ export class BattleSim {
         // (`AlienStageBullet collidedWith:` passes the immediate 200.0f to `damage:`).
         const target = this.throwTarget();
         if (target) {
-          this.launchProjectile(target, sp.damage || ALIEN_LASER_DAMAGE, "", 20, { straight: true });
+          this.launchProjectile(target, sp.damage || ALIEN_LASER_DAMAGE, ALIEN_LASER_SPRITE, 20, {
+            straight: true,
+          });
         }
         break;
       }
@@ -2530,6 +2545,7 @@ export class BattleSim {
           this.dealEnemyDamage(p, pr.damage);
           p.struckThisTick = true;
           this.projectileImpactsThisTick++;
+          this.lastProjectileImpactSprite = pr.sprite;
           pr.done = true;
           break;
         }
@@ -2537,6 +2553,7 @@ export class BattleSim {
       if (pr.done) continue;
       // A ballistic throw fizzles (misses) once it reaches the ground.
       if (pr.y >= GROUND_Y) pr.done = true;
+      else if (pr.gravity === 0 && (pr.x < -80 || pr.x > FIELD_W + 80)) pr.done = true;
     }
     // Compact in place (keep the readonly array reference stable).
     let w = 0;

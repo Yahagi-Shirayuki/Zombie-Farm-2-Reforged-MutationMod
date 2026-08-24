@@ -85,7 +85,11 @@ import type { RaidOutcome } from "./types";
 // 20: Focus also scales the pre-deploy focus bar fill speed. Focus 50 keeps the old
 // 3.6s bar, low Focus slows it, and high/over-100 Focus speeds it up with caps. The
 // butterfly/brain auto-continue timers are unchanged, but release timing can change.
-export const RAID_RULESET_VERSION = 20;
+// 39: local port of upstream v38/v39 raid fixes: Protect applies to Headless allies but
+// not the carrier itself, Arrrnold mirrors his opponent's attack clock like Scallywag,
+// Garden zombies only use rear support behavior when they actually have heal/revive, and
+// held boss throws wait through the visible windup before launching.
+export const RAID_RULESET_VERSION = 39;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

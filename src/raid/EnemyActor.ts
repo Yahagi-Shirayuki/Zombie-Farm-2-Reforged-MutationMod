@@ -14,6 +14,7 @@
 //   wing  — flaps (mirrored back/front)
 import { Container, Rectangle, Sprite, Texture } from "pixi.js";
 import { EnemyModel } from "../assets";
+import { poseForFrame } from "./clipRuntime";
 
 const TILT_AMP_MOVE = 0.09;
 const TILT_AMP_IDLE = 0.045;
@@ -110,10 +111,27 @@ const keyframe = (t: number, frames: readonly (readonly [number, number])[]) => 
   return frames[frames.length - 1][1];
 };
 
+/** The joint a rig's arm assembly hangs from when it authors no pivot for that side:
+ *  the top-most (min py) part of the assembly, which for a shoulder-down arm is the
+ *  shoulder end. A one-part assembly returns its own anchor, i.e. no change. */
+function topOfAssembly(
+  arms: readonly { baseX: number; baseY: number; back: boolean }[],
+  back: boolean
+): { x: number; y: number } | null {
+  const side = arms.filter((a) => a.back === back);
+  if (!side.length) return null;
+  const top = side.reduce((a, b) => (b.baseY < a.baseY ? b : a));
+  return { x: top.baseX, y: top.baseY };
+}
+
 export interface EnemyAttackPose {
   atkProg: number;
   damageTiming: number;
   attackName?: string;
+  /** Names the authored clip outright, for a state the actor cannot infer from the
+   *  swing alone — a perched boss's "throw" or "ability". Ignored when the rig has no
+   *  authored clips, which is every rig nobody has edited in the Rig Studio. */
+  clip?: string;
 }
 
 export class EnemyActor {
@@ -129,7 +147,6 @@ export class EnemyActor {
   private bodies: {
     sp: Sprite; baseX: number; baseY: number; baseRot: number; baseScaleX: number; baseScaleY: number;
   }[] = [];
-  private sprites: Sprite[] = [];
   private wings: { sp: Sprite; baseRot: number; back: boolean }[] = [];
   private wheels: { sp: Sprite; baseRot: number }[] = [];
   private hasLegs = false;
@@ -147,8 +164,19 @@ export class EnemyActor {
   private tiltPhase = 0;
   private stepPhase = 0;
   private t = 0;
+  /** Parts that take the actor's runtime colour — everything except the rig's own
+   *  `noTint` parts (the source's `setInheritColor: NO`). See applyTint. */
+  private tintable: Sprite[] = [];
+  /** Every part sprite BY MODEL PART INDEX, with its rest pose. The procedural code
+   *  works in group buckets (arms, legs, head); an authored clip addresses parts by
+   *  index, so it needs this view of the same sprites. */
+  private partSprites: { sp: Sprite; px: number; py: number; rot: number; sx: number; sy: number }[] = [];
+  private readonly model: EnemyModel;
+  private readonly sourceKey: string;
 
   constructor(strip: Texture, model: EnemyModel, sourceKey = "") {
+    this.model = model;
+    this.sourceKey = sourceKey;
     this.container.addChild(this.root);
     this.root.sortableChildren = true;
     this.neck = model.neck;
@@ -165,12 +193,15 @@ export class EnemyActor {
         frame: new Rectangle(p.rx, p.ry, p.rw, p.rh),
       });
       const sp = new Sprite(tex);
-      this.sprites.push(sp);
       sp.anchor.set(p.ax, p.ay);
       sp.position.set(p.px, p.py);
       sp.rotation = p.rot;
       sp.zIndex = p.z;
       this.root.addChild(sp);
+      this.partSprites.push({
+        sp, px: p.px, py: p.py, rot: p.rot, sx: sp.scale.x, sy: sp.scale.y,
+      });
+      if (!p.noTint) this.tintable.push(sp);
       if (p.group === "head") this.headParts.push({ sp, bx: p.px, by: p.py });
       else if (p.group === "leg")
         this.legs.push({ sp, baseX: p.px, baseY: p.py, baseRot: p.rot, back: p.back });
@@ -195,12 +226,22 @@ export class EnemyActor {
     if (model.shoulder) {
       this.shoulder = { x: model.shoulder.x, y: model.shoulder.y };
     } else {
-      const front = this.arms.filter((a) => !a.back);
-      if (front.length) {
-        const top = front.reduce((a, b) => (b.baseY < a.baseY ? b : a));
-        this.shoulder = { x: top.baseX, y: top.baseY };
-      }
+      this.shoulder = topOfAssembly(this.arms, false);
     }
+    // The SAME fallback for the rear assembly. Without it a rig that authors no
+    // `back-shoulder` turned each of its back-arm parts about its own anchor, and a
+    // multi-part rear arm came apart exactly as the front ones used to — the Ninja
+    // girl's two-part back arm separated by up to 38 px mid-stab. For a one-part rear
+    // arm the top-most part IS the part, so this changes nothing at all.
+    if (!this.backShoulder) this.backShoulder = topOfAssembly(this.arms, true);
+  }
+
+  /** Tint the actor's body, the way `-[Actor resetColor]` walks the attachments and
+   *  applies `colorFromSubType:` to every one whose `inheritColor` is YES. Parts the rig
+   *  marks `noTint` are skipped — for the alien minion those are its face and body
+   *  detail, which stay grey while the rest of it takes a random hue. */
+  applyTint(color: number) {
+    for (const sp of this.tintable) sp.tint = color;
   }
 
   /** Face toward a horizontal movement delta (art faces left at facing +1). */
@@ -209,8 +250,43 @@ export class EnemyActor {
     else if (dx < -0.01) this.facing = 1;
   }
 
-  setTint(tint: number) {
-    for (const sp of this.sprites) sp.tint = tint;
+  /**
+   * Pose from an authored clip. Returns false when the rig has none for this state, in
+   * which case the caller runs the procedural pose exactly as it always has.
+   *
+   * The clip is evaluated in MODEL space and produces the same absolute part positions
+   * the procedural code writes, which is what src/rigClips.test.ts compares pose for
+   * pose. Anything the clip does not name is left at its rest pose rather than wherever
+   * the previous frame's procedural code happened to leave it.
+   */
+  private applyAuthoredClip(moving: boolean, attack: EnemyAttackPose | null): boolean {
+    const pose = poseForFrame(
+      "enemy", this.sourceKey, this.model, moving,
+      attack?.attackName, attack ? attack.atkProg : null, this.t, attack?.clip,
+    );
+    if (!pose) return false;
+    for (let i = 0; i < this.partSprites.length; i++) {
+      const base = this.partSprites[i];
+      const d = pose.parts[i];
+      if (d) {
+        base.sp.position.set(base.px + d.dx, base.py + d.dy);
+        base.sp.rotation = base.rot + d.rot;
+        base.sp.scale.set(base.sx * d.sx, base.sy * d.sy);
+      } else {
+        base.sp.position.set(base.px, base.py);
+        base.sp.rotation = base.rot;
+        base.sp.scale.set(base.sx, base.sy);
+      }
+    }
+    // The clip authors the lunge in the rig's own default facing (art faces left, so the
+    // engine's `forward` is -1 there): its root.dx IS the engine's `forward * lunge` at
+    // facing +1. Multiplying by facing re-points it when the actor has turned around,
+    // rather than negating a value that already carries the sign.
+    this.root.x = this.facing * pose.root.dx;
+    this.root.y = pose.root.dy;
+    this.root.rotation = pose.root.rot;
+    this.root.scale.set(pose.root.sx, pose.root.sy);
+    return true;
   }
 
   /**
@@ -221,6 +297,10 @@ export class EnemyActor {
    */
   update(dt: number, moving: boolean, attack: EnemyAttackPose | null = null) {
     this.t += dt;
+    // An authored clip, if the Rig Studio has been used on this rig, replaces the whole
+    // procedural pose below — it carries the bob and the head rock as well as the swing,
+    // so it has to be all or nothing. Rigs nobody has edited never reach this.
+    if (this.applyAuthoredClip(moving, attack)) return;
     const circusAttack = attack?.attackName === CIRCUS_BEAR_ATTACK
       || attack?.attackName === CIRCUS_STACK_ATTACK
       || attack?.attackName === CIRCUS_RINGMASTER_ATTACK;
@@ -365,9 +445,10 @@ export class EnemyActor {
       } else if (a.back && genericAttack && this.hasLegs) {
         // Rear arm on a legged attacker: counter-swing with the strike (opposite the
         // front jab, smaller reach) so the back arm pumps along instead of freezing.
-        const back = -BACK_ARM_SWING * thrust + BACK_ARM_SWING * ARM_COCK * cock;
-        a.sp.position.set(a.baseX, a.baseY);
-        a.sp.rotation = a.baseRot + back;
+        // About the authored `back-shoulder` where the rig has one — a rear arm is an
+        // assembly too, and spinning it on its own anchor tears it off the same way the
+        // front one used to (see swingArm).
+        this.swingArm(a, -BACK_ARM_SWING * thrust + BACK_ARM_SWING * ARM_COCK * cock);
       } else {
         a.sp.position.set(a.baseX, a.baseY);
         a.sp.rotation = a.baseRot + sway(a);
@@ -396,6 +477,36 @@ export class EnemyActor {
     else if (robotAttack && attack) this.poseRobotAttack(attack);
 
     this.root.scale.x = this.facing;
+  }
+
+  /**
+   * Swing one arm through `theta` about the assembly's authored pivot.
+   *
+   * GROUND TRUTH ISSUE this fixes: a rig's "arm" is usually two or three parts — the
+   * upper arm and whatever it is holding — each anchored at its own top-centre, tens of
+   * pixels apart. Rotating each part about ITS OWN anchor sends them off on separate
+   * arcs: the cutlass leaves the hand, the briefcase leaves the lawyer, and the
+   * assembly comes apart in mid-swing. The slam branch already rotates about the
+   * authored `shoulder` / `back-shoulder` for exactly this reason (see the note there);
+   * the authored ZFAttackAnims poses below never did, and every one of them was
+   * dismembering the rig it posed.
+   *
+   * Falls back to the part's own anchor when the rig authors no pivot for that side,
+   * which is the old behaviour and is correct for a one-part arm.
+   */
+  private swingArm(
+    a: { sp: Sprite; baseX: number; baseY: number; baseRot: number; back: boolean },
+    theta: number
+  ) {
+    const pivot = a.back ? this.backShoulder : this.shoulder;
+    if (pivot) {
+      const cos = Math.cos(theta), sin = Math.sin(theta);
+      const dx = a.baseX - pivot.x, dy = a.baseY - pivot.y;
+      a.sp.position.set(pivot.x + dx * cos - dy * sin, pivot.y + dx * sin + dy * cos);
+    } else {
+      a.sp.position.set(a.baseX, a.baseY);
+    }
+    a.sp.rotation = a.baseRot + theta;
   }
 
   /** Rotate the cooldown so the source contact frame coincides with the sim hit. */
@@ -437,10 +548,7 @@ export class EnemyActor {
       [0, 0], [0.55, -90 * DEG], [0.8, 25 * DEG],
       [0.85, -135 * DEG], [1, -135 * DEG],
     ]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     // headHack is two relative moves: (8, 4) over .95, then (-5, 0) over .05.
     const headX = keyframe(t, [[0, 0], [0.95, -8], [1, -3]]);
     const headY = keyframe(t, [[0, 0], [0.95, -4], [1, -4]]);
@@ -462,10 +570,7 @@ export class EnemyActor {
     const back = phase <= 0.1
       ? keyframe(phase, [[0, 0], [0.1, -45 * DEG]])
       : keyframe(phase, [[0.1, -45 * DEG], [0.5, -135 * DEG]]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     // headFlail: half a second into the blow, then half a second back.
     const headFlail = t <= 0.5 ? smooth(t / 0.5) : 1 - smooth((t - 0.5) / 0.5);
     for (const head of this.headParts) {
@@ -481,10 +586,7 @@ export class EnemyActor {
   private poseLawyer(t: number) {
     const front = keyframe(t, [[0, 0], [0.5, 50 * DEG], [0.75, 0], [1, 0]]);
     const back = keyframe(t, [[0, 0], [0.5, 0], [0.75, 50 * DEG], [1, 0]]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     const step = t < 0.75 ? 1 : 1 - smooth((t - 0.75) / 0.25);
     this.root.x += -15 * this.facing * step;
     this.root.y -= 15 * step;
@@ -502,10 +604,7 @@ export class EnemyActor {
   private posePirateBoss(t: number) {
     const front = keyframe(t, [[0, 0], [0.95, 90 * DEG], [1, -135 * DEG]]);
     const back = keyframe(t, [[0, 0], [0.855, 45 * DEG], [0.9, -135 * DEG], [1, -135 * DEG]]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     const headFlail = t <= 0.5 ? smooth(t / 0.5) : 1 - smooth((t - 0.5) / 0.5);
     for (const head of this.headParts) {
       head.sp.x += -8 * this.facing * headFlail;
@@ -520,10 +619,7 @@ export class EnemyActor {
       [0, 0], [0.55, -90 * DEG], [0.8, 25 * DEG],
       [0.85, -135 * DEG], [1, -135 * DEG],
     ]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     const headX = keyframe(t, [[0, 0], [0.95, -8], [1, -3]]);
     const headY = keyframe(t, [[0, 0], [0.95, -4], [1, -4]]);
     for (const head of this.headParts) {
@@ -541,11 +637,11 @@ export class EnemyActor {
     const frontArm = keyframe(t, [[0, 0], [0.8, -20 * DEG], [1, 90 * DEG]]);
     const backArm = keyframe(t, [[0, 0], [0.2, -90 * DEG], [1, 20 * DEG]]);
     for (const arm of this.arms) {
-      const leanX = arm.back ? -5 : -10;
-      const leanY = arm.back ? 4 : 2;
-      arm.sp.x = arm.baseX + leanX * this.facing * t;
-      arm.sp.y = arm.baseY + leanY * t;
-      arm.sp.rotation = arm.baseRot + (arm.back ? backArm : frontArm);
+      // Swing about the shoulder first, THEN add the forward lean — the lean is a
+      // whole-body helper in the source, not a re-anchoring of the arm.
+      this.swingArm(arm, arm.back ? backArm : frontArm);
+      arm.sp.x += (arm.back ? -5 : -10) * this.facing * t;
+      arm.sp.y += (arm.back ? 4 : 2) * t;
     }
 
     const headAngle = keyframe(t, [
@@ -586,18 +682,14 @@ export class EnemyActor {
       [0.96, -275 * DEG], [1, 0],
     ]);
     front.forEach((arm, i) => {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (i === 0 ? primary : secondary);
+      this.swingArm(arm, i === 0 ? primary : secondary);
       const scale = i === 0
         ? keyframe(t, [[0, 1], [0.9, 1.2], [1, 1]])
         : 1;
       arm.sp.scale.set(arm.baseScaleX * scale, arm.baseScaleY * scale);
     });
     for (const arm of this.arms.filter((item) => item.back)) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + keyframe(t, [
-        [0, 0], [0.9, 10 * DEG], [1, -20 * DEG],
-      ]);
+      this.swingArm(arm, keyframe(t, [[0, 0], [0.9, 10 * DEG], [1, -20 * DEG]]));
     }
     const headX = keyframe(t, [[0, 0], [0.8, -8], [0.95, 5], [1, 0]]);
     const headY = keyframe(t, [[0, 0], [0.8, -4], [0.95, 2], [1, 0]]);
@@ -631,8 +723,7 @@ export class EnemyActor {
         [0.2, direction * 120 * DEG], [0.3, -direction * 15 * DEG],
         [0.55, direction * 10 * DEG], [1, 0],
       ]);
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + angle;
+      this.swingArm(arm, angle);
     });
     for (const wheel of this.wheels) {
       wheel.sp.rotation = wheel.baseRot + keyframe(t, [
@@ -674,10 +765,7 @@ export class EnemyActor {
     const back = keyframe(t, [
       [0, 0], [0.1, -90 * DEG], [0.5, -160 * DEG], [0.75, -40 * DEG], [1, 0],
     ]);
-    for (const arm of this.arms) {
-      arm.sp.position.set(arm.baseX, arm.baseY);
-      arm.sp.rotation = arm.baseRot + (arm.back ? back : front);
-    }
+    for (const arm of this.arms) this.swingArm(arm, arm.back ? back : front);
     const flourish = keyframe(t, [[0, 0], [0.4, 1], [0.75, 0.55], [1, 0]]);
     const strike = keyframe(t, [[0, 0], [0.5, 0], [0.75, 1], [1, 0]]);
     for (const body of this.bodies) body.sp.rotation = body.baseRot - 10 * DEG * flourish;

@@ -25,6 +25,7 @@ import {
 } from "../zombie/appearance";
 import { SpecialHeadFx, specialHeadFxKind } from "../zombie/specialHeadFx";
 import { zombiePartTextureForFacing } from "../zombie/facingPartTexture";
+import { poseForFrame } from "./clipRuntime";
 
 const MODEL_BASE = 0.95;
 const TILT_AMP_MOVE = 0.1;
@@ -108,6 +109,13 @@ export class RaidActor {
   private tiltPhase = 0;
   private stepPhase = 0;
   private deathT = -1; // â‰¥0 once dead: seconds into the head-pop animation
+  /** Free-running clock for authored clips. */
+  private t = 0;
+  /** Base rig sprites by model part index; authored clips address parts by index. */
+  private partSprites: { sp: Sprite; i: number; px: number; py: number; scale: number }[] = [];
+  private clipModel: ZombieModel | null = null;
+  private clipKey = "";
+  private hasMutationVisuals = false;
   private specialHeadFx: SpecialHeadFx | null = null;
 
   constructor(
@@ -159,6 +167,9 @@ export class RaidActor {
   ) {
     const m: ZombieModel =
       assets.zombieModels[key] ?? assets.zombieModels["ZombieActorRegularTier1"];
+    this.clipModel = m;
+    this.clipKey = key;
+    this.partSprites = [];
     this.armReplaceable = { armF: [], armB: [] };
     this.facingPartSprites = [];
     this.facingPartAssets = assets;
@@ -172,6 +183,7 @@ export class RaidActor {
       const texture = part ? assets.zombiePartTex[part.file] : undefined;
       return part && texture ? [{ ref, part, texture }] : [];
     });
+    this.hasMutationVisuals = mutationParts.length > 0;
     // Crop arms occupy the authored ArmF slot. Only suppress the base front arm
     // after its replacement has resolved, so incomplete assets cannot remove it.
     const replacements = new Set<MutationReplacement>();
@@ -190,7 +202,7 @@ export class RaidActor {
     this.root.sortableChildren = true;
     this.neck = { x: m.neck.x, y: m.neck.y };
 
-    for (const p of m.parts) {
+    for (const [partIndex, p] of m.parts.entries()) {
       if (replacements.has("body") && /Body$/i.test(p.file)) continue;
       if (
         replacements.has("head")
@@ -209,6 +221,7 @@ export class RaidActor {
         : p.z;
       if (p.tint) sp.tint = zombiePartTint(p.file, tint, group);
       this.root.addChild(sp);
+      this.partSprites.push({ sp, i: partIndex, px: p.px, py: p.py, scale: p.scale ?? 1 });
       this.facingPartSprites.push({ sp, file: p.file });
       if (matchesMutationReplacement(p.file, "armF")) this.armReplaceable.armF.push(sp);
       if (matchesMutationReplacement(p.file, "armB")) this.armReplaceable.armB.push(sp);
@@ -340,6 +353,10 @@ export class RaidActor {
     healRaise = 0,
     attackName = ""
   ) {
+    const ability = smashSlam >= 0 || windup > 0 || healRaise > 0;
+    if (!ability && this.deathT < 0 && this.applyAuthoredClip(attacking, walking, atkProg, attackName)) {
+      return;
+    }
     if (smashSlam >= 0) {
       // Smash SLAM: arms drive from fully overhead (1) back down (0) as the zombie
       // shrinks; continuous from the wind-up, which ended with the arms at RAISE_ANGLE.
@@ -365,6 +382,41 @@ export class RaidActor {
     } else {
       for (const arm of this.arms) arm.rotation = ARM_REST; // hang down at the sides (waiting)
     }
+  }
+
+  /**
+   * Pose from an authored clip. Mutation overlays stay on the older procedural path:
+   * clips are authored against base model part indexes, so custom heads/arms have no
+   * matching part to follow without a per-mutation rig map.
+   */
+  private applyAuthoredClip(
+    attacking: boolean, walking: boolean, atkProg: number, attackName: string,
+  ): boolean {
+    if (!this.clipModel || this.hasMutationVisuals) return false;
+    const name = attacking
+      ? (/scratch/i.test(attackName) ? "attack:scratch" : "attack:bite")
+      : walking ? "move" : "idle";
+    const pose = poseForFrame(
+      "zombie", this.clipKey, this.clipModel, walking,
+      undefined, attacking ? atkProg : null, this.t, name,
+    );
+    if (!pose) return false;
+    for (const base of this.partSprites) {
+      const d = pose.parts[base.i];
+      if (d) {
+        base.sp.position.set(base.px + d.dx, base.py + d.dy);
+        base.sp.rotation = d.rot;
+        base.sp.scale.set(base.scale * d.sx, base.scale * d.sy);
+      } else {
+        base.sp.position.set(base.px, base.py);
+        base.sp.rotation = 0;
+        base.sp.scale.set(base.scale);
+      }
+    }
+    this.root.scale.set(
+      this.renderScale * this.facing * pose.root.sx, this.renderScale * pose.root.sy,
+    );
+    return true;
   }
 
   /** Rotate a cooldown phase so source-time `damageTiming` occurs at the sim hit.
@@ -447,6 +499,7 @@ export class RaidActor {
   }
 
   update(dt: number, moving: boolean, focusing = false) {
+    this.t += dt;
     // Dead: pop the head off and let it tumble backward (skip the normal idle/walk).
     if (this.deathT >= 0) {
       this.deathT += dt;

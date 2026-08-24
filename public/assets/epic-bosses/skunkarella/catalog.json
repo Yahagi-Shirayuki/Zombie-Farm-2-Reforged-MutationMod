@@ -2,55 +2,25 @@
   "id": "skunkarella",
   "sourceId": 5,
   "name": "Skunkarella",
-  "costBrains": 10,
+  "costBrains": 5,
   "durationMs": 1209600000,
-  "fightMs": 30000,
+  "fightMs": 60000,
   "retryMs": 1200000,
   "encounterMs": 7200000,
-  "baseHp": 2000,
+  "baseHp": 2350,
   "multipliers": [
-    1,
-    1.4,
-    2.2,
-    3.6,
-    6.8,
-    7.4,
-    8.1,
-    9.4,
-    14,
-    23,
-    25,
-    27.4,
-    31.7,
-    40,
-    53,
-    58,
-    64,
-    74,
-    88,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107
+    2.4,
+    5.8,
+    14.2,
+    17.5,
+    37,
+    52.4,
+    71.7,
+    111,
+    138,
+    195
   ],
-  "maxLevel": 40,
+  "maxLevel": 10,
   "music": "music.wav",
   "punchSfx": "punch.wav",
   "introText": "Skunkarella is here",
@@ -60,12 +30,13 @@
     "attacks": [
       {
         "frequency": 100,
-        "name": "EpicBossAttack"
+        "name": "EpicBossAttack",
+        "damageTiming": 0.88
       }
     ],
     "con": 20,
     "dex": 4,
-    "str": 1
+    "str": 3.125
   },
   "animations": {
     "idle": {
@@ -73,14 +44,14 @@
       "cellWidth": 345,
       "cellHeight": 243,
       "frameCount": 5,
-      "frameSeconds": 0.08333333333333333
+      "frameSeconds": 0.1
     },
     "enter": {
       "file": "enter.png",
       "cellWidth": 345,
       "cellHeight": 243,
       "frameCount": 4,
-      "frameSeconds": 0.08333333333333333
+      "frameSeconds": 0.1
     },
     "attack": {
       "file": "attack.png",
@@ -94,14 +65,14 @@
       "cellWidth": 345,
       "cellHeight": 243,
       "frameCount": 7,
-      "frameSeconds": 0.08333333333333333
+      "frameSeconds": 0.17142857142857143
     },
     "escape": {
       "file": "escape.png",
       "cellWidth": 345,
       "cellHeight": 243,
       "frameCount": 3,
-      "frameSeconds": 0.08333333333333333
+      "frameSeconds": 0.09999999999999999
     },
     "fly": {
       "file": "fly.png",
@@ -265,55 +236,55 @@
   ],
   "loot": [
     {
-      "level": 5,
+      "level": 2,
       "name": "Skunkarella's Perfume",
       "tile": "perfumeVat",
       "sprite": "Perfume_Vat.png"
     },
     {
-      "level": 10,
+      "level": 3,
       "name": "Skunkarella's Scarecrow",
       "tile": "fashionableScarecrow",
       "sprite": "Fashionable_Scarecrow.png"
     },
     {
-      "level": 15,
+      "level": 4,
       "name": "Skunkarella's Mirror",
       "tile": "evilMirror",
       "sprite": "Fancy_Evil_Mirror.png"
     },
     {
-      "level": 20,
+      "level": 5,
       "name": "Skunkarella's Gravestone",
       "tile": "bedazzledGravestone",
       "sprite": "blingn_Gravestone.png"
     },
     {
-      "level": 25,
+      "level": 7,
       "name": "Skunkarella's Fountain",
       "tile": "fancyFountain",
       "sprite": "fancyChocoFountain_default.png"
     },
     {
-      "level": 30,
+      "level": 8,
       "name": "Skunkarella's Gazebo",
       "tile": "crystalGazebo",
       "sprite": "Crystal_Gazebo.png"
     },
     {
-      "level": 35,
+      "level": 9,
       "name": "Skunkarella's Car",
       "tile": "diamondCar",
       "sprite": "Diamond_Car.png"
     },
     {
-      "level": 37,
+      "level": 10,
       "name": "Skunkarella's Home",
       "tile": "jewelHome",
       "sprite": "Jewel_Home.png"
     },
     {
-      "level": 39,
+      "level": 10,
       "name": "Tame Skunk",
       "stageActor": "skunkPetActor",
       "sprite": "skunkPet_default.png"

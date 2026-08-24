@@ -15,6 +15,7 @@ import { ZombieField } from "./zombie/ZombieField";
 import { makeOwned, type OwnedZombie } from "./zombie/types";
 import { encodeReceivedZombie, parseReceivedZombie } from "./zombie/receivedReward";
 import { almanacEntries, isEpicZombie, obtainHint } from "./zombie/almanac";
+import { mutationAlmanacEntries } from "./zombie/mutationAlmanac";
 import { planTeamAssembly, sanitizeTeams, settleTeamMembers } from "./zombie/teams";
 import { POT_DURATION_MS } from "./zombie/ZombiePot";
 import { isCombinePromotion } from "./zombie/combineSpecies";
@@ -85,6 +86,7 @@ import {
 import {
   appendHarvestTarget, harvestTargetKey, sampleStrokeSegment, type HarvestTarget,
 } from "./harvestStroke";
+import { appendCancelTarget, cancelTargetKey, type CancelTarget } from "./cancelStroke";
 import { mutationMarketDescription } from "./zombie/statDisplay";
 import {
   combineSubject, combineSubjectAliases, mutantSubjectIndex, unitQuestSubjects,
@@ -772,8 +774,7 @@ async function main() {
 
   const minSceneZoom = () => Math.max(
     MIN_ZOOM,
-    app.screen.width / (boundR - boundL),
-    app.screen.height / (boundB - boundT)
+    app.screen.width / (boundR - boundL)
   );
   const clampZoom = () => {
     const s = Math.max(minSceneZoom(), Math.min(MAX_ZOOM, world.scale.x));
@@ -2083,6 +2084,12 @@ async function main() {
   const plowStrokeKeys = new Set<string>();
   const plowStrokeClaimed = new Set<string>();
   const plowStrokePreviews = new Map<string, Graphics>();
+  let cancelStrokeCandidate: CancelTarget | null = null;
+  let cancelStrokeActive = false;
+  const cancelStrokeLast = new Point();
+  const cancelStrokeTargets: CancelTarget[] = [];
+  const cancelStrokeKeys = new Set<string>();
+  const cancelStrokePreviews = new Map<string, Graphics>();
   const fenceStrokeKeys = new Set<string>();
   let fenceStrokeLock: boolean | null = null;
 
@@ -2116,6 +2123,14 @@ async function main() {
     plowStrokeKeys.clear();
     plowStrokeClaimed.clear();
     plowStrokeAnchor = null;
+  };
+  const clearCancelStroke = () => {
+    for (const preview of cancelStrokePreviews.values()) preview.destroy();
+    cancelStrokePreviews.clear();
+    cancelStrokeTargets.length = 0;
+    cancelStrokeKeys.clear();
+    cancelStrokeCandidate = null;
+    cancelStrokeActive = false;
   };
   const clearFenceStroke = () => {
     fenceStrokeKeys.clear();
@@ -2191,6 +2206,7 @@ async function main() {
     field.hideCursor();
     field.setObjectHighlight(null);
     clearHarvestStroke();
+    clearCancelStroke();
   };
   // Canvas-relative CSS pixels (same space wheel/zoomAt use).
   const canvasXY = (clientX: number, clientY: number) => {
@@ -2213,6 +2229,7 @@ async function main() {
       // two fingers control the camera instead.
       clearTouchToolStroke();
       clearHarvestStroke();
+      clearCancelStroke();
       lastPlot = "";
       clearPlowStroke();
       clearFenceStroke();
@@ -2348,6 +2365,67 @@ async function main() {
     const targets = [...harvestStrokeTargets];
     clearHarvestStroke();
     for (const target of targets) enqueueHarvestTarget(target);
+  };
+
+  const cancelTargetAtGlobal = (x: number, y: number): CancelTarget | null => {
+    const worldPoint = world.toLocal(new Point(x, y));
+    const grid = screenToGrid(worldPoint.x, worldPoint.y);
+    const col = Math.round(grid.col), row = Math.round(grid.row);
+    if (tutorial?.active && !tutorial.allowsTile(col, row)) return null;
+    const plotJob = jobs.pendingPlotJobAt(col, row);
+    if (plotJob) return { kind: "plot", jobKind: plotJob.kind, oc: plotJob.oc, or: plotJob.or };
+    const objectId = field.objectAtPoint(worldPoint.x, worldPoint.y);
+    return objectId && jobs.isTreeHarvestPending(objectId)
+      ? { kind: "object", instanceId: objectId }
+      : null;
+  };
+
+  const applyCancelTarget = (target: CancelTarget): boolean => target.kind === "object"
+    ? jobs.cancelObject(target.instanceId)
+    : jobs.cancelAtTile(target.oc, target.or);
+
+  const showCancelStrokePreview = (target: CancelTarget) => {
+    const key = cancelTargetKey(target);
+    if (cancelStrokePreviews.has(key)) return;
+    const area = target.kind === "object"
+      ? field.objectHighlightArea(target.instanceId)
+      : { ...field.plotCenterOf(target.oc, target.or), tiles: PLOT };
+    if (!area) return;
+    const w = area.tiles * HW, h = area.tiles * HH;
+    const preview = new Graphics();
+    preview.moveTo(0, -h).lineTo(w, 0).lineTo(0, h).lineTo(-w, 0).lineTo(0, -h)
+      .fill({ color: 0xf25a5a, alpha: 0.28 })
+      .stroke({ width: 3, color: 0xff8f7a, alpha: 0.95 });
+    preview.position.set(area.x, area.y);
+    (target.kind === "plot" && target.jobKind === "till"
+      ? field.plowHighlightLayer : field.highlightLayer).addChild(preview);
+    cancelStrokePreviews.set(key, preview);
+  };
+
+  const recordCancelStrokeTarget = (target: CancelTarget) => {
+    if (!appendCancelTarget(target, cancelStrokeTargets, cancelStrokeKeys)) return;
+    if (isTouchPointer(pressPointerType)) showCancelStrokePreview(target);
+    else applyCancelTarget(target);
+  };
+
+  const collectCancelStrokeSegment = (x: number, y: number) => {
+    for (const point of sampleStrokeSegment(cancelStrokeLast, { x, y })) {
+      const target = cancelTargetAtGlobal(point.x, point.y);
+      if (target) recordCancelStrokeTarget(target);
+    }
+    cancelStrokeLast.set(x, y);
+  };
+
+  const beginCancelStroke = (x: number, y: number) => {
+    cancelStrokeActive = true;
+    if (cancelStrokeCandidate) recordCancelStrokeTarget(cancelStrokeCandidate);
+    collectCancelStrokeSegment(x, y);
+  };
+
+  const commitTouchCancelStroke = () => {
+    const targets = [...cancelStrokeTargets];
+    clearCancelStroke();
+    for (const target of targets) applyCancelTarget(target);
   };
 
   // Queue the active tool on a plot: Plow places/re-tills a 4x4; Plant sows the
@@ -2599,12 +2677,16 @@ async function main() {
   // Zombies are stored in the Mausoleum (capped at mausoleumCap slots); the army
   // cap limits only the count deployed on the farm.
   hud.getRoster = () => zombies.roster();
+  hud.onZombieAppearanceChanged = () => zombies.refreshAppearance();
   // Zombie Almanac: every obtainable species with its lifetime-obtained count.
   // Base catalog stats only â€” deliberately no farmer/veterancy/mutation modifiers.
   const almanacSources = {
     raidNameById: (raidId: number) => assets.raids.find((raid) => raid.id === raidId)?.name,
     epicBossNameByQuestId: (questId: string) =>
       EPIC_BOSSES.find((boss) => boss.questIds.includes(questId))?.name,
+  };
+  const mutationAlmanacSources = {
+    cropName: (cropKey: string) => assets.plants.find((plant) => plant.key === cropKey)?.name,
   };
   hud.getAlmanac = () =>
     almanacEntries(assets.zombies, state.zombieDiscovered).map((def) => {
@@ -2624,6 +2706,7 @@ async function main() {
         ...(epic ? { epic } : {}),
       };
     });
+  hud.getMutationAlmanac = () => mutationAlmanacEntries(zombies.roster(), mutationAlmanacSources);
   hud.zombiePortraitOf = (key) => zombieCatalogPortrait(zombieDefs.get(key), key);
   hud.getMausoleumCap = () => zombies.mausoleumCap;
   // The Mausoleum upgrade ladder: each tier is an ordinary catalog placeable that
@@ -4560,6 +4643,7 @@ async function main() {
     cancelZombieLongPress();
     zombieLongPressActivated = false;
     clearHarvestStroke();
+    clearCancelStroke();
     clearPlowStroke();
     clearFenceStroke();
     pressStart.copyFrom(e.global);
@@ -4626,13 +4710,14 @@ async function main() {
       }
       return;
     }
-    if (!touch && jobs.cancelAtTile(col, row)) { // tapped a queued action -> un-queue it
-      dragging = false;
-      return;
-    }
-    const queuedObjId = field.objectAtPoint(wx, wy);
-    if (!touch && queuedObjId && jobs.cancelObject(queuedObjId)) {
-      dragging = false;
+    const cancelCandidate = cancelTargetAtGlobal(e.global.x, e.global.y);
+    if (cancelCandidate) {
+      cancelStrokeCandidate = cancelCandidate;
+      cancelStrokeLast.copyFrom(e.global);
+      dragging = true;
+      moved = false;
+      last.copyFrom(e.global);
+      if (!touch) beginCancelStroke(e.global.x, e.global.y);
       return;
     }
     if (hud.mode === "till") {
@@ -4673,9 +4758,18 @@ async function main() {
       if (moved) cancelZombieLongPress();
       if (moved && !harvestStrokeActive && harvestStrokeCandidate && hud.mode === "walk" &&
           !temporaryPanGesture) beginHarvestStroke(e.global.x, e.global.y);
+      if (moved && !cancelStrokeActive && cancelStrokeCandidate)
+        beginCancelStroke(e.global.x, e.global.y);
     }
     if (harvestStrokeActive) {
       collectHarvestStrokeSegment(e.global.x, e.global.y);
+      hoveredCrop = null;
+      hud.showCropHover(null);
+      field.hideCursor();
+      return;
+    }
+    if (cancelStrokeActive) {
+      collectCancelStrokeSegment(e.global.x, e.global.y);
       hoveredCrop = null;
       hud.showCropHover(null);
       field.hideCursor();
@@ -4805,12 +4899,14 @@ async function main() {
         if (jobs.cancelAtTile(col, row)) {
           dragging = false;
           lastPlot = "";
+          clearCancelStroke();
           return;
         }
         const queuedObjId = field.objectAtPoint(wx, wy);
         if (queuedObjId && jobs.cancelObject(queuedObjId)) {
           dragging = false;
           lastPlot = "";
+          clearCancelStroke();
           return;
         }
         if (isDeferredTouchMode(hud.mode)) {
@@ -4945,6 +5041,7 @@ async function main() {
       clearTouchToolStroke();
       clearHarvestStroke();
       clearPlowStroke();
+      clearCancelStroke();
       return;
     }
     if (temporaryPanGesture) {
@@ -4955,6 +5052,24 @@ async function main() {
       pressPointerId = -1;
       clearHarvestStroke();
       clearPlowStroke();
+      clearCancelStroke();
+      return;
+    }
+    if (cancelStrokeActive) {
+      collectCancelStrokeSegment(e.global.x, e.global.y);
+      if (isTouchPointer(pressPointerType)) commitTouchCancelStroke();
+      else clearCancelStroke();
+      dragging = false;
+      moved = false;
+      lastPlot = "";
+      pressPointerId = -1;
+      touchOutsideFarmPan = false;
+      touchSelectStartTile = null;
+      field.hideCursor();
+      clearTouchToolStroke();
+      clearHarvestStroke();
+      clearPlowStroke();
+      clearFenceStroke();
       return;
     }
     if (dragging && hud.mode === "till" && plowStrokeTargets.length) {
@@ -4968,6 +5083,7 @@ async function main() {
       touchOutsideFarmPan = false;
       clearTouchToolStroke();
       clearHarvestStroke();
+      clearCancelStroke();
       return;
     }
     if (harvestStrokeActive) {
@@ -4981,6 +5097,7 @@ async function main() {
       touchOutsideFarmPan = false;
       touchSelectStartTile = null;
       clearTouchToolStroke();
+      clearCancelStroke();
       return;
     }
     if (dragging && moved && !touchOutsideFarmPan && isTouchPointer(pressPointerType) &&
@@ -4998,6 +5115,7 @@ async function main() {
       clearTouchToolStroke();
       clearHarvestStroke();
       clearPlowStroke();
+      clearCancelStroke();
       return;
     }
     endDrag(e);
@@ -5008,6 +5126,7 @@ async function main() {
     clearHarvestStroke();
     clearPlowStroke();
     clearFenceStroke();
+    clearCancelStroke();
   };
   app.stage.on("pointerup", onPointerUp);
   app.stage.on("pointerupoutside", onPointerUp);
@@ -5046,23 +5165,29 @@ async function main() {
   // Equip a tool without the toolbar's toggle behaviour: choosing the tool you are
   // already holding, from a menu, must keep it â€” not silently unequip it.
   const equipTool = (m: Mode) => { if (hud.mode !== m) hud.setMode(m); };
-  const toolWheelItems = (): ToolWheelItem[] => [
-    { id: "walk", label: "Select", icon: "button_multitool.png", hint: "1",
-      active: hud.mode === "walk", onPick: () => equipTool("walk") },
-    { id: "move", label: "Move", icon: "button_move.png", hint: "2",
-      active: hud.mode === "move", onPick: () => equipTool("move") },
-    { id: "rotate", label: "Rotate", icon: "button_rotate.png", hint: "3",
-      active: hud.mode === "rotate", onPick: () => rotateCurrent() },
-    { id: "till", label: "Plow", icon: "button_plow.png", hint: "4",
-      active: hud.mode === "till", onPick: () => equipTool("till") },
-    { id: "remove", label: "Remove", icon: "button_sell.png", hint: "5",
-      active: hud.mode === "remove", onPick: () => equipTool("remove") },
-    { id: "fence", label: "Fence", icon: "button_fence.png", hint: "6",
-      active: hud.mode === "fence", onPick: () => equipTool("fence") },
-    { id: "plant", label: "Plantâ€¦", icon: "button_plant.png", hint: "P",
-      active: hud.mode === "plant",
-      onPick: () => hud.openPlantMenu((cfg) => hud.setPlanting(cfg)) },
-  ];
+  const toolWheelItems = (): ToolWheelItem[] => {
+    const holdingObject = (hud.mode === "place" && !!hud.placing) || (hud.mode === "move" && !!carrying);
+    const rotateRow: ToolWheelItem = holdingObject
+      ? { id: "rotate", label: "Rotate", icon: "button_rotate.png", hint: "3", onPick: () => rotateCurrent() }
+      : { id: "rotate", label: "Rotate", icon: "button_rotate.png", hint: "3",
+          active: hud.mode === "rotate", onPick: () => equipTool("rotate") };
+    return [
+      { id: "walk", label: "Select", icon: "button_multitool.png", hint: "1",
+        active: hud.mode === "walk", onPick: () => equipTool("walk") },
+      { id: "move", label: "Move", icon: "button_move.png", hint: "2",
+        active: hud.mode === "move", onPick: () => equipTool("move") },
+      rotateRow,
+      { id: "till", label: "Plow", icon: "button_plow.png", hint: "4",
+        active: hud.mode === "till", onPick: () => equipTool("till") },
+      { id: "remove", label: "Remove", icon: "button_sell.png", hint: "5",
+        active: hud.mode === "remove", onPick: () => equipTool("remove") },
+      { id: "fence", label: "Fence", icon: "button_fence.png", hint: "6",
+        active: hud.mode === "fence", onPick: () => equipTool("fence") },
+      { id: "plant", label: "Plantâ€¦", icon: "button_plant.png", hint: "P",
+        active: hud.mode === "plant",
+        onPick: () => hud.openPlantMenu((cfg) => hud.setPlanting(cfg)) },
+    ];
+  };
   app.canvas.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     if (tutorial.active || visiting || raidActive) return;
@@ -5233,6 +5358,7 @@ async function main() {
     }
     for (const potId of placedPotIds) {
       const pot = zombies.potFor(potId);
+      field.setObjectWork(potId, pot.busy ? (pot.ready ? "ready" : "busy") : null);
       let view = potBars.get(potId);
       if (!view) { view = makeStatusBar(); potBars.set(potId, view); }
       const wp = field.objectStatusBarPoint(potId);

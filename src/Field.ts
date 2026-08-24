@@ -15,6 +15,10 @@ import type { PlacedObjectSave, PlotSave } from "./save/schema";
 import { plotsTouch } from "./zombie/cropMutations";
 import { isZombieColorMixerBucketKey } from "./zombieColorMixerBucket";
 import { BASE } from "./base";
+import {
+  COST_AVOID, COST_GROUND, COST_PATH, isGate, objectWalkCost, wormholeSide,
+} from "./pathCosts";
+import type { Cell, PathOptions } from "./pathfind";
 
 export const PLOT = 4; // tiles per plot side
 export const DIAMINT_KEY = "diamint";
@@ -228,6 +232,7 @@ export interface TillTarget {
 }
 
 export type TillHandleDirection = "col-" | "col+" | "row-" | "row+";
+type ObjectWork = "busy" | "ready";
 
 // A placed farm object (tree/decor) occupying a tileW x tileH footprint.
 interface FarmObject {
@@ -250,6 +255,9 @@ interface FarmObject {
   // Fruit trees only: readyAt = epoch ms the fruit ripens; ready = fruit present.
   readyAt: number;
   ready: boolean;
+  // Working functional objects only: switches to busy/ready art without changing the
+  // object's footprint or saved identity.
+  work?: ObjectWork;
   // Rotated by the Rotate tool: a horizontal mirror (flip on the vertical axis), so
   // a directional decor (fences!) can face either diagonal. The footprint is a
   // rectangle centered under the sprite, so mirroring never moves which tiles it
@@ -323,6 +331,9 @@ export class Field {
   // that overhang into a neighbour tile). Keyed tile -> set of object ids blocking it,
   // so overlapping overhangs (two fences meeting) and removal stay correct.
   private fenceBlock = new Map<string, Set<string>>();
+  private portals: Map<string, Cell> | null = null;
+  private paths: boolean | null = null;
+  private walkOpts: PathOptions | null = null;
   private nextObjId = 1;
   private highlightedObj: string | null = null;
   private fenceBackTex = Texture.EMPTY;
@@ -565,19 +576,91 @@ export class Field {
     return col >= 0 && row >= 0 && col < this.w && row < this.h;
   }
 
-  // Can an actor walk on this tile? Placed objects block movement, EXCEPT the
-  // Zombie Patch (it's walkable soil zombies nap on). Plots and bare ground are
-  // walkable. Used by pathfinding (farmer + wandering zombies).
-  isPassable(col: number, row: number): boolean {
-    if (!this.inBounds(col, row)) return false;
+  tileCost(col: number, row: number): number {
+    if (!this.inBounds(col, row)) return Infinity;
     const k = `${col},${row}`;
-    // A solid object on the tile blocks it (the walkable Zombie Patch is the exception).
-    const id = this.tileObject.get(k);
-    if (id && !this.objects.get(id)?.def.zombiePatch) return false;
-    // A fence panel overhanging from a neighbour tile blocks it for movement too, even
-    // though nothing "owns" this tile for placement.
-    if (this.fenceBlock.get(k)?.size) return false;
-    return true;
+    const own = this.tileObject.get(k);
+    const def = own ? this.objects.get(own)?.def : undefined;
+    const cost = def ? objectWalkCost(def) : COST_GROUND;
+    if (!Number.isFinite(cost)) return Infinity;
+    const ext = this.fenceBlock.get(k);
+    if (ext?.size && !(def && isGate(def))) {
+      let worst = cost;
+      for (const oid of ext) {
+        const o = this.objects.get(oid);
+        if (o) worst = Math.max(worst, objectWalkCost(o.def));
+      }
+      return worst;
+    }
+    return cost;
+  }
+
+  isPassable(col: number, row: number): boolean {
+    return Number.isFinite(this.tileCost(col, row));
+  }
+
+  isOpenGround(col: number, row: number): boolean {
+    return this.tileCost(col, row) < COST_AVOID;
+  }
+
+  portalExit(col: number, row: number): Cell | null {
+    return this.portalMap().get(`${col},${row}`) ?? null;
+  }
+
+  hasPortals(): boolean {
+    return this.portalMap().size > 0;
+  }
+
+  hasPaths(): boolean {
+    if (this.paths === null) {
+      this.paths = false;
+      for (const o of this.objects.values()) {
+        if (objectWalkCost(o.def) < COST_GROUND) { this.paths = true; break; }
+      }
+    }
+    return this.paths;
+  }
+
+  pathOptions(): PathOptions {
+    if (this.walkOpts) return this.walkOpts;
+    const opts: PathOptions = {
+      inBounds: (c, r) => this.inBounds(c, r),
+      cost: (c, r) => this.tileCost(c, r),
+      minTileCost: COST_PATH,
+      avoidCost: COST_AVOID,
+    };
+    if (this.hasPortals()) opts.portal = (c, r) => this.portalExit(c, r);
+    return (this.walkOpts = opts);
+  }
+
+  private portalMap(): Map<string, Cell> {
+    if (this.portals) return this.portals;
+    const map = new Map<string, Cell>();
+    const sides: Record<"A" | "B", FarmObject[]> = { A: [], B: [] };
+    for (const o of this.objects.values()) {
+      const side = wormholeSide(o.def);
+      if (side) sides[side].push(o);
+    }
+    const order = (a: FarmObject, b: FarmObject) => a.oc - b.oc || a.or - b.or;
+    sides.A.sort(order);
+    sides.B.sort(order);
+    const pairs = Math.min(sides.A.length, sides.B.length);
+    for (let i = 0; i < pairs; i++) {
+      this.linkPad(map, sides.A[i], sides.B[i]);
+      this.linkPad(map, sides.B[i], sides.A[i]);
+    }
+    return (this.portals = map);
+  }
+
+  private linkPad(map: Map<string, Cell>, from: FarmObject, to: FarmObject) {
+    const exit = { col: to.oc, row: to.or };
+    this.forEachFootprint(from.oc, from.or, from.def.tileW, from.def.tileH, (t) => map.set(t, exit));
+  }
+
+  private topologyChanged() {
+    this.portals = null;
+    this.paths = null;
+    this.walkOpts = null;
   }
 
   private key(oc: number, or: number) {
@@ -1301,6 +1384,7 @@ export class Field {
     return out;
   }
   private setExtensionBlocks(id: string, def: PlaceableDef, oc: number, or: number, flipped: boolean, add: boolean) {
+    this.topologyChanged();
     for (const t of this.extensionTiles(def, oc, or, flipped)) {
       let set = this.fenceBlock.get(t);
       if (add) {
@@ -1340,8 +1424,11 @@ export class Field {
   private objectRenderY(def: PlaceableDef, y: number): number {
     return y + (def.collideExtend?.length ? HH : 0);
   }
-  // Which sprite to show: a fruit tree that isn't ripe shows its growing frame.
-  private objectSpriteName(def: PlaceableDef, ready: boolean): string {
+  // Which sprite to show: a working object (Zombie Pot) shows the frame for what it
+  // is doing; a fruit tree that isn't ripe shows its growing frame.
+  private objectSpriteName(def: PlaceableDef, ready: boolean, work?: ObjectWork): string {
+    if (work === "ready" && def.readySprite) return def.readySprite;
+    if (work && def.busySprite) return def.busySprite;
     return !ready && def.growingSprite ? def.growingSprite : def.sprite;
   }
   private isGroundObject(def: PlaceableDef): boolean {
@@ -1349,9 +1436,9 @@ export class Field {
   }
   private fitObjectSprite(
     sp: Sprite, def: PlaceableDef, oc: number, or: number, ready = true, flipped = false,
-    extra?: { backSprite?: Sprite; frontOverlay?: Container; paintOverlay?: Sprite },
+    extra?: { backSprite?: Sprite; frontOverlay?: Container; paintOverlay?: Sprite; work?: ObjectWork },
   ) {
-    const name = this.objectSpriteName(def, ready);
+    const name = this.objectSpriteName(def, ready, extra?.work);
     const texture = this.assets.objects[name] ?? this.assets.objects[def.sprite] ?? Texture.EMPTY;
     const tint = objectTint(def.color);
     const s = this.objectScale();
@@ -1524,6 +1611,19 @@ export class Field {
 
   zombiePotCount(): number {
     return this.zombiePotIds().length;
+  }
+
+  /** Show a working object's state art (currently the Zombie Pot). No-op for objects
+   * without state art, and cheap to call every frame because it only repaints on
+   * actual state changes. */
+  setObjectWork(id: string, work: ObjectWork | null): boolean {
+    const obj = this.objects.get(id);
+    if (!obj || !obj.def.busySprite) return false;
+    const next = work ?? undefined;
+    if (obj.work === next) return false;
+    obj.work = next;
+    this.fitObjectSprite(obj.sprite, obj.def, obj.oc, obj.or, obj.ready, obj.flipped, obj);
+    return true;
   }
 
   zombieColorMixerBucketCount(): number {
@@ -2163,6 +2263,7 @@ export class Field {
     this.objects.clear();
     this.tileObject.clear();
     this.fenceBlock.clear();
+    this.topologyChanged();
     const restored: string[] = [];
     for (const s of saves) {
       const def = resolve(s.key);

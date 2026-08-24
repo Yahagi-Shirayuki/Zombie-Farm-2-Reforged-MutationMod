@@ -181,7 +181,24 @@ export function lineupSpeedBand(index: number, bypass = false): number {
  *  against a slow one it is very slow. `opponentIntervalSec` is the opponent's CURRENT
  *  effective interval in seconds. This is why a Scallywag reads as "swings every ~4 s"
  *  in reference footage while every other enemy runs at the raw 1/dex clock. */
+/** Damage reduction the Protect aura grants one zombie.
+ *
+ *  Protect no longer skips Headless. The one exception kept from the old behavior is
+ *  that a carrier does not shield itself, only the rest of the line. A lone Protect
+ *  holder therefore still has no reduction, while multiple Headless tanks protect each
+ *  other up to the same cap as before. */
+export const PROTECT_STEP = 0.20;
+export const PROTECT_CAP = 0.95;
+export function protectReduction(carriers: number, isCarrier: boolean): number {
+  const others = Math.max(0, carriers - (isCarrier ? 1 : 0));
+  return Math.min(PROTECT_CAP, others * PROTECT_STEP);
+}
+
 export const SCALLYWAG_KEY = "PirateStageActorScallywag";
+/** Deliberate local parity with the restored Pirates rule: Arrrnold mirrors the
+ *  opponent attack clock like Scallywag, giving slow front-liners a counter-play. */
+export const PIRATE_BOSS_KEY = "PirateStageActorBoss";
+export const MIRROR_SPEED_KEYS: ReadonlySet<string> = new Set([SCALLYWAG_KEY, PIRATE_BOSS_KEY]);
 export function mirroredAttackIntervalSec(opponentIntervalSec: number): number {
   return Math.max(0.5, (opponentIntervalSec * opponentIntervalSec) / 0.8);
 }

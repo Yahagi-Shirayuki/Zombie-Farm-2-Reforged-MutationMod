@@ -68,6 +68,53 @@ describe("damage formula is wired into the resolver", () => {
   });
 });
 
+describe("Protect and pirate mirror fixes", () => {
+  const owned = (id: string, over: Partial<OwnedZombie> = {}): OwnedZombie => ({
+    id,
+    key: "ZombieActorHeadlessTier3",
+    name: id,
+    typeName: id,
+    group: "Headless",
+    className: "Red",
+    classColor: "#ff6666",
+    str: 3,
+    dex: 1,
+    con: 11,
+    focus: 0,
+    invasions: 0,
+    mutation: 0,
+    col: 0,
+    row: 0,
+    abilityKeys: ["protect"],
+    ...over,
+  });
+
+  it("lets Headless Protect carriers shield each other but not themselves", () => {
+    const [solo] = buildPlayerUnits([owned("solo")], { abilityUnlocked: () => true });
+    expect(solo.damageReduction).toBe(0);
+
+    const pair = buildPlayerUnits([owned("a"), owned("b")], { abilityUnlocked: () => true });
+    expect(pair.map((unit) => unit.damageReduction)).toEqual([0.2, 0.2]);
+  });
+
+  it("makes Arrrnold mirror his opponent clock like Scallywag", () => {
+    const units = buildEnemyUnits(
+      { enemyKeys: [], bossKey: "PirateStageActorBoss" },
+      {
+        PirateStageActorBoss: {
+          str: 50,
+          dex: 1,
+          con: 50,
+          focus: 0,
+          attacks: [{ name: "boss", frequency: 1 }],
+        },
+      },
+      { boss: { damageMultiplier: 1, speedMultiplier: 1 } },
+    );
+    expect(units[0].mirrorsOpponentSpeed).toBe(true);
+  });
+});
+
 describe("enemies engage one at a time (army concentration matters)", () => {
   const army = (team: "player" | "enemy", n: number) =>
     Array.from({ length: n }, (_, i) => mk({ id: `${team}${i}`, team, str: 10, con: 10 }));

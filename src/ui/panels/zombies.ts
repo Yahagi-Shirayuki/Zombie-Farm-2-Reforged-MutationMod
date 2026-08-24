@@ -12,12 +12,18 @@ import { onFirstVisible } from "../onFirstVisible";
 import type { AlmanacEntryView, MenuCard, ZombieInfo } from "../hudTypes";
 import { zombieSellValue } from "../../economy";
 import { MAX_ZOMBIE_NAME_LENGTH, RosterEntry } from "../../zombie/types";
-import { mutationBonus, SLOTS } from "../../zombie/mutations";
+import { mutationBonus, SLOTS, type MutationRef } from "../../zombie/mutations";
 import {
   STATS, veterancy, STAT_TILE, VALUE_FILL, VALUE_END, ABILITY_FRAME, MUTATION_FRAME,
   ABILITY_POOL, unitAbilityAt, TIER_BOSS, MAX_ABILITY_TIER, wisToFocusBonus, abilityTierOf,
 } from "../../zombie/traits";
 import { mutationEntries, mutationTipText } from "../../zombie/mutationDisplay";
+import {
+  statEffectText, type MutationAlmanacEntry,
+} from "../../zombie/mutationAlmanac";
+import {
+  isMutationHidden, pruneMutationVisibility, setMutationHidden, visibleMutationSet,
+} from "../../zombie/mutationVisibility";
 import { statBreakdown, statTone } from "../../zombie/statDisplay";
 import { classTierRank } from "../../zombie/taxonomy";
 import { ZOMBIE_SORTS, isZombieSort, sortZombies, type ZombieSort } from "../../zombie/rosterSort";
@@ -130,16 +136,16 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   port.style.backgroundImage = `url(${info.portrait})`;
   // Use the static catalog portrait immediately, then replace it with the cached
   // individual rig once its mutation-aware render is available.
-  // Deferred until on screen â€” "My Zombies" stacks one of these cards per owned unit.
-  if (hud.zombieMutationPortraitOf) {
-    onFirstVisible(port, () => {
-      void hud.zombieMutationPortraitOf?.(info.key, info.mutation, info.color, info.mutationIds)
+  // Deferred until on screen - "My Zombies" stacks one of these cards per owned unit.
+  const paintPortrait = () => {
+    const visible = visibleMutationSet(info.id, info.mutation, info.mutationIds);
+    void hud.zombieMutationPortraitOf?.(info.key, visible.mutation, info.color, visible.mutationIds)
         .then((portrait) => {
           if (port.isConnected) port.style.backgroundImage = `url(${portrait})`;
         })
         .catch(() => { /* retain the static species portrait if extraction fails */ });
-    });
-  }
+  };
+  if (hud.zombieMutationPortraitOf) onFirstVisible(port, paintPortrait);
   const meta = document.createElement("div");
   meta.className = "zcard-meta";
   meta.innerHTML =
@@ -204,7 +210,10 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
   mutHdr.textContent = mutations.length > 1 ? `Mutations (${mutations.length}/${SLOTS.length})` : "Mutation";
   const mutRow = document.createElement("div");
   mutRow.className = "zrow zmuts";
+  const canHide = Boolean(info.id);
   for (const mutation of mutations) {
+    const slot = document.createElement("div");
+    slot.className = "zmut-slot";
     const cell = document.createElement("button");
     cell.className = "zmut";
     cell.style.backgroundImage = `url(${MUTATION_FRAME})`;
@@ -214,7 +223,34 @@ export function buildZombieCard(hud: Hud, info: ZombieInfo, host: HTMLElement): 
       e.stopPropagation();
       showTip(cell, mutation.name, mutationTipText(mutation));
     };
-    mutRow.appendChild(cell);
+    slot.appendChild(cell);
+    const ref = mutation.ref ?? mutation.bit;
+    if (canHide && ref !== undefined) {
+      const typedRef = ref as MutationRef;
+      const eye = document.createElement("button");
+      eye.className = "zmut-vis";
+      const paint = () => {
+        const hidden = isMutationHidden(info.id, typedRef);
+        cell.classList.toggle("mut-off", hidden);
+        eye.classList.toggle("off", hidden);
+        eye.textContent = hidden ? "x" : "o";
+        eye.setAttribute("aria-pressed", String(!hidden));
+        eye.title = hidden
+          ? `Show ${mutation.name} on ${info.name}`
+          : `Hide ${mutation.name} on ${info.name}`;
+        eye.setAttribute("aria-label", eye.title);
+      };
+      paint();
+      eye.onclick = (e) => {
+        e.stopPropagation();
+        setMutationHidden(info.id!, typedRef, !isMutationHidden(info.id, typedRef));
+        paint();
+        if (hud.zombieMutationPortraitOf) paintPortrait();
+        hud.onZombieAppearanceChanged?.(info.id!);
+      };
+      slot.appendChild(eye);
+    }
+    mutRow.appendChild(slot);
   }
 
   const abilHdr = document.createElement("div");
@@ -465,7 +501,8 @@ export function buildRosterCard(hud: Hud, z: RosterEntry, onClick: () => void): 
   // once, and each render is a blocking GPU readback.
   if (hud.zombieMutationPortraitOf) {
     onFirstVisible(pim, () => {
-      void hud.zombieMutationPortraitOf?.(z.key, z.mutation, z.color, z.mutationIds)
+      const visible = visibleMutationSet(z.id, z.mutation, z.mutationIds);
+      void hud.zombieMutationPortraitOf?.(z.key, visible.mutation, z.color, visible.mutationIds)
         .then((mutated) => { if (pim.isConnected) pim.src = mutated; })
         .catch(() => { /* retain the static species portrait */ });
     });
@@ -482,7 +519,7 @@ export function buildRosterCard(hud: Hud, z: RosterEntry, onClick: () => void): 
   return card;
 }
 
-export type ZombiesPanelTab = "roster" | "almanac";
+export type ZombiesPanelTab = "roster" | "almanac" | "mutations";
 
 // The "Zombies" tab (right bar): "My Zombies" lists every owned zombie as its
 // full inspect card (the same one shown when tapping a zombie); the "Zombie
@@ -509,7 +546,8 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
     body.innerHTML = "";
     body.scrollTop = 0;
     if (tab === "roster") renderRoster();
-    else renderAlmanac();
+    else if (tab === "almanac") renderAlmanac();
+    else renderMutationAlmanac();
   };
   const mkTab = (tab: ZombiesPanelTab, label: string) => {
     const b = document.createElement("button");
@@ -521,6 +559,7 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
   };
   mkTab("roster", "My Zombies");
   mkTab("almanac", "Zombie Almanac");
+  mkTab("mutations", "Mutation Almanac");
 
   let rosterSort: ZombieSort = getZombieSort();
 
@@ -529,6 +568,7 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
     // reward sent to storage remains visible and deployable even before the player
     // opens (or has room in) the physical Mausoleum panel.
     const roster = hud.getRoster ? hud.getRoster() : [];
+    pruneMutationVisibility(roster.map((zombie) => zombie.id));
     const onFarm = roster.filter((r) => !r.stored).length;
     const stored = roster.length - onFarm;
     head.innerHTML = "";
@@ -616,6 +656,33 @@ export function openZombiesPanel(hud: Hud, initialTab: ZombiesPanelTab = "roster
         grid.appendChild(header);
       }
       grid.appendChild(buildAlmanacCard(hud, entry));
+    }
+  };
+
+  const renderMutationAlmanac = () => {
+    const entries = hud.getMutationAlmanac ? hud.getMutationAlmanac() : [];
+    const found = entries.filter((entry) => entry.obtained > 0).length;
+    head.innerHTML = "";
+    const title = document.createElement("h2");
+    title.textContent = "Mutation Almanac";
+    const cnt = document.createElement("span");
+    cnt.className = "zr-total";
+    cnt.textContent = `${found} / ${entries.length} discovered`;
+    head.append(title, cnt);
+
+    const grid = document.createElement("div");
+    grid.className = "zr-grid alm-grid mut-alm-grid";
+    body.appendChild(grid);
+    let lastSection = "";
+    for (const entry of entries) {
+      if (entry.source !== lastSection) {
+        lastSection = entry.source;
+        const header = document.createElement("div");
+        header.className = "alm-section";
+        header.textContent = entry.source;
+        grid.appendChild(header);
+      }
+      grid.appendChild(buildMutationAlmanacCard(hud, entry));
     }
   };
 
@@ -741,5 +808,77 @@ function openAlmanacEntry(hud: Hud, entry: AlmanacEntryView) {
   hint.className = "alm-hint";
   hint.textContent = entry.hint;
   wrap.append(por, title, status, hint);
+  panel.appendChild(wrap);
+}
+
+function buildMutationAlmanacCard(hud: Hud, entry: MutationAlmanacEntry): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "zr-card alm-card mut-alm-card";
+  const por = document.createElement("div");
+  por.className = "zr-por";
+  const pim = entry.obtained ? document.createElement("img") : silhouetteImg(entry.icon);
+  pim.className = "zr-por-img";
+  if (entry.obtained) {
+    pim.src = entry.icon;
+    onFirstVisible(por, () => {
+      void hud.zombieMutationPortraitOf?.(
+        entry.portraitZombieKey, entry.portraitMutation, undefined, entry.portraitMutationIds,
+      )
+        .then((src) => { if (pim.isConnected) pim.src = src; })
+        .catch(() => { /* keep the mutation icon */ });
+    });
+    const count = document.createElement("span");
+    count.className = "alm-count";
+    count.textContent = `x${entry.obtained}`;
+    por.append(pim, count);
+  } else {
+    por.appendChild(pim);
+  }
+  const name = document.createElement("div");
+  name.className = "zr-name";
+  name.textContent = entry.name;
+  const slot = document.createElement("span");
+  slot.className = `zr-cls ${entry.obtained ? "" : "alm-unknown"}`;
+  slot.textContent = entry.slotLabel;
+  card.append(por, name, slot);
+  card.onclick = () => openMutationAlmanacEntry(hud, entry);
+  return card;
+}
+
+function openMutationAlmanacEntry(hud: Hud, entry: MutationAlmanacEntry) {
+  const { panel } = openModal({ host: hud.el, panelClass: "zpanel", bgClass: "alm-bg", replaceSelector: ".alm-bg" });
+  const wrap = document.createElement("div");
+  wrap.className = "alm-detail mut-alm-detail";
+  const por = document.createElement("div");
+  por.className = "zr-por alm-detail-por";
+  if (entry.obtained) {
+    const img = document.createElement("img");
+    img.className = "zr-por-img";
+    img.src = entry.icon;
+    por.appendChild(img);
+    void hud.zombieMutationPortraitOf?.(
+      entry.portraitZombieKey, entry.portraitMutation, undefined, entry.portraitMutationIds,
+    )
+      .then((src) => { if (img.isConnected) img.src = src; })
+      .catch(() => {});
+  } else {
+    por.appendChild(silhouetteImg(entry.icon));
+  }
+  const title = document.createElement("h2");
+  title.textContent = entry.name;
+  const meta = document.createElement("div");
+  meta.className = "alm-meta";
+  meta.textContent = entry.obtained
+    ? `${entry.slotLabel} - Lifetime obtained: ${entry.obtained}`
+    : `${entry.slotLabel} - Not yet obtained`;
+  const stats = document.createElement("div");
+  stats.className = "mut-alm-stats";
+  stats.textContent = entry.statEffects.length
+    ? entry.statEffects.map(statEffectText).join(" - ")
+    : "No stat change";
+  const hint = document.createElement("p");
+  hint.className = "alm-hint";
+  hint.textContent = entry.hint;
+  wrap.append(por, title, meta, stats, hint);
   panel.appendChild(wrap);
 }

@@ -10,6 +10,7 @@ import { AssetHttpError, fetchJson, mapConcurrent } from "./assetLoading";
 import { MAX_ZOMBIE_POTS } from "./placementLimit";
 import { isPowderMachineKey, POWDER_MACHINE_PURCHASE_LIMIT } from "./powderMachine";
 import { isZombieColorMixerBucketKey, ZOMBIE_COLOR_MIXER_BUCKET_LIMIT } from "./zombieColorMixerBucket";
+import { isFencePanel } from "./pathCosts";
 
 export interface Tile {
   terrain: string;
@@ -89,6 +90,8 @@ export interface EnemyPart {
   px: number; py: number; ax: number; ay: number; z: number; rot: number;
   group: "head" | "leg" | "arm" | "wing" | "wheel" | "body";
   back: boolean;
+  /** This part does not take the actor's runtime color. */
+  noTint?: boolean;
 }
 export interface EnemyModel {
   parts: EnemyPart[];
@@ -333,6 +336,10 @@ export interface PlaceableDef {
    *  `sprite` but behind anything standing inside the object. Only the Pet Pen has
    *  one: its far wall, which pets have to walk in front of. */
   backSprite?: string;
+  /** Working-state art. The Zombie Pot uses these while a combine cooks and once
+   *  it is ready to collect. */
+  busySprite?: string;
+  readySprite?: string;
   nativeW: number;
   nativeH: number;
   pivotX: number;
@@ -675,12 +682,11 @@ export async function loadAssets(): Promise<GameAssets> {
   // │   Or block BOTH neighbours to seal EVERY orientation: [{ dc: 1, dr: 0 }, { dc: 0, dr: 1 }]
   // └── (null disables the overhang entirely).
   const FENCE_OVERHANG: { dc: number; dr: number }[] | null = [{ dc: 0, dr: 1 }];
-  const FENCE_KEYS = new Set(["pen_01", "barbWireFence_01", "cemeteryFence_01", "hazardFence"]);
 
   // Flag functional items by key. (TODO: bake these into prep_placeables.py so
   // they're source-driven rather than derived here.)
   for (const p of placeables) {
-    if (FENCE_OVERHANG && FENCE_KEYS.has(p.key)) p.collideExtend = FENCE_OVERHANG;
+    if (FENCE_OVERHANG && isFencePanel(p)) p.collideExtend = FENCE_OVERHANG;
     // Footprints are whole tiles in the base game (`-[Tile dimensions]` reads
     // tileWidth/tileHeight via integerValue, truncating). Coerce any authored
     // fractional size (e.g. coolerLarge 1.5) to an integer so occupancy and the
@@ -858,7 +864,8 @@ export async function ensureObjectTexture(
  *  contents. Callers preload the whole list — a missing back layer would leave the
  *  pen showing only its near wall. */
 export function objectSpriteFiles(def: PlaceableDef): string[] {
-  return [def.sprite, def.growingSprite, def.backSprite].filter((f): f is string => !!f);
+  return [def.sprite, def.growingSprite, def.backSprite, def.busySprite, def.readySprite]
+    .filter((f): f is string => !!f);
 }
 
 /** Preload every texture `def` needs before it can be placed on the farm. */

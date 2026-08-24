@@ -93,6 +93,7 @@ import type {
   Mode, ObjCard, MenuCard, EpicBossMarketView, ZombieInfo, ObjectActions,
   AlmanacEntryView, LevelUpView, QuestCompleteView, ReceivedView,
 } from "./ui/hudTypes";
+import type { MutationAlmanacEntry } from "./zombie/mutationAlmanac";
 export { graveNeededFor } from "./ui/hudTypes";
 export type {
   Mode, ObjCard, MenuCard, EpicBossMarketView, ZombieInfo, ObjectActions,
@@ -1399,6 +1400,8 @@ export class Hud {
   getRoster: (() => RosterEntry[]) | null = null;
   /** The Zombie Almanac's entry list (every obtainable species + discovery counts). */
   getAlmanac: (() => AlmanacEntryView[]) | null = null;
+  /** The Mutation Almanac's entry list (vanilla bits + local modded string ids). */
+  getMutationAlmanac: (() => MutationAlmanacEntry[]) | null = null;
   /** Portrait image URL for a zombie type key (per-type composite). */
   zombiePortraitOf: ((key: string) => string) | null = null;
   /** Render one owned zombie with its complete individual mutation mask. */
@@ -1409,6 +1412,8 @@ export class Hud {
   onZombieStore: ((id: string) => void | Promise<void>) | null = null;
   /** Change an owned zombie's individual display name. */
   onZombieRename: ((id: string, name: string) => string | null) | null = null;
+  /** Redraw a deployed zombie after its device-local appearance toggles change. */
+  onZombieAppearanceChanged: ((id: string) => void) | null = null;
   /** Put a stored zombie back on the farm. */
   onZombieDeploy: ((id: string) => void | Promise<void>) | null = null;
   /** Whether a Mausoleum exists to store zombies in (gates the Store action). */

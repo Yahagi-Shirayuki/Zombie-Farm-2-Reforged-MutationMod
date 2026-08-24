@@ -225,6 +225,15 @@ export class JobSystem {
     return this.pending.has(`tree:${objId}`);
   }
 
+  pendingPlotJobAt(col: number, row: number): { kind: JobKind; oc: number; or: number } | null {
+    for (const job of this.active ? [this.active, ...this.queue] : this.queue) {
+      if (job.kind === "walk" || job.kind === "harvestTree") continue;
+      if (col >= job.oc && col < job.oc + PLOT && row >= job.or && row < job.or + PLOT)
+        return { kind: job.kind, oc: job.oc, or: job.or };
+    }
+    return null;
+  }
+
   // Plain move-to-point, serialized behind any queued work so it never hijacks the
   // farmer mid-job.
   enqueueWalk(x: number, y: number) {

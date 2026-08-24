@@ -97,6 +97,32 @@ describe("Mini Buddy", () => {
   });
 });
 
+describe("floating damage events", () => {
+  it("reports the attack amount instead of clamping overkill to remaining HP", () => {
+    const hitter = unit({
+      id: "hitter",
+      sourceKey: "ZombieActorRegularTier1",
+      team: "player",
+      str: 20,
+      focus: 100,
+    });
+    const target = unit({
+      id: "target",
+      sourceKey: "FarmStageActorFarmhand",
+      team: "enemy",
+      hp: 10,
+      maxHp: 10,
+      con: 0.1,
+    });
+    const sim = new BattleSim([hitter], [target], null, true);
+
+    for (let i = 0; i < 300 && !sim.finished; i++) sim.step(50);
+    const hit = sim.consumeDamageEvents().find((event) => event.targetId === "target");
+
+    expect(hit?.amount).toBeGreaterThan(10);
+  });
+});
+
 // `present` drives whether the battle strip shows a move's button at all. It is a
 // deliberately WIDER and steadier window than `ready` (which is a tap's success),
 // because a button that blinks out between swings can't be aimed at or timed into.
@@ -556,7 +582,7 @@ describe("Garden healing and formation depth", () => {
     ]);
   });
 
-  it("publishes enemy damage events as the actual player HP lost", () => {
+  it("publishes enemy damage events as the post-mitigation attack amount", () => {
     const player = unit({
       id: "target", sourceKey: "ZombieActorRegularTier1", team: "player",
       hp: 20, maxHp: 100,
@@ -572,7 +598,7 @@ describe("Garden healing and formation depth", () => {
 
     expect(p.hp).toBe(1);
     expect(sim.consumeDamageEvents()).toEqual([
-      { targetId: "target", amount: 19, fromPlayer: false, critLayers: 0 },
+      { targetId: "target", amount: 50, fromPlayer: false, critLayers: 0 },
     ]);
   });
 

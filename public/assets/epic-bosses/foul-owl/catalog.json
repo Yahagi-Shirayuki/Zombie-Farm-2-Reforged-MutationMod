@@ -2,55 +2,25 @@
   "id": "foul-owl",
   "sourceId": 4,
   "name": "Foul Owl",
-  "costBrains": 10,
+  "costBrains": 4,
   "durationMs": 1209600000,
-  "fightMs": 30000,
+  "fightMs": 60000,
   "retryMs": 1200000,
   "encounterMs": 7200000,
-  "baseHp": 2000,
+  "baseHp": 2150,
   "multipliers": [
-    1,
-    1.4,
-    2.2,
-    3.6,
-    6.8,
-    7.4,
-    8.1,
-    9.4,
-    14,
-    23,
-    25,
-    27.4,
-    31.7,
-    40,
-    53,
-    58,
-    64,
-    74,
-    88,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107,
-    107
+    2.4,
+    5.8,
+    14.2,
+    17.5,
+    37,
+    52.4,
+    71.7,
+    111,
+    138,
+    195
   ],
-  "maxLevel": 40,
+  "maxLevel": 10,
   "music": "music.wav",
   "punchSfx": "punch.wav",
   "introText": "Foul Owl is here",
@@ -60,12 +30,13 @@
     "attacks": [
       {
         "frequency": 100,
-        "name": "EpicBossAttack"
+        "name": "EpicBossAttack",
+        "damageTiming": 0.88
       }
     ],
     "con": 20,
     "dex": 2,
-    "str": 2
+    "str": 5.5
   },
   "animations": {
     "idle": {
@@ -80,7 +51,7 @@
       "cellWidth": 375,
       "cellHeight": 275,
       "frameCount": 13,
-      "frameSeconds": 0.08333333333333333
+      "frameSeconds": 0.07692307692307693
     },
     "attack": {
       "file": "attack.png",
@@ -265,7 +236,7 @@
   ],
   "loot": [
     {
-      "level": 5,
+      "level": 2,
       "name": "Farmhand Snowman",
       "scale": 0.35,
       "sprite": "Icon_Market_Snowman_FarmHand.png",
@@ -273,7 +244,7 @@
       "unique": false
     },
     {
-      "level": 10,
+      "level": 3,
       "name": "Lumberjack Snowman",
       "scale": 0.35,
       "sprite": "Icon_Market_Snowman_Lumberjack.png",
@@ -281,7 +252,7 @@
       "unique": false
     },
     {
-      "level": 15,
+      "level": 4,
       "name": "Boss Farmer Snowman",
       "scale": 0.35,
       "sprite": "Icon_Market_Snowman_McDonnell.png",
@@ -289,7 +260,7 @@
       "unique": false
     },
     {
-      "level": 20,
+      "level": 5,
       "name": "Zombie Snowman",
       "scale": 0.35,
       "sprite": "Icon_Market_Snowman_Zombie.png",
@@ -297,7 +268,7 @@
       "unique": false
     },
     {
-      "level": 25,
+      "level": 7,
       "name": "Foul Owl's Colossal Snowman",
       "scale": 0.35,
       "sprite": "Icon_Market_Snowman_FoulOwl.png",
@@ -305,7 +276,7 @@
       "unique": false
     },
     {
-      "level": 30,
+      "level": 8,
       "name": "Foul Owl's Gift Incinerator",
       "scale": 0.35,
       "sprite": "Icon_Market_Anti_HolidayIncinerator.png",
@@ -313,7 +284,7 @@
       "unique": false
     },
     {
-      "level": 35,
+      "level": 9,
       "name": "Foul Owl's Evil Carriage",
       "scale": 0.35,
       "sprite": "Icon_Market_Evil_carriage.png",
@@ -321,7 +292,7 @@
       "unique": false
     },
     {
-      "level": 37,
+      "level": 10,
       "name": "Foul Owl's Gift Vault",
       "scale": 0.35,
       "sprite": "Icon_Market_Anti_HolidayVault.png",
@@ -329,7 +300,7 @@
       "unique": false
     },
     {
-      "level": 39,
+      "level": 10,
       "name": "Tame Foul Owl",
       "scale": 0.35,
       "sprite": "foulowlpet.png",

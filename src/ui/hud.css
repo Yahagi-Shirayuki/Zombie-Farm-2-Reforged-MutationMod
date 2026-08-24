@@ -717,6 +717,15 @@
   align-items: center; justify-content: center; filter: drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
 #hud .zmut img { width: 30px; height: 30px; object-fit: contain; image-rendering: pixelated; }
 #hud .zmut:hover { filter: brightness(1.1) drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
+#hud .zmut-slot { position: relative; flex: 0 0 auto; line-height: 0; }
+#hud .zmut.mut-off { opacity: .42; filter: grayscale(1) drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
+#hud .zmut.mut-off:hover { filter: grayscale(1) brightness(1.15) drop-shadow(0 2px 2px rgba(0,0,0,.45)); }
+#hud .zmut-vis { position: absolute; top: -5px; right: -6px; width: 19px; height: 19px;
+  border-radius: 50%; border: 1px solid #d8b45e; background: #1c130a; color: #ffe08a;
+  font: 900 10px/17px system-ui, sans-serif; padding: 0; text-align: center;
+  box-shadow: 0 1px 3px rgba(0,0,0,.5); cursor: pointer; }
+#hud .zmut-vis:hover { background: #34240f; }
+#hud .zmut-vis.off { border-color: #8d7a52; opacity: .85; }
 /* small tooltip popup for a stat/ability */
 #hud .ztip { position: fixed; transform: translate(-50%, -100%); z-index: 5;
   box-sizing: border-box; max-width: min(180px, calc(100vw - 16px)); min-width: 96px;
@@ -1856,6 +1865,7 @@
   #hud .zmuts { gap: 5px; }
   #hud .zmut { width: 30px; height: 33px; }
   #hud .zmut img { width: 22px; height: 22px; }
+  #hud .zmut-vis { width: 17px; height: 17px; top: -4px; right: -5px; font-size: 9px; line-height: 15px; }
 
   #hud .zl-panel { width: min(720px, 94vw); }
   #hud .zl-list { gap: 7px; max-height: 70vh; }
@@ -2093,3 +2103,8 @@
 #hud .alm-detail h2 { margin: 2px 0 0; font-size: 20px; }
 #hud .alm-detail-por { width: 96px; height: 96px; }
 #hud .alm-detail-por .zr-por-img { max-width: 72px; max-height: 72px; }
+#hud .mut-alm-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+#hud .mut-alm-card .zr-name { max-width: 92px; }
+#hud .mut-alm-card .zr-cls { max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#hud .mut-alm-detail { min-width: min(360px, 82vw); }
+#hud .mut-alm-stats { text-align: center; color: #f7e7b3; font-size: 14px; font-weight: 800; }
