@@ -136,10 +136,6 @@ means something. **Restore all twelve if the raid or mutation stack is ever re-p
 - src/zombie/mutationAlmanac.test.ts
 - src/zombie/mutationVisibility.test.ts
 - src/zombie/specialPortrait.test.ts
-- src/zombie/mutationRedundancy.test.ts (restorable NOW — but it fails on real findings:
-    Tomatohead dominates Onionhead and Broccohair dominates Cauli-hair while sitting
-    LOWER in CATALOG, so the Zombie Pot discards the better of each pair. Fixing it
-    means retuning those stats, which is a balance call, not a merge one.)
 - src/raid/BattleSim.feats.test.ts      (upstream's RaidFeats)
 - src/raid/BattleSim.formation.test.ts  (upstream's formation model)
 - src/quest/reforgedQuests.test.ts       (restorable NOW except for one finding: quest
@@ -163,3 +159,30 @@ means something. **Restore all twelve if the raid or mutation stack is ever re-p
 - **`upgradeVariantMutations` now runs on BOTH sides.** It was imported only by
   `server/src/rosterCatalog.ts`; the client's `makeOwned` did not call it. With the
   Tier-4 bits live that would have desynced a raid replay on the first legacy unit.
+
+## Restored later: mutationRedundancy.test.ts
+
+Restored and passing. Two things had to change with it:
+
+- Its `STATS` list is upstream's `str/dex/con`, and this build has `wis`. Leaving wis
+  out did not just hide findings, it invented one — Broccohair and Cauli-hair differ
+  only in con and wis, so a str/dex/con comparison reported Broccohair as dominating a
+  mutation it actually trades with.
+- The one real inversion it found is fixed: Onionhead paid a bare +1 life while the
+  Tomatohead one rung BELOW it paid +1 life and +1 attack, so the Pot threw the better
+  head away. Onionhead now also pays +1 focus.
+
+**Still open, and deliberately outside that test's scope.** `refRank` in mutations.ts
+scores every modded string-id mutation above every vanilla bit, so a modded mutation
+wins its slot in the Pot no matter what it pays. Under that rule:
+
+- Turnip-head (+2 life) and Corned head beat Pumpking, the level-39 capstone head
+- Turnip-eyed (+2 focus) and Oatnyx wreath beat Cauli-hair
+- carrot-armed beats Dragon-arm, in both arm slots
+- Corned Arm and Celery-arms are stat-for-stat identical, and Corned Arm always wins
+
+Whether that is a bug or the point of the mod is a design call. If it should be fixed,
+the shape is an authored ladder position on each modded mutation — an `after: "<vanilla
+key>"` anchor read by `refRank` — rather than a stat retune, because the stats are fine
+and it is only the ORDER that is wrong. Nothing persists a rank, so changing one is
+save-safe.

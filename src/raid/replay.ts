@@ -89,7 +89,13 @@ import type { RaidOutcome } from "./types";
 // not the carrier itself, Arrrnold mirrors his opponent's attack clock like Scallywag,
 // Garden zombies only use rear support behavior when they actually have heal/revive, and
 // held boss throws wait through the visible windup before launching.
-export const RAID_RULESET_VERSION = 39;
+// 40: mutation VALUES changed, which moves every stat a mutated unit fights with.
+// Eyebiscus and Heartichoke became catalogued mutations of their own (bits 16384 and
+// 32768) instead of resolving to Carrot-eyed and to nothing at all, and Onionhead pays
+// +1 focus alongside its life so it stops being strictly worse than the Tomatohead one
+// rung below it. A v39 client and a v40 verifier disagree about any fight containing a
+// unit that carries one of those three.
+export const RAID_RULESET_VERSION = 40;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;

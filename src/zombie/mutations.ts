@@ -56,7 +56,10 @@ export function statEffectsOf(def: Pick<ResolvedMutationDef, "stats">): { stat: 
 // Original mutation list
 const CATALOG: readonly MutationSpec[] = [
 	{ key: "tomato",	  name: "Tomatohead",	  slot: "head",		  stats: { str: 1, con: 1 } },
-	{ key: "onion",	    name: "Onionhead",	  slot: "head",		  stats: { con: 1 } },
+	// +1 focus alongside the life. Onionhead sits ONE rung above Tomatohead, which pays
+	// life AND attack, so a pure +1 life lost every Pot conflict to the strictly better
+	// mutation below it — see mutationRedundancy.test.ts.
+	{ key: "onion",	    name: "Onionhead",	  slot: "head",		  stats: { con: 1, wis: 1 } },
 	{ key: "carrot",	  name: "Carrot-eyed",	slot: "hair_eye",	stats: { dex: 1 } },
 	{ key: "turnip",	  name: "Turnip-Arm",	  slot: "arm",		  stats: { str: 2 } },
 	{ key: "potato",	  name: "Potatohead",	  slot: "head",		  stats: { con: 2, str: 1 } },

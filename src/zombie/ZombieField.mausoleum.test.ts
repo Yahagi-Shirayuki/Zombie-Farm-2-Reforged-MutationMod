@@ -31,25 +31,31 @@ const withMausoleum = (tier?: PlaceableDef, stored = 0) => {
 describe("Mausoleum upgrade ladder", () => {
   it("ships ten tiers, each adding five slots for brains", () => {
     // Only the base building is bought outright (8 brains); every rung above it is an
-    // upgrade priced in brains.
-    //
-    // NOTE the shape of the prices below. Rungs 5-7 climb 6/8/10, and then rungs 8-12
-    // drop back to a flat 4 — so buying 35 -> 60 slots costs 20 brains while 15 -> 35
-    // costs 28. That reads like an escalating ladder that was started and not carried
-    // to the top rung. It is pinned here as it ships so the next edit to these numbers
-    // is a deliberate one; it is not an endorsement of the dip.
+    // upgrade, and each one costs two brains more than the last. 116 brains buys the
+    // whole ladder, against 8 for the base — the capacity is meant to be a long-run
+    // sink for the currency, not something a mid-game player tops out in one sitting.
     expect(tombs.map((tier) => [tier.key, tier.cost, tier.zombieSlots])).toEqual([
       ["mausoleum3", 8, 15],
       ["mausoleum4", 4, 20],
       ["mausoleum5", 6, 25],
       ["mausoleum6", 8, 30],
       ["mausoleum7", 10, 35],
-      ["mausoleum8", 4, 40],
-      ["mausoleum9", 4, 45],
-      ["mausoleum10", 4, 50],
-      ["mausoleum11", 4, 55],
-      ["mausoleum12", 4, 60],
+      ["mausoleum8", 12, 40],
+      ["mausoleum9", 14, 45],
+      ["mausoleum10", 16, 50],
+      ["mausoleum11", 18, 55],
+      ["mausoleum12", 20, 60],
     ]);
+    // The rule the prices above have to keep, whatever they are retuned to: each rung
+    // costs at least as much as the one below it. A ladder that dips lets a player skip
+    // the expensive middle and buy the cheap top, which is what the flat 4s used to do
+    // for rungs 8-12 — 35 -> 60 slots cost 20 brains while 15 -> 35 cost 28.
+    const upgrades = tombs.slice(1);
+    upgrades.forEach((tier, i) => {
+      if (i === 0) return;
+      expect(tier.cost, `${tier.key} is cheaper than ${upgrades[i - 1].key}`)
+        .toBeGreaterThanOrEqual(upgrades[i - 1].cost);
+    });
     // Whatever the prices do, the capacity ladder itself is regular: ten rungs, five
     // more slots each, strictly increasing.
     expect(tombs).toHaveLength(10);

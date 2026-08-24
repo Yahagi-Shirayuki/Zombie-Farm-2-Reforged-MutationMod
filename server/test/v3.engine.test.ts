@@ -1960,16 +1960,18 @@ describe("protocol v3 command engine", () => {
   });
 
   // ---- Mausoleum upgrade ladder (mausoleum3 -> 4 -> ... -> 12, +5 slots each) ----
-  const withMausoleum = (catalogKey: string): MutableGameplayState => {
+  const withMausoleum = (catalogKey: string, brains = 100): MutableGameplayState => {
     const state = freshGameplayState();
-    state.balance.brains = 100;
+    state.balance.brains = brains;
     state.balance.xp = 50_000; // above every level gate
     state.objects.objects.push({ instanceId: "tomb", catalogKey, status: "placed" });
     return state;
   };
 
   it("charges each Mausoleum rung in brains and swaps the building in place", () => {
-    const state = withMausoleum("mausoleum3");
+    // The whole ladder is 108 brains of upgrades (4, 6, 8 ... 20, two more per rung),
+    // so this wallet is stocked to clear it rather than to the fixture's default 100.
+    const state = withMausoleum("mausoleum3", 200);
     const result = applyCommandBatch(state, commands(
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum4" },
     ), { now: 1 });
@@ -1977,19 +1979,20 @@ describe("protocol v3 command engine", () => {
     expect(result.state.objects.objects).toContainEqual(
       expect.objectContaining({ instanceId: "tomb", catalogKey: "mausoleum4" })
     );
-    expect(result.state.balance.brains).toBe(96);
+    expect(result.state.balance.brains).toBe(196); // 200 - 4
 
     // ...and this fork prices the next three rungs 6 / 8 / 10 rather than a flat 4,
-    // so the three of them cost 24: 96 - 24 = 72.
+    // so the three of them cost 24: 196 - 24 = 172.
     const rest = applyCommandBatch(result.state, commands(
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum5" },
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum6" },
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum7" },
     ), { now: 2 });
     expect(rest.results.map((r) => r.status)).toEqual(["applied", "applied", "applied"]);
-    expect(rest.state.balance.brains).toBe(72);
+    expect(rest.state.balance.brains).toBe(172);
 
-    // The ladder runs five rungs further, at the same price, to Mausoleum X.
+    // The ladder runs five rungs further to Mausoleum X, and keeps climbing in price:
+    // 12, 14, 16, 18, 20 — 80 brains for the top half.
     const top = applyCommandBatch(rest.state, commands(
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum8" },
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum9" },
@@ -1998,7 +2001,7 @@ describe("protocol v3 command engine", () => {
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum12" },
     ), { now: 3 });
     expect(top.results.map((r) => r.status)).toEqual(Array(5).fill("applied"));
-    expect(top.state.balance.brains).toBe(52); // 72 - 5x4 // 84 - 5 rungs x 4
+    expect(top.state.balance.brains).toBe(92); // 172 - 80
     expect(top.state.objects.objects).toContainEqual(
       expect.objectContaining({ instanceId: "tomb", catalogKey: "mausoleum12" })
     );
