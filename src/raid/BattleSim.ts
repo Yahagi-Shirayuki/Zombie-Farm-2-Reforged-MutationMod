@@ -393,6 +393,10 @@ export interface SimUnit {
   stunInflictMs: number; // stun this enemy applies to a zombie on hit (ms)
   attackDamageTiming: number; // 0..1 fraction of the swing when it connects (enemy anim)
   isWall: boolean; // boss-summoned blocker (carrotWall / junkWall) — tappable, no attacks
+  /** Conjured mid-fight by the boss (a summoned minion or a wall) rather than being
+   *  part of the enemy roster the fight started with. Set by spawnEnemy. Read only by
+   *  teamTotals, which leaves these out of the enemy bar — see the note there. */
+  isSpawned: boolean;
   passedWall: boolean; // latched when already beyond a newly summoned wall
   /** Carried off the field by a Beach crab: still ALIVE (it comes home after the raid —
    *  source state 38 is not the death path) but out of this fight, so it counts as a
@@ -603,6 +607,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     stunInflictMs: isPlayer ? 0 : u.stunMs ?? 0,
     attackDamageTiming: u.attackDamageTiming ?? 0.5,
     isWall: false,
+    isSpawned: false,
     passedWall: false,
     taken: false,
     mirrorsOpponentSpeed: !isPlayer && !!u.mirrorsOpponentSpeed,
@@ -943,6 +948,51 @@ export class BattleSim {
       key,
       count: deployed.filter((p) => p.abilities.includes(key)).length,
     }));
+  }
+
+  /** Totals behind the two top-HUD team bars.
+   *
+   *  NUMERATOR AND DENOMINATOR MUST COME FROM THE SAME UNITS. The scene used to divide a
+   *  live HP sum by a constant captured at construction from the roster buildPlayerUnits
+   *  handed over — and that roster's con, so its maxHp, already carries the FULL team aura
+   *  (chivalry / grace / fortitude), while refreshTeamAuras only pays the aura to zombies
+   *  that have actually DEPLOYED. Before the first zombie marched in, every carrier's live
+   *  maxHp therefore sat BELOW the number the bar divided by, so an army holding an aura
+   *  carrier opened the fight with a partly dark bar while every zombie in it was at full
+   *  health. Summing maxHp here tracks the aura in lockstep. Dead units keep their maxHp,
+   *  so a loss still reads as a loss.
+   *
+   *  Walls and summoned minions are left OUT of the enemy total. They are transient things
+   *  the boss conjures mid-fight, and adding their HP to a numerator whose denominator was
+   *  captured before they existed pinned the enemy bar at full for as long as one stood.
+   *  Both keep their own on-field bars. The head COUNT still includes them — that is a
+   *  tally of what is on the field, not a share of a total. */
+  teamTotals(): {
+    playerHp: number; playerMax: number; playerAlive: number;
+    enemyHp: number; enemyMax: number; enemyAlive: number;
+  } {
+    let playerHp = 0, playerMax = 0, playerAlive = 0;
+    let enemyHp = 0, enemyMax = 0, enemyAlive = 0;
+    for (const u of this.units) {
+      // Totals count every unit, including a zombie still waiting to charge and an
+      // enemy still queued off-screen.
+      if (u.team === "player") {
+        playerHp += Math.max(0, u.hp);
+        playerMax += u.maxHp;
+        if (u.alive) playerAlive++;
+      } else {
+        if (u.alive) enemyAlive++;
+        // `=== true` on purpose: a checkpoint written before this field existed
+        // resumes without it, and an undefined must read as "part of the roster".
+        if (u.isWall || u.isSpawned === true) continue;
+        enemyHp += Math.max(0, u.hp);
+        enemyMax += u.maxHp;
+      }
+    }
+    return {
+      playerHp, playerMax: Math.max(1, playerMax), playerAlive,
+      enemyHp, enemyMax: Math.max(1, enemyMax), enemyAlive,
+    };
   }
 
   /** Recompute type auras from currently deployed carriers. Their source behavior
@@ -2131,6 +2181,7 @@ export class BattleSim {
    *  emerges through the normal one-at-a-time queue. */
   private spawnEnemy(template: CombatUnit): SimUnit {
     const su = toSim({ ...template, id: `spawn${this.spawnSeq++}` }, this.enemies.length);
+    su.isSpawned = true;
     su.state = "queued";
     su.hp = su.maxHp;
     su.alive = true;

@@ -125,7 +125,6 @@ could not compile, let alone pass. They are deleted rather than skipped so the s
 means something. **Restore all twelve if the raid or mutation stack is ever re-ported.**
 
 - src/raid/BattleSim.knockback.test.ts
-- src/raid/BattleSim.teamBar.test.ts
 - src/raid/abilityStack.test.ts
 - src/raid/alienStage.test.ts
 - src/raid/damageNumbers.test.ts
@@ -186,3 +185,26 @@ the shape is an authored ladder position on each modded mutation — an `after: 
 key>"` anchor read by `refRank` — rather than a stat retune, because the stats are fine
 and it is only the ORDER that is wrong. Nothing persists a rank, so changing one is
 save-safe.
+
+## Restored later: BattleSim.teamBar.test.ts
+
+Restored, adapted, and passing -- and it found a live bug, not a merge artifact.
+
+Both top-HUD team bars divided a live HP sum by a constant `RaidScene` captured at
+construction from the roster `buildPlayerUnits` handed over. That roster's con carries
+the FULL team aura, while `refreshTeamAuras` pays the aura only to zombies that have
+DEPLOYED, so an army holding a Chivalry, Grace or Fortitude carrier opened every
+invasion with a visibly dark bar and not a point of damage taken. The enemy bar had the
+mirror problem: walls and summoned minions joined the numerator mid-fight while the
+denominator was captured before they existed, pinning it at full for as long as one
+stood.
+
+`BattleSim.teamTotals()` now returns both halves of both bars from one pass over the
+live units, and the scene reads nothing else. Two adaptations from upstream's version:
+the fork models summons through `summonTemplate` rather than a `SummonConfig`, and it
+had no `isSummon` flag -- `spawnEnemy` is the single path that conjures a unit
+mid-fight, so `SimUnit.isSpawned` is set there and covers minions and walls alike.
+
+Purely a reporting accessor: nothing in the fight reads `isSpawned`, so no transcript
+changes and no ruleset bump. Verified against the server's 596 tests, which replay
+fights through this same BattleSim.

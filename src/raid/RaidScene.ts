@@ -494,8 +494,6 @@ export class RaidScene {
   private roundLabel!: Text; // top-center countdown → "ENRAGED" when it expires
   private pFace = new Container(); // generic zombie face badge, left of the player bar
   private eFace = new Container(); // boss face badge, right of the enemy bar
-  private maxPlayerHp = 1;
-  private maxEnemyHp = 1;
   private retreatBtn = new Container();
   private retreatRequested = false;
   private retreated = false;
@@ -600,8 +598,6 @@ export class RaidScene {
       params.grabber ?? null,
       params.crab ?? null
     );
-    this.maxPlayerHp = Math.max(1, sumMax(params.playerUnits));
-    this.maxEnemyHp = Math.max(1, sumMax(params.enemyUnits));
   }
 
   /** Build a ready-to-add scene, preloading all textures first. */
@@ -1378,10 +1374,10 @@ export class RaidScene {
       return [toX(x), toY(y)];
     };
 
-    let pHp = 0;
-    let eHp = 0;
-    let pAlive = 0;
-    let eAlive = 0;
+    // Team-bar totals come from the sim in one piece (teamTotals), so the numerator
+    // and the denominator always describe the same units. Do NOT re-derive either
+    // half here: the live maxHp moves with the team aura as zombies deploy.
+    const totals = this.sim.teamTotals();
     for (const u of this.sim.units) {
       // Units spawned mid-fight (summoned minions, walls) get their token on first
       // sight — the renderer only holds tokens for the initial roster otherwise.
@@ -1389,16 +1385,6 @@ export class RaidScene {
       if (!tok) {
         tok = this.makeToken(u);
         this.tokens.set(u.id, tok);
-      }
-
-      // Remaining-team totals count every living unit, including a zombie still
-      // waiting to charge and an enemy still queued off-screen.
-      if (u.team === "player") {
-        pHp += Math.max(0, u.hp);
-        if (u.alive) pAlive++;
-      } else {
-        eHp += Math.max(0, u.hp);
-        if (u.alive) eAlive++;
       }
 
       // Queued enemies haven't emerged yet — keep them hidden off the field.
@@ -1864,10 +1850,16 @@ export class RaidScene {
       );
     }
     // Both team bars read green when full (drain as the team loses HP).
-    this.drawTeamBar(this.pBar, this.pFill, barW, barH, pHp / this.maxPlayerHp, PLAYER_COLOR, this.pBarState);
-    this.drawTeamBar(this.eBar, this.eFill, barW, barH, eHp / this.maxEnemyHp, PLAYER_COLOR, this.eBarState);
-    this.pLabel.text = `Zombies  ${pAlive}`;
-    this.eLabel.text = `${this.raid.bossName || "Enemies"}  ${eAlive}`;
+    this.drawTeamBar(
+      this.pBar, this.pFill, barW, barH,
+      totals.playerHp / totals.playerMax, PLAYER_COLOR, this.pBarState,
+    );
+    this.drawTeamBar(
+      this.eBar, this.eFill, barW, barH,
+      totals.enemyHp / totals.enemyMax, PLAYER_COLOR, this.eBarState,
+    );
+    this.pLabel.text = `Zombies  ${totals.playerAlive}`;
+    this.eLabel.text = `${this.raid.bossName || "Enemies"}  ${totals.enemyAlive}`;
     this.eLabel.x = barW - this.eLabel.width;
 
     // Round countdown → ENRAGED. Only meaningful for a raid with a boss timer.
@@ -2545,7 +2537,4 @@ export class RaidScene {
   }
 }
 
-function sumMax(units: CombatUnit[]): number {
-  return units.reduce((s, u) => s + u.maxHp, 0);
-}
 
