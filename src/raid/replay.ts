@@ -89,13 +89,34 @@ import type { RaidOutcome } from "./types";
 // not the carrier itself, Arrrnold mirrors his opponent's attack clock like Scallywag,
 // Garden zombies only use rear support behavior when they actually have heal/revive, and
 // held boss throws wait through the visible windup before launching.
-// 40: mutation VALUES changed, which moves every stat a mutated unit fights with.
+// 1040: mutation VALUES changed, which moves every stat a mutated unit fights with.
 // Eyebiscus and Heartichoke became catalogued mutations of their own (bits 16384 and
 // 32768) instead of resolving to Carrot-eyed and to nothing at all, and Onionhead pays
 // +1 focus alongside its life so it stops being strictly worse than the Tomatohead one
-// rung below it. A v39 client and a v40 verifier disagree about any fight containing a
-// unit that carries one of those three.
-export const RAID_RULESET_VERSION = 40;
+// rung below it. Any verifier on an earlier ruleset disagrees about any fight
+// containing a unit that carries one of those three.
+//
+// ---------------------------------------------------------------------------
+// WHY 1040 AND NOT 40: this fork numbers its rulesets in a 1000+ range of its own.
+//
+// This number is the ONLY thing that stops a client and a verifier that disagree about
+// combat from settling a fight anyway. It is compared for exact equality -- /raid/start
+// answers 426 `stale_ruleset` on a mismatch -- and it is NOT a description of the rules,
+// just a label for them. So two builds that both say "39" are assumed to agree, and
+// nothing ever checks that they do.
+//
+// This fork kept its own combat and mutation stacks through the upstream merge, so its
+// rules genuinely differ from upstream's at the same number. Upstream reached 39 and
+// then 42 with entirely different fixes in them. Sharing the numbering means that the
+// moment the two land on the same one, the guard passes and the server replays the
+// player's inputs under the wrong maths: /raid/finish never reads the client's result,
+// it takes its OWN outcome (verified.outcome.win), so a fight won on screen is settled
+// as a loss, with the casualties the wrong simulation chose. Silently.
+//
+// 1000+ makes that collision impossible. A mismatch stays loud, which is the whole job.
+// Keep local bumps as 1041, 1042, ... and never reuse a bare upstream number.
+// ---------------------------------------------------------------------------
+export const RAID_RULESET_VERSION = 1040;
 export const RAID_TICK_MS = 50;
 export const RAID_MAX_TICKS = 4 * 60 * 1000 / RAID_TICK_MS;
 export const RAID_MAX_INPUTS = 512;
