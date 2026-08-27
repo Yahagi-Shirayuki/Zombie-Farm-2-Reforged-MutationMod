@@ -44,6 +44,9 @@ export interface Bindings {
   MUTATIONS_DISABLED?: string;
   /** Cross-account trading remains opt-in until the protocol-v3 security gates are met. */
   BLACK_MARKET_ENABLED?: string;
+  /** Friend invasions (PvP). Fully built and verified, PARKED ("0") while the interface
+   *  is redesigned — see docs/FRIEND_INVASIONS.md for the feature and how to re-enable. */
+  PVP_ENABLED?: string;
   /** Exclusive-writer rollout: observe accepts legacy clients; enforce requires the
    * authenticated writer credential on every gameplay mutation. */
   WRITER_LEASE_MODE?: "observe" | "enforce";

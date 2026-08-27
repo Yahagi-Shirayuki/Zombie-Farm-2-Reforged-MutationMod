@@ -29,23 +29,6 @@ export function reconcilePartySelection<T extends { id: string }>(
   return { ids, party, missingIds };
 }
 
-/** Fill an army selection from a remembered order without allowing zombies that
- * are no longer eligible to consume invisible slots. */
-export function fillPartySelection(
-  selectedIds: string[],
-  preferredIds: string[],
-  eligibleIds: string[],
-  cap: number
-): string[] {
-  const eligible = new Set(eligibleIds);
-  const result: string[] = [];
-  for (const id of [...selectedIds, ...preferredIds, ...eligibleIds]) {
-    if (result.length >= Math.max(0, cap)) break;
-    if (eligible.has(id) && !result.includes(id)) result.push(id);
-  }
-  return result;
-}
-
 /** Put previously-used zombies first, in their saved attack order, then append
  * every other eligible zombie in its existing order (the roster's harvest order). */
 export function orderPartyRoster<T extends { id: string }>(

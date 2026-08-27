@@ -46,8 +46,11 @@ export async function setup() {
   } catch {
     throw new Error(`could not clear isolated integration state: ${TEST_STATE}`);
   }
-  runWrangler(["d1", "execute", "zombiefarm", "--local", `--persist-to=${TEST_STATE}`, "--file=./schema.sql"]);
-  runWrangler(["d1", "execute", "zombiefarm", "--local", `--persist-to=${TEST_STATE}`, "--file=./scripts/baseline-migrations.sql"]);
+  // "zombiefarm-staging" is the DEFAULT (top-level) database in wrangler.toml — the
+  // same one the bare `wrangler dev` below binds. --persist-to isolates the state,
+  // so nothing here touches the real staging (or prod) database.
+  runWrangler(["d1", "execute", "zombiefarm-staging", "--local", `--persist-to=${TEST_STATE}`, "--file=./schema.sql"]);
+  runWrangler(["d1", "execute", "zombiefarm-staging", "--local", `--persist-to=${TEST_STATE}`, "--file=./scripts/baseline-migrations.sql"]);
 
   child = spawn(process.execPath, [
     "./node_modules/wrangler/bin/wrangler.js",

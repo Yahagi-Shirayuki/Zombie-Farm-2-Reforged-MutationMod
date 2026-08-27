@@ -4,6 +4,7 @@ import boostRows from "../../public/assets/boosts.json";
 import specialFrames from "../../public/assets/zombie/special_frames.json";
 import specialModels from "../../public/assets/zombie/special_models.json";
 import { purchasableZombies, type BoostDef, type ZombieDef } from "../assets";
+import { LUCKYBOX_ZOMBIE_KEYS } from "./appearance";
 
 const zombies = zombieRows as ZombieDef[];
 const boosts = boostRows as BoostDef[];
@@ -34,15 +35,33 @@ describe("complete special-zombie roster", () => {
     }
   });
 
-  it("exposes exactly the five permanent plantable specials", () => {
+  it("exposes the permanent plantable specials on their authored terms", () => {
     const plantableSpecials = purchasableZombies(zombies)
       .filter((zombie) => zombie.category === "special");
     expect(plantableSpecials.map((zombie) => zombie.name).sort()).toEqual([
-      "Bombie", "Crazy Zombie", "Cupid Zombie", "Dapper Zombie", "Granny Zombie",
+      "Bombie", "Crazy Zombie", "Cupid Zombie", "Dapper Zombie", "Gold Box Zombie",
+      "Granny Zombie", "Platinum Box Zombie", "Silver Box Zombie",
     ]);
-    expect(plantableSpecials.every((zombie) =>
+
+    // ZF2's own five sit on one shelf: same level, same price, all bought with brains.
+    const vanilla = plantableSpecials.filter((zombie) => !LUCKYBOX_ZOMBIE_KEYS.has(zombie.key));
+    expect(vanilla).toHaveLength(5);
+    expect(vanilla.every((zombie) =>
       zombie.cost === 5 && zombie.level === 20 && zombie.brainsNeeded === true
     )).toBe(true);
+
+    // The Box Zombies are this build's addition and deliberately do NOT follow that
+    // shelf: they are a three-rung ladder that starts in gold, below the brain wall,
+    // and only the top rung costs brains.
+    const boxes = plantableSpecials
+      .filter((zombie) => LUCKYBOX_ZOMBIE_KEYS.has(zombie.key))
+      .sort((a, b) => a.level - b.level);
+    expect(boxes.map((zombie) => [zombie.name, zombie.level, zombie.cost, zombie.brainsNeeded === true]))
+      .toEqual([
+        ["Silver Box Zombie", 16, 5000, false],
+        ["Gold Box Zombie", 21, 10000, false],
+        ["Platinum Box Zombie", 26, 5, true],
+      ]);
   });
 
   it("keeps all Epic rewards out of the plantable Market", () => {

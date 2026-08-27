@@ -1,21 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { BOOSTS, boostEcon, MAX_STACK, VOUCHER_KEY } from "../src/boostCatalog";
+import { BOOSTS, boostEcon, BRAIN_TICKET_KEY, MAX_STACK, VOUCHER_KEY } from "../src/boostCatalog";
 import { planBuy, planUse } from "../src/inventory";
 
 const bal = (gold = 1000, brains = 1000, xp = 0) => ({ gold, brains, xp });
 const MAX_LEVEL = 99;
 
 describe("boostCatalog", () => {
-  it("has the 6 non-zombie-purchase boosts with positive economics", () => {
-    expect(Object.keys(BOOSTS)).toHaveLength(6);
+  it("has the 7 non-zombie-purchase boosts with positive economics", () => {
+    expect(Object.keys(BOOSTS)).toHaveLength(7);
     for (const [key, boost] of Object.entries(BOOSTS)) {
       expect(boost.cost, key).toBeGreaterThan(0);
       expect(boost.perPurchase, key).toBeGreaterThan(0);
     }
   });
 
-  it("prices the voucher in gold and the consumables in brains", () => {
+  it("prices the two tickets in gold and the consumables in brains", () => {
     expect(boostEcon(VOUCHER_KEY)).toMatchObject({ cost: 2000, brains: false, perPurchase: 1 });
+    expect(boostEcon(BRAIN_TICKET_KEY)).toMatchObject({ cost: 10000, brains: false, perPurchase: 1 });
     expect(boostEcon("insta_grow")).toMatchObject({ cost: 1, brains: true, perPurchase: 20 });
     expect(boostEcon("nope")).toBeUndefined();
   });

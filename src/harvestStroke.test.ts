@@ -43,4 +43,24 @@ describe("harvest stroke", () => {
   it("does not resample a stationary pointer", () => {
     expect(sampleStrokeSegment({ x: 3, y: 7 }, { x: 3, y: 7 })).toEqual([]);
   });
+
+  // The property every drag-paint tool depends on, and the one the plant stroke used
+  // to violate by reading raw pointermove positions instead of sampling between them:
+  // a swipe fast enough to cross several plots between two pointer events must still
+  // land inside every plot on the way. A gesture is fastest in its MIDDLE, which is
+  // why the plots players found unplanted were the ones in the middle of the drag.
+  it("lands inside every plot a fast swipe crosses", () => {
+    // Screen-space walk across seven 4x4 plots laid in a row: each is 96px along x
+    // and 48px along y in isometric space (PLOT * HW, PLOT * HH).
+    const PLOT_DX = 96;
+    const PLOT_DY = 48;
+    const start = { x: 0, y: 0 };
+    const end = { x: PLOT_DX * 6, y: PLOT_DY * 6 };
+    const points = sampleStrokeSegment(start, end);
+    // Which plot each sampled point falls in, by its offset along the run.
+    const visited = new Set(points.map((point) => Math.round(point.x / PLOT_DX)));
+    for (let plot = 1; plot <= 6; plot++) {
+      expect(visited.has(plot), `plot ${plot} was jumped over`).toBe(true);
+    }
+  });
 });

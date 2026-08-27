@@ -143,6 +143,27 @@
   "ay": 0.85,
   "z": 4
  },
+ "eyebiscus": {
+  "file": "eyebiscusHat",
+  "group": "head",
+  "headRel": true,
+  "ox": 18,
+  "oy": 26,
+  "ax": 0.93,
+  "ay": 0.28,
+  "z": 7
+ },
+ "heartichoke": {
+  "file": "heartichokeBody",
+  "group": "root",
+  "headRel": false,
+  "ox": 26,
+  "oy": 15,
+  "ax": 0.73,
+  "ay": 0.75,
+  "z": 3,
+  "replaces": "body"
+ },
  "eyebiscusHat": {
   "file": "eyebiscusHat",
   "group": "head",

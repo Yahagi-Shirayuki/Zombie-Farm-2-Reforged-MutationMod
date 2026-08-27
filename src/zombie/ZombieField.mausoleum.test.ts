@@ -19,6 +19,7 @@ const withMausoleum = (tier?: PlaceableDef, stored = 0) => {
     objectDefOf: () => tier,
     inBounds: () => true,
     isPassable: () => true, // positionless saves arrive on the farmer's tile
+    isOpenGround: () => true,
   } as unknown as Field;
   const zombies = new ZombieField(
     {} as GameAssets, field, new GameState(), (key) => (key === def.key ? def : undefined)
@@ -28,14 +29,39 @@ const withMausoleum = (tier?: PlaceableDef, stored = 0) => {
 };
 
 describe("Mausoleum upgrade ladder", () => {
-  it("ships five tiers, each adding five slots for brains", () => {
+  it("ships ten tiers, each adding five slots for brains", () => {
+    // Only the base building is bought outright (8 brains); every rung above it is an
+    // upgrade, and each one costs two brains more than the last. 116 brains buys the
+    // whole ladder, against 8 for the base — the capacity is meant to be a long-run
+    // sink for the currency, not something a mid-game player tops out in one sitting.
     expect(tombs.map((tier) => [tier.key, tier.cost, tier.zombieSlots])).toEqual([
       ["mausoleum3", 8, 15],
       ["mausoleum4", 4, 20],
       ["mausoleum5", 6, 25],
       ["mausoleum6", 8, 30],
       ["mausoleum7", 10, 35],
+      ["mausoleum8", 12, 40],
+      ["mausoleum9", 14, 45],
+      ["mausoleum10", 16, 50],
+      ["mausoleum11", 18, 55],
+      ["mausoleum12", 20, 60],
     ]);
+    // The rule the prices above have to keep, whatever they are retuned to: each rung
+    // costs at least as much as the one below it. A ladder that dips lets a player skip
+    // the expensive middle and buy the cheap top, which is what the flat 4s used to do
+    // for rungs 8-12 — 35 -> 60 slots cost 20 brains while 15 -> 35 cost 28.
+    const upgrades = tombs.slice(1);
+    upgrades.forEach((tier, i) => {
+      if (i === 0) return;
+      expect(tier.cost, `${tier.key} is cheaper than ${upgrades[i - 1].key}`)
+        .toBeGreaterThanOrEqual(upgrades[i - 1].cost);
+    });
+    // Whatever the prices do, the capacity ladder itself is regular: ten rungs, five
+    // more slots each, strictly increasing.
+    expect(tombs).toHaveLength(10);
+    tombs.forEach((tier, i) => {
+      expect(tier.zombieSlots, tier.key).toBe(15 + i * 5);
+    });
     // Every tier is a brain-priced functional building sharing the base art, so an
     // upgrade swaps capacity in place without changing how the farm looks.
     for (const tier of tombs) {
@@ -51,6 +77,7 @@ describe("Mausoleum upgrade ladder", () => {
     expect(withMausoleum(tombs[0]).mausoleumCap).toBe(15);
     expect(withMausoleum(tombs[1]).mausoleumCap).toBe(20);
     expect(withMausoleum(tombs[4]).mausoleumCap).toBe(35);
+    expect(withMausoleum(tombs[tombs.length - 1]).mausoleumCap).toBe(60);
   });
 
   it("frees five more slots as soon as the building is upgraded", () => {
@@ -74,6 +101,7 @@ describe("grantReward Almanac accounting", () => {
       objectDefOf: () => tombs[0],
       inBounds: () => true,
       isPassable: () => true,
+      isOpenGround: () => true,
     } as unknown as Field;
     const zombies = new ZombieField(
       {} as GameAssets, field, state, (key) => (key === def.key ? def : undefined)

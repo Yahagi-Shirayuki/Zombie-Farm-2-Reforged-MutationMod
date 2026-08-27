@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { BoostDef, DropDef, GameAssets, PlaceableDef, ZombieDef } from "./assets";
-import { looseMutationFiles, looseMutationPath, mergeModdedZombies, raidRewardImage } from "./assets";
+import type {
+  BoostDef, DropDef, GameAssets, PlaceableDef, ZombieDef, ZombieModel,
+} from "./assets";
+import {
+  looseMutationFiles, looseMutationPath, mergeModdedZombies, mergeSpecialZombieModel,
+  raidRewardImage,
+} from "./assets";
 
 const assets = {
   drops: {
@@ -136,5 +141,64 @@ describe("modded zombie catalog", () => {
       rewardOnly: false,
       marketHidden: false,
     });
+  });
+});
+
+describe("mergeSpecialZombieModel", () => {
+  // The named actors are attachment DELTAS over an ordinary skeleton, so what a merge
+  // INHERITS is what decides whether a zombie ends up wearing two faces.
+  const base: ZombieModel = {
+    name: "base",
+    neck: { x: 7, y: -36 },
+    scale: 0.9,
+    color: [159, 255, 95],
+    parts: (
+      ["defaultBody", "defaultHead", "defaultEyeL", "defaultEyeR", "defaultJaw",
+        "defaultUpperTeeth", "defaultLowerTeeth", "defaultScar"] as const
+    ).map((file, index) => ({
+      file,
+      group: file === "defaultBody" ? ("root" as const) : ("head" as const),
+      px: 0, py: 0, ax: 0.5, ay: 0.5, z: index, tint: true,
+    })),
+  };
+  const def = (key: string) => ({ key, name: key, group: "Regular" } as ZombieDef);
+  const manifest = (...files: string[]) => ({
+    name: "special",
+    neck: { x: 7, y: -36 },
+    parts: files.map((file) => ({
+      file, group: "head" as const, px: 0, py: 0, ax: 0.5, ay: 0.5, z: 9,
+    })),
+  });
+  const merged = (key: string, ...files: string[]) =>
+    mergeSpecialZombieModel(base, def(key), manifest(...files), (file) => file)
+      .parts.map((part) => part.file);
+
+  it("keeps the ordinary face for an actor that only swaps its body", () => {
+    expect(merged("ZombieActorSkittles", "Body.png")).toContain("defaultEyeL");
+    expect(merged("ZombieActorSkittles", "Body.png")).toContain("defaultLowerTeeth");
+  });
+
+  it("drops the whole default face for an actor whose art already has one", () => {
+    const parts = merged("ZombieActorMasterNinjombie", "Head.png");
+    for (const face of ["defaultEyeL", "defaultEyeR", "defaultJaw",
+      "defaultUpperTeeth", "defaultLowerTeeth", "defaultScar"]) {
+      expect(parts).not.toContain(face);
+    }
+    expect(parts).toContain("Head.png");
+  });
+
+  it("drops only the mouth for a masked face, which keeps its eyes", () => {
+    const parts = merged("ZombieActorZastronaut", "Features.png");
+    expect(parts).not.toContain("defaultLowerTeeth");
+    expect(parts).toContain("defaultEyeL");
+    expect(parts).toContain("defaultHead");
+  });
+
+  it("drops the default lower teeth from any actor that brings its own jaw", () => {
+    // They are positioned against the DEFAULT jaw and land wrong on another shape —
+    // this is what put a second set of teeth on the Dapper Zombie's chin.
+    const parts = merged("ZombieActorDapper", "Jaw.png");
+    expect(parts).not.toContain("defaultLowerTeeth");
+    expect(parts).toContain("defaultUpperTeeth");
   });
 });

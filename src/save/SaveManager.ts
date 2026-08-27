@@ -4,23 +4,29 @@ import { objectSpriteFiles, PlaceableDef } from "../assets";
 import { WalkController } from "../WalkController";
 import { ZombieField } from "../zombie/ZombieField";
 import { QuestSystem } from "../quest/QuestSystem";
+import type { PeriodicQuestSystem } from "../quest/periodic/PeriodicQuestSystem";
 import {
-  SaveGame, SAVE_VERSION, ONLINE_PRESENTATION_PREFIX, ONLINE_SNAPSHOT_PREFIX,
+  SaveGame, SAVE_VERSION, migrateSave, ONLINE_PRESENTATION_PREFIX, ONLINE_SNAPSHOT_PREFIX,
+  type FallenZombieSave,
 } from "./schema";
 import { activeSaveKey, migrateLegacyProfileSaves } from "./profiles";
+import { shedCapacityOf } from "../shedCapacity";
 import * as api from "../net/api";
 import { getFarmBackground } from "../prefs";
+import { recordDiagnostic } from "../diagnostics";
+import { crumb } from "../breadcrumbs";
 import { epicBossById } from "../epicBoss/catalog";
 import { GAMEPLAY_PROTOCOL } from "../net/protocol";
 import { epicBossRunToClient, serverTimestampToClient } from "../net/clock";
 import { reconcileTutorialCompletion } from "../tutorial/steps";
 import { backfillDiscovered, sanitizeDiscovered } from "../zombie/almanac";
+import { sanitizeFallen, sanitizeFallenUncapped } from "../zombie/memorial";
+import { sanitizeTeams } from "../zombie/teams";
+import { sanitizeFarmStats } from "../stats";
 import type { PlayMode } from "../playMode";
 import type { JobSystem } from "../JobSystem";
 import { sanitizePowderGrinds, sanitizePowderStorage } from "../powderMachine";
 import { sanitizeZombieColorDyeJobs } from "../zombieColorMixerBucket";
-import { sanitizeTeams } from "../zombie/teams";
-import type { PeriodicQuestSystem } from "../quest/periodic/PeriodicQuestSystem";
 
 export type FarmLoadResult =
   | { kind: "local-existing" }
@@ -37,15 +43,19 @@ type PresentationData = {
     background?: SaveGame["farm"]["background"];
     zombiePatchGathered?: boolean;
   };
-  objectLayout?: { id: string; key?: string; oc: number; or: number; rotation?: number }[];
+  objectLayout?: { id: string; key?: string; oc: number; or: number; rotation?: number;
+    turn?: number; memorial?: FallenZombieSave }[];
   rosterLayout?: { id: string; name?: string; pos?: { col: number; row: number }; stored?: boolean; color?: [number, number, number] }[];
   zombiePot?: SaveGame["zombiePot"];
   zombiePots?: SaveGame["zombiePots"];
   tutorial?: SaveGame["tutorial"];
-  ui?: { attackOrder?: string[]; teams?: unknown };
+  ui?: { attackOrder?: string[]; teams?: unknown; stats?: unknown };
   /** Zombie Almanac lifetime-discovery counts. Cosmetic and client-authored, so
    * online it rides the presentation blob rather than a server table. */
   almanac?: SaveGame["almanac"];
+  /** The graveyard (unenshrined fallen zombies). Client-authored for the same
+   * reason: the server deletes a casualty outright and keeps no record of it. */
+  fallen?: SaveGame["fallen"];
 };
 type ObjectLayout = NonNullable<PresentationData["objectLayout"]>[number];
 
@@ -59,6 +69,9 @@ export class SaveManager {
   private presentationVersion = 0;
   private lastPresentation = "";
   private presentationDirty = false;
+  /** One alarm per refusal streak. A rejected presentation is refused on every retry,
+   *  and a toast per minute would be noise on top of a fault the player cannot fix. */
+  private presentationRefused = false;
   private pushing = false;
   private pendingPresentation: Record<string, unknown> | null = null;
   private pendingPresentationImmediate = false;
@@ -82,6 +95,10 @@ export class SaveManager {
   private onlineJobsResumable = false;
   private draining = false;
   onStorageError: ((message: string) => void) | null = null;
+  /** Daily/weekly quests. A settable field rather than a constructor parameter: only
+   *  main.ts ever supplies one, while a dozen tests build a SaveManager positionally
+   *  and have no interest in it. Offline it round-trips through the save; online
+   *  `serialize()` returns undefined and the sets come from the server instead. */
 
   constructor(
     private state: GameState,
@@ -217,8 +234,10 @@ export class SaveManager {
       epicBoss: this.state.epicBossRun ?? undefined,
       social: { friends: this.state.friends },
       tutorial: this.state.tutorial,
-      almanac: { discovered: this.state.zombieDiscovered },
+      almanac: { discovered: this.state.zombieDiscovered, mutations: this.state.mutationDiscovered },
+      fallen: this.state.fallenZombies,
       teams: this.state.zombieTeams,
+      stats: this.state.stats,
       ...(farmJobs ? { farmJobs } : {}),
     };
   }
@@ -231,6 +250,9 @@ export class SaveManager {
         oc: object.oc,
         or: object.or,
         rotation: object.rotation,
+        // A road bend's corner. Its own field, not `rotation`: for those pieces
+        // turning is a swap of art, not a mirror. See Field.savedTurn.
+        turn: object.turn,
       });
     }
     return {
@@ -253,8 +275,18 @@ export class SaveManager {
       rosterLayout: (blob.ownedZombies ?? []).map((u) => ({ id: u.id, name: u.name, pos: u.pos, stored: u.stored, color: u.color })),
       zombiePots: blob.zombiePots,
       tutorial: blob.tutorial,
-      ui: { attackOrder: blob.raids?.attackOrder ?? [], teams: blob.teams ?? [] },
+      // Saved line-ups ride the UI blob beside the attack order for the same
+      // reason: both are lists of the account's own zombie ids that only this
+      // client authors, and neither is ever read back as gameplay truth.
+      // …and the lifetime tally with them: it is counted by this client, read by
+      // nothing, and the server has no table that could reconstruct it.
+      ui: { attackOrder: blob.raids?.attackOrder ?? [], teams: blob.teams ?? [], stats: blob.stats },
       almanac: blob.almanac,
+      // The graveyard and each statue's occupant are SERVER-owned (fallen_v3) — a
+      // visitor renders the memorial from the authoritative projection, so a copy
+      // here would be a second source of truth that only this client can see. The
+      // `fallen` key stays allow-listed server-side purely so an older client's
+      // blob is still accepted rather than rejecting its whole presentation write.
     };
   }
 
@@ -323,7 +355,11 @@ export class SaveManager {
     void this.push(data);
   }
 
-  private writeLocal(blob: SaveGame): void {
+  /** Returns false when nothing reached storage. `importLocal` is the caller that
+   *  must not lie about that: it used to return true regardless, so a player importing
+   *  a backup into a browser with no room was told it worked and then reloaded into the
+   *  farm they were trying to replace. */
+  private writeLocal(blob: SaveGame): boolean {
     const key = this.cacheKey();
     const temporary = `${key}.tmp`;
     const backup = `${key}.backup`;
@@ -335,9 +371,20 @@ export class SaveManager {
       if (current !== null) localStorage.setItem(backup, current);
       localStorage.setItem(key, encoded);
       localStorage.removeItem(temporary);
+      // Successful writes COLLAPSE in the ring (autosave runs on a timer), so this costs
+      // one line however long the session is — and the size is what a later quota failure
+      // is explained by. See breadcrumbs.crumb.
+      crumb("save:local", `${Math.round(encoded.length / 1024)}kB`);
+      return true;
     } catch (error) {
+      // Drop the scratch copy on the way out. It is a whole save's worth of quota, and
+      // leaving it behind after a quota failure makes the NEXT write likelier to fail
+      // too — the one state where the retry has least room to spare.
+      try { localStorage.removeItem(temporary); } catch { /* storage already unusable */ }
       console.warn("[save] local write failed", error);
+      crumb("save:failed", error instanceof Error ? error.name : "unknown");
       this.onStorageError?.("Local Farm could not be saved. Check browser storage or export a backup.");
+      return false;
     }
   }
 
@@ -356,8 +403,35 @@ export class SaveManager {
       this.presentationVersion = saved.version;
       this.lastPresentation = encoded;
       this.presentationDirty = false;
+      this.presentationRefused = false;
+      crumb("save:online", `${Math.round(encoded.length / 1024)}kB v${saved.version}`);
     } catch (error) {
       this.presentationDirty = true;
+      // A REFUSED write (as opposed to a lost one) never clears by retrying: the same
+      // blob goes back every minute and is rejected every time. Nothing used to say so
+      // — no log, no diagnostic, no word to the player — while names, teams, layouts,
+      // the Almanac and the lifetime tally quietly stopped being saved at all. The
+      // player finds out by reloading, hours later, into a farm that forgot everything.
+      // 409 is excluded because it is the ordinary CAS race, handled just below.
+      if (error instanceof api.ApiError && error.status !== 409 && error.status !== 0) {
+        const detail = `${error.status} ${error.code}`;
+        console.warn(`[presentation] write refused (${detail}); farm layout is not being saved`);
+        crumb("save:refused", detail);
+        recordDiagnostic({
+          at: Date.now(), kind: "error", where: "presentation-write",
+          message: `presentation refused: ${detail}`,
+        });
+        if (!this.presentationRefused) {
+          this.presentationRefused = true;
+          this.onStorageError?.(
+            "Your farm's layout and names have stopped saving online. Please report this — " +
+            "your farm itself is safe, and Settings › Diagnostics has the detail."
+          );
+        }
+      } else if (!(error instanceof api.ApiError) || error.status === 0) {
+        // A lost write is ordinary; if one later succeeds, allow the alarm to fire again.
+        this.presentationRefused = false;
+      }
       if (error instanceof api.ApiError && error.status === 409) {
         console.warn("[presentation] conflict; reconciling with server");
         try {
@@ -373,6 +447,14 @@ export class SaveManager {
             // A genuinely newer projection won the CAS. Rebase this write onto its
             // version; preserve any newer local presentation queued while we fetched.
             this.pendingPresentation ??= data;
+            // …and take the lifetime tally with us. The blob is written WHOLESALE, so
+            // rebasing ours onto the winner's version would otherwise roll the account
+            // back to whatever this device had counted — the one situation where
+            // another device has recorded progress this one has never seen (it played
+            // while we were away, or we booted from a stale cached snapshot). The
+            // counters only climb, so folding the two by the higher of each cannot lose
+            // either side's work. See mergeFarmStats.
+            this.adoptServerStats(boot.presentation.data, this.pendingPresentation);
             this.pendingPresentationImmediate = true;
           }
         } catch (recoveryError) {
@@ -393,7 +475,37 @@ export class SaveManager {
     }
   }
 
+  /** Fold the tally in an authoritative presentation blob into the live one, and patch
+   *  the queued write so it carries the merged figures rather than this device's alone.
+   *  A blob with no tally in it (written by a client older than the field) is nothing to
+   *  merge — ours already holds everything it could have contributed. */
+  private adoptServerStats(authoritative: unknown, queued: Record<string, unknown>): void {
+    const theirs = (authoritative as PresentationData | undefined)?.ui?.stats;
+    if (theirs === undefined) return;
+    const merged = this.state.mergeStats(sanitizeFarmStats(theirs, Date.now()));
+    const ui = queued.ui as { stats?: unknown } | undefined;
+    if (ui) ui.stats = merged;
+  }
+
   async load(): Promise<FarmLoadResult> {
+    return this.crumbLoad(await this.loadFarm());
+  }
+
+  /** Note how the farm came back. This is the other half of a save report: "settings/farm
+   *  reset" reads completely differently depending on whether the last boot restored an
+   *  existing save, fell back to a cached snapshot, or started a NEW farm. */
+  private crumbLoad(result: FarmLoadResult): FarmLoadResult {
+    const detail =
+      result.kind === "online-cached" ? `cached from ${new Date(result.savedAt).toISOString()}`
+        : result.kind === "online-authoritative" ? (result.restored ? "restored" : "empty farm")
+          : result.kind === "local-unavailable" || result.kind === "online-unavailable"
+            ? result.reason
+            : "";
+    crumb(`load:${result.kind}`, detail || undefined);
+    return result;
+  }
+
+  private async loadFarm(): Promise<FarmLoadResult> {
     if (this.mode === "online") {
       if (!this.isOnline()) return { kind: "online-unavailable", reason: "not_configured" };
       try {
@@ -440,8 +552,8 @@ export class SaveManager {
     try {
       const raw = localStorage.getItem(key);
       if (!raw) return null;
-      const snapshot = JSON.parse(raw) as SaveGame;
-      if (snapshot.version !== SAVE_VERSION) return null;
+      const snapshot = migrateSave(JSON.parse(raw) as SaveGame);
+      if (!snapshot) return null;
       await this.applySave(snapshot, false);
       return { kind: "online-cached", savedAt: snapshot.savedAt };
     } catch {
@@ -455,6 +567,27 @@ export class SaveManager {
     this.objectLayouts = new Map((p.objectLayout ?? []).map((layout) => [layout.id, { ...layout }]));
     const objectLayout = new Map((p.objectLayout ?? []).map((o) => [o.id, o]));
     const rosterLayout = new Map((p.rosterLayout ?? []).map((u) => [u.id, u]));
+    // The graveyard is server-owned (fallen_v3), so the presentation blob's copy —
+    // written by clients before that table existed — is deliberately ignored.
+    //
+    // Split into the zombies standing on a statue and those still waiting for one
+    // BEFORE either is capped. MAX_REMEMBERED_FALLEN bounds the graveyard, which is
+    // the unenshrined list alone; capping the combined list instead dropped whichever
+    // records were oldest, and an occupant is exactly the record most likely to be old
+    // — so a statue bought to remember a long-ago loss came back as a bare plinth once
+    // sixty more zombies had died behind it, and re-enshrining it was then refused by
+    // the server as `statue_occupied`.
+    const projected = boot.gameplay.fallen ?? [];
+    const enshrinedIds = new Map(projected
+      .filter((unit) => !!unit.memorialObjectId)
+      .map((unit) => [unit.id, unit.memorialObjectId!]));
+    const enshrined = new Map(sanitizeFallenUncapped(
+      projected.filter((unit) => enshrinedIds.has(unit.id))
+    ).flatMap((unit) => {
+      const objectId = enshrinedIds.get(unit.id);
+      return objectId ? [[objectId, unit] as const] : [];
+    }));
+    const graveyard = sanitizeFallen(projected.filter((unit) => !enshrinedIds.has(unit.id)));
     const plots = Object.entries(boot.gameplay.farm.plots).map(([key, plot]) => {
       const [oc, or] = key.split(":").map(Number);
       if (plot.state === "plowed") return { oc, or, state: "plowed" as const };
@@ -475,14 +608,15 @@ export class SaveManager {
       // reconcile treats it as an orphan and re-homes it onto a real free tile.
       if (!layout) return [];
       return [{ id: obj.instanceId, key: obj.catalogKey, oc: layout.oc, or: layout.or,
-        rotation: layout.rotation, readyAt: obj.readyAt == null
+        rotation: layout.rotation, turn: layout.turn,
+        memorial: enshrined.get(obj.instanceId), readyAt: obj.readyAt == null
           ? undefined
           : serverTimestampToClient(obj.readyAt, boot.serverTime, clientTime) }];
     });
     for (const layout of objectLayout.values()) {
       if (layout.key === "storage01" && !objects.some((object) => object.id === layout.id)) {
         objects.push({ id: layout.id, key: layout.key, oc: layout.oc, or: layout.or,
-          rotation: layout.rotation, readyAt: undefined });
+          rotation: layout.rotation, turn: layout.turn, memorial: layout.memorial, readyAt: undefined });
       }
     }
     const pots = Object.fromEntries(Object.entries(p.zombiePots ?? {}).filter(([, pot]) =>
@@ -540,7 +674,14 @@ export class SaveManager {
       zombiePots: Object.keys(pots).length ? pots : undefined,
       zombiePot: pot,
       storage: {
-        itemCap: 8,
+        // The server derives shed capacity from the placed shed rather than storing it,
+        // so it is derived here too. This used to be a flat 8, corrected only later by
+        // the object reconcile — and anything serialised before that reconcile carried
+        // the 8: the closedown export-only handoff exports at boot, and Local Farm's
+        // Import takes the file at its word, so a farm with a big shed was imported
+        // with eight slots (see shedCapacity.ts).
+        itemCap: shedCapacityOf(objects.map((object) => object.key),
+          (key) => this.placeCatalog.get(key)?.storageSlots),
         items: Object.entries(boot.gameplay.storage.stored).map(([key, count]) => ({ key, count })),
         received: Object.entries(boot.gameplay.storage.received).flatMap(([key, count]) => Array(count).fill(key)),
       },
@@ -556,7 +697,13 @@ export class SaveManager {
       social: { friends: boot.social.friends.map((friend) => ({ id: friend.accountId, name: friend.name, addedAt: boot.serverTime, giftsSent: 0 })) },
       tutorial: reconcileTutorialCompletion(p.tutorial, boot.gameplay.tutorialRewarded),
       almanac: p.almanac,
+      // Only the unenshrined go in the graveyard list; the rest are already standing
+      // on their statues, which carry them (see `enshrined` above).
+      fallen: graveyard,
       teams: sanitizeTeams(p.ui?.teams),
+      // Absent stays absent: applySave seeds a first-time tally, and only it can
+      // tell "no tally yet" from "a tally that happens to be all zeroes".
+      stats: p.ui?.stats ? sanitizeFarmStats(p.ui.stats, clientTime) : undefined,
       farmJobs: this.readJobJournal(),
     };
   }
@@ -571,8 +718,8 @@ export class SaveManager {
       const raw = values[index];
       if (!raw) continue;
       try {
-        const data = JSON.parse(raw) as SaveGame;
-        if (data.version !== SAVE_VERSION || !data.player || !data.farm) continue;
+        const data = migrateSave(JSON.parse(raw) as SaveGame);
+        if (!data) continue;
         await this.applySave(data);
         if (index === 1) {
           try { localStorage.removeItem(key); } catch { /* keep backup usable */ }
@@ -636,10 +783,30 @@ export class SaveManager {
     this.state.zombieDiscovered = Object.keys(discovered).length
       ? discovered
       : backfillDiscovered(data.ownedZombies ?? []);
+    // The same for mutations, seeded independently: a save from between the two tabs
+    // shipping has species counts and no mutation ones, so an emptiness test on the
+    // species map would wrongly conclude this one needs no backfill either.
     // `received` was assigned straight onto the state above, so the reward zombies
     // parked in it have not been through receiveItem/syncStorage yet. Owned is owned:
     // count them here too, or an unclaimed prize opens the Almanac as a silhouette.
     this.state.countUnclaimedZombieRewards();
+    // Lifetime statistics. A save written before the tally existed starts counting
+    // from now — with the one figure that IS recoverable seeded from the raid
+    // progress it carries, so a veteran's Statistics panel doesn't open claiming
+    // they have never won an invasion.
+    const stats = sanitizeFarmStats(data.stats, Date.now());
+    if (!data.stats) {
+      stats.raidsWon = Object.values(this.state.raidsCompleted)
+        .reduce((total, wins) => total + Math.max(0, Math.trunc(Number(wins) || 0)), 0);
+    }
+    this.state.restoreStats(stats);
+    // The graveyard. Statues carry their own occupant (restoreObjects below), so
+    // this is only the zombies still waiting for one.
+    this.state.fallenZombies = sanitizeFallen(data.fallen);
+    // Saved line-ups. Members are NOT checked against the roster here: a team is
+    // resolved when it is shown or assembled, so a zombie that is missing today
+    // simply sits the next assembly out (see zombie/teams.ts).
+    this.state.zombieTeams = sanitizeTeams(data.teams);
     if (data.farm.w && data.farm.h) this.field.resize(data.farm.w, data.farm.h);
     this.state.ownedClimates = data.farm.ownedClimates ?? ["grass"];
     if (!this.state.ownedClimates.includes("grass")) this.state.ownedClimates.unshift("grass");
@@ -660,6 +827,10 @@ export class SaveManager {
     const epicActive = !!epicRun && !epicRun.completedAt && Date.now() < epicRun.expiresAt;
     this.quests.setEpicBossActive(epicActive, epicActive ? epicDef?.questIds ?? [] : []);
     this.quests.restore(data.quests);
+    // Offline only — online this is a no-op and the server's projection installs the
+    // real sets. A missing field (an older save, or any online save) generates a
+    // fresh board for today rather than leaving the panel empty.
+    this.periodicQuests?.restore(data.periodicQuests);
     // restorePending uses the same current-field validation as a fresh tap, so an
     // online intent whose command already committed is safely discarded here.
     if (restoreJobs) {
@@ -710,10 +881,10 @@ export class SaveManager {
   importLocal(raw: string): boolean {
     if (this.mode !== "local") return false;
     try {
-      const data = JSON.parse(raw) as SaveGame;
-      if (data.version !== SAVE_VERSION || !data.player || !data.farm) return false;
-      this.writeLocal(data);
-      return true;
+      const migrated = migrateSave(JSON.parse(raw) as SaveGame);
+      if (!migrated) return false;
+      // The write's own answer, not an assumption about it.
+      return this.writeLocal(migrated);
     } catch {
       return false;
     }
@@ -776,3 +947,4 @@ export class SaveManager {
     window.addEventListener("online", () => { if (this.presentationDirty) void this.push(this.presentation()); });
   }
 }
+

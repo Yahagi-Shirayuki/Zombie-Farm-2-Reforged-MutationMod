@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { bossThrowIntervalSecs, raidTier, winGold } from "./RaidCatalog";
+import { bossThrowIntervalSecs, raidTier, winGold, boostDrops } from "./RaidCatalog";
+
 import type { RaidDef, RaidStage } from "./types";
 
 // winGold: wiki-figure raids scale their known payout by survival; raids without a
@@ -54,3 +55,31 @@ describe("raidTier", () => {
     expect(raidTier(raid({ id: 6 }))).toBe(6);
   });
 });
+
+describe("boostDrops — the invasion card's boost list", () => {
+  const catalog = [
+    { key: "insta_grow", name: "Insta-Grow" },
+    { key: "insta_plow", name: "Insta-Plow" },
+    { key: "invasion_voucher", name: "Invasion Voucher" },
+  ];
+
+  it("keeps only the loot names that are boosts, in tier order", () => {
+    const r = raid({ loot: [["Bonus Gold"], ["Haystack"], ["Insta-Plow", "Insta-Grow"], ["Windmill"]] });
+    expect(boostDrops(r, catalog)).toEqual([
+      { key: "insta_plow", name: "Insta-Plow", qty: 1 },
+      { key: "insta_grow", name: "Insta-Grow", qty: 10 },
+    ]);
+  });
+
+  it("names a boost once even when two tiers list it (Valentine's Day)", () => {
+    const r = raid({ loot: [["Invasion Voucher", "Invasion Voucher"], ["Invasion Voucher"]] });
+    expect(boostDrops(r, catalog)).toEqual([
+      { key: "invasion_voucher", name: "Invasion Voucher", qty: 1 },
+    ]);
+  });
+
+  it("is empty for a table of pure objects", () => {
+    expect(boostDrops(raid({ loot: [["Bonus Gold"], ["Pyramid"]] }), catalog)).toEqual([]);
+  });
+});
+

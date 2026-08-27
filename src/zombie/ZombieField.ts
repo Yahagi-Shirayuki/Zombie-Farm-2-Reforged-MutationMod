@@ -81,11 +81,20 @@ export class ZombieField {
   // ---- server-owned roster hooks (P12) ----
   // ONLINE only. Fire when a unit is CREATED (onGrant) or REMOVED as a casualty /
   // combined parent (onCasualty), so the server roster shadow stays accurate. Gated by
-  // `rosterLive` so restoring the save (which re-spawns every unit) doesn't re-emit â€”
+  // `rosterLive` so restoring the save (which re-spawns every unit) doesn't re-emit —
   // those are seeded via /roster/sync instead. A SELL is reported at its own call site
   // (it credits gold), so it deliberately does NOT go through onCasualty.
   onGrant: ((u: { id: string; key: string; mutation: number; invasions: number }) => void) | null = null;
   onCasualty: ((ids: string[]) => void) | null = null;
+  // ---- the graveyard (Memorial Statues) ----
+  // Fired for every unit lost to a raid, and again for any of them the player then
+  // buys back at the revival offer. Both live here rather than at the call sites
+  // because removeCasualties/reviveCasualties are the ONLY doors a zombie dies or
+  // un-dies through, and the offline and server-verified raid paths use both.
+  // Unlike the hooks above these are NOT gated by `rosterLive`: an offline farm has
+  // no server shadow but still buries its dead.
+  onFallen: ((units: OwnedZombie[]) => void) | null = null;
+  onRevived: ((ids: string[]) => void) | null = null;
   // Combine goes through its own server ops so the result can be validated against the
   // two parents: onCombineStart consumes the parents; onCombineCollect grants the
   // result (the v3 server derives its species from the authoritative parents). Fall
@@ -120,27 +129,48 @@ export class ZombieField {
     // Resolve a zombie type key -> its catalog def (stats/taxonomy).
     private resolve: (key: string) => ZombieDef | undefined,
     private playFertilizeSfx: () => void = () => {},
-    /** The farmer's current tile â€” where a unit with no remembered spot of its
+    /** The farmer's current tile — where a unit with no remembered spot of its
      *  own turns up. See arrivalTile(). */
     private farmerTile: () => { col: number; row: number } = () => ({ col: 0, row: 0 })
   ) {}
 
   /** Where to put a zombie that has no position to restore: on the farmer, so the
    *  player sees it arrive, snapped to the nearest walkable tile if he happens to
-   *  be standing in a doorway or under an object. The old fallback was (0,0) â€”
+   *  be standing in a doorway or under an object. The old fallback was (0,0) —
    *  the field's top corner, usually buried under whatever is built there. */
   private arrivalTile(): { col: number; row: number } {
     const at = this.farmerTile();
-    const col = Math.round(at.col);
-    const row = Math.round(at.row);
-    if (this.field.isPassable(col, row)) return { col, row };
-    const out = findEscape({ col, row }, (c, r) => this.field.isPassable(c, r), {
+    return this.openTileNear(at.col, at.row);
+  }
+
+  /** (col,row) itself when a zombie can stand there, else the nearest tile it can.
+   *  "Walkable" is not enough: a hedge tile is crossable but is no place to put a
+   *  zombie down, so the search walks out to real open ground. */
+  private openTileNear(atCol: number, atRow: number): { col: number; row: number } {
+    const col = Math.round(atCol);
+    const row = Math.round(atRow);
+    const open = (c: number, r: number) => this.field.isOpenGround(c, r);
+    if (open(col, row)) return { col, row };
+    const out = findEscape({ col, row }, open, {
       inBounds: (c, r) => this.field.inBounds(c, r),
     });
     return out.length ? out[out.length - 1] : { col, row };
   }
 
-  /** Deployed (on-farm) unit count â€” what the army cap limits. */
+  /** Where a zombie collected from a placed object turns up: beside THAT OBJECT,
+   *  not wherever the farmer happens to be standing when the panel's button is
+   *  pressed. Collecting a Zombie Pot from across the farm used to drop the child
+   *  at the player's feet, which reads as the farmer having grown it.
+   *
+   *  The object's own tiles are built on, so this steps out to the open ground
+   *  beside it. Falls back to the farmer if the object is gone (sold or reconciled
+   *  away between the panel opening and the collection landing). */
+  objectArrivalTile(instanceId: string | null | undefined): { col: number; row: number } {
+    const at = instanceId ? this.field.objectAnchorTile(instanceId) : null;
+    return at ? this.openTileNear(at.col, at.row) : this.arrivalTile();
+  }
+
+  /** Deployed (on-farm) unit count — what the army cap limits. */
   get count(): number {
     return this.units.length;
   }
@@ -170,19 +200,23 @@ export class ZombieField {
     return this.units.length < this.state.zombieMax;
   }
 
-  /** Can a grown zombie be collected into either the active army or Mausoleum? */
-  canHarvestZombie(): boolean {
-    return this.canAdd() || (!!this.field.mausoleumId() && !this.mausoleumFull);
-  }
-
-  /** How many grown zombie crops can be collected right now. */
+  /** How many more grown zombies have somewhere to go: free army slots plus free
+   *  Mausoleum slots. Zero means a ripe zombie crop must stay in the ground — the
+   *  farm cap is never exceeded, and the crop is never spent on a unit with no home.
+   *  Callers queueing several harvests at once must debit their own pending ones. */
   zombieHarvestRoom(): number {
-    const armyRoom = Math.max(0, this.state.zombieMax - this.units.length);
-    const cryptRoom = this.field.mausoleumId()
+    const army = Math.max(0, this.state.zombieMax - this.units.length);
+    const crypt = this.field.mausoleumId()
       ? Math.max(0, this.mausoleumCap - this.stored.length)
       : 0;
-    return armyRoom + cryptRoom;
+    return army + crypt;
   }
+
+  /** Can a grown zombie be collected into either the active army or Mausoleum? */
+  canHarvestZombie(): boolean {
+    return this.zombieHarvestRoom() > 0;
+  }
+
 
   /** A crop was just planted at plot (oc,or): each DEPLOYED Garden zombie rolls its
    *  tier's `fertilizeChance` (first success wins), matching the source's per-actor
@@ -274,7 +308,7 @@ export class ZombieField {
     const mutationSet = splitMutationInput(mutation, mutationIds);
     const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutationSet.mask, undefined, undefined, mutationSet.ids);
     const unit = this.addUnit(data);
-    this.state.recordZombieDiscovered(data.key);
+    this.state.recordZombieDiscovered(data.key, data.mutation);
     this.syncCount();
     return unit;
   }
@@ -295,7 +329,7 @@ export class ZombieField {
       const mutationSet = splitMutationInput(mutation, mutationIds);
     const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutationSet.mask, undefined, undefined, mutationSet.ids);
       this.stored.push(data);
-      this.state.recordZombieDiscovered(data.key);
+      this.state.recordZombieDiscovered(data.key, data.mutation);
       return data;
     } finally {
       this.harvesting = false;
@@ -455,7 +489,7 @@ export class ZombieField {
   }
 
   /** Permanently remove raid casualties (dead units, by id) from the roster.
-   *  GROUND TRUTH: a downed zombie is a permanent loss â€” raids cull the fallen
+   *  GROUND TRUTH: a downed zombie is a permanent loss — raids cull the fallen
    *  (IMPLEMENTATION_RAIDS_PLAN Phase 6). Called by RaidManager.finishRaid with
    *  outcome.losses. Reuses takeOwned, so each deployed casualty's sprite is
    *  destroyed, its army slot freed, and the selection cleared. Returns the
@@ -468,6 +502,7 @@ export class ZombieField {
     }
     // Drop the dead from the server shadow too, so they can't be sold after dying.
     if (this.rosterLive && removed.length) this.onCasualty?.(removed.map((r) => r.id));
+    if (removed.length) this.onFallen?.(removed);
     return removed;
   }
 
@@ -558,9 +593,11 @@ export class ZombieField {
       else this.onCasualty?.([idA, idB]);
     }
     return pot.start(
-      { id: a.id, key: a.key, mutation: a.mutation, mutationIds: a.mutationIds, color: this.colorOf(a), ...this.speciesTraits(a) },
+      // Slot 1's NAME rides along with its species: the child is the zombie the player
+      // put in the first slot, so it keeps that zombie's name (see ZombiePotSave.nameA).
+      { id: a.id, key: a.key, name: a.name, mutation: a.mutation, mutationIds: a.mutationIds, color: this.colorOf(a), ...this.speciesTraits(a) },
       { id: b.id, key: b.key, mutation: b.mutation, mutationIds: b.mutationIds, color: this.colorOf(b), ...this.speciesTraits(b) },
-      this.field.hasCombineMonolith(), // Clay Monolith â†’ 15-min combine
+      this.field.hasCombineMonolith(), // Clay Monolith → 15-min combine
       baseDurationMs,
       this.state.level,
       reserved
@@ -568,7 +605,7 @@ export class ZombieField {
   }
 
   /** Traits recorded for a parent fed to the pot. `group`, `className` and `isSpecial`
-   *  drive selection (see selectCombineSpecies); `tier` and `isBaseClass` no longer do â€”
+   *  drive selection (see selectCombineSpecies); `tier` and `isBaseClass` no longer do —
    *  they are persisted so a job started by an older client still round-trips.
    *  Falls back gracefully when the catalog lacks the unit. */
   private speciesTraits(z: OwnedZombie): {
@@ -606,7 +643,7 @@ export class ZombieField {
     const def = this.resolve(result.key);
     if (!def) return null;
     // Built through makeOwned exactly as collectCombine does, so the preview can
-    // never advertise a mutation the collected unit won't have â€” a headless child
+    // never advertise a mutation the collected unit won't have — a headless child
     // has its head/hair-eye bits stripped there (no carrot-eyed Party Zombie).
     const mutations = def.mutation
       ? addMutationRef({ mask: result.mutation, ids: result.mutationIds ?? [] }, def.mutation)
@@ -621,7 +658,7 @@ export class ZombieField {
     return { key: child.key, name: def.name, mutation: child.mutation, mutationIds: child.mutationIds, color: child.color };
   }
 
-  /** Quest/server reward. `serverStored` is the authoritative placement online â€”
+  /** Quest/server reward. `serverStored` is the authoritative placement online —
    *  including a Received zombie being claimed, which the caller has already checked
    *  against the Mausoleum cap. Offline the caller decides between the farm and
    *  Received first, so the local fallback here is only reached for a legacy grant.
@@ -643,7 +680,7 @@ export class ZombieField {
       // preserve the earned zombie in the Mausoleum instead of dropping the reward.
       if (serverStored !== true && this.canAdd()) { this.addUnit(data); this.syncCount(); }
       else this.stored.push(data);
-      if (opts.recordDiscovery !== false) this.state.recordZombieDiscovered(data.key);
+      if (opts.recordDiscovery !== false) this.state.recordZombieDiscovered(data.key, data.mutation);
     } finally { this.harvesting = false; }
     return data;
   }
@@ -655,7 +692,7 @@ export class ZombieField {
   }
 
   /** Can a finished combine be sent straight to the Mausoleum? Needs the building
-   *  placed with a free slot â€” an empty crypt is never a destination. */
+   *  placed with a free slot — an empty crypt is never a destination. */
   canStoreCombine(): boolean {
     return !!this.field.mausoleumId() && !this.mausoleumFull;
   }
@@ -663,7 +700,7 @@ export class ZombieField {
   /**
    * Collect a finished combine: builds the result zombie (species from slot 1,
    * mutations inherited per-slot deterministically) and adds
-   * it to the farm at (col,row) â€” or, with `stored`, straight into the Mausoleum,
+   * it to the farm at (col,row) — or, with `stored`, straight into the Mausoleum,
    * so a full farm is no longer a reason the Pot cannot be emptied. Like any zombie
    * crop, collection to the farm waits when the active army is full. Returns the new
    * unit's data, or null if nothing is ready or the chosen destination has no room.
@@ -683,7 +720,7 @@ export class ZombieField {
     const result = pot.collect();
     if (!result) return null;
     // From here the job is CLEARED. Both parents were consumed when the combine
-    // started, so every remaining failure path must put the job back â€” abandoning it
+    // started, so every remaining failure path must put the job back — abandoning it
     // destroys two zombies and yields nothing.
     const abandon = (): null => {
       if (pending) pot.restore(pending);
@@ -696,13 +733,17 @@ export class ZombieField {
     const mutations = def.mutation
       ? addMutationRef({ mask: result.mutation, ids: result.mutationIds ?? [] }, def.mutation)
       : { mask: result.mutation, ids: result.mutationIds ?? [] };
-    const data = makeOwned(`z${this.nextId++}`, def, col, row, 0, mutations.mask, result.color, undefined, mutations.ids);
+    // `result.name` is slot 1's name (see ZombiePot.preview). A job started before the
+    // pot recorded it passes undefined, which is the old id-derived random name.
+    const data = makeOwned(
+      `z${this.nextId++}`, def, col, row, 0, mutations.mask, result.color, result.name, mutations.ids
+    );
     // A combine result is granted via onCombineCollect (server validates it against the
-    // two parents), NOT the generic onGrant â€” so suppress the latter while adding.
+    // two parents), NOT the generic onGrant — so suppress the latter while adding.
     this.combining = true;
     if (toCrypt) this.stored.push(data);
     else this.addUnit(data);
-    this.state.recordZombieDiscovered(data.key);
+    this.state.recordZombieDiscovered(data.key, data.mutation);
     this.syncCount();
     this.combining = false;
     if (this.rosterLive) {
@@ -719,6 +760,10 @@ export class ZombieField {
         this.onGrant?.({ id: data.id, key: data.key, mutation: data.mutation, invasions: data.invasions });
       }
     }
+    // Lifetime tally, counted LAST: every failure path above either returns null or
+    // goes through abandon(), so reaching here is the one place a Pot child is
+    // certainly the player's — a refused hand-off puts the job back in the Pot.
+    this.state.recordZombieCombined();
     return data;
   }
 
@@ -875,17 +920,17 @@ export class ZombieField {
 
   /** Reconcile local Pot jobs against the authoritative roster, in both directions.
    *
-   * RECOVER â€” a surviving parent reservation (`lockedByRaid = "pot:<id>"`) proves a
+   * RECOVER — a surviving parent reservation (`lockedByRaid = "pot:<id>"`) proves a
    * combine started, so rebuild the job even if the local presentation lost it.
    * Recovered jobs are immediately ready: the reservation does not own the timer.
    *
-   * RETIRE â€” the inverse, and the one whose absence used to destroy zombies. A job
+   * RETIRE — the inverse, and the one whose absence used to destroy zombies. A job
    * this client believes in but the server has no reservation for can never be
    * collected, yet its two parent ids stay hidden from the presentation for as long as
    * it exists (see the callers of `pendingPotParents`). The result was two zombies
    * that were neither in the Pot nor anywhere else. Retiring the job releases them.
    *
-   * `settled` must be true â€” with a command queued or in flight the roster predates
+   * `settled` must be true — with a command queued or in flight the roster predates
    * this client's own work, and a start that has not been sent yet would look exactly
    * like a job the server never got. Only jobs flagged `reserved` are retired, because
    * an older job legitimately has no reservation and the server still honours it
@@ -916,7 +961,7 @@ export class ZombieField {
         [current.parentAId, current.parentBId].every((id) => parents.some((u) => u.id === id));
       // SLOT ORDER IS NOT IN THE ROSTER. It arrives in CREATION order, so reading slot 1
       // off it swaps the Pot's two slots whenever the player fed in the NEWER zombie
-      // first â€” and slot 1 is what decides the result species (see selectCombineSpecies).
+      // first — and slot 1 is what decides the result species (see selectCombineSpecies).
       // Keep the order this client recorded when the job started; only a job this client
       // no longer holds falls back to roster order, and the server no longer takes the
       // collecting client's word for it either (engine.ts `potSlots`).
@@ -1047,6 +1092,10 @@ export class ZombieField {
     } finally {
       this.rosterLive = live;
     }
+    // Anyone bought back is not dead after all, so they leave the graveyard. This
+    // runs for every id offered, not just the ones re-added: a unit already in the
+    // roster (`owned` above) was revived by another path and must not stay buried.
+    if (casualties.length) this.onRevived?.(casualties.map((zombie) => zombie.id));
   }
 
   /** Reconcile a server roster without rebuilding unchanged actors. `aliases` maps
@@ -1082,12 +1131,12 @@ export class ZombieField {
         const def = this.resolve(save.key);
         if (!def) continue;
         // No local counterpart means the server is handing us a unit this client
-        // never placed â€” a Black Market purchase, most often. It has no position
+        // never placed — a Black Market purchase, most often. It has no position
         // of its own, so it joins the player at the farmer instead of the corner.
         const home = source ?? this.arrivalTile();
         // Prefer the server's tint. A unit with no local counterpart is exactly the
-        // case the old code could not colour â€” a Black Market purchase or a cancelled
-        // listing coming home under a new id â€” and it used to fall back to the
+        // case the old code could not colour — a Black Market purchase or a cancelled
+        // listing coming home under a new id — and it used to fall back to the
         // species' catalog colour, permanently, once the next save was written.
         const data = makeOwned(save.id, def, home.col, home.row, save.invasions, save.mutation,
           save.color ?? source?.color, source?.name, source?.mutationIds,
@@ -1101,13 +1150,13 @@ export class ZombieField {
         else this.addUnit(data);
         // A server unit with no local counterpart arriving AFTER go-live is a real
         // acquisition this client never created itself (e.g. a Black Market
-        // purchase reconciled from the authoritative roster) â€” count it for the
+        // purchase reconciled from the authoritative roster) — count it for the
         // Almanac. Pre-live reconciles are the initial bootstrap, not new grants.
         // `restored` units are the exception: the server is handing back a zombie
         // this player escrowed on a Black Market listing they then cancelled. It
         // carries a fresh unit id but it is the same zombie they already own, so
         // crediting it would let list/cancel cycles farm the lifetime count.
-        if (this.rosterLive && !source && !save.restored) this.state.recordZombieDiscovered(data.key);
+        if (this.rosterLive && !source && !save.restored) this.state.recordZombieDiscovered(data.key, data.mutation);
       }
     } finally {
       this.harvesting = false;

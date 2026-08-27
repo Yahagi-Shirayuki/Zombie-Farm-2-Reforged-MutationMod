@@ -28,6 +28,21 @@ EFFECTS = {
     7: {"key": "zombieStrength", "amount": 0.10},
     8: {"key": "invasionCooldown", "amount": -0.25},
     9: {"key": "invasionCooldown", "amount": -0.25},
+    # OURS. ZF2 shipped every head from the Jester onward as a pure cosmetic, with no
+    # `info` line to carry a bonus. The ninja masks now move the FARMER rather than the
+    # farm — the only bonus in the set that does. Mirrored by HEAD_EFFECTS in
+    # src/farmer.ts, which is what the game actually reads; this keeps the Market card's
+    # advertised line and the live effect from drifting apart.
+    23: {"key": "farmerSpeed", "amount": 0.25},  # Ninja Male
+    22: {"key": "farmerSpeed", "amount": 0.25},  # Ninja Female
+}
+
+# Description overrides for the heads whose bonus is ours, since the source has no
+# `info` line for them. Written in the voice of the shipped ones ("+10% more gold for
+# harvesting"), which is what the Market card prints verbatim.
+DESCRIPTIONS = {
+    23: "+25% farmer movement speed",
+    22: "+25% farmer movement speed",
 }
 
 heads = []
@@ -49,7 +64,8 @@ for entry in market:
     if "cost" in entry:
         head["cost"] = int(entry["cost"])
         head["brains"] = bool(entry.get("brainsNeeded", False))
-    info = " ".join(filter(None, [entry.get("info"), entry.get("info2")]))
+    info = DESCRIPTIONS.get(head_id) or " ".join(
+        filter(None, [entry.get("info"), entry.get("info2")]))
     if info:
         head["description"] = info
     if head_id in EFFECTS:

@@ -19,7 +19,12 @@ import json
 import os
 import shutil
 
-from reforge_economy import brain_price
+from PIL import Image
+
+import prep_assets
+from reforge_economy import (
+    EXTRA_CLIMATES, EXTRA_SIZE_TIERS, LEVEL_CAP, brain_price,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -39,6 +44,62 @@ def copy_icon(sheet, dest_name):
     os.makedirs(ICON_DIR, exist_ok=True)
     shutil.copyfile(src, os.path.join(ICON_DIR, dest_name))
     return dest_name
+
+
+def derived_climate_icon(terrain):
+    """Market thumbnail for a Reforged-added skin: the grassy icon put through the
+    exact same recolour its ground tiles get, so the card matches the terrain."""
+    spec = prep_assets.DERIVED_GROUND_ROWS.get(terrain)
+    if not spec:
+        return ""
+    src = os.path.join(ICON_DIR, "upgrade_ground_grassy.png")
+    if not os.path.exists(src):
+        print(f"  WARN no grassy icon to derive {terrain} from")
+        return ""
+    dest = f"upgrade_ground_{terrain}.png"
+    prep_assets.recolor_terrain(
+        Image.open(src).convert("RGBA"), spec["hue"], spec["sat"], spec["val"]
+    ).save(os.path.join(ICON_DIR, dest))
+    return dest
+
+
+def check_climates(climates):
+    """Every skin must name a terrain the ground slicer actually emits, or the
+    Market sells a card that silently does nothing (Field.setClimate no-ops on an
+    unknown terrain key)."""
+    known = set(prep_assets.GROUND_ROWS) | set(prep_assets.DERIVED_GROUND_ROWS)
+    for c in climates:
+        if c["terrain"] not in known:
+            raise ValueError(f"{c['name']}: unknown terrain {c['terrain']!r}")
+    keys = [c["terrain"] for c in climates]
+    if len(keys) != len(set(keys)):
+        raise ValueError(f"duplicate climate terrains: {keys}")
+
+
+def check_size_progression(tiers):
+    """Assert the farm-size ladder keeps the source's own progression.
+
+    The source ships three tiers and Reforged appends more (EXTRA_SIZE_TIERS); the
+    added ones are only defensible if they continue the existing curve rather than
+    inventing a price. Fail loudly here rather than let an off-pattern tier ship.
+    """
+    for prev, cur in zip(tiers, tiers[1:]):
+        where = f"{cur['name']} ({cur['size']}x{cur['size']})"
+        if cur["size"] - prev["size"] != 10:
+            raise ValueError(f"{where}: size must step by 10, got +{cur['size'] - prev['size']}")
+        if cur["level"] - prev["level"] != 10:
+            raise ValueError(f"{where}: level must step by 10, got +{cur['level'] - prev['level']}")
+        if cur["gold"] != prev["gold"] * 5:
+            raise ValueError(f"{where}: gold must be 5x the previous tier "
+                             f"({prev['gold'] * 5}), got {cur['gold']}")
+        if cur["level"] > LEVEL_CAP:
+            raise ValueError(f"{where}: level {cur['level']} is past the cap {LEVEL_CAP}")
+    # Brains rise by a doubling step (+2, +4, +8, ...), so compare second differences.
+    steps = [cur["brains"] - prev["brains"] for prev, cur in zip(tiers, tiers[1:])]
+    for i, (a, b) in enumerate(zip(steps, steps[1:])):
+        if b != a * 2:
+            raise ValueError(f"{tiers[i + 2]['name']}: brains step must double "
+                             f"({a} -> {a * 2}), got {b}")
 
 
 def main():
@@ -73,6 +134,16 @@ def main():
             "gold": gold, "brains": brains, "info": r["info"], "icon": farm_icon,
         })
 
+    # Reforged's own tiers, continuing the ladder past where the source stops.
+    for extra in EXTRA_SIZE_TIERS:
+        map_size.append({
+            "name": extra["name"], "size": extra["size"], "level": extra["level"],
+            "gold": extra["gold"], "brains": extra["brains"],
+            "info": f"{extra['size']}x{extra['size']}", "icon": farm_icon,
+        })
+    map_size.sort(key=lambda m: m["size"])
+    check_size_progression(map_size)
+
     # --- Climate/ground skins (emitted for later; not wired into UI yet). ---
     # Source terrain tileset (tex0000.png) rows, one block of 5 GIDs per climate,
     # in the SAME order the ground tiles were sliced by prep_assets.slice_ground.
@@ -96,6 +167,18 @@ def main():
             "name": e["name"], "climateGID": gid, "level": int(e["level"]),
             "gold": int(e["cost"]), "icon": icon, "terrain": terrain,
         })
+
+    # Reforged's own skins, on terrain rows prep_assets derives rather than slices.
+    # climateGID 0 marks "no source entry" — the field is vestigial (nothing at
+    # runtime reads it; a climate card previews the ground tile itself), but the
+    # shape stays uniform across the catalog.
+    for extra in EXTRA_CLIMATES:
+        climate.append({
+            "name": extra["name"], "climateGID": 0, "level": extra["level"],
+            "gold": extra["gold"], "icon": derived_climate_icon(extra["terrain"]),
+            "terrain": extra["terrain"],
+        })
+    check_climates(climate)
 
     os.makedirs(os.path.dirname(OUT_JSON), exist_ok=True)
     # indent=1 and no trailing newline: matches the committed asset (and the other

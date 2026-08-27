@@ -2,11 +2,14 @@ import type {
   BalanceProjection,
   CommandResult,
   FarmPlotProjection,
+  GameplayCommand,
   GameplayProjection,
   QuestProjection,
   RosterUnitProjection,
+  FallenUnitProjection,
   SequencedCommand,
 } from "../../../src/net/protocol";
+import { EPIC_BOSS_TOKEN_GRANT_LIMIT } from "../../../src/net/protocol";
 import plantRows from "../../../public/assets/plants.json";
 import zombieRows from "../../../public/assets/zombies.json";
 import zombieModelRows from "../../../public/assets/zombie/models.json";
@@ -16,8 +19,8 @@ import objectRows from "../../../public/assets/placeables.json";
 import { boostEcon, boostKeyForName, MAX_STACK } from "../boostCatalog";
 import { cropEcon } from "../catalog";
 import { dropEcon } from "../raidLootCatalog";
-import { levelForXp, levelUpBrains } from "../levels";
-import { objectBuyXp, objectEcon, objectRefund } from "../objectCatalog";
+import { XP_THRESHOLDS, levelForXp, levelUpBrains } from "../levels";
+import { BASE_SHED_SLOTS, objectBuyXp, objectEcon, objectSellGold } from "../objectCatalog";
 import { planClaim } from "../storage";
 import { QUEST_DEFINITIONS, QUEST_REWARD } from "../questCatalog";
 import { isHeadlessZombie, legalMutation, zombieSell } from "../rosterCatalog";
@@ -26,7 +29,6 @@ import { zombieCropEcon } from "../zombieCropCatalog";
 import {
   activeBonusHeadId, farmerGold, farmerHeadHasEffect, farmerHeadXp, farmerZombieGrowMs,
 } from "../../../src/farmer";
-import { dropsEpicBossToken } from "../../../src/epicBoss/tokens";
 import {
   isPowderMachineKey,
   GRIND_CRYSTAL_CAPACITY,
@@ -50,9 +52,17 @@ import {
 } from "../../../src/zombieColorMixerBucket";
 import { combineMutationSets } from "../../../src/zombie/mutations";
 import { resolveCropMutationSet, plotsTouch } from "../../../src/zombie/cropMutations";
+
 import { createCombineRandom, isCombinePromotion, selectCombineSpecies } from "../../../src/zombie/combineSpecies";
 import { harvestXp, plowXp } from "../../../src/farmRewards";
+import { epicBossById, epicBossHp, epicBossUnlockLevel } from "../../../src/epicBoss/catalog";
+import { bossForFavoriteCrop, luresEpicBoss } from "../../../src/epicBoss/favoriteCrops";
+import { reopenEpicQuests } from "../../../src/epicBoss/rewards";
 import { questSubjectMatches } from "../../../src/quest/matching";
+import {
+  applyPeriodicEvents, claimPeriodicQuest, refreshPeriodicState, xpToNextLevel,
+} from "../../../src/quest/periodic/generate";
+import type { PeriodicQuestState } from "../../../src/quest/periodic/types";
 import { objectQuestAliases } from "../../../src/quest/objectVariants";
 import { decorAvailable } from "../../../src/decorThemes";
 import {
@@ -62,7 +72,45 @@ import {
 import { encodeReceivedZombie, parseReceivedZombie } from "../../../src/zombie/receivedReward";
 
 export const MAX_FUNCTIONAL_OBJECTS = 512;
+
+/** The only shape a CLIENT-proposed object instance id may take. Every path that lets
+ *  the client name an object it is creating runs its id through this; anything else is
+ *  replaced with a server-minted one. Ids reach other players through farm visits and
+ *  are used as keys throughout the client, so the document must never carry an
+ *  arbitrary 128-character string just because a command field was typed `string`. */
+const CLIENT_INSTANCE_ID = /^[A-Za-z0-9_-]{1,80}$/;
+/** How many UNENSHRINED fallen zombies an account keeps. Oldest are dropped, so the
+ *  losses a player is most likely to still want a statue for survive. Zombies already
+ *  standing on one are never counted or dropped — a memorial is permanent, and the
+ *  cap exists to bound a list nobody is looking at, not to erase a monument.
+ *  Mirrored by MAX_REMEMBERED_FALLEN on the client. */
+export const MEMORIAL_GRAVEYARD_CAP = 60;
+/** SQL literal that empties a spent fight config, for interpolation into an UPDATE
+ *  that is already setting `finished_at`. The pinned config of a raid or Epic Boss
+ *  encounter is by far the largest thing this server stores — ~14 KB a session, and
+ *  56% of the whole database at beta volume — but it is read exactly once, by the
+ *  finish path, and only while `finished_at IS NULL`: a settled session answers from
+ *  `result_json`, and an already-finished one answers 409. Neither reads it again, so
+ *  every path that finishes a session drops it in the same statement. That makes the
+ *  30-day purge a backstop rather than the only thing bounding these tables.
+ *
+ *  Clearing it can only ever race with a live read, and that fails closed: `{}` parses
+ *  but does not survive the playerUnits/enemyUnits shape check, so the session closes
+ *  as `bad_session_config` instead of settling on an empty fight.
+ *
+ *  NOT for pvp_sessions_v3 — a PvP config outlives its fight on purpose, so the
+ *  defender can re-simulate the attack on their farm (see migration 0055). */
+export const CONFIG_SPENT = "'{}'";
 export const PLOT_SIZE = 4;
+/** How many plots the LARGEST farm on the ladder holds — plots are PLOT_SIZE square
+ *  and may not overlap, so a size-N farm fits floor(N / PLOT_SIZE) of them per side.
+ *
+ *  DERIVED, never a literal. It used to be hard-coded at 225, which was exactly right
+ *  for the 60x60 farm that was then the top tier and became a trap the moment 70x70
+ *  was added: the farm grew, the cap did not, and the last 64 plots of a 1,250,000-gold
+ *  upgrade could never be plowed — every attempt rejected `farm_full` and rolled back.
+ *  `validCoord` already keeps a plot inside the account's OWN farm, so this is the
+ *  ceiling across every farm size rather than a per-account limit. */
 export const MAX_FARM_PLOTS = Math.floor(MAX_FARM_SIZE / PLOT_SIZE) ** 2;
 export const GROW_GRACE_MS_V3 = 15_000;
 export const PLOW_COST_V3 = 10;
@@ -119,7 +167,7 @@ const zombieRules = zombieRows as ZombieRule[];
 const zombieNames = new Map(zombieRules.map((r) => [r.key, r.name]));
 const zombieMutations = new Map(zombieRules.map((r) => [r.key, r.mutation ?? 0]));
 const zombieModelColors = new Map(
-  Object.entries(zombieModelRows as Record<string, ZombieModelRule>).flatMap(([key, model]) =>
+  Object.entries(zombieModelRows as unknown as Record<string, ZombieModelRule>).flatMap(([key, model]) =>
     Array.isArray(model.color) && model.color.length === 3 ? [[key, model.color] as const] : []
   )
 );
@@ -227,6 +275,43 @@ const baseMausoleumSlots = mausoleumTiers[0]?.slots ?? 0;
 /** The tier that follows a building with `slots` capacity (undefined at the top). */
 const nextMausoleumTier = (slots: number) => mausoleumTiers.find((tier) => tier.slots > slots);
 
+/** The Memorial Statue: the one functional object bought in quantity, sellable, and
+ *  able to hold a fallen zombie. Keyed off the catalog so the rule follows the item
+ *  rather than being spelled out at every site that has to know about it. */
+const isMemorial = (catalogKey: string) => catalogKey === "memorialStatue";
+
+/** Take whoever stands on statue `instanceId` back off it. Returns false when the
+ *  plinth was already bare, which is what makes memorial.clear reject a no-op.
+ *
+ *  `now` stamps `releasedAt`, which is what the graveyard's cap orders by from here
+ *  on: a player enshrines a memorable — and so usually OLD — loss, and ranking it by
+ *  `diedAt` on the way back would drop it straight off the end of a busy farm's list.
+ *  It rejoins at the top and ages out behind the next MEMORIAL_GRAVEYARD_CAP losses. */
+function releaseMemorial(
+  state: MutableGameplayState, instanceId: string, now: number
+): boolean {
+  const occupant = (state.fallen ?? []).find((f) => f.memorialObjectId === instanceId);
+  if (!occupant) return false;
+  occupant.memorialObjectId = undefined;
+  occupant.releasedAt = now;
+  return true;
+}
+
+/** Trim a client-supplied memorial name to the same rule the roster uses (24 code
+ *  points, no control characters). Returns null when nothing usable is left, which
+ *  keeps whatever name the row already had. */
+function memorialName(raw: string | undefined): string | null {
+  if (typeof raw !== "string") return null;
+  // Filtered by code point rather than by regex so the source carries no literal
+  // control characters of its own.
+  const printable = [...raw].filter((ch) => {
+    const code = ch.charCodeAt(0);
+    return code >= 0x20 && code !== 0x7f;
+  }).join("").replace(/\s+/g, " ").trim();
+  const cleaned = [...printable].slice(0, 24).join("");
+  return cleaned || null;
+}
+
 const farmerHeads = new Map(farmerRows.heads.map((head) => [head.id, head]));
 /** The head supplying bonuses: the pinned one, else whichever is being worn. */
 const bonusHeadOf = (state: { farmerHeadId: number; farmerBonusHeadId?: number | null }) =>
@@ -240,6 +325,10 @@ export interface EngineOptions {
   now: number;
   random?: () => number;
   id?: () => string;
+  /** Seeds the daily/weekly quest roll, so two farms are not handed the same board on
+   *  the same day. Optional only so the many unit tests that drive the engine directly
+   *  need not invent one — every real call site passes the account id. */
+  accountId?: string;
 }
 
 export interface EngineResult {
@@ -250,6 +339,7 @@ export interface EngineResult {
   farmChanged: boolean;
   objectChanged: boolean;
   questChanged: boolean;
+  periodicChanged: boolean;
   balanceBefore: BalanceProjection;
 }
 
@@ -280,6 +370,26 @@ function overlapsExistingPlot(
 function isRipe(plot: Extract<FarmPlotProjection, { state: "planted" }>, now: number): boolean {
   return now - plot.plantedAt >= Math.max(0, plot.growMs - GROW_GRACE_MS_V3);
 }
+
+/** How many ITEMS the account's shed holds. Derived from the placed shed's tier, with
+ *  the free starter Shabby Shed as the floor — the same rule the client's own cap uses
+ *  (see `itemCap` in main.ts), so this can only ever refuse what the client refuses.
+ *
+ *  A shed cannot itself be put away (`object.status` rejects any storageSlots object),
+ *  so "placed" and "owned" are the same set here; reading the tier rather than a stored
+ *  number is what stops an edited client declaring its own capacity. */
+function shedCapacity(state: MutableGameplayState): number {
+  let cap = BASE_SHED_SLOTS;
+  for (const obj of state.objects.objects) {
+    if (obj.status !== "placed") continue;
+    cap = Math.max(cap, objectRules.get(obj.catalogKey)?.storageSlots ?? 0);
+  }
+  return cap;
+}
+
+/** Items currently occupying shed slots (stacked counts, all keys). */
+const storedItemTotal = (state: MutableGameplayState): number =>
+  Object.values(state.storage.stored).reduce((total, count) => total + Math.max(0, count), 0);
 
 function placedCapacity(state: MutableGameplayState): { army: number; storage: number } {
   let army = state.zombieMax;
@@ -378,13 +488,60 @@ function adjacentCropKeys(
   return keys;
 }
 
+/** Roll a just-harvested crop for an Epic Boss LURE: the rare chance that this crop's
+ *  favourite boss (src/epicBoss/favoriteCrops.ts) turns up and starts its own event,
+ *  free, when none is running.
+ *
+ *  UNLIKE the Boss Token roll two functions down, this one is the SERVER'S. A token is
+ *  worth a single brain, which is why the client is allowed to mint its own and merely
+ *  report them; a lure is worth the boss's whole activation price AND reopens its prize
+ *  quest chain, signature zombie included. That is squarely the kind of grant this
+ *  project keeps on the authoritative side, and the roll costs nothing extra here — the
+ *  harvest is already being replayed and grow-gated against the server's own clock.
+ *
+ *  The gates are the same three the market card enforces, in the order that makes the
+ *  cheapest check first: no event already running, the crop is somebody's favourite,
+ *  and that somebody is unlocked at this account's level. A locked boss's crop is a
+ *  silent no-op rather than a fallback to some other boss — which boss you might draw
+ *  is supposed to be the player's planting decision, not the game's consolation prize.
+ *
+ *  Returns whether an event was started; the caller uses it only to stop rolling. */
+function maybeLureEpicBoss(
+  state: MutableGameplayState, cropKey: string, options: Required<EngineOptions>
+): boolean {
+  const run = state.epicBoss;
+  if (run && !run.completedAt && run.expiresAt > options.now) return false;
+  const def = epicBossById(bossForFavoriteCrop(cropKey));
+  if (!def || levelForXp(state.balance.xp) < epicBossUnlockLevel(def)) return false;
+  const econ = cropEcon(cropKey);
+  if (!econ || !luresEpicBoss(econ.growMs, options.random)) return false;
+  const hp = epicBossHp(def, 1);
+  state.epicBoss = {
+    runId: options.id(), bossId: def.id, activatedAt: options.now,
+    expiresAt: options.now + def.durationMs, level: 1, maxHp: hp, currentHp: hp,
+    encounterStartedAt: 0, retryReadyAt: 0, tokenCount: 0, completedAt: 0,
+    attackOrder: [],
+    // What the client announces on: a run carrying a crop is one the player never
+    // asked for. A bought run leaves this unset (v3/epicBoss.ts activate).
+    startedCrop: cropKey,
+  };
+  // Exactly what a paid activation does, and for the same reason — a new run re-offers
+  // this boss's chain so its prizes are earnable again. Skipped when nothing of this
+  // boss's was ever finished, which is what reopenEpicQuests returning null means.
+  const reopened = reopenEpicQuests(state.quests, def.questIds);
+  if (reopened) {
+    state.quests.completed = reopened.completed;
+    state.quests.progress = reopened.progress;
+  }
+  return true;
+}
+
 function rewardHarvest(
   state: MutableGameplayState,
   key: string,
   plot: Extract<FarmPlotProjection, { state: "planted" }>,
   makeId: () => string,
   created: string[],
-  now: number,
   random: () => number,
   mutationCropKeys: readonly string[] = []
 ): { ok: true; event: QuestEvent } | { ok: false; error: string } {
@@ -433,11 +590,10 @@ function rewardHarvest(
     state.powderStorage = sanitizePowderStorage(state.powderStorage);
     state.powderStorage.crystals[crystal.color] += crystal.count;
   }
-  const run = state.epicBoss;
-  if (run && !run.completedAt && run.expiresAt > now &&
-      dropsEpicBossToken(plot.growMs, harvestValue, random)) {
-    run.tokenCount = (run.tokenCount ?? 0) + 1;
-  }
+  // Boss Tokens are NOT rolled here. The client rolls them at the moment it harvests
+  // and reports the result with `epicBoss.token`; see that command and the note on it
+  // in protocol.ts for why the authoritative roll was given up. This fork used to roll
+  // them here as well — keeping both would have paid the token twice.
   return { ok: true, event: { type: "kCropHarvestedNotification", subject: plantNames.get(key) ?? key } };
 }
 
@@ -520,6 +676,9 @@ export function applyQuestEvents(
         received: options.storage?.received,
       });
     }
+    // Paid ON TOP of whichever branch above ran. Only the Reforged achievements carry
+    // one; every imported quest has it at zero.
+    if (def.rewardBrains) balance.brains += def.rewardBrains;
   }
 
   quests.completed = [...completed];
@@ -531,53 +690,72 @@ export function applyQuestEvents(
   }));
 }
 
+/** The daily/weekly document, materialised on first touch. It is optional on the
+ *  projection (a Worker predating the feature omits it), so everything that reaches for
+ *  it goes through here rather than assuming it exists. */
+export function periodicStateOf(state: MutableGameplayState): PeriodicQuestState {
+  if (!state.periodicQuests) state.periodicQuests = { version: 0, daily: null, weekly: null };
+  return state.periodicQuests;
+}
+
+/** Roll the daily/weekly sets forward to `now` at the player's current level, which is
+ *  what generates a new day's quests and discards an unclaimed old day's. Returns true
+ *  if a set was replaced. */
+export function refreshPeriodic(
+  state: MutableGameplayState,
+  accountId: string,
+  now: number
+): boolean {
+  const level = levelForXp(state.balance.xp);
+  return refreshPeriodicState(periodicStateOf(state), {
+    accountId,
+    level,
+    xpToNext: xpToNextLevel(level, XP_THRESHOLDS),
+    now,
+  });
+}
+
 function reject(sequence: number, error: string): CommandResult {
   return { sequence, status: "rejected", error };
 }
 
+/** Apply a bulk farm command as its individual plots, in order, under exactly the
+ *  single-plot rules — including the ones that depend on what the earlier plots in the
+ *  same command already did (gold spent, XP gained and the level it may cross, the plot
+ *  count against MAX_FARM_PLOTS, overlap against soil this command just laid).
+ *
+ *  A plot the server refuses is skipped, not fatal: a drag-paint stroke that runs out of
+ *  gold halfway, or crosses ground that changed under it, should still lay the soil it
+ *  can afford. The command as a WHOLE is only rejected when nothing at all applied, so
+ *  the client's existing rejection toast still fires for the cases the player must see
+ *  (no funds, wrong level). A partial refusal is reported through `rejectedPlots` so it
+ *  can be summarised once instead of once per plot.
+ *
+ *  An empty list is `applied`: there is nothing to refuse, and treating "no work" as a
+ *  failure would surface an error for a command the client should never have sent. */
 function applyBulkFarm(
   state: MutableGameplayState,
   sequence: number,
   options: Required<EngineOptions>,
   events: QuestEvent[],
   created: string[],
-  commands: Extract<GameplayCommand, { type: "farm.plow" | "farm.plant" }>[]
+  commands: GameplayCommand[]
 ): CommandResult {
-  if (!commands.length) return reject(sequence, "no_effect");
   let applied = 0;
-  let rejected = 0;
-  let rejectedPlotError = "";
-  const createdBefore = created.length;
-  const createdZombieSources: { id: string; oc: number; or: number }[] = [];
-  for (const command of commands.slice(0, MAX_FARM_PLOTS)) {
-    const createdAt = created.length;
-    const result = applyOne(
-      state,
-      { sequence, command },
-      options,
-      events,
-      created,
-    );
-    if (result.status === "applied") {
-      applied++;
-      if (result.createdZombieSources?.length) createdZombieSources.push(...result.createdZombieSources);
-      else if (created.length > createdAt) {
-        createdZombieSources.push({ id: created[created.length - 1], oc: command.oc, or: command.or });
-      }
-    } else {
-      rejected++;
-      rejectedPlotError ||= result.error ?? "no_effect";
+  let rejectedPlots = 0;
+  let firstError = "";
+  for (const command of commands) {
+    const result = applyOne(state, { sequence, command }, options, events, created);
+    if (result.status === "applied") applied++;
+    else {
+      rejectedPlots++;
+      firstError ||= result.error ?? "no_effect";
     }
   }
-  if (!applied) return reject(sequence, rejectedPlotError || "no_effect");
-  const createdIds = created.slice(createdBefore);
-  return {
-    sequence,
-    status: "applied",
-    ...(createdIds.length ? { createdIds } : {}),
-    ...(createdZombieSources.length ? { createdZombieSources } : {}),
-    ...(rejected ? { rejectedPlots: rejected, rejectedPlotError: rejectedPlotError || "no_effect" } : {}),
-  };
+  if (!applied && rejectedPlots) return reject(sequence, firstError);
+  return rejectedPlots
+    ? { sequence, status: "applied", rejectedPlots, rejectedPlotError: firstError }
+    : { sequence, status: "applied" };
 }
 
 function applyOne(
@@ -616,12 +794,8 @@ function applyOne(
     case "farm.plant_many":
       return applyBulkFarm(state, sequence, options, events, created,
         command.plots.map((plot) => ({
-          type: "farm.plant",
-          oc: plot.oc,
-          or: plot.or,
-          cropKey: command.cropKey,
-          fertilized: plot.fertilized,
-          variant: plot.variant,
+          type: "farm.plant", oc: plot.oc, or: plot.or,
+          cropKey: command.cropKey, fertilized: plot.fertilized,
         })));
     case "farm.plant": {
       if (!validCoord(command.oc, state.farmSize) || !validCoord(command.or, state.farmSize)) return reject(sequence, "bad_coord");
@@ -671,9 +845,13 @@ function applyOne(
       if (!plot || plot.state !== "planted") return reject(sequence, "nothing_planted");
       if (!isRipe(plot, options.now)) return reject(sequence, "not_grown");
       const createdBefore = created.length;
-      const harvest = rewardHarvest(state, plot.cropKey, plot, options.id, created, options.now,
+      const harvest = rewardHarvest(state, plot.cropKey, plot, options.id, created,
         options.random, adjacentCropKeys(state.farm.plots, command.oc, command.or));
       if (!harvest.ok) return reject(sequence, harvest.error);
+      // After the harvest is known to have applied: a rejected one (a full army on a
+      // zombie crop) leaves the crop in the ground, and a crop still standing has not
+      // been pulled, so it cannot have lured anything.
+      if (!plot.zombie) maybeLureEpicBoss(state, plot.cropKey, options);
       state.farm.plots[key] = { state: "spent", zombie: plot.zombie };
       events.push(harvest.event);
       const createdIds = created.slice(createdBefore);
@@ -763,9 +941,13 @@ function applyOne(
         for (const [key, plot] of ripe) {
           const createdAt = created.length;
           const [oc, or] = key.split(":").map(Number);
-          const harvest = rewardHarvest(state, plot.cropKey, plot, options.id, created, options.now,
+          const harvest = rewardHarvest(state, plot.cropKey, plot, options.id, created,
             options.random, adjacentCropKeys(mutationPlots, oc, or));
           if (!harvest.ok) continue; // capacity-full zombie crops remain planted
+          // One sweep can pull dozens of favourite crops. Each rolls, but the first to
+          // hit leaves an event running, and maybeLureEpicBoss refuses from then on —
+          // so a field-wide Insta-Harvest can start one event, never a queue of them.
+          if (!plot.zombie) maybeLureEpicBoss(state, plot.cropKey, options);
           if (created.length > createdAt) {
             createdZombieSources.push({ id: created[created.length - 1], oc, or });
           }
@@ -829,14 +1011,18 @@ function applyOne(
       const buySlots = objectRules.get(command.catalogKey)?.zombieSlots ?? 0;
       if (buySlots > 0 && buySlots !== baseMausoleumSlots) return reject(sequence, "bad_item");
       const isZombiePot = command.catalogKey === "zombieCombiner";
+      // `functional` normally means one per farm. Exceptions, all named: the Zombie Pot's
+      // three, the Memorial Statue's none at all (one statue per remembered zombie), and
+      // this fork's Powder Machine and dye bucket. Mirrors placeablePurchaseLimit.
       const isPowderMachine = isPowderMachineKey(command.catalogKey);
       const isColorMixerBucket = isZombieColorMixerBucketKey(command.catalogKey);
       const ownedCount = state.objects.objects.filter((object) =>
         object.catalogKey === command.catalogKey).length;
       const purchaseLimit = isZombiePot ? 3
+        : isMemorial(command.catalogKey) ? undefined
         : isPowderMachine ? POWDER_MACHINE_PURCHASE_LIMIT
-          : isColorMixerBucket ? ZOMBIE_COLOR_MIXER_BUCKET_LIMIT
-          : objectRules.get(command.catalogKey)?.category === "functional" ? 1 : undefined;
+        : isColorMixerBucket ? ZOMBIE_COLOR_MIXER_BUCKET_LIMIT
+        : objectRules.get(command.catalogKey)?.category === "functional" ? 1 : undefined;
       if (purchaseLimit !== undefined && ownedCount >= purchaseLimit) {
         return reject(sequence, "object_limit");
       }
@@ -853,7 +1039,7 @@ function applyOne(
           : (econ.brains ? "brains" : "gold");
       if (state.balance[currency] < cost) return reject(sequence, "insufficient");
       const requested = command.clientInstanceId;
-      const instanceId = requested && /^[A-Za-z0-9_-]{1,80}$/.test(requested) &&
+      const instanceId = requested && CLIENT_INSTANCE_ID.test(requested) &&
         !state.objects.objects.some((o) => o.instanceId === requested) ? requested : options.id();
       state.balance[currency] -= cost;
       state.balance.xp += objectBuyXp(
@@ -877,12 +1063,20 @@ function applyOne(
       const obj = state.objects.objects[index];
       const econ = objectEcon(obj.catalogKey);
       if (!econ) return reject(sequence, "bad_item");
-      if (objectRules.get(obj.catalogKey)?.category === "functional") {
+      // Functional buildings are permanent. The Memorial Statue is the exception:
+      // it is bought in quantity, so it has to be reversible.
+      if (objectRules.get(obj.catalogKey)?.category === "functional" && !isMemorial(obj.catalogKey)) {
         return reject(sequence, "not_sellable");
       }
+      // Selling the plinth must not bury the zombie on it a second time.
+      releaseMemorial(state, obj.instanceId, options.now);
       state.objects.objects.splice(index, 1);
       const boughtWithBrains = (obj.purchaseCurrency ?? (econ.brains ? "brains" : "gold")) === "brains";
-      state.balance.gold += objectRefund(obj.purchaseCost ?? econ.cost, boughtWithBrains);
+      // An invasion prize has no purchase price, so it sells for its authored value
+      // rather than the one-gold floor a cost-0 item would otherwise refund.
+      state.balance.gold += objectSellGold(
+        obj.catalogKey, econ, obj.purchaseCost ?? null, boughtWithBrains
+      );
       return { sequence, status: "applied" };
     }
     case "object.upgrade": {
@@ -893,7 +1087,12 @@ function applyOne(
       // therefore has no source instance to mutate. Adopt that existing client id as
       // a placed storage02 while still charging the full catalog price; every later
       // shed tier must continue to upgrade an owned server object.
-      const adoptsFreeStarterShed = !obj && command.catalogKey === "storage02";
+      // Adoption is the one upgrade path that INSERTS a client-named object rather than
+      // mutating one the server already minted, so it takes the same id fence as
+      // object.buy and storage.claim. Without it this was the only door into the object
+      // document that accepted any 128-character string the command carried.
+      const adoptsFreeStarterShed = !obj && command.catalogKey === "storage02" &&
+        CLIENT_INSTANCE_ID.test(command.instanceId);
       if (!obj && !adoptsFreeStarterShed) return reject(sequence, "not_owned");
       if (adoptsFreeStarterShed && state.objects.objects.length >= MAX_FUNCTIONAL_OBJECTS) {
         return reject(sequence, "object_limit");
@@ -945,7 +1144,37 @@ function applyOne(
       if (command.status === "stored" && ((rule?.zombieSlots ?? 0) > 0 || (rule?.storageSlots ?? 0) > 0)) {
         return reject(sequence, "not_storable");
       }
+      // The shed holds a key and a count, so a shelved statue is always a bare
+      // plinth: its occupant goes back to the graveyard rather than into storage.
+      if (command.status === "stored") releaseMemorial(state, obj.instanceId, options.now);
       obj.status = command.status;
+      return { sequence, status: "applied" };
+    }
+    case "memorial.enshrine": {
+      const obj = state.objects.objects.find((o) => o.instanceId === command.instanceId);
+      if (!obj || obj.status !== "placed" || !isMemorial(obj.catalogKey)) {
+        return reject(sequence, "not_owned");
+      }
+      const fallen = (state.fallen ?? []).find((f) => f.id === command.unitId);
+      // Only a zombie this account actually lost, and only one that is not already
+      // standing somewhere. Both are what stop a client inventing an occupant.
+      if (!fallen) return reject(sequence, "not_owned");
+      if (fallen.memorialObjectId) return reject(sequence, "already_enshrined");
+      if ((state.fallen ?? []).some((f) => f.memorialObjectId === command.instanceId)) {
+        return reject(sequence, "statue_occupied");
+      }
+      fallen.memorialObjectId = command.instanceId;
+      // The name is the one client-authored field, exactly as it is for a living
+      // unit. Normalized here so a hostile client cannot park control characters or
+      // a novel on a plinth other players can see.
+      const named = memorialName(command.name);
+      if (named) fallen.name = named;
+      return { sequence, status: "applied" };
+    }
+    case "memorial.clear": {
+      const obj = state.objects.objects.find((o) => o.instanceId === command.instanceId);
+      if (!obj || !isMemorial(obj.catalogKey)) return reject(sequence, "not_owned");
+      if (!releaseMemorial(state, command.instanceId, options.now)) return reject(sequence, "no_effect");
       return { sequence, status: "applied" };
     }
     case "object.harvest_trees": {
@@ -1183,6 +1412,15 @@ function applyOne(
       });
       created.push(id);
       if (!reserved) events.push(combinerCombined(a, b));
+      // EVERY collection, promotion or not, farm or crypt. "Collect N zombies from the
+      // Zombie Pot" needs a signal that fires whenever the Pot hands something over;
+      // the promotion-gated event below cannot serve that, and gating on `stored` would
+      // punish the player for the one destination a full farm leaves them.
+      events.push({
+        type: "kCombinerCollectedNotification",
+        subject: zombieNames.get(resultKey) ?? resultKey,
+        aliases: unitSubjectAliases(zombieNames.get(resultKey) ?? resultKey, mutation, mutantSubjects),
+      });
       // The harvest notification (the "Combine for a <silver>" quests) is only
       // earned by a species neither parent was — re-cooking a silver hands slot 1's
       // own species back and must not close the objective. See isCombinePromotion.
@@ -1302,7 +1540,7 @@ function applyOne(
       }
       if (state.objects.objects.length >= MAX_FUNCTIONAL_OBJECTS) return reject(sequence, "object_limit");
       const requested = command.clientInstanceId;
-      const instanceId = requested && /^[A-Za-z0-9_-]{1,80}$/.test(requested) &&
+      const instanceId = requested && CLIENT_INSTANCE_ID.test(requested) &&
         !state.objects.objects.some((object) => object.instanceId === requested) ? requested : options.id();
       state.storage.received[command.itemName] = have - 1;
       const rule = objectRules.get(plan.objectKey);
@@ -1320,8 +1558,40 @@ function applyOne(
       const from = command.direction === "store" ? state.storage.received : state.storage.stored;
       const to = command.direction === "store" ? state.storage.stored : state.storage.received;
       if ((from[command.itemKey] ?? 0) < command.quantity) return reject(sequence, "insufficient_items");
+      // The shed's item capacity is authoritative here. The retired v2 route enforced
+      // it (planStore, via shedCapacity) and v3 dropped it on the way over, leaving the
+      // cap client-side only — so an edited client could stuff a Shabby Shed with any
+      // number of items and the server would file every one of them.
+      if (command.direction === "store" &&
+          storedItemTotal(state) + command.quantity > shedCapacity(state)) {
+        return reject(sequence, "shed_full");
+      }
       from[command.itemKey] -= command.quantity;
       to[command.itemKey] = (to[command.itemKey] ?? 0) + command.quantity;
+      return { sequence, status: "applied" };
+    }
+    case "quest.periodic_claim": {
+      // The set has already been rolled forward to `now` by applyCommandBatch, so a
+      // quest id belonging to yesterday is simply absent and lands on `no_such_quest`.
+      // That is the expiry rule: an unclaimed daily is worth nothing once its day ends.
+      const claim = claimPeriodicQuest(periodicStateOf(state), command.scope, command.questId);
+      if (!claim.ok) return reject(sequence, claim.error);
+      state.balance.xp += claim.xp;
+      return { sequence, status: "applied" };
+    }
+    case "epicBoss.token": {
+      // Taken on trust. The client rolled this token when it harvested the crop (see
+      // GameplayCommand in protocol.ts); the only things checked are that the event it
+      // names is the one actually running and that the batch cannot carry an absurd
+      // count. A stale or finished run drops the grant rather than moving it forward.
+      const run = state.epicBoss;
+      if (!run || run.runId !== command.runId) return reject(sequence, "inactive");
+      if (run.completedAt || run.expiresAt <= options.now) return reject(sequence, "inactive");
+      const count = command.count ?? 1;
+      if (!Number.isInteger(count) || count < 1 || count > EPIC_BOSS_TOKEN_GRANT_LIMIT) {
+        return reject(sequence, "bad_count");
+      }
+      run.tokenCount = (run.tokenCount ?? 0) + count;
       return { sequence, status: "applied" };
     }
     case "tutorial.complete": {
@@ -1349,7 +1619,13 @@ export function applyCommandBatch(
     now: options.now,
     random: options.random ?? Math.random,
     id: options.id ?? (() => crypto.randomUUID()),
+    accountId: options.accountId ?? "",
   };
+  // Roll the daily/weekly sets over BEFORE anything is applied, so this batch counts
+  // against today's quests and a claim naming yesterday's finds nothing to pay.
+  const periodicBefore = JSON.stringify(state.periodicQuests ?? null);
+  refreshPeriodic(state, required.accountId, required.now);
+  const periodic = periodicStateOf(state);
   const failedResources = new Set<string>();
   const resources = (item: SequencedCommand): string[] => {
     const command = item.command;
@@ -1370,6 +1646,7 @@ export function applyCommandBatch(
     if (command.type === "storage.move") return [`storage:${command.itemKey}`];
     if (command.type === "pet.buy" || command.type === "pet.equip") return [`pet:${command.petKey ?? "active"}`];
     if (command.type === "pet.pen") return ["pet:pen"];
+    if (command.type === "quest.periodic_claim") return [`periodic:${command.scope}:${command.questId}`];
     return [];
   };
   const results: CommandResult[] = [];
@@ -1380,9 +1657,16 @@ export function applyCommandBatch(
       keys.forEach((key) => failedResources.add(key));
       continue;
     }
+    const emitted = events.length;
     const result = applyOne(state, item, required, events, createdZombieIds);
     results.push(result);
     if (result.status === "rejected") keys.forEach((key) => failedResources.add(key));
+    // Count each command's events against the periodic quests IMMEDIATELY rather than
+    // once at the end of the batch. A batch can legitimately hold the harvest that
+    // finishes a daily and the claim for it — the client coalesces up to 30s of play
+    // into one POST — and deferring would make that claim arrive at a quest the server
+    // still saw as incomplete.
+    applyPeriodicEvents(periodic, events.slice(emitted));
   }
   const questChanges = applyQuestEvents(state.balance, state.quests, events, {
     inventory: state.inventory,
@@ -1403,6 +1687,7 @@ export function applyCommandBatch(
     farmChanged: farmBefore !== JSON.stringify(state.farm.plots),
     objectChanged: objectsBefore !== JSON.stringify(state.objects.objects),
     questChanged: questsBefore !== JSON.stringify(state.quests),
+    periodicChanged: periodicBefore !== JSON.stringify(state.periodicQuests ?? null),
     balanceBefore,
   };
 }
@@ -1413,12 +1698,14 @@ export function freshGameplayState(): MutableGameplayState {
     farm: { version: 0, plots: {} },
     objects: { version: 0, objects: [] },
     quests: { version: 0, completed: [], progress: [] } satisfies QuestProjection,
+    periodicQuests: { version: 0, daily: null, weekly: null },
     inventory: {},
     storage: { received: {}, stored: {} },
     powderStorage: sanitizePowderStorage(),
     powderGrinds: {},
     zombieColorDyes: {},
     roster: [] satisfies RosterUnitProjection[],
+    fallen: [] satisfies FallenUnitProjection[],
     farmSize: 30,
     climates: ["grass"],
     farmerHeads: [...freeFarmerHeads],

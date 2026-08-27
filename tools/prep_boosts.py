@@ -53,6 +53,34 @@ def effect_of(e):
 
 FARM_USABLE = {"grow", "harvest", "plow"}
 
+# Consumables Reforged ADDS — they have no Market.json entry, so they are appended after
+# the source pass rather than derived from it. Without this, re-running the tool would
+# silently delete them from boosts.json (the same trap that eats hand edits to plants.json;
+# see tools/reforge_economy.py). Icons are committed under public/assets/boosts/ and are
+# NOT copied from the .app, so the icon-copy step below skips them.
+REFORGED_EXTRA = [
+    # The Invasion Voucher's expensive cousin: skips the same wait, quadruples the brain
+    # and rare-zombie odds, and promotes the fight to ELITE (src/raid/eliteInvasion.ts).
+    {
+        "key": "brain_ticket",
+        "name": "Brain Ticket",
+        "cost": 10000,
+        "brainsNeeded": False,
+        "level": 0,
+        "effect": "other",
+        "amount": 0,
+        "perPurchase": 1,
+        "giftZombieKey": "",
+        "usableOnFarm": False,
+        "info": "Invade now, for brains!",
+        "flavorText": (
+            "Skips the wait AND quadruples the brain and rare-zombie odds — but the "
+            "invasion turns ELITE, and elite invasions hit far harder."
+        ),
+        "icon": "brain_ticket.png",
+    },
+]
+
 
 def main():
     os.makedirs(BOOSTDIR, exist_ok=True)
@@ -137,6 +165,7 @@ def main():
             "icon": icon,
         })
 
+    boosts.extend(dict(extra) for extra in REFORGED_EXTRA)
     boosts.sort(key=lambda b: (not b["usableOnFarm"], b["cost"], b["name"]))
     # Trailing newline so a re-run is byte-for-byte identical to the committed asset.
     with open(os.path.join(OUT, "boosts.json"), "w", encoding="utf-8") as f:

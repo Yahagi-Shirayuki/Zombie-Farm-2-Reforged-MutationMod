@@ -15,7 +15,7 @@ describe("periodic quest clocks", () => {
     expect(dayEndsAt(utc("2026-08-08T13:20:00.000Z"))).toBe(utc("2026-08-09T00:00:00.000Z"));
   });
 
-  // Epoch day 0 was a Thursday, so the +3 shift in weekIndex is the whole trick ?
+  // Epoch day 0 was a Thursday, so the +3 shift in weekIndex is the whole trick —
   // get it wrong and the "week" silently resets on a Thursday.
   it("starts the week on Monday, not on the epoch's Thursday", () => {
     const sunday = utc("2026-08-09T23:00:00.000Z"); // Sunday

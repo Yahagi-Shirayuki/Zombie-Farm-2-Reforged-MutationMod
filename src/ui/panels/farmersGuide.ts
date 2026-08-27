@@ -113,7 +113,11 @@ export const FARMERS_GUIDE_PAGES: GuidePage[] = [
       },
       {
         title: "Epic Bosses",
-        body: "Starting at level 24, you can begin limited 14-day boss events from Market → Epic Boss. Boss damage carries between attempts. Harvesting crops during an event provides fight tokens, which allow you to take another attempt at the boss. Defeating the boss provides escalating special rewards, including extremely powerful special zombies.",
+        body: "Starting at level 24, you can begin limited 14-day boss events from Market → Epic Boss. Boss damage carries between attempts. Harvesting crops during an event provides fight tokens, which allow you to take another attempt at the boss. Defeating the boss provides escalating special rewards, including extremely powerful special zombies. Each boss also has a favourite crop, named on its card — see Favourite Crops below for what planting it does.",
+      },
+      {
+        title: "Favourite Crops",
+        body: "Every Epic Boss has one favourite crop it cannot leave alone. You can see which is which on the boss's card in Market → Epic Boss. A favourite crop does two things, and never both at once. While that boss's event is running, harvesting its favourite crop yields fight tokens more often than any other crop would — about a quarter more — so it is worth keeping some in the ground for the fortnight the event lasts. When no event is running at all, that same harvest instead has a very rare chance of luring its boss onto the farm and starting the event outright, for free, provided you have reached the level that boss unlocks at. Planting is the only thing that steers it: a crop can only ever call its own boss, and a boss you have not unlocked yet will not come. Treat it as a lucky accident rather than a plan — there is nothing to collect and nothing to claim if it does not happen, and the odds are long enough that the surest way to start an event is still to pay for it.",
       },
       {
         title: "Earned Zombies",

@@ -18,7 +18,7 @@ describe("catalog", () => {
       cost: p.cost, sell: p.sell, xp: p.xp, growMs: p.growMs, level: p.level,
     }]));
     expect(CROPS).toEqual(frontend);
-    expect(Object.keys(CROPS)).toHaveLength(35);
+    expect(Object.keys(CROPS)).toHaveLength(42); // 35 vanilla + this fork's 7 crops
     for (const [k, c] of Object.entries(CROPS)) {
       expect(c.cost, k).toBeGreaterThan(0);
       expect(c.sell, k).toBeGreaterThan(0);

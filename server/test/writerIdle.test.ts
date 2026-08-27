@@ -5,6 +5,7 @@ import {
   acquire,
   beginOperation,
   projection,
+  release,
   validate,
 } from "../src/v3/writer";
 
@@ -202,5 +203,39 @@ describe("writer lease idle expiry", () => {
       clientId: "client-new", token: TOKEN, observedGeneration: 3, takeover: false,
     }, NOW);
     expect(result).toMatchObject({ status: 409, error: "operation_in_progress" });
+  });
+
+  it("lets the holder release past an EXPIRED operation marker", async () => {
+    // acquire and beginOperation both treat a marker past its TTL as absent; release
+    // required `active_batch_id IS NULL` outright, so one orphaned marker (a request
+    // that never reached endOperation) made the holder permanently unable to hand its
+    // own lease back — sign-out stopped freeing it and the next device had to wait out
+    // the whole idle window. The statement now carries the same escape, and clears the
+    // dead marker on the way out so nothing inherits it.
+    const { db, calls } = fakeDb({
+      ...(await heldByMe(1_000)),
+      active_batch_id: "batch-orphaned",
+      active_batch_expires_at: NOW - 1,
+    });
+    expect(await release(db, "account", MINE.sessionId, credential, NOW)).toBe(true);
+    const statement = calls.find((call) => call.sql.includes("writer_device_id=NULL"));
+    expect(statement?.sql).toContain("active_batch_expires_at<=?");
+    expect(statement?.sql).toContain("active_batch_id=NULL,active_batch_expires_at=0");
+    expect(statement?.args.at(-1)).toBe(NOW); // the TTL comparison reads "now"
+  });
+
+  it("still refuses to release while an operation is genuinely in flight", async () => {
+    // The escape is about EXPIRED markers only: a live write must keep the lease, or a
+    // release racing its own in-flight batch could hand the account to another device
+    // mid-commit. The fake reports changes for any statement, so this asserts the fence
+    // is present in the SQL rather than the row's answer.
+    const { db, calls } = fakeDb({
+      ...(await heldByMe(1_000)),
+      active_batch_id: "batch-live",
+      active_batch_expires_at: NOW + 30_000,
+    });
+    await release(db, "account", MINE.sessionId, credential, NOW);
+    const statement = calls.find((call) => call.sql.includes("writer_device_id=NULL"));
+    expect(statement?.sql).toContain("(active_batch_id IS NULL OR active_batch_expires_at<=?)");
   });
 });

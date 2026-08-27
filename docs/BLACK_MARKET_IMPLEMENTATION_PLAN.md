@@ -3,10 +3,12 @@
 > **Status (2026-07-25): SHIPPED.** This document is the original design plan and is kept
 > for its rationale, not as a description of current behavior. The feature is live and
 > server-authoritative; the nav reshuffle described below (Social hub, Epic Bosses moved out
-> of the standalone Boss button) is done. Two things have changed since: buy orders can now
-> demand **specific mutations** (`mutation_required`, migration `0030`), and delivery is gated
+> of the standalone Boss button) is done. Three things have changed since: buy orders can now
+> demand **specific mutations** (`mutation_required`, migration `0030`), delivery is gated
 > on the recipient (level 20 for special zombies; levels 1/15/25 for Blue/Red/Silver classes,
-> matching their gravestone unlocks but not requiring grave ownership). For current behavior read
+> matching their gravestone unlocks but not requiring grave ownership), and a post is priced in
+> **gold or brains** over the wider range `1 … 10,000,000` (`currency`, migration `0045`) — so
+> every "brains" below should be read as "the post's own currency". For current behavior read
 > `../SECURITY.md` (Black Market section) and
 > `../server/README.md`; where this plan and those disagree, they win.
 
@@ -405,6 +407,10 @@ friend codes, roster IDs, or escrow internals.
 
 Add Black Market wire types and API functions beside `src/net/api.ts`, but put cache,
 filter, cursor, and action orchestration in a focused `src/social/blackMarket.ts` module.
+
+> **As shipped, that split landed elsewhere:** there is no `src/social/blackMarket.ts`. The
+> client-side gating and mutation matching live in `src/blackMarketRules.ts`, the panel lives in
+> `src/hud.ts`, and the authoritative server logic is `server/src/v3/blackMarket.ts`.
 
 Before a market mutation:
 

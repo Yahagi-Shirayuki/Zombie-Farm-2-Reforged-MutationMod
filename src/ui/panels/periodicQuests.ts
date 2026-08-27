@@ -2,7 +2,7 @@
 //
 // Deliberately NOT part of the catalog quest rail. Those are a progression chain that
 // grants itself the moment the last objective lands; these expire on a clock and have
-// to be collected, so the two need different affordances ? a countdown and a Claim
+// to be collected, so the two need different affordances — a countdown and a Claim
 // button here, neither of which the rail has any use for.
 //
 // Pure presentation: everything it knows arrives in PeriodicQuestPanelView, and the
@@ -23,7 +23,7 @@ const SCOPE_TITLE: Record<PeriodicScope, string> = {
   weekly: "Weekly",
 };
 
-/** "2d 4h" / "4h 12m" / "12m" ? coarse on purpose. A second-by-second countdown on a
+/** "2d 4h" / "4h 12m" / "12m" — coarse on purpose. A second-by-second countdown on a
  *  board that only matters at midnight is noise, and it would force a 1Hz redraw. */
 export function formatPeriodRemaining(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 60_000));
@@ -77,7 +77,7 @@ function questRow(
   if (quest.claimed) {
     const claimed = document.createElement("span");
     claimed.className = "pq-claimed";
-    claimed.textContent = "? Claimed";
+    claimed.textContent = "✓ Claimed";
     action.appendChild(claimed);
   } else if (quest.done) {
     const claim = markPrimary(document.createElement("button"));

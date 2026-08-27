@@ -1,5 +1,7 @@
 import type {
+  BlackMarketBestSale,
   BlackMarketCollectResponse,
+  BlackMarketCurrency,
   BlackMarketFulfillmentsResponse,
   BlackMarketFulfillmentView,
   BlackMarketHistoryEntry,
@@ -27,8 +29,45 @@ import { parseRosterColor, serializeRosterColor } from "./rosterColor";
 
 const ACTIVE_LIMIT = 10 as const;
 const DAILY_LIMIT = 50 as const;
-const MAX_PRICE = 1_000_000;
+const MAX_PRICE = 10_000_000;
 const PAGE_SIZE = 30;
+
+/** How long an OPEN post stays on the board. Past this it is off every board
+ *  immediately (see the freshness clause in `list`) and the next time its creator
+ *  touches the market it is closed and its escrow handed back (`expireStalePosts`).
+ *  Nothing here ever deletes a listing behind a player's back: the zombie or the
+ *  payment always comes home, exactly as a manual cancel would return it. */
+export const POST_LIFETIME_MS = 3 * 86_400_000; // 3 days
+/** How long a post must have sat before its creator may bump it back to the top of
+ *  "newest" (which also restarts its lifetime). Long enough that reposting is
+ *  housekeeping rather than a way to hold the front page. */
+export const REPOST_COOLDOWN_MS = 6 * 3_600_000; // 6 hours
+/** Posts older than this are expired. */
+const freshAfter = (now: number): number => now - POST_LIFETIME_MS;
+/** How many stale posts one sweep closes. A player cannot hold more than
+ *  ACTIVE_LIMIT open at a time, so this covers every case with room to spare. */
+const SWEEP_LIMIT = 16;
+
+/** The `balances` column a post's currency is paid out of and into. Every currency-aware
+ *  statement interpolates this rather than binding it: a column name cannot be a bound
+ *  parameter, so the value must come from the closed union — never from request text.
+ *  `parseCurrency` is the only way an outside string becomes one. */
+const BALANCE_COLUMN: Record<BlackMarketCurrency, "brains" | "gold"> = {
+  BRAINS: "brains",
+  GOLD: "gold",
+};
+/** The error a caller gets when they cannot afford a post, named for what they lack. */
+const INSUFFICIENT: Record<BlackMarketCurrency, string> = {
+  BRAINS: "insufficient_brains",
+  GOLD: "insufficient_gold",
+};
+/** An omitted currency is BRAINS: that is what every post predating gold pricing was,
+ *  and what a client cached from before it still sends. Anything else is a 400 rather
+ *  than a silent fallback — a typo'd currency must not quietly charge the wrong wallet. */
+const parseCurrency = (value: unknown): BlackMarketCurrency | null =>
+  value === undefined || value === "BRAINS" ? "BRAINS" : value === "GOLD" ? "GOLD" : null;
+const currencyOf = (row: { currency?: string | null }): BlackMarketCurrency =>
+  row.currency === "GOLD" ? "GOLD" : "BRAINS";
 
 const placedObjectCases = (field: "armyMax" | "zombieSlots") =>
   (objectRows as Array<{ key: string; armyMax?: number; zombieSlots?: number }>)
@@ -79,7 +118,9 @@ interface OrderRow {
   zombie_key: string;
   mutated_required: number;
   mutation_required: number | null;
+  /** The price, in `currency` — the column name is historical (see schema.sql). */
   price_brains: number;
+  currency: string;
   status: "OPEN" | "FULFILLED" | "CANCELLED";
   created_at: number;
   escrow_mutation: number | null;
@@ -224,9 +265,15 @@ const toView = (row: OrderRow, accountId: string): BlackMarketOrderView => ({
   ...(row.kind === "SELL_ZOMBIE" && parseRosterColor(row.escrow_color)
     ? { color: parseRosterColor(row.escrow_color)! }
     : {}),
+  price: row.price_brains,
+  currency: currencyOf(row),
   priceBrains: row.price_brains,
   status: row.status,
   createdAt: row.created_at,
+  // Both are pure functions of `created_at`, which a repost resets — so the card can
+  // count down to "expires" and to "can be bumped again" without a second round-trip.
+  expiresAt: row.created_at + POST_LIFETIME_MS,
+  repostableAt: row.created_at + REPOST_COOLDOWN_MS,
   creatorName: row.creator_name ?? "Player",
   mine: row.creator_account_id === accountId,
 });
@@ -238,15 +285,23 @@ async function orderRow(db: D1Database, id: string): Promise<OrderRow | null> {
 
 export async function summary(db: D1Database, accountId: string, now: number): Promise<BlackMarketSummary> {
   const [active, daily, held] = await Promise.all([
-    db.prepare("SELECT COUNT(*) n FROM black_market_orders WHERE creator_account_id=? AND status='OPEN'")
-      .bind(accountId).first<{ n: number }>(),
+    // Only posts still on the board count against the active limit. A stale one is
+    // already invisible to every other player and is closed by the next sweep, so
+    // holding a slot for it would lock the player out of the market for three days.
+    db.prepare(`SELECT COUNT(*) n FROM black_market_orders
+      WHERE creator_account_id=? AND status='OPEN' AND created_at>?`)
+      .bind(accountId, freshAfter(now)).first<{ n: number }>(),
     db.prepare("SELECT COUNT(*) n FROM black_market_orders WHERE creator_account_id=? AND created_day=?")
       .bind(accountId, dayBucket(now)).first<{ n: number }>(),
-    // Brains the market is holding for this account: every sale of theirs that has
-    // settled but not been collected (migration 0043).
-    db.prepare(`SELECT COALESCE(SUM(price_brains),0) brains FROM black_market_orders
+    // What the market is holding for this account: every sale of theirs that has
+    // settled but not been collected (migration 0043), split by the currency it was
+    // priced in — the two are different wallets and never sum.
+    db.prepare(`SELECT
+        COALESCE(SUM(CASE WHEN currency='GOLD' THEN 0 ELSE price_brains END),0) brains,
+        COALESCE(SUM(CASE WHEN currency='GOLD' THEN price_brains ELSE 0 END),0) gold
+      FROM black_market_orders
       WHERE creator_account_id=? AND status='FULFILLED' AND kind='SELL_ZOMBIE' AND payout_at IS NULL`)
-      .bind(accountId).first<{ brains: number }>(),
+      .bind(accountId).first<{ brains: number; gold: number }>(),
   ]);
   return {
     activePosts: active?.n ?? 0,
@@ -254,6 +309,7 @@ export async function summary(db: D1Database, accountId: string, now: number): P
     activeLimit: ACTIVE_LIMIT,
     dailyLimit: DAILY_LIMIT,
     heldBrains: held?.brains ?? 0,
+    heldGold: held?.gold ?? 0,
     serverTime: now,
   };
 }
@@ -262,14 +318,27 @@ export async function list(
   db: D1Database,
   accountId: string,
   query: {
-    kind?: string; zombieClass?: string; zombieGroup?: string;
+    kind?: string; zombieClass?: string; zombieGroup?: string; currency?: string;
     zombieKey?: string; mutated?: string; sort?: string; mine?: string; cursor?: string;
   },
   now: number
 ): Promise<BlackMarketListResponse> {
   const kind: BlackMarketOrderKind = query.kind === "BUY_ZOMBIE" ? "BUY_ZOMBIE" : "SELL_ZOMBIE";
+  // The freshness clause is what actually clears the board: a post past its lifetime
+  // stops being listed for EVERYONE the moment it ages out, whether or not its
+  // creator has been back to trigger the sweep that closes it.
+  //
+  // ...with one exception: the creator's OWN "My posts" view. The sweep normally
+  // closes a stale post before this query runs, so the only OPEN stale rows that can
+  // still show up here are the ones it could not finish — a sale whose owner has no
+  // room for the zombie coming back. Hiding those would leave the seller with a
+  // zombie that is in no roster, on no board, and behind no button: an invisible
+  // post they cannot cancel and a unit that reads as lost. They stay listed for
+  // their owner (flagged `expired`) so Cancel Post is still reachable.
+  const mineOnly = query.mine === "true";
   const where = ["o.status='OPEN'", "o.kind=?"];
   const binds: unknown[] = [kind];
+  if (!mineOnly) { where.push("o.created_at>?"); binds.push(freshAfter(now)); }
   // The toolbar's two dropdowns. A bucket can span dozens of keys, so the list is
   // inlined rather than bound — D1 caps bound parameters per query, and these are
   // catalog constants, never request text (blackMarketFilterKeys resolves a bucket
@@ -285,6 +354,12 @@ export async function list(
   }
   if (query.mutated === "true" || query.mutated === "false") {
     where.push("o.mutated_required=?"); binds.push(query.mutated === "true" ? 1 : 0);
+  }
+  // Prices in different currencies do not compare, so the price sorts below only mean
+  // something within one of them — hence a currency filter rather than a merged board.
+  // An unrecognised value is ignored, the same as every other optional filter here.
+  if (query.currency === "BRAINS" || query.currency === "GOLD") {
+    where.push("o.currency=?"); binds.push(query.currency);
   }
   if (query.mine === "true") { where.push("o.creator_account_id=?"); binds.push(accountId); }
   const offset = Math.max(0, Math.min(10_000, Number.parseInt(query.cursor ?? "0", 10) || 0));
@@ -310,6 +385,7 @@ interface FulfillmentRow {
   zombie_key: string;
   mutated_required: number;
   price_brains: number;
+  currency: string;
   created_at: number;
   closed_at: number;
   escrow_mutation: number | null;
@@ -338,7 +414,7 @@ export async function fulfillments(
   accountId: string
 ): Promise<BlackMarketFulfillmentsResponse> {
   const result = await db.prepare(`SELECT o.id,o.kind,o.zombie_key,o.mutated_required,o.price_brains,
-      o.created_at,o.closed_at,o.escrow_mutation,o.escrow_invasions,
+      o.currency,o.created_at,o.closed_at,o.escrow_mutation,o.escrow_invasions,
       o.delivered_mutation,o.delivered_invasions,o.escrow_color,o.delivered_color,
       o.creator_account_id,o.claimed_at,o.payout_at,
       a.username AS fulfilled_by_name, ca.username AS creator_name
@@ -375,6 +451,8 @@ export async function fulfillments(
       mutated: !!row.mutated_required,
       ...(mutation !== null ? { mutation, invasions: invasions ?? 0 } : {}),
       ...(color ? { color } : {}),
+      price: row.price_brains,
+      currency: currencyOf(row),
       priceBrains: row.price_brains,
       createdAt: row.created_at,
       fulfilledAt: row.closed_at,
@@ -382,7 +460,7 @@ export async function fulfillments(
       ...(row.claimed_at === null && (row.kind === "SELL_ZOMBIE") !== mine
         ? { awaitingClaim: true }
         : {}),
-      // The market is holding this sale's brains for its creator until they collect.
+      // The market is holding this sale's payment for its creator until they collect.
       ...(mine && row.kind === "SELL_ZOMBIE" && row.payout_at === null
         ? { awaitingPayout: true }
         : {}),
@@ -451,16 +529,19 @@ async function claimDelivery(
   return { unit: { unitId, zombieKey: row.zombie_key, mutation, invasions, stored: !!stored?.stored } };
 }
 
-/** Pay out a sale the market is still holding brains for. Idempotent on `payout_at`:
- *  the timestamp is claimed first and every other statement is guarded on it having
- *  landed, so a double-tapped Collect (or a retry) credits exactly once. Returns the
- *  brains actually credited — 0 when another request got there first. */
+/** Pay out a sale the market is still holding payment for, into whichever wallet the
+ *  post was priced in. Idempotent on `payout_at`: the timestamp is claimed first and
+ *  every other statement is guarded on it having landed, so a double-tapped Collect (or
+ *  a retry) credits exactly once. Returns the amount actually credited — 0 when another
+ *  request got there first. */
 async function payOutSale(
   db: D1Database,
   accountId: string,
   row: OrderRow,
   now: number
 ): Promise<number> {
+  const currency = currencyOf(row);
+  const wallet = BALANCE_COLUMN[currency];
   const paid = db.prepare(`UPDATE black_market_orders SET payout_at=?
     WHERE id=? AND creator_account_id=? AND status='FULFILLED' AND payout_at IS NULL
       AND EXISTS(SELECT 1 FROM account_runtime_v3 WHERE account_id=? AND active_batch_id IS NOT NULL)`)
@@ -468,30 +549,30 @@ async function payOutSale(
   const guard = "EXISTS(SELECT 1 FROM black_market_orders WHERE id=? AND payout_at=?)";
   const committed = await db.batch([
     paid,
-    db.prepare(`UPDATE balances SET brains=brains+? WHERE account_id=? AND ${guard}`)
+    db.prepare(`UPDATE balances SET ${wallet}=${wallet}+? WHERE account_id=? AND ${guard}`)
       .bind(row.price_brains, accountId, row.id, now),
     db.prepare(`UPDATE account_runtime_v3 SET account_version=account_version+1,updated_at=?
       WHERE account_id=? AND ${guard}`).bind(now, accountId, row.id, now),
     db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
       SELECT ?,?,'black_market_payout',?,? WHERE ${guard}`)
       .bind(`${accountId}:payout:${row.id}`, accountId,
-        JSON.stringify({ orderId: row.id, brains: row.price_brains }), now, row.id, now),
+        JSON.stringify({ orderId: row.id, amount: row.price_brains, currency }), now, row.id, now),
   ]);
   return (committed[0]?.meta.changes ?? 0) === 1 ? row.price_brains : 0;
 }
 
 /** Collect one settled order: take delivery of the zombie it owes this account (if
- * any) and the brains the market is holding for it, then acknowledge it so it stops
+ * any) and the payment the market is holding for it, then acknowledge it so it stops
  * surfacing as uncollected.
  *
  * The claim runs FIRST and its failure aborts the whole thing — acknowledging an order
  * whose zombie could not land would dismiss the only card that can still deliver it.
  *
  * It also echoes the current balance, which is what a seller's collect is FOR: a sale's
- * brains wait on the order until this call pays them out (migration 0043). A filled
- * request's brains were credited to its fulfiller at settlement instead, so for that
- * card the echo is still just news the client never saw. Reading the balance here costs
- * one extra SELECT and saves the client a whole second round-trip. */
+ * payment waits on the order until this call pays it out (migration 0043). A filled
+ * request's payment went to its fulfiller at settlement instead, so for that card the
+ * echo is still just news the client never saw. Reading the balance here costs one extra
+ * SELECT and saves the client a whole second round-trip. */
 export async function collect(
   db: D1Database,
   accountId: string,
@@ -514,15 +595,16 @@ export async function collect(
     if (!("unit" in result)) return result;
     claimed = result.unit;
   }
-  // Only a SALE holds brains for its creator; a request's went to its fulfiller at
+  // Only a SALE holds payment for its creator; a request's went to its fulfiller at
   // settlement. The payout is deliberately independent of the acknowledgment below —
   // it has its own idempotency marker, so money can never ride on a notice flag.
-  const owedBrains = isCreator && row.kind === "SELL_ZOMBIE" && row.payout_at == null;
-  const brainsPaid = owedBrains ? await payOutSale(db, accountId, row, now) : 0;
+  const owedPayment = isCreator && row.kind === "SELL_ZOMBIE" && row.payout_at == null;
+  const paid = owedPayment ? await payOutSale(db, accountId, row, now) : 0;
   // Like the claim above: a payout that did not land must NOT be acknowledged away.
   // The usual cause is a concurrent collect that already paid — the retry then sees
   // `payout_at` set, skips the payout, and dismisses the card normally.
-  if (owedBrains && !brainsPaid) return { status: 409, error: "payout_conflict" };
+  if (owedPayment && !paid) return { status: 409, error: "payout_conflict" };
+  const paidGold = currencyOf(row) === "GOLD";
   const acknowledged = isCreator
     ? await db.prepare(`UPDATE black_market_orders SET acknowledged_at=?
         WHERE id=? AND creator_account_id=? AND status='FULFILLED' AND acknowledged_at IS NULL`)
@@ -532,9 +614,9 @@ export async function collect(
     ok: true,
     // "Already collected" only describes the acknowledgment. A claim or a payout that
     // just landed is news either way, so neither reports as a repeat.
-    alreadyCollected: !claimed && !brainsPaid && (acknowledged?.meta.changes ?? 0) !== 1,
+    alreadyCollected: !claimed && !paid && (acknowledged?.meta.changes ?? 0) !== 1,
     ...(claimed ? { claimed } : {}),
-    ...(brainsPaid ? { brainsPaid } : {}),
+    ...(paid ? (paidGold ? { goldPaid: paid } : { brainsPaid: paid }) : {}),
     ...await balanceEcho(db, accountId),
   };
 }
@@ -552,20 +634,39 @@ async function balanceEcho(
 
 const HISTORY_PAGE = 100;
 
-// A completed trade always has one brain-earning side and one brain-spending
-// side. Which account sits on which side depends on the order kind: a sale's
-// creator earns and its fulfiller spends; a request's creator spends and its
-// fulfiller earns.
+// A completed trade always has one earning side and one spending side. Which account
+// sits on which side depends on the order kind: a sale's creator earns and its
+// fulfiller spends; a request's creator spends and its fulfiller earns.
 const EARNED_SIDE_SQL = `status='FULFILLED' AND
   ((kind='SELL_ZOMBIE' AND creator_account_id=?1) OR (kind='BUY_ZOMBIE' AND fulfilled_by_account_id=?1))`;
 const SPENT_SIDE_SQL = `status='FULFILLED' AND
   ((kind='SELL_ZOMBIE' AND fulfilled_by_account_id=?1) OR (kind='BUY_ZOMBIE' AND creator_account_id=?1))`;
+
+/** Sums the earned/spent side of a set of trades, split by currency — the two never
+ *  add up, so every aggregate here reports both. */
+const CURRENCY_TOTALS = `COUNT(*) n,
+  COALESCE(SUM(CASE WHEN currency='GOLD' THEN 0 ELSE price_brains END),0) brains,
+  COALESCE(SUM(CASE WHEN currency='GOLD' THEN price_brains ELSE 0 END),0) gold`;
+
+const bestSale = (
+  row: { zombie_key: string; price_brains: number; delivered_mutation: number | null } | null,
+  currency: BlackMarketCurrency
+): BlackMarketBestSale | null => row
+  ? {
+      zombieKey: row.zombie_key,
+      price: row.price_brains,
+      currency,
+      priceBrains: row.price_brains,
+      mutation: row.delivered_mutation,
+    }
+  : null;
 
 interface HistoryRow {
   id: string;
   kind: BlackMarketOrderKind;
   zombie_key: string;
   price_brains: number;
+  currency: string;
   closed_at: number;
   delivered_mutation: number | null;
   delivered_invasions: number | null;
@@ -581,8 +682,8 @@ export async function history(
   db: D1Database,
   accountId: string
 ): Promise<BlackMarketHistoryResponse> {
-  const [entries, earnedTotals, bestSale, spentTotals, mostTraded] = await Promise.all([
-    db.prepare(`SELECT o.id,o.kind,o.zombie_key,o.price_brains,o.closed_at,
+  const [entries, earnedTotals, bestBrains, bestGold, spentTotals, mostTraded] = await Promise.all([
+    db.prepare(`SELECT o.id,o.kind,o.zombie_key,o.price_brains,o.currency,o.closed_at,
         o.delivered_mutation,o.delivered_invasions,o.delivered_color,o.creator_account_id,
         ca.username AS creator_name, fa.username AS fulfiller_name
       FROM black_market_orders o
@@ -591,16 +692,20 @@ export async function history(
       WHERE o.status='FULFILLED' AND (o.creator_account_id=?1 OR o.fulfilled_by_account_id=?1)
       ORDER BY o.closed_at DESC, o.id LIMIT ${HISTORY_PAGE}`)
       .bind(accountId).all<HistoryRow>(),
-    db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(price_brains),0) brains
+    db.prepare(`SELECT ${CURRENCY_TOTALS}
       FROM black_market_orders WHERE ${EARNED_SIDE_SQL}`)
-      .bind(accountId).first<{ n: number; brains: number }>(),
+      .bind(accountId).first<{ n: number; brains: number; gold: number }>(),
     db.prepare(`SELECT zombie_key, price_brains, delivered_mutation
-      FROM black_market_orders WHERE ${EARNED_SIDE_SQL}
+      FROM black_market_orders WHERE ${EARNED_SIDE_SQL} AND currency!='GOLD'
       ORDER BY price_brains DESC, closed_at DESC LIMIT 1`)
       .bind(accountId).first<{ zombie_key: string; price_brains: number; delivered_mutation: number | null }>(),
-    db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(price_brains),0) brains
+    db.prepare(`SELECT zombie_key, price_brains, delivered_mutation
+      FROM black_market_orders WHERE ${EARNED_SIDE_SQL} AND currency='GOLD'
+      ORDER BY price_brains DESC, closed_at DESC LIMIT 1`)
+      .bind(accountId).first<{ zombie_key: string; price_brains: number; delivered_mutation: number | null }>(),
+    db.prepare(`SELECT ${CURRENCY_TOTALS}
       FROM black_market_orders WHERE ${SPENT_SIDE_SQL}`)
-      .bind(accountId).first<{ n: number; brains: number }>(),
+      .bind(accountId).first<{ n: number; brains: number; gold: number }>(),
     db.prepare(`SELECT zombie_key, COUNT(*) n FROM black_market_orders
       WHERE status='FULFILLED' AND (creator_account_id=?1 OR fulfilled_by_account_id=?1)
       GROUP BY zombie_key ORDER BY n DESC, zombie_key LIMIT 1`)
@@ -610,11 +715,15 @@ export async function history(
     sold: {
       count: earnedTotals?.n ?? 0,
       brains: earnedTotals?.brains ?? 0,
-      best: bestSale
-        ? { zombieKey: bestSale.zombie_key, priceBrains: bestSale.price_brains, mutation: bestSale.delivered_mutation }
-        : null,
+      gold: earnedTotals?.gold ?? 0,
+      best: bestSale(bestBrains, "BRAINS"),
+      bestGold: bestSale(bestGold, "GOLD"),
     },
-    bought: { count: spentTotals?.n ?? 0, brains: spentTotals?.brains ?? 0 },
+    bought: {
+      count: spentTotals?.n ?? 0,
+      brains: spentTotals?.brains ?? 0,
+      gold: spentTotals?.gold ?? 0,
+    },
     mostTraded: mostTraded ? { zombieKey: mostTraded.zombie_key, count: mostTraded.n } : null,
   };
   const views: BlackMarketHistoryEntry[] = (entries.results ?? []).map((row) => {
@@ -628,6 +737,8 @@ export async function history(
       mutation: row.delivered_mutation,
       invasions: row.delivered_invasions ?? 0,
       ...(parseRosterColor(row.delivered_color) ? { color: parseRosterColor(row.delivered_color)! } : {}),
+      price: row.price_brains,
+      currency: currencyOf(row),
       priceBrains: row.price_brains,
       counterparty: (mine ? row.fulfiller_name : row.creator_name) ?? "Player",
       fulfilledAt: row.closed_at,
@@ -670,18 +781,23 @@ export async function create(
   const operationId = body.operationId;
   const expectedVersion = body.expectedAccountVersion;
   const kind = body.kind;
+  // `priceBrains` is the pre-gold field name, still accepted so a client cached from
+  // before this change keeps posting (as BRAINS, which is what it meant).
+  const price = body.price ?? body.priceBrains;
+  const currency = parseCurrency(body.currency);
   if (!validId(operationId) || !Number.isSafeInteger(expectedVersion) ||
-      (kind !== "BUY_ZOMBIE" && kind !== "SELL_ZOMBIE") || !validPrice(body.priceBrains)) {
+      (kind !== "BUY_ZOMBIE" && kind !== "SELL_ZOMBIE") || !currency || !validPrice(price)) {
     return { status: 400, error: "bad_market_order" };
   }
   const input = kind === "SELL_ZOMBIE"
-    ? { kind, unitId: body.unitId, priceBrains: body.priceBrains }
+    ? { kind, unitId: body.unitId, price, currency }
     : {
         kind,
         zombieKey: body.zombieKey,
         mutated: body.mutated,
         mutationRequired: body.mutationRequired ?? null,
-        priceBrains: body.priceBrains,
+        price,
+        currency,
       };
   const fp = fingerprint("CREATE", input);
   const prior = await replay(db, accountId, operationId, fp, now);
@@ -723,30 +839,36 @@ export async function create(
     mutationRequired = body.mutationRequired ?? null;
     const requirementFailure = await purchaseRequirementFailure(db, accountId, zombieKey);
     if (requirementFailure) return requirementFailure;
-    const balance = await db.prepare("SELECT brains FROM balances WHERE account_id=?")
-      .bind(accountId).first<{ brains: number }>();
-    if (!balance || balance.brains < Number(body.priceBrains)) return { status: 409, error: "insufficient_brains" };
+    const wallet = BALANCE_COLUMN[currency];
+    const balance = await db.prepare(`SELECT ${wallet} AS funds FROM balances WHERE account_id=?`)
+      .bind(accountId).first<{ funds: number }>();
+    if (!balance || balance.funds < Number(price)) {
+      return { status: 409, error: INSUFFICIENT[currency] };
+    }
   }
 
   const orderId = crypto.randomUUID();
   const guard = `EXISTS (SELECT 1 FROM account_runtime_v3 r WHERE r.account_id=?
     AND r.account_version=? AND r.active_batch_id IS NOT NULL)`;
+  const wallet = BALANCE_COLUMN[currency];
   const statements: D1PreparedStatement[] = [db.prepare(`INSERT INTO black_market_orders
-    (id,creator_account_id,kind,zombie_key,mutated_required,mutation_required,price_brains,status,created_day,created_at,
+    (id,creator_account_id,kind,zombie_key,mutated_required,mutation_required,price_brains,currency,status,created_day,created_at,
      source_unit_id,escrow_mutation,escrow_invasions,escrow_brains,escrow_color)
-    SELECT ?,?,?,?,?,?,?,'OPEN',?,?,?,?,?,?,? WHERE ${guard}
-      AND (SELECT COUNT(*) FROM black_market_orders WHERE creator_account_id=? AND status='OPEN')<?
+    SELECT ?,?,?,?,?,?,?,?,'OPEN',?,?,?,?,?,?,? WHERE ${guard}
+      AND (SELECT COUNT(*) FROM black_market_orders
+        WHERE creator_account_id=? AND status='OPEN' AND created_at>?)<?
       AND (SELECT COUNT(*) FROM black_market_orders WHERE creator_account_id=? AND created_day=?)<?`)
-    .bind(orderId, accountId, kind, zombieKey, mutated, mutationRequired, body.priceBrains, dayBucket(now), now,
-      unitId, mutation, invasions, kind === "BUY_ZOMBIE" ? body.priceBrains : 0, escrowColor,
-      accountId, expectedVersion, accountId, ACTIVE_LIMIT, accountId, dayBucket(now), DAILY_LIMIT)];
+    .bind(orderId, accountId, kind, zombieKey, mutated, mutationRequired, price, currency, dayBucket(now), now,
+      unitId, mutation, invasions, kind === "BUY_ZOMBIE" ? price : 0, escrowColor,
+      accountId, expectedVersion, accountId, freshAfter(now), ACTIVE_LIMIT,
+      accountId, dayBucket(now), DAILY_LIMIT)];
   if (kind === "SELL_ZOMBIE") {
     statements.push(db.prepare(`DELETE FROM roster_v3 WHERE account_id=? AND unit_id=? AND locked_by_raid IS NULL
       AND EXISTS(SELECT 1 FROM black_market_orders WHERE id=?)`).bind(accountId, unitId, orderId));
   } else {
-    statements.push(db.prepare(`UPDATE balances SET brains=brains-? WHERE account_id=? AND brains>=?
+    statements.push(db.prepare(`UPDATE balances SET ${wallet}=${wallet}-? WHERE account_id=? AND ${wallet}>=?
       AND EXISTS(SELECT 1 FROM black_market_orders WHERE id=?)`)
-      .bind(body.priceBrains, accountId, body.priceBrains, orderId));
+      .bind(price, accountId, price, orderId));
   }
   statements.push(
     db.prepare(`UPDATE account_runtime_v3 SET account_version=account_version+1,updated_at=?
@@ -758,7 +880,7 @@ export async function create(
     db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
       SELECT ?,?,'black_market_create',?,? WHERE EXISTS(SELECT 1 FROM black_market_orders WHERE id=?)`)
       .bind(`${accountId}:market:${operationId}`, accountId, JSON.stringify({
-        orderId, kind, zombieKey, mutated: !!mutated, mutationRequired, priceBrains: body.priceBrains,
+        orderId, kind, zombieKey, mutated: !!mutated, mutationRequired, price, currency,
       }), now, orderId)
   );
   const committed = await db.batch(statements);
@@ -809,8 +931,13 @@ export async function cancel(
     SELECT ?,?,?,?,?,${claimDestinationSql},1,?,? WHERE ${guard}`).bind(accountId, restoredId, row.zombie_key,
       row.escrow_mutation ?? 0, row.escrow_invasions ?? 0,
       ...claimDestinationBinds(accountId), now, row.escrow_color ?? null, orderId, operationId));
-  else statements.push(db.prepare(`UPDATE balances SET brains=brains+? WHERE account_id=? AND ${guard}`)
-    .bind(row.price_brains, accountId, orderId, operationId));
+  else {
+    // The escrowed offer comes back to the wallet it left (`currency` is fixed for the
+    // life of a post, so this is the same column create debited).
+    const wallet = BALANCE_COLUMN[currencyOf(row)];
+    statements.push(db.prepare(`UPDATE balances SET ${wallet}=${wallet}+? WHERE account_id=? AND ${guard}`)
+      .bind(row.price_brains, accountId, orderId, operationId));
+  }
   statements.push(
     db.prepare(`UPDATE account_runtime_v3 SET account_version=account_version+1,updated_at=? WHERE account_id=?
       AND account_version=? AND ${guard}`).bind(now, accountId, expectedVersion, orderId, operationId),
@@ -827,6 +954,121 @@ export async function cancel(
   return response(db, accountId, orderId, now);
 }
 
+/** Bump one of the caller's own posts back to the top of "newest" and restart its
+ *  three-day life.
+ *
+ *  `created_at` IS the bump time — every ordering, the expiry cutoff and this
+ *  cooldown all read that one column — so a repost is a single guarded UPDATE and
+ *  needs no schema of its own. The same guard is what rate-limits it: a post must
+ *  have sat for REPOST_COOLDOWN_MS, so a listing can be kept alive by tending it,
+ *  never by hammering the button.
+ *
+ *  Deliberately does NOT touch `created_day`: the daily post allowance is about how
+ *  many listings a player CREATES in a day, and re-dating an old post into today's
+ *  bucket would spend an allowance they never used.
+ *
+ *  Nothing moves between accounts here — no escrow, no balance, no roster — so this
+ *  is also the one market mutation that leaves `account_version` alone. */
+export async function repost(
+  db: D1Database, accountId: string, orderId: string, now: number
+): Promise<BlackMarketMutationResponse | MarketFailure> {
+  if (!validId(orderId)) return { status: 400, error: "bad_market_repost" };
+  const row = await orderRow(db, orderId);
+  if (!row) return { status: 404, error: "order_not_found" };
+  if (row.creator_account_id !== accountId) return { status: 403, error: "not_order_owner" };
+  if (row.status !== "OPEN") return { status: 409, error: "order_closed" };
+  // An already-stale post is not bumped back to life: it belongs to the sweep, which
+  // is about to hand its escrow back. Reposting it would resurrect a listing the
+  // board stopped showing days ago.
+  if (row.created_at <= freshAfter(now)) return { status: 409, error: "order_expired" };
+  if (now - row.created_at < REPOST_COOLDOWN_MS) return { status: 409, error: "repost_cooldown" };
+  const bumped = await db.prepare(`UPDATE black_market_orders SET created_at=?
+    WHERE id=? AND creator_account_id=? AND status='OPEN' AND created_at<=? AND created_at>?`)
+    .bind(now, orderId, accountId, now - REPOST_COOLDOWN_MS, freshAfter(now)).run();
+  // Losing the race means another device bumped it (or it just closed); either way the
+  // caller's view is stale, so say so rather than reporting a bump that did not happen.
+  if ((bumped.meta.changes ?? 0) !== 1) return { status: 409, error: "repost_cooldown" };
+  await db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
+    VALUES (?,?,'black_market_repost',?,?)`)
+    .bind(`${accountId}:repost:${orderId}:${now}`, accountId,
+      JSON.stringify({ orderId, previousCreatedAt: row.created_at }), now)
+    .run();
+  return response(db, accountId, orderId, now);
+}
+
+/** Close the caller's OPEN posts that have outlived POST_LIFETIME_MS and hand their
+ *  escrow back — the zombie to the roster, the offered payment to the wallet. This is
+ *  exactly what `cancel` does, performed for the player instead of by them, so a post
+ *  that ages out costs them nothing.
+ *
+ *  Lazy rather than scheduled: it runs whenever the owner touches the market. Other
+ *  players never see a stale post either way (`list` filters by age), so the only
+ *  thing waiting on this pass is the owner getting their own escrow back — and they
+ *  have to be here to receive it.
+ *
+ *  A sale whose owner has NO room for the zombie is skipped, not force-delivered: the
+ *  post stays open (invisible, and not counting against their active limit) until a
+ *  later sweep finds them a slot. Same rule as a manual cancel, which is refused
+ *  outright in that state.
+ *
+ *  Every statement is guarded on the CLAIM landing, so two concurrent sweeps — two
+ *  devices, or a list and a create at once — can never return the same escrow twice.
+ *  Returns how many posts were actually closed. */
+export async function expireStalePosts(
+  db: D1Database, accountId: string, now: number
+): Promise<number> {
+  const stale = await db.prepare(`SELECT * FROM black_market_orders
+    WHERE creator_account_id=? AND status='OPEN' AND created_at<=?
+    ORDER BY created_at LIMIT ?`)
+    .bind(accountId, freshAfter(now), SWEEP_LIMIT).all<OrderRow>();
+  const rows = stale.results ?? [];
+  if (!rows.length) return 0;
+  let closed = 0;
+  for (const row of rows) {
+    // A distinct, deterministic marker per post: it doubles as this expiry's operation
+    // id, so the guard below matches only the statement that actually closed it.
+    const operationId = `expire:${row.id}`;
+    const restoredId = crypto.randomUUID();
+    const roomGuard = row.kind === "SELL_ZOMBIE"
+      ? { sql: ` AND ${hasRoomSql}`, binds: hasRoomBinds(accountId) }
+      : { sql: "", binds: [] as unknown[] };
+    const claim = db.prepare(`UPDATE black_market_orders SET status='CANCELLED',closed_at=?,closed_operation_id=?
+      WHERE id=? AND creator_account_id=? AND status='OPEN'${roomGuard.sql}`)
+      .bind(now, operationId, row.id, accountId, ...roomGuard.binds);
+    const guard = "EXISTS(SELECT 1 FROM black_market_orders WHERE id=? AND status='CANCELLED' AND closed_operation_id=?)";
+    const statements: D1PreparedStatement[] = [claim];
+    if (row.kind === "SELL_ZOMBIE") {
+      // from_escrow=1 for the same reason a cancel sets it: this is the seller's own
+      // zombie coming home under a new id, not a species they just acquired.
+      statements.push(db.prepare(`INSERT INTO roster_v3
+        (account_id,unit_id,zombie_key,mutation,invasions,stored,from_escrow,created_at,color)
+        SELECT ?,?,?,?,?,${claimDestinationSql},1,?,? WHERE ${guard}`)
+        .bind(accountId, restoredId, row.zombie_key, row.escrow_mutation ?? 0,
+          row.escrow_invasions ?? 0, ...claimDestinationBinds(accountId), now,
+          row.escrow_color ?? null, row.id, operationId));
+    } else {
+      const wallet = BALANCE_COLUMN[currencyOf(row)];
+      statements.push(db.prepare(`UPDATE balances SET ${wallet}=${wallet}+? WHERE account_id=? AND ${guard}`)
+        .bind(row.price_brains, accountId, row.id, operationId));
+    }
+    statements.push(
+      db.prepare(`UPDATE account_runtime_v3 SET account_version=account_version+1,updated_at=?
+        WHERE account_id=? AND ${guard}`).bind(now, accountId, row.id, operationId),
+      db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
+        SELECT ?,?,'black_market_expire',?,? WHERE ${guard}`)
+        .bind(`${accountId}:expire:${row.id}`, accountId, JSON.stringify({
+          orderId: row.id, kind: row.kind, zombieKey: row.zombie_key,
+          restoredId: row.kind === "SELL_ZOMBIE" ? restoredId : null,
+          refunded: row.kind === "BUY_ZOMBIE" ? row.price_brains : 0,
+          currency: currencyOf(row),
+        }), now, row.id, operationId)
+    );
+    const committed = await db.batch(statements);
+    if ((committed[0]?.meta.changes ?? 0) === 1) closed++;
+  }
+  return closed;
+}
+
 export async function fulfill(
   db: D1Database, accountId: string, orderId: string, body: Record<string, unknown>, now: number
 ): Promise<BlackMarketMutationResponse | MarketFailure> {
@@ -841,6 +1083,10 @@ export async function fulfill(
   if (!row) return { status: 404, error: "order_not_found" };
   if (row.creator_account_id === accountId) return { status: 403, error: "self_trade" };
   if (row.status !== "OPEN") return { status: 409, error: "order_closed" };
+  // The post's own currency decides which wallet moves, on both sides of the trade. It
+  // is read from the stored row, never from the fulfiller's request.
+  const currency = currencyOf(row);
+  const wallet = BALANCE_COLUMN[currency];
 
   const recipientAccountId = row.kind === "SELL_ZOMBIE" ? accountId : row.creator_account_id;
   const requirementFailure = await purchaseRequirementFailure(db, recipientAccountId, row.zombie_key);
@@ -869,9 +1115,11 @@ export async function fulfill(
       color: await escrowedColor(db, accountId, unit.unit_id),
     };
   } else {
-    const balance = await db.prepare("SELECT brains FROM balances WHERE account_id=?").bind(accountId)
-      .first<{ brains: number }>();
-    if (!balance || balance.brains < row.price_brains) return { status: 409, error: "insufficient_brains" };
+    const balance = await db.prepare(`SELECT ${wallet} AS funds FROM balances WHERE account_id=?`)
+      .bind(accountId).first<{ funds: number }>();
+    if (!balance || balance.funds < row.price_brains) {
+      return { status: 409, error: INSUFFICIENT[currency] };
+    }
   }
   const creatorRuntime = await db.prepare("SELECT active_batch_id,active_batch_expires_at FROM account_runtime_v3 WHERE account_id=?")
     .bind(row.creator_account_id).first<{ active_batch_id: string | null; active_batch_expires_at: number }>();
@@ -880,7 +1128,7 @@ export async function fulfill(
 
   const mutationAsset = mutationRequirementSql(row.mutation_required);
   const actorAsset = row.kind === "SELL_ZOMBIE"
-    ? "EXISTS(SELECT 1 FROM balances WHERE account_id=? AND brains>=?)"
+    ? `EXISTS(SELECT 1 FROM balances WHERE account_id=? AND ${wallet}>=?)`
     : `EXISTS(SELECT 1 FROM roster_v3 WHERE account_id=? AND unit_id=? AND zombie_key=?
         AND ${mutationAsset.sql}
         AND locked_by_raid IS NULL)`;
@@ -900,8 +1148,8 @@ export async function fulfill(
       color: row.escrow_color ?? null }
     : { mutation: offered!.mutation, invasions: offered!.invasions, color: offered!.color };
   // A filled REQUEST pays its fulfiller in this batch (they are here, with the panel
-  // open, and hold no card to collect from), so it is stamped paid. A SALE's brains
-  // stay with the market until its creator collects — `payout_at` NULL — because the
+  // open, and hold no card to collect from), so it is stamped paid. A SALE's payment
+  // stays with the market until its creator collects — `payout_at` NULL — because the
   // seller is typically offline right now and would otherwise find the payout already
   // in their balance with nothing left for Collect to do.
   const payoutAt = row.kind === "SELL_ZOMBIE" ? null : now;
@@ -922,14 +1170,14 @@ export async function fulfill(
   if (row.kind === "SELL_ZOMBIE") {
     // The buyer pays now; the seller is paid by their own collect (see `payoutAt`).
     statements.push(
-      db.prepare(`UPDATE balances SET brains=brains-? WHERE account_id=? AND ${guard}`)
+      db.prepare(`UPDATE balances SET ${wallet}=${wallet}-? WHERE account_id=? AND ${guard}`)
         .bind(row.price_brains, accountId, orderId, operationId)
     );
   } else {
     statements.push(
       db.prepare(`DELETE FROM roster_v3 WHERE account_id=? AND unit_id=? AND ${guard}`)
         .bind(accountId, offered!.unitId, orderId, operationId),
-      db.prepare(`UPDATE balances SET brains=brains+? WHERE account_id=? AND ${guard}`)
+      db.prepare(`UPDATE balances SET ${wallet}=${wallet}+? WHERE account_id=? AND ${guard}`)
         .bind(row.price_brains, accountId, orderId, operationId)
     );
   }
@@ -948,7 +1196,7 @@ export async function fulfill(
     db.prepare(`INSERT INTO audit_events_v3(id,account_id,kind,detail_json,created_at)
       SELECT ?,?,'black_market_fulfill',?,? WHERE ${guard}`)
       .bind(`${accountId}:market:${operationId}`, accountId, JSON.stringify({ orderId, creatorAccountId: row.creator_account_id,
-        zombieKey: row.zombie_key, priceBrains: row.price_brains,
+        zombieKey: row.zombie_key, price: row.price_brains, currency,
         recipientAccountId }), now, orderId, operationId)
   );
   const committed = await db.batch(statements);

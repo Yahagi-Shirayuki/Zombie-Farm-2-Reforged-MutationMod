@@ -4,7 +4,9 @@ Asset-prep for the ZF2R field milestone.
 Reads the extracted ZF2R 1.0 app bundle and produces clean PNGs + JSON under
 zombiefarm/public/assets/ :
 
-  ground/<terrain>_<variant>.png   sliced from tex0000.png (48x24 iso diamonds)
+  ground/<terrain>_<variant>.png   sliced from tex0000.png (48x24 iso diamonds);
+                                   the lunar row is regraded and "autumn" is a
+                                   recolour of grass (see DERIVED_GROUND_ROWS)
   player/<part>.png                sliced from playerSpriteSheet.png (cocos2d fmt 3)
   rig_player.json                  FarmerSprites.plist layout (offset/pivot/z per part)
   ground_index.json                terrain -> [variant filenames]
@@ -12,7 +14,7 @@ zombiefarm/public/assets/ :
 
 Run:  python tools/prep_assets.py
 """
-import os, re, io, json, plistlib, random, shutil
+import colorsys, os, re, io, json, plistlib, random, shutil
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +43,292 @@ def rect(s):
 GROUND_ROWS = ["grass", "dirt", "snow", "stone", "sand", "water"]
 TILE_W, TILE_H = 48, 24
 
+# Terrains Reforged ADDS on top of the six source rows, each derived from an
+# existing row by an HSV rotation: hue is replaced outright, saturation and value
+# are scaled. Rotating in HSV (rather than remapping through a luminance ramp, as
+# the backdrops do) preserves the source tile's texture EXACTLY — every
+# grass-blade stroke keeps its relative shading, so the result still reads as the
+# same hand-painted art rather than a flat wash.
+#
+# "autumn": the default grass turned to a warm orange-tan. Deliberately pushed
+# past a plain brown — the palette already has a pale sand ("dirt", the Sandy
+# skin) and a mustard dead grass ("sand", the Dead skin), and a new ground has to
+# be distinguishable from both at a glance.
+#
+# KEEP IN SYNC with: EXTRA_CLIMATES in reforge_economy.py (the market entry),
+# CLIMATE_COST in server/src/shopCatalog.ts (the price the server charges), and
+# the theme in src/surroundings.ts (what the land around the farm looks like).
+#
+# "sakura": grass under blossom, drifted over with fallen petals. Pink is the one
+# family the palette has no entry in at all, so it clears the distinguishable-at-a-
+# glance bar outright; saturation is pulled DOWN (unlike autumn's boost) because a
+# fully saturated pink lawn fights the crops standing on it, and value is pushed up
+# hard so the tile reads as pale blossom rather than raw magenta.
+DERIVED_GROUND_ROWS = {
+    "autumn": {"source": "grass", "hue": 28 / 360, "sat": 1.05, "val": 1.32},
+    "sakura": {"source": "grass", "hue": 337 / 360, "sat": 0.52, "val": 1.38,
+               "rocky": True, "fill": True},
+}
+
+# ---- Rocky ground (the Sakura skin) --------------------------------------
+# A recolour alone leaves the terrain reading as lawn, just a different colour of
+# lawn. `rocky` strews stone THROUGH the tile itself — pebbles bedded in the ground
+# rather than more `rocks.png` objects standing on it — so the blossom valley has a
+# stony floor at every zoom, including the one where placed decor is too small to
+# make out.
+#
+# Same discipline as LUNAR_PITS: the tile repeats across the entire farm, so this is
+# a handful of SMALL stones per variant, hand-placed well inside the diamond and
+# different in all five, plus a fine grit. Anything larger, or repeated in the same
+# spot, stops reading as ground and starts reading as wallpaper.
+#
+# Pebbles are (centre x, centre y, x radius, y radius) in the 48x24 tile.
+#
+# The COUNT deliberately varies (2/1/2/0/1) rather than being even across the five,
+# and one variant carries no stone at all. With the same number in every variant the
+# ground gains a faint regular beat at native scale — the eye finds the cadence even
+# when it cannot resolve the individual stones. Uneven counts, and an empty variant
+# to open real gaps, give the strew clumps and bare ground instead.
+#
+# These are 2.2 stones per tile on average, and they are the FARM's ground only —
+# the land outside it is deliberately left smooth (see WILD_*), so the stones are
+# what tells the two apart. An early pass ran at 3.6 and read as a gravel path
+# rather than as ground with stones in it: at farm scale a tile is only 48x24, so
+# even two stones per tile is thousands of them across a 30x30 field.
+ROCKY_PEBBLES = [
+    [(14, 13, 3, 2), (30, 9, 2, 1), (36, 15, 2, 1)],
+    [(31, 14, 3, 2), (18, 8, 2, 1)],
+    [(20, 8, 2, 1), (31, 16, 3, 2), (13, 13, 2, 1)],
+    [(27, 15, 3, 2)],
+    [(19, 15, 3, 2), (33, 9, 2, 1)],
+]
+# Stone tones. Pink-leaning greys, not neutral ones: a neutral stone on blossom
+# ground reads as a hole punched in it rather than as part of the same landscape.
+# Light comes from the upper right, as it does everywhere else in the art.
+#
+# All three sit well BELOW the ground's luminance (~212). The first pass matched the
+# lit face to it exactly, and a stone whose top is the same brightness as what it
+# lies on has no top — the whole strew read as faint smudges.
+#
+# Softened deliberately. An earlier pass ran these much darker (rim 96,82,92) and the
+# stones read as hard chips of slate dropped on the blossom — the farm looked like a
+# different material from the hills behind it. They now sit close enough to the ground
+# to be felt rather than counted, which is the half of "ground and hills should match"
+# that belongs to the ground; the other half is TERRAIN_GRAIN in prep_backgrounds.py.
+PEBBLE_LIGHT = (210, 197, 204)
+PEBBLE_DARK = (158, 142, 152)
+PEBBLE_RIM = (134, 118, 128)
+# Contact shadow cast onto the ground under each stone, as a multiplier.
+PEBBLE_SHADOW = 0.93
+# Grit: the fraction of ground pixels darkened, and by how much. Deliberately weak —
+# it should be felt as texture underfoot, not seen as noise. At 0.14/20 it was seen:
+# a 14% speckle over the whole farm is a dither pattern, not dirt.
+GRIT_CHANCE = 0.05
+GRIT_DEPTH = 9
+
+
+# ---- Wild ground: the same terrain, OUTSIDE the farm ---------------------
+# The fill and the farm must not be the same picture. Making them seamless was the
+# right first move — it stopped the farm reading as a textured island on a blank
+# sheet — but taken all the way it erases the fence line, and a player should be
+# able to see at a glance where their land stops.
+#
+# So the two are cut from the same cloth and finished differently: the farm is the
+# ground someone works, carrying the stones that come up out of it, and the land
+# beyond is left plain and a shade deeper, the way unworked ground reads at a
+# distance. No stones at all out there, which is also what keeps the surrounding
+# land quiet enough for the scatter of trees and rocks standing ON it to be read.
+WILD_DARKEN = 0.955
+WILD_GRIT_CHANCE = 0.03
+WILD_GRIT_DEPTH = 10
+
+
+def weather_ground(cell, variant):
+    """The plain, slightly deeper cut of a terrain, for the land outside the farm."""
+    out = cell.copy()
+    px = out.load()
+    for y in range(out.height):
+        for x in range(out.width):
+            r, g, b, a = px[x, y]
+            if a == 0 or not _in_diamond(x, y):
+                continue
+            if _hash2(x, y, variant + 29) % 1000 < WILD_GRIT_CHANCE * 1000:
+                r, g, b = (max(0, c - WILD_GRIT_DEPTH) for c in (r, g, b))
+            px[x, y] = tuple(max(0, min(255, round(c * WILD_DARKEN)))
+                             for c in (r, g, b)) + (a,)
+    return out
+
+
+def _hash2(x, y, salt):
+    """Deterministic 0..0x7fffffff from a pixel and a salt. The tiles are checked-in
+    build artefacts, so the grain must never come from `random`."""
+    h = (x * 73856093) ^ (y * 19349663) ^ (salt * 83492791)
+    return (h ^ (h >> 13)) & 0x7FFFFFFF
+
+
+def strew_pebbles(cell, variant):
+    """Bed a few stones and a grit of small chips into one ground tile."""
+    out = cell.copy()
+    px = out.load()
+    stones = ROCKY_PEBBLES[variant % len(ROCKY_PEBBLES)]
+
+    def shade(v, mul):
+        return max(0, min(255, round(v * mul)))
+
+    for y in range(out.height):
+        for x in range(out.width):
+            r, g, b, a = px[x, y]
+            if a == 0 or not _in_diamond(x, y):
+                continue
+            # Grit first, so a stone laid on top covers it rather than showing through.
+            if _hash2(x, y, variant + 7) % 1000 < GRIT_CHANCE * 1000:
+                r, g, b = (max(0, c - GRIT_DEPTH) for c in (r, g, b))
+            painted = False
+            for cx, cy, rx, ry in stones:
+                nx, ny = (x - cx) / rx, (y - cy) / ry
+                d = nx * nx + ny * ny
+                if d <= 1.0:
+                    # Lit from the upper right: ramp across that diagonal, with the
+                    # outer edge dropped to a rim so the stone has an outline like
+                    # every other piece of art in the game.
+                    f = min(1.0, max(0.0, (nx * 0.5 - ny * 0.85 + 1) / 2)) ** 0.9
+                    if d > 0.72:
+                        r, g, b = PEBBLE_RIM
+                    else:
+                        r, g, b = (round(PEBBLE_DARK[i] + (PEBBLE_LIGHT[i] - PEBBLE_DARK[i]) * f)
+                                   for i in range(3))
+                        speck = (_hash2(x, y, variant + 13) % 9) - 4
+                        r, g, b = (max(0, min(255, c + speck)) for c in (r, g, b))
+                    painted = True
+                    break
+                # Just below and outside a stone: the ground it sits in.
+                if not painted and ny > 0 and d <= 2.0:
+                    r, g, b = (shade(c, PEBBLE_SHADOW) for c in (r, g, b))
+            px[x, y] = (r, g, b, a)
+    return out
+
+
+def recolor_terrain(cell, hue, sat, val):
+    """HSV-rotate one ground tile onto a new hue, keeping its texture intact."""
+    out = cell.copy()
+    px = out.load()
+    for y in range(out.height):
+        for x in range(out.width):
+            r, g, b, a = px[x, y]
+            if a == 0:
+                continue
+            _, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+            s = max(0.0, min(1.0, s * sat))
+            v = max(0.0, min(1.0, v * val))
+            nr, ng, nb = colorsys.hsv_to_rgb(hue, s, v)
+            px[x, y] = (round(nr * 255), round(ng * 255), round(nb * 255), a)
+    return out
+
+
+# The source "water" row is the Lunar Ground skin, and as sliced it is a flat,
+# strongly BLUE slate with a handful of soft craters — it reads as water, which
+# is what the row is named, not as the moon it dresses. This regrade nudges it
+# toward real regolith without abandoning the game's stylised palette: darker,
+# most of the blue cast pulled out toward neutral grey, deeper craters, and a
+# fine dust grain over the whole tile.
+#
+# It lives HERE, in the slice, rather than as an edit to the emitted PNGs: the
+# tiles are derived from the source atlas every run, so a hand-edited tile would
+# be silently reverted the next time anyone regenerates assets.
+LUNAR_DESATURATE = 0.72   # fraction of the way to pure luminance
+LUNAR_DARKEN = 0.82       # overall exposure
+LUNAR_CONTRAST = 1.25     # expansion about LUNAR_PIVOT, so craters stay readable
+LUNAR_PIVOT = 84.0
+LUNAR_GRAIN = 6           # +/- per-pixel dust grain, in levels
+# Extra impact pits, as (centre x, centre y, x radius, y radius, darkening) per
+# variant. Deliberately small and few: the tile repeats across the whole farm, so
+# anything with a strong silhouette would read as a wallpaper pattern rather than
+# as ground. Every centre sits inside the 48x24 diamond.
+LUNAR_PITS = [
+    [(15, 15, 3, 2, 0.88), (33, 9, 2, 1, 0.91), (24, 17, 2, 1, 0.93)],
+    [(30, 15, 3, 2, 0.89), (17, 8, 2, 1, 0.92), (38, 13, 2, 1, 0.93)],
+    [(21, 7, 3, 2, 0.88), (13, 13, 2, 1, 0.92), (31, 18, 2, 1, 0.91)],
+    [(27, 16, 3, 2, 0.90), (36, 11, 2, 1, 0.92), (16, 11, 2, 1, 0.93)],
+    [(19, 16, 3, 2, 0.89), (29, 6, 2, 1, 0.93), (35, 15, 2, 1, 0.92)],
+]
+
+
+def _in_diamond(x, y):
+    """The 48x24 iso tile's alpha silhouette, as a half-pixel-centred test."""
+    return abs(x + 0.5 - TILE_W / 2) / (TILE_W / 2) + \
+           abs(y + 0.5 - TILE_H / 2) / (TILE_H / 2) <= 1.0
+
+
+def regrade_lunar(cell, variant):
+    """Repaint one sliced lunar tile as darker, grainier, near-neutral regolith."""
+    out = cell.copy()
+    px = out.load()
+    pits = LUNAR_PITS[variant % len(LUNAR_PITS)]
+    for y in range(out.height):
+        for x in range(out.width):
+            r, g, b, a = px[x, y]
+            if a == 0:
+                continue
+            lum = 0.299 * r + 0.587 * g + 0.114 * b
+            ch = []
+            for v in (r, g, b):
+                v = v + (lum - v) * LUNAR_DESATURATE      # toward neutral grey
+                v *= LUNAR_DARKEN                          # a stop down
+                v = LUNAR_PIVOT + (v - LUNAR_PIVOT) * LUNAR_CONTRAST
+                ch.append(v)
+            # Dust grain: one deterministic offset applied to all three channels,
+            # so the noise reads as brightness variation and never as colour speckle.
+            h = (x * 73856093) ^ (y * 19349663) ^ (variant * 83492791)
+            h = (h ^ (h >> 13)) & 0x7fffffff
+            grain = (h % (2 * LUNAR_GRAIN + 1)) - LUNAR_GRAIN
+            for cx, cy, rx, ry, mul in pits:
+                if ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1.0 and _in_diamond(x, y):
+                    ch = [v * mul for v in ch]
+            px[x, y] = tuple(max(0, min(255, round(v + grain))) for v in ch) + (a,)
+    return out
+
+
+# ---- Ground fill for the land OUTSIDE the farm ---------------------------
+# Only the farm itself is built out of ground tiles. Everything around it is the
+# renderer's flat `filler` colour (see surroundings.ts) — which is invisible for a
+# plain grass skin and glaring for a textured one, since the stony Sakura farm ends
+# up a detailed diamond sitting on an unbroken sheet of pink. A terrain with a
+# `fill` emits one SEAMLESS rectangle of itself that main tiles over that land, so
+# the ground reads the same inside the fence and out.
+#
+# 240x120 is a genuine period of the iso lattice — both (240,0) and (0,120) are
+# integer combinations of the tile steps (24,12) and (-24,12) — so the rect repeats
+# with no seam. It holds 50 diamonds: big enough that the repeat is not readable,
+# where the minimum period (48x24, two diamonds) would tile as an obvious checker.
+GROUND_FILL_W, GROUND_FILL_H = 240, 120
+
+
+def build_ground_fill(cells):
+    """A seamless GROUND_FILL_W x GROUND_FILL_H rectangle of one terrain."""
+    out = Image.new("RGBA", (GROUND_FILL_W, GROUND_FILL_H), (0, 0, 0, 0))
+    rows = GROUND_FILL_H // (TILE_H // 2)
+    cols = GROUND_FILL_W // TILE_W
+    for j in range(-2, rows + 2):
+        for i in range(-2, cols + 2):
+            # Phase matched to Field.fit, which anchors a tile's TOP-CENTRE at
+            # gridToScreen(col,row) — so a tile box's left edge lands on a multiple
+            # of 48 on odd rows and halfway between on even ones. Getting this
+            # backwards puts the fill half a tile out of step with the farm, and the
+            # stones visibly jump at the field's edge.
+            x = i * TILE_W + (TILE_W // 2 if j % 2 == 0 else 0)
+            y = j * (TILE_H // 2)
+            # The variant must be periodic too, or the pattern is seamless in
+            # geometry and seamed in colour: the tile just past the right edge has to
+            # be the same one the left edge starts with.
+            v = ((i % cols) * 73856093) ^ ((j % rows) * 19349663)
+            cell = cells[((v ^ (v >> 13)) & 0x7FFFFFFF) % len(cells)]
+            for dx in (-GROUND_FILL_W, 0, GROUND_FILL_W):
+                for dy in (-GROUND_FILL_H, 0, GROUND_FILL_H):
+                    out.paste(cell, (x + dx, y + dy), cell)
+    if out.getextrema()[3][0] != 255:
+        raise ValueError("ground fill has gaps — the tile lattice does not tessellate")
+    return out
+
 
 def slice_ground():
     src = os.path.join(APP, "tex0000.png")
@@ -48,17 +336,46 @@ def slice_ground():
     cols = im.width // TILE_W
     rows = im.height // TILE_H
     index = {}
+    sliced = {}  # terrain -> [cell, ...], kept so derived rows come off the source
     for r in range(rows):
         terrain = GROUND_ROWS[r] if r < len(GROUND_ROWS) else f"terrain{r}"
         index[terrain] = []
+        sliced[terrain] = []
         for c in range(cols):
             cell = im.crop((c * TILE_W, r * TILE_H,
                             c * TILE_W + TILE_W, r * TILE_H + TILE_H))
+            if terrain == "water":
+                cell = regrade_lunar(cell, c)
             name = f"{terrain}_{c}.png"
             cell.save(os.path.join(OUT, "ground", name))
             index[terrain].append(name)
+            sliced[terrain].append(cell)
+
+    # Reforged's own terrains, recoloured off a source row. Derived from the cells
+    # held above rather than re-read from disk, so re-running can never compound a
+    # previous run's recolour onto itself.
+    for terrain, spec in DERIVED_GROUND_ROWS.items():
+        index[terrain] = []
+        wild = []
+        for c, cell in enumerate(sliced[spec["source"]]):
+            name = f"{terrain}_{c}.png"
+            base = recolor_terrain(cell, spec["hue"], spec["sat"], spec["val"])
+            # Both cuts come off the same recoloured tile, so the farm and the land
+            # around it can never drift apart in hue however either is retuned; only
+            # the finish differs. Stone goes in AFTER the recolour, or the pebbles
+            # get rotated onto the terrain's hue along with the grass.
+            farm = strew_pebbles(base, c) if spec.get("rocky") else base
+            farm.save(os.path.join(OUT, "ground", name))
+            index[terrain].append(name)
+            wild.append(weather_ground(base, c) if spec.get("fill") else base)
+        if spec.get("fill"):
+            build_ground_fill(wild).save(
+                os.path.join(OUT, "ground", f"{terrain}_fill.png"))
+
     json.dump(index, open(os.path.join(OUT, "ground_index.json"), "w"), indent=1)
-    print(f"ground: {rows} terrains x {cols} variants -> {rows*cols} tiles")
+    total = sum(len(v) for v in index.values())
+    print(f"ground: {len(index)} terrains ({rows} source + "
+          f"{len(DERIVED_GROUND_ROWS)} derived) x {cols} variants -> {total} tiles")
     return index
 
 
@@ -355,6 +672,42 @@ def _tint(im, rgb):
 # positioned relative to the head, so their offsets get the head's offset added.
 HEAD_SLOTS = {"Head", *FACE_SLOTS}
 
+# ---------------------------------------------------------------------------
+# Faces the ordinary skeleton must not show through
+# ---------------------------------------------------------------------------
+# A named actor's plist is a DELTA over the regular skeleton, and most of them
+# replace Head (and sometimes Jaw) without replacing the separate EyeL/EyeR/teeth/
+# scar attachments. For an actor whose head art already has a complete face drawn on
+# it, compositing those inherited parts stacks a second face on top of the authored
+# one — the reported "Zombug has the default eyes over its model" (its plist supplies
+# Head + Jaw only, so the default eyeballs landed on the bug's own compound eyes).
+#
+# The RUNTIME rig has always handled this: these three sets MIRROR, by catalog key,
+# COMPLETE_SPECIAL_FACES / DEFAULT_FACE_SLOTS / MASKED_FACE_SLOTS in src/assets.ts
+# (the masked-actor membership itself lives in src/zombie/mutationVisual.ts). The
+# baked PORTRAIT did not, which is why a Zombug looked right on the farm and wrong on
+# every card that shows the PNG — the rewards screen and Received. Pinned against the
+# runtime lists by src/zombie/specialPortrait.test.ts.
+COMPLETE_SPECIAL_FACE_KEYS = {
+    "ZombieActorZombug",
+    "ZombieActorZwampThing",
+    "ZombieActorMasterNinjombie",
+    "ZombieActorNinjombie",
+    "ZombieActorMerZombie",
+    "ZombieActorProto",
+    "ZombieActorZombieBot",
+    "ZombieActorOmegaZombieBot",
+    "ZombieActorZomtar",
+    "ZombieActorZomdini",
+}
+MASKED_FACE_KEYS = {
+    "ZombieActorOldMcZombie",
+    "ZombieActorZastronaut",
+    "ZombieActorForest",
+}
+DEFAULT_FACE_SLOTS = {"EyeL", "EyeR", "UpperTeeth", "LowerTeeth", "Scar", "Jaw"}
+MASKED_FACE_SLOTS = {"LowerTeeth"}
+
 NAMED_SPECIAL_ZOMBIES = [
     ("Bombie", "bombie", "ZombieActorBombie"),
     ("Brock Coley", "brock_coley", "ZombieActorBrockColey"),
@@ -466,7 +819,7 @@ def export_zombie_parts(entry_name, name):
     print(f"zombie parts: {len(parts)} parts for {entry_name} -> zombie/{name}/")
 
 
-def composite_zombie(entry_name, out_name):
+def composite_zombie(entry_name, out_name, catalog_key=None):
     z = load_plist(os.path.join(APP, "Zombies.plist"))["Entries"][entry_name]
     rig = load_plist(os.path.join(APP, z["frameListFile"]))
     atlas = Image.open(os.path.join(APP, z["spriteSheetFile"])).convert("RGBA")
@@ -498,11 +851,23 @@ def composite_zombie(entry_name, out_name):
     base_head = (base["neck"]["x"], -base["neck"]["y"])
     head_dx, head_dy = head[0] - base_head[0], head[1] - base_head[1]
     replaced = set(slot.values())
+    # Same three rules the runtime rig applies (see the sets above). `own_jaw` is the
+    # Dapper Zombie case: an actor bringing its own jaw brings its own mouth line, and
+    # the default lower teeth are placed against the DEFAULT jaw shape.
+    complete_face = catalog_key in COMPLETE_SPECIAL_FACE_KEYS
+    masked_face = catalog_key in MASKED_FACE_KEYS
+    own_jaw = "Jaw" in replaced
     items = []
     if entry_name == "Bombie" or not z.get("floatingHead", False):
         for p in base["parts"]:
             base_slot = p["file"].removeprefix("default")
             if base_slot in replaced:
+                continue
+            if complete_face and base_slot in DEFAULT_FACE_SLOTS:
+                continue
+            if masked_face and base_slot in MASKED_FACE_SLOTS:
+                continue
+            if own_jaw and base_slot == "LowerTeeth":
                 continue
             f = frames[p["file"]]
             part = base_sheet.crop((f["x"], f["y"], f["x"] + f["w"], f["y"] + f["h"]))
@@ -644,7 +1009,7 @@ if __name__ == "__main__":
     os.makedirs(portrait_dir, exist_ok=True)
     for source_name, file_stem, catalog_key in NAMED_SPECIAL_ZOMBIES:
         export_zombie_parts(source_name, file_stem)
-        composite_zombie(source_name, file_stem + ".png")
+        composite_zombie(source_name, file_stem + ".png", catalog_key)
         shutil.copy2(os.path.join(OUT, "zombie", file_stem + ".png"),
                      os.path.join(portrait_dir, catalog_key + ".png"))
     pack_special_zombies()

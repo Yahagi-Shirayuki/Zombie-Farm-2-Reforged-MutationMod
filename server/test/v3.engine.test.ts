@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { RosterUnitProjection, SequencedCommand } from "../../src/net/protocol";
-import { EPIC_BOSSES } from "../../src/epicBoss/catalog";
+import { DR_GROUNDHOG, EPIC_BOSSES } from "../../src/epicBoss/catalog";
+import { XP_THRESHOLDS } from "../src/levels";
 import { COMBINE_SPECIAL_CHANCE, createCombineRandom } from "../../src/zombie/combineSpecies";
 import { encodeReceivedZombie } from "../../src/zombie/receivedReward";
+import { EPIC_PRIZE_SELL, RAID_DROP_SELL } from "../../src/awardSellValue";
 import plantRows from "../../public/assets/plants.json";
 import {
   applyCommandBatch,
@@ -231,29 +233,162 @@ describe("protocol v3 command engine", () => {
     expect(plot.state === "planted" ? plot.growMs : 0).toBe(450_000);
   });
 
-  it("authoritatively grants crop tokens only while an Epic Boss event is active", () => {
+  // The token roll now belongs to the client (see `epicBoss.token` in net/protocol.ts):
+  // harvesting must not mint one server-side, and the reporting command is taken on
+  // trust for the RUNNING event only.
+  const activeRun = () => ({
+    runId: "run", bossId: "dr-groundhog", activatedAt: 1, expiresAt: 10_000,
+    level: 1, maxHp: 2_000, currentHp: 2_000, encounterStartedAt: 0,
+    retryReadyAt: 0, tokenCount: 2, completedAt: 0, attackOrder: [],
+  });
+  const ripeCrop = () => ({
+    state: "planted" as const, cropKey: "lima_beans", plantedAt: -86_400_000, growMs: 86_400_000,
+    sell: 205, xp: 1, fertilized: false, zombie: false,
+  });
+
+  it("does not roll crop tokens server-side any more", () => {
     const state = freshGameplayState();
-    state.epicBoss = {
-      runId: "run", bossId: "dr-groundhog", activatedAt: 1, expiresAt: 10_000,
-      level: 1, maxHp: 2_000, currentHp: 2_000, encounterStartedAt: 0,
-      retryReadyAt: 0, tokenCount: 2, completedAt: 0, attackOrder: [],
-    };
-    state.farm.plots["0:0"] = {
-      state: "planted", cropKey: "lima_beans", plantedAt: -86_400_000, growMs: 86_400_000,
-      sell: 205, xp: 1, fertilized: false, zombie: false,
-    };
-    const won = applyCommandBatch(state, commands({ type: "farm.harvest", oc: 0, or: 0 }), {
+    state.epicBoss = activeRun();
+    state.farm.plots["0:0"] = ripeCrop();
+    // random() === 0 wins every roll the old authoritative path could have made.
+    const harvested = applyCommandBatch(state, commands({ type: "farm.harvest", oc: 0, or: 0 }), {
       now: 1_000, random: () => 0,
     });
-    expect(won.state.epicBoss?.tokenCount).toBe(3);
+    expect(harvested.results[0].status).toBe("applied");
+    expect(harvested.state.epicBoss?.tokenCount).toBe(2);
+  });
+
+  it("records client-rolled tokens without re-checking the roll", () => {
+    const state = freshGameplayState();
+    state.epicBoss = activeRun();
+    const granted = applyCommandBatch(state, commands(
+      { type: "epicBoss.token", runId: "run" },
+      { type: "epicBoss.token", runId: "run", count: 3 },
+    ), { now: 1_000 });
+    expect(granted.results.every((r) => r.status === "applied")).toBe(true);
+    expect(granted.state.epicBoss?.tokenCount).toBe(6);
+  });
+
+  it("drops token grants naming a stale, finished or expired event", () => {
+    const wrongRun = freshGameplayState();
+    wrongRun.epicBoss = activeRun();
+    const stale = applyCommandBatch(wrongRun, commands({ type: "epicBoss.token", runId: "other" }), { now: 1_000 });
+    expect(stale.results[0].status).toBe("rejected");
+    expect(stale.state.epicBoss?.tokenCount).toBe(2);
 
     const expired = freshGameplayState();
-    expired.epicBoss = { ...state.epicBoss, expiresAt: 999 };
-    expired.farm.plots["0:0"] = { ...state.farm.plots["0:0"] };
-    const ignored = applyCommandBatch(expired, commands({ type: "farm.harvest", oc: 0, or: 0 }), {
-      now: 1_000, random: () => 0,
+    expired.epicBoss = { ...activeRun(), expiresAt: 999 };
+    const late = applyCommandBatch(expired, commands({ type: "epicBoss.token", runId: "run" }), { now: 1_000 });
+    expect(late.results[0].status).toBe("rejected");
+    expect(late.state.epicBoss?.tokenCount).toBe(2);
+
+    const done = freshGameplayState();
+    done.epicBoss = { ...activeRun(), completedAt: 900 };
+    const after = applyCommandBatch(done, commands({ type: "epicBoss.token", runId: "run" }), { now: 1_000 });
+    expect(after.results[0].status).toBe("rejected");
+    expect(after.state.epicBoss?.tokenCount).toBe(2);
+  });
+
+  it("refuses an out-of-range token count", () => {
+    const state = freshGameplayState();
+    state.epicBoss = activeRun();
+    const absurd = applyCommandBatch(state, commands({ type: "epicBoss.token", runId: "run", count: 5_000 }), { now: 1_000 });
+    expect(absurd.results[0].status).toBe("rejected");
+    expect(absurd.state.epicBoss?.tokenCount).toBe(2);
+  });
+
+  // The event LURE is the opposite call from the token roll above: it is worth a whole
+  // activation and reopens the boss's prize chain, so it stays server-side.
+  describe("favourite crop event lure", () => {
+    const potatoPlot = () => ({
+      state: "planted" as const, cropKey: "potato", plantedAt: -86_400_000, growMs: 86_400_000,
+      sell: 99, xp: 5, fertilized: false, zombie: false,
     });
-    expect(ignored.state.epicBoss?.tokenCount).toBe(2);
+    // Dr. Groundhog unlocks at 24, and potato is its favourite.
+    const eligible = () => {
+      const state = freshGameplayState();
+      state.balance.xp = XP_THRESHOLDS[23];
+      state.farm.plots["0:0"] = potatoPlot();
+      return state;
+    };
+    const harvest = (state: MutableGameplayState, random: () => number) =>
+      applyCommandBatch(state, commands({ type: "farm.harvest", oc: 0, or: 0 }), { now: 1_000, random });
+
+    it("starts the crop's own event, free, and records the crop that did it", () => {
+      const state = eligible();
+      const brainsBefore = state.balance.brains;
+      const lured = harvest(state, () => 0);
+      expect(lured.results[0].status).toBe("applied");
+      expect(lured.state.epicBoss?.bossId).toBe("dr-groundhog");
+      expect(lured.state.epicBoss?.startedCrop).toBe("potato");
+      expect(lured.state.epicBoss?.level).toBe(1);
+      expect(lured.state.epicBoss?.tokenCount).toBe(0);
+      expect(lured.state.epicBoss?.expiresAt).toBe(1_000 + DR_GROUNDHOG.durationMs);
+      // Free means free: harvest gold is still paid, and nothing is deducted for it.
+      expect(lured.state.balance.brains).toBe(brainsBefore);
+    });
+
+    it("reopens that boss's finished quests exactly as a paid activation does", () => {
+      const state = eligible();
+      const questId = DR_GROUNDHOG.questIds[0];
+      state.quests.completed.push(questId);
+      state.quests.progress.push({ questId, counts: [1] });
+      const lured = harvest(state, () => 0);
+      expect(lured.state.quests.completed).not.toContain(questId);
+      expect(lured.state.quests.progress.some((entry) => entry.questId === questId)).toBe(false);
+      expect(lured.questChanged).toBe(true);
+    });
+
+    it("never lures while an event is already running", () => {
+      const state = eligible();
+      state.epicBoss = activeRun();
+      const harvested = harvest(state, () => 0);
+      expect(harvested.state.epicBoss?.runId).toBe("run");
+      expect(harvested.state.epicBoss?.startedCrop).toBeUndefined();
+    });
+
+    // An expired or completed run is not a running one, so the farm is eligible again.
+    it("lures over a finished or expired run", () => {
+      const expired = eligible();
+      expired.epicBoss = { ...activeRun(), expiresAt: 999 };
+      expect(harvest(expired, () => 0).state.epicBoss?.startedCrop).toBe("potato");
+
+      const done = eligible();
+      done.epicBoss = { ...activeRun(), completedAt: 900 };
+      expect(harvest(done, () => 0).state.epicBoss?.startedCrop).toBe("potato");
+    });
+
+    it("stays silent below the boss's unlock level", () => {
+      const state = eligible();
+      state.balance.xp = XP_THRESHOLDS[22]; // level 23, one short of Dr. Groundhog
+      expect(harvest(state, () => 0).state.epicBoss).toBeNull();
+    });
+
+    it("ignores a crop that is nobody's favourite", () => {
+      const state = eligible();
+      state.farm.plots["0:0"] = { ...potatoPlot(), cropKey: "carrot", growMs: 900_000 };
+      expect(harvest(state, () => 0).state.epicBoss).toBeNull();
+    });
+
+    it("loses the roll on an ordinary harvest", () => {
+      expect(harvest(eligible(), () => 0.99).state.epicBoss).toBeNull();
+    });
+
+    // A field-wide Insta-Harvest rolls every plot it pulls. It may start ONE event.
+    it("starts at most one event per Insta-Harvest sweep", () => {
+      const state = eligible();
+      state.balance.xp = XP_THRESHOLDS[23];
+      state.inventory["insta_harvest"] = 1;
+      for (let plot = 0; plot < 6; plot++) state.farm.plots[`${plot * 4}:0`] = potatoPlot();
+      const swept = applyCommandBatch(
+        state, commands({ type: "power.use", key: "insta_harvest" }), { now: 1_000, random: () => 0 }
+      );
+      expect(swept.results[0].status).toBe("applied");
+      expect(swept.state.epicBoss?.startedCrop).toBe("potato");
+      expect(swept.state.epicBoss?.runId).toBeTruthy();
+      // Every plot was still harvested; only the extra ACTIVATIONS are suppressed.
+      expect(Object.values(swept.state.farm.plots).every((plot) => plot.state === "spent")).toBe(true);
+    });
   });
 
   it("accepts the freely placed, non-grid-aligned plot used by the tutorial", () => {
@@ -353,7 +488,7 @@ describe("protocol v3 command engine", () => {
     );
 
     expect(result.results[0]).toMatchObject({ status: "applied" });
-    expect(result.state.powderStorage.crystals.red).toBe(5);
+    expect(result.state.powderStorage!.crystals.red).toBe(5);
   });
 
   it("doubles crystal crop harvests when fertilized", () => {
@@ -376,14 +511,14 @@ describe("protocol v3 command engine", () => {
     );
 
     expect(result.results[0]).toMatchObject({ status: "applied" });
-    expect(result.state.powderStorage.crystals.black).toBe(30);
+    expect(result.state.powderStorage!.crystals.black).toBe(30);
   });
 
   it("starts and collects a Powder Machine grind", () => {
     const state = freshGameplayState();
     state.objects.objects.push({ instanceId: "powder-1", catalogKey: "powderMachine", status: "placed" });
-    state.powderStorage.crystals.red = 2;
-    state.powderStorage.crystals.blue = 1;
+    state.powderStorage!.crystals.red = 2;
+    state.powderStorage!.crystals.blue = 1;
 
     const started = applyCommandBatch(
       state,
@@ -392,8 +527,8 @@ describe("protocol v3 command engine", () => {
     );
 
     expect(started.results[0]).toMatchObject({ status: "applied" });
-    expect(started.state.powderStorage.crystals.red).toBe(0);
-    expect(started.state.powderStorage.crystals.blue).toBe(0);
+    expect(started.state.powderStorage!.crystals.red).toBe(0);
+    expect(started.state.powderStorage!.crystals.blue).toBe(0);
     expect(started.state.powderGrinds?.["powder-1"]).toMatchObject({
       crystals: { red: 2, blue: 1 },
       powders: { red: 14, blue: 7 },
@@ -414,8 +549,8 @@ describe("protocol v3 command engine", () => {
       { now: 541_000 },
     );
     expect(collected.results[0]).toMatchObject({ status: "applied" });
-    expect(collected.state.powderStorage.powders.red).toBe(14);
-    expect(collected.state.powderStorage.powders.blue).toBe(7);
+    expect(collected.state.powderStorage!.powders.red).toBe(14);
+    expect(collected.state.powderStorage!.powders.blue).toBe(7);
     expect(collected.state.powderGrinds?.["powder-1"]).toBeUndefined();
   });
 
@@ -467,9 +602,10 @@ describe("protocol v3 command engine", () => {
   it("grants a quest boost reward into the authoritative inventory", () => {
     const state = freshGameplayState();
     state.quests.completed = ["1002"]; // quest 1003's prerequisite
-    // Epic quest 1003 "Defeat Dr. Groundhog Level 20" pays a Golden Dice.
+    // Epic quest 1003 pays a Golden Dice at the top of the ladder — rung 10 since the
+    // 20 authored rungs were merged in pairs (prep_all_epic_bosses.multipliers).
     applyQuestEvents(state.balance, state.quests, [
-      { type: "kEpicStageEnemyDefeatedNotification", subject: "20" },
+      { type: "kEpicStageEnemyDefeatedNotification", subject: "10" },
     ], {
       includeEpic: true,
       epicQuestIds: new Set(["1003"]),
@@ -837,6 +973,38 @@ describe("protocol v3 command engine", () => {
     }));
   });
 
+  it("refuses every queued harvest once the army is full with no Mausoleum", () => {
+    const state = freshGameplayState();
+    state.zombieMax = 16;
+    state.roster = Array.from({ length: 16 }, (_unit, i) => ({
+      id: `z${i}`, key: "ZombieActorRegularTier1", mutation: 0, invasions: 0, stored: false,
+    }));
+    for (const oc of [0, 4, 8]) {
+      state.farm.plots[`${oc}:0`] = {
+        state: "planted", cropKey: "ZombieActorGirlTier1", plantedAt: 0,
+        growMs: 1, sell: 0, xp: 1, fertilized: false, zombie: true,
+      };
+    }
+
+    // A client whose own fences failed still cannot push a 17th zombie through: each
+    // ripe crop is rejected and stays in the ground, ready to harvest after a sale.
+    const result = applyCommandBatch(state, commands(
+      { type: "farm.harvest", oc: 0, or: 0 },
+      { type: "farm.harvest", oc: 4, or: 0 },
+      { type: "farm.harvest", oc: 8, or: 0 },
+    ), { now: 1_000, id: () => "must-not-exist" });
+
+    expect(result.results).toEqual([
+      { sequence: 1, status: "rejected", error: "capacity_full" },
+      { sequence: 2, status: "rejected", error: "capacity_full" },
+      { sequence: 3, status: "rejected", error: "capacity_full" },
+    ]);
+    expect(result.state.roster).toHaveLength(16);
+    for (const oc of [0, 4, 8]) {
+      expect(result.state.farm.plots[`${oc}:0`]).toMatchObject({ state: "planted" });
+    }
+  });
+
   it("rejects removed zombie-purchase powers even if stale inventory contains one", () => {
     const state = freshGameplayState();
     state.inventory.flower_zombie_pot = 1;
@@ -997,6 +1165,22 @@ describe("protocol v3 command engine", () => {
     expect(invalidMissingSource.results[0]).toMatchObject({ status: "rejected", error: "not_owned" });
   });
 
+  it("refuses to adopt the starter shed under a malformed client instance id", () => {
+    // Adoption is the only upgrade that INSERTS a client-named object, so it takes the
+    // same id fence as object.buy. It used to accept anything `commandString` allowed,
+    // which put an arbitrary 128-character string into a document other players read.
+    const state = freshGameplayState();
+    state.balance.gold = 20_000;
+    for (const instanceId of ["<script>", "has space", "a".repeat(81), "quote\"id"]) {
+      const rejected = applyCommandBatch(state, commands({
+        type: "object.upgrade", instanceId, catalogKey: "storage02",
+      }), { now: 100 });
+      expect(rejected.results[0]).toMatchObject({ status: "rejected", error: "not_owned" });
+      expect(rejected.state.objects.objects).toEqual([]);
+      expect(rejected.state.balance.gold).toBe(20_000);
+    }
+  });
+
   it("persists Zombie Pot ownership and charges the permanent repeat price", () => {
     const state = freshGameplayState();
     state.balance.gold = 1_000;
@@ -1096,7 +1280,7 @@ describe("protocol v3 command engine", () => {
   it("dyes a zombie after the bucket's timed job finishes", () => {
     const state = freshGameplayState();
     state.objects.objects.push({ instanceId: "bucket-1", catalogKey: "zombieColorMixerBucket", status: "placed" });
-    state.powderStorage.powders.red = 96;
+    state.powderStorage!.powders.red = 96;
     state.roster.push({
       id: "z1",
       key: "ZombieActorRegularTier1",
@@ -1114,7 +1298,7 @@ describe("protocol v3 command engine", () => {
     }), { now: 100 });
 
     expect(started.results[0]).toMatchObject({ status: "applied" });
-    expect(started.state.powderStorage.powders.red).toBe(0);
+    expect(started.state.powderStorage!.powders.red).toBe(0);
     expect(started.state.roster[0].lockedByRaid).toBe("dye:bucket-1");
     expect(started.state.roster[0].color).toBeUndefined();
     expect(started.state.zombieColorDyes?.["bucket-1"]).toMatchObject({
@@ -1148,7 +1332,7 @@ describe("protocol v3 command engine", () => {
   it("rejects dyeing beyond a colour's useful range", () => {
     const state = freshGameplayState();
     state.objects.objects.push({ instanceId: "bucket-1", catalogKey: "zombieColorMixerBucket", status: "placed" });
-    state.powderStorage.powders.red = 1;
+    state.powderStorage!.powders.red = 1;
     state.roster.push({
       id: "z1",
       key: "ZombieActorRegularTier1",
@@ -1167,7 +1351,7 @@ describe("protocol v3 command engine", () => {
     }), { now: 100 });
 
     expect(dyed.results[0]).toMatchObject({ status: "rejected", error: "color_saturated" });
-    expect(dyed.state.powderStorage.powders.red).toBe(1);
+    expect(dyed.state.powderStorage!.powders.red).toBe(1);
     expect(dyed.state.roster[0].color).toEqual([255, 0, 0]);
   });
 
@@ -1775,17 +1959,19 @@ describe("protocol v3 command engine", () => {
       .toMatchObject({ status: "rejected", error: "storage_full" });
   });
 
-  // ---- Mausoleum upgrade ladder (mausoleum3 -> 4 -> 5 -> 6 -> 7, +5 slots each) ----
-  const withMausoleum = (catalogKey: string): MutableGameplayState => {
+  // ---- Mausoleum upgrade ladder (mausoleum3 -> 4 -> ... -> 12, +5 slots each) ----
+  const withMausoleum = (catalogKey: string, brains = 100): MutableGameplayState => {
     const state = freshGameplayState();
-    state.balance.brains = 100;
+    state.balance.brains = brains;
     state.balance.xp = 50_000; // above every level gate
     state.objects.objects.push({ instanceId: "tomb", catalogKey, status: "placed" });
     return state;
   };
 
   it("charges each Mausoleum rung in brains and swaps the building in place", () => {
-    const state = withMausoleum("mausoleum3");
+    // The whole ladder is 108 brains of upgrades (4, 6, 8 ... 20, two more per rung),
+    // so this wallet is stocked to clear it rather than to the fixture's default 100.
+    const state = withMausoleum("mausoleum3", 200);
     const result = applyCommandBatch(state, commands(
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum4" },
     ), { now: 1 });
@@ -1793,16 +1979,32 @@ describe("protocol v3 command engine", () => {
     expect(result.state.objects.objects).toContainEqual(
       expect.objectContaining({ instanceId: "tomb", catalogKey: "mausoleum4" })
     );
-    expect(result.state.balance.brains).toBe(96);
+    expect(result.state.balance.brains).toBe(196); // 200 - 4
 
-    // ...and the rungs above cost 6, 8, then 10 brains.
+    // ...and this fork prices the next three rungs 6 / 8 / 10 rather than a flat 4,
+    // so the three of them cost 24: 196 - 24 = 172.
     const rest = applyCommandBatch(result.state, commands(
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum5" },
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum6" },
       { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum7" },
     ), { now: 2 });
     expect(rest.results.map((r) => r.status)).toEqual(["applied", "applied", "applied"]);
-    expect(rest.state.balance.brains).toBe(72);
+    expect(rest.state.balance.brains).toBe(172);
+
+    // The ladder runs five rungs further to Mausoleum X, and keeps climbing in price:
+    // 12, 14, 16, 18, 20 — 80 brains for the top half.
+    const top = applyCommandBatch(rest.state, commands(
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum8" },
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum9" },
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum10" },
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum11" },
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum12" },
+    ), { now: 3 });
+    expect(top.results.map((r) => r.status)).toEqual(Array(5).fill("applied"));
+    expect(top.state.balance.brains).toBe(92); // 172 - 80
+    expect(top.state.objects.objects).toContainEqual(
+      expect.objectContaining({ instanceId: "tomb", catalogKey: "mausoleum12" })
+    );
   });
 
   it("refuses to skip a rung, to climb from a non-Mausoleum, or to buy a tier outright", () => {
@@ -1812,8 +2014,9 @@ describe("protocol v3 command engine", () => {
     expect(skipped.results[0]).toMatchObject({ status: "rejected", error: "bad_tier" });
     expect(skipped.state.balance.brains).toBe(100);
 
-    const topped = applyCommandBatch(withMausoleum("mausoleum7"), commands(
-      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum7" },
+    // Nothing sits above Mausoleum X, so the top rung has no upgrade of its own.
+    const topped = applyCommandBatch(withMausoleum("mausoleum12"), commands(
+      { type: "object.upgrade", instanceId: "tomb", catalogKey: "mausoleum12" },
     ), { now: 1 });
     expect(topped.results[0]).toMatchObject({ status: "rejected", error: "bad_tier" });
 
@@ -1857,6 +2060,42 @@ describe("protocol v3 command engine", () => {
     expect(result.results[0]).toMatchObject({ status: "rejected", error: "bad_item" });
     expect(result.state.storage.received[marker]).toBe(1);
     expect(result.state.storage.stored[marker]).toBeUndefined();
+  });
+
+  it("holds the item shed to the capacity of the shed actually placed", () => {
+    // The retired v2 route enforced this (planStore via shedCapacity); v3 dropped it and
+    // left the cap client-side only, so an edited client could fill a Shabby Shed
+    // without limit. The floor is the free starter shed's 8 slots.
+    const state = freshGameplayState();
+    state.storage.received.windmill = 20;
+
+    const overflow = applyCommandBatch(state, commands(
+      { type: "storage.move", itemKey: "windmill", quantity: 9, direction: "store" },
+    ), { now: 1 });
+    expect(overflow.results[0]).toMatchObject({ status: "rejected", error: "shed_full" });
+    expect(overflow.state.storage.stored.windmill).toBeUndefined();
+
+    const exact = applyCommandBatch(state, commands(
+      { type: "storage.move", itemKey: "windmill", quantity: 8, direction: "store" },
+      { type: "storage.move", itemKey: "windmill", quantity: 1, direction: "store" },
+    ), { now: 1 });
+    expect(exact.results[0].status).toBe("applied");
+    expect(exact.results[1]).toMatchObject({ status: "rejected", error: "shed_full" });
+    expect(exact.state.storage.stored.windmill).toBe(8);
+
+    // A bigger PLACED shed raises the ceiling; taking items back out never checks it.
+    const bigger = { ...state, objects: { version: 0,
+      objects: [{ instanceId: "shed", catalogKey: "storage03", status: "placed" as const }] } };
+    const roomy = applyCommandBatch(bigger, commands(
+      { type: "storage.move", itemKey: "windmill", quantity: 20, direction: "store" },
+    ), { now: 1 });
+    expect(roomy.results[0].status).toBe("applied");
+    expect(roomy.state.storage.stored.windmill).toBe(20);
+
+    const emptying = applyCommandBatch(roomy.state, commands(
+      { type: "storage.move", itemKey: "windmill", quantity: 20, direction: "take" },
+    ), { now: 2 });
+    expect(emptying.results[0].status).toBe("applied");
   });
 
   const specialPair = (): MutableGameplayState => {
@@ -2116,15 +2355,17 @@ describe("protocol v3 command engine", () => {
     expect(result.results.map((entry) => entry.status)).toEqual(["applied", "applied"]);
     expect(result.state.storage.received["Circus Tent"]).toBe(0);
     expect(result.state.objects.objects).toEqual([]);
-    expect(result.state.balance.gold).toBe(initialGold + 1);
+    // An invasion prize sells for its authored value (src/raidDropValue.ts), not the
+    // one-gold floor a cost-0 catalog row would otherwise produce.
+    expect(result.state.balance.gold).toBe(initialGold + RAID_DROP_SELL.circusTent);
   });
 
-  it("can sell every Epic Boss prize, for the same one gold as any other reward", () => {
+  it("can sell every Epic Boss prize, at a quarter of its brain price", () => {
     // Two gaps met here. The prizes had no drops.json/raidLootCatalog row, so claiming
     // one was refused as a "bad item"; and 40 of the 50 had no objectCatalog row, so
-    // object.refund refused the sale even once the claim worked. They are priced at
-    // cost 0 like every other earned decoration, so a free prize sells for the game's
-    // one-gold minimum rather than minting its source brain price (1,000/brain).
+    // object.refund refused the sale even once the claim worked. They still carry
+    // cost 0 (they are never bought), so the payout comes from the authored table:
+    // a quarter of the prize's Reforged brain price, at 1,000 gold per brain.
     const prizes = EPIC_BOSSES.flatMap((boss) => boss.loot.filter((prize) => !prize.stageActor));
     expect(prizes.length).toBe(50);
     const state = freshGameplayState();
@@ -2142,7 +2383,8 @@ describe("protocol v3 command engine", () => {
       .map(({ entry, prize }) => `${prize}: ${JSON.stringify(entry)}`);
     expect(refused).toEqual([]);
     expect(result.state.objects.objects).toEqual([]);
-    expect(result.state.balance.gold).toBe(initialGold + prizes.length);
+    const expected = prizes.reduce((sum, prize) => sum + EPIC_PRIZE_SELL[prize.tile!], 0);
+    expect(result.state.balance.gold).toBe(initialGold + expected);
   });
 
   it("cannot claim a Received reward twice", () => {
@@ -2164,16 +2406,20 @@ describe("protocol v3 command engine", () => {
       type: "kEpicStageEnemyDefeatedNotification",
       subject: String(level),
     }];
+    // Rungs are the 10-rung ladder's: the ordinary prize is pinned to 5, the omega to 10
+    // (prep_quests.py EPIC_PRIZE_RUNGS), with the middle milestones spread between.
     expect(applyQuestEvents(state.balance, state.quests, event(5))).toEqual([]);
+    // Rung 5 carries both the zombie prize and the voucher milestone.
     expect(applyQuestEvents(state.balance, state.quests, event(5), { includeEpic: true, epicQuestIds: groundhog }))
-      .toContainEqual(expect.objectContaining({ questId: "1000", completed: true }));
-    expect(applyQuestEvents(state.balance, state.quests, event(10), { includeEpic: true, epicQuestIds: groundhog }))
-      .toContainEqual(expect.objectContaining({ questId: "1001", completed: true }));
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ questId: "1000", completed: true }),
+        expect.objectContaining({ questId: "1001", completed: true }),
+      ]));
     const brains = state.balance.brains;
-    expect(applyQuestEvents(state.balance, state.quests, event(15), { includeEpic: true, epicQuestIds: groundhog }))
+    expect(applyQuestEvents(state.balance, state.quests, event(8), { includeEpic: true, epicQuestIds: groundhog }))
       .toContainEqual(expect.objectContaining({ questId: "1002", completed: true }));
     expect(state.balance.brains).toBe(brains + 1);
-    const final = applyQuestEvents(state.balance, state.quests, event(20), { includeEpic: true, epicQuestIds: groundhog });
+    const final = applyQuestEvents(state.balance, state.quests, event(10), { includeEpic: true, epicQuestIds: groundhog });
     expect(final).toEqual(expect.arrayContaining([
       expect.objectContaining({ questId: "1003", completed: true }),
       expect.objectContaining({ questId: "1011", completed: true }),

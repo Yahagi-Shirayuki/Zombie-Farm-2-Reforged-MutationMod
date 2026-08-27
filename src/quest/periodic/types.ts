@@ -2,9 +2,9 @@
 // catalog quests in quests.json: those are a one-time authored progression chain,
 // these are generated per period, reset on a clock, and pay XP only.
 //
-// The two systems deliberately share the requirement vocabulary ? a periodic quest
+// The two systems deliberately share the requirement vocabulary — a periodic quest
 // carries the same `notificationID` / `notificationObject` / `countTotal` triple as a
-// QuestRequirement ? so the same game events and the same questSubjectMatches() drive
+// QuestRequirement — so the same game events and the same questSubjectMatches() drive
 // both. What differs is the lifecycle: a periodic quest expires, and its reward is
 // CLAIMED rather than auto-granted (see PeriodicScopeState.claimed).
 
@@ -26,7 +26,7 @@ export interface PeriodicQuest {
   /** Subject to match; "" is the wildcard, exactly as in the catalog quests. */
   notificationObject: string;
   countTotal: number;
-  /** XP paid on claim. FROZEN at generation time ? see generatePeriodicSet. */
+  /** XP paid on claim. FROZEN at generation time — see generatePeriodicSet. */
   xp: number;
 }
 

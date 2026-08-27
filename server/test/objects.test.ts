@@ -27,9 +27,19 @@ describe("objectCatalog — mirror of placeables.json", () => {
     }
   });
   it("limits every functional item, with the Zombie Pot capped at three", () => {
+    // Two named exceptions to one-per-farm, and they must stay named: the Zombie
+    // Pot's three, and the Memorial Statue's none at all (one statue remembers one
+    // zombie, so the farm needs as many as the player has lost). Anything else
+    // functional gaining a cap by accident is what this loop is here to catch.
+    const uncapped = new Set(["memorialStatue"]);
+    // This fork's own functional buildings: the Powder Machine is a throughput
+    // building (four) and the dye bucket matches the Pot (three).
+    const forkLimits: Record<string, number> = { powderMachine: 4, zombieColorMixerBucket: 3 };
     for (const placeable of placeables.filter((row) => row.category === "functional")) {
-      expect(objectEcon(placeable.key)?.purchaseLimit, placeable.key)
-        .toBe(placeable.key === "zombieCombiner" ? 3 : 1);
+      const expected = uncapped.has(placeable.key) ? undefined
+        : forkLimits[placeable.key]
+        ?? (placeable.key === "zombieCombiner" ? 3 : 1);
+      expect(objectEcon(placeable.key)?.purchaseLimit, placeable.key).toBe(expected);
     }
   });
   it("prices refund at floor(cost*0.2), and NOTHING for a free object", () => {
@@ -114,17 +124,17 @@ describe("planObjectBuy — exact price + xp", () => {
 
 describe("planObjectRefund — must own it", () => {
   it("always credits gold, converting brain costs at 1,000 gold each", () => {
-    expect(planObjectRefund(objectEcon("daisy"), 1)).toEqual({ ok: true, currency: "gold", refund: 2 });
-    expect(planObjectRefund(objectEcon("skeletonCouple"), 2)).toEqual({ ok: true, currency: "gold", refund: 3_000 });
+    expect(planObjectRefund("daisy", objectEcon("daisy"), 1)).toEqual({ ok: true, currency: "gold", refund: 2 });
+    expect(planObjectRefund("skeletonCouple", objectEcon("skeletonCouple"), 2)).toEqual({ ok: true, currency: "gold", refund: 3_000 });
   });
   it("rejects refunding an object you don't own, or an unknown key", () => {
-    expect(planObjectRefund(objectEcon("daisy"), 0)).toMatchObject({ ok: false, error: "none_owned" });
-    expect(planObjectRefund(objectEcon("nope"), 5)).toMatchObject({ ok: false, error: "bad_item" });
+    expect(planObjectRefund("daisy", objectEcon("daisy"), 0)).toMatchObject({ ok: false, error: "none_owned" });
+    expect(planObjectRefund("nope", objectEcon("nope"), 5)).toMatchObject({ ok: false, error: "bad_item" });
   });
   it("never sells functional items", () => {
-    expect(planObjectRefund(objectEcon("gravestoneBlue"), 1))
+    expect(planObjectRefund("gravestoneBlue", objectEcon("gravestoneBlue"), 1))
       .toMatchObject({ ok: false, error: "not_sellable" });
-    expect(planObjectRefund(objectEcon("zombieCombiner"), 1))
+    expect(planObjectRefund("zombieCombiner", objectEcon("zombieCombiner"), 1))
       .toMatchObject({ ok: false, error: "not_sellable" });
   });
 });

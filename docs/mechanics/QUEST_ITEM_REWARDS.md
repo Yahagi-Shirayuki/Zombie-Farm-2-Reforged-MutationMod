@@ -57,8 +57,10 @@ the extracted `Market.plist` (`ZF2R_extracted/data/json/gameplay/Market.json`):
   currently ships no `effect: "gift"` entries, so there is nothing to grant. It lands in
   Received as a trophy until a gift-voucher boost exists.
 * **White Bunny** (entry 560, Mystery Box) and **Poppy** (entry 523, Mega Pets Pack) are
-  **pets**. `public/assets/pets/` only carries epic-boss pets plus the Easter and
-  Gingerbread actors, so neither exists.
+  **pets**. Both now exist — the pet catalog carries all 40 variants — but they still do
+  not deliver, for a different reason than when this was written: `grantQuestItem` resolves
+  a name through `boostKeyForName` and `dropEcon` only, and a pet is in neither catalog.
+  Wiring them needs a pet branch in `grantQuestItem`, not new content.
 
 Their keys are populated anyway. `grantQuestItem` ignores a name it cannot resolve, so
 these stay no-ops — but they start working the day the content lands, with no code

@@ -14,10 +14,67 @@ describe("Dr. Groundhog event", () => {
       expect(epicBossHp(boss, boss.maxLevel)).toBeGreaterThan(0);
     }
   });
-  it("uses the recovered 20-level HP curve", () => {
-    expect(epicBossHp(DR_GROUNDHOG, 1)).toBe(2_000);
-    expect(epicBossHp(DR_GROUNDHOG, 2)).toBe(2_800);
-    expect(epicBossHp(DR_GROUNDHOG, 20)).toBe(214_000);
+  // The three bosses whose atlases shipped without frame metadata draw from art
+  // recovered out of those sheets by geometry. Both halves used to be missing: the
+  // combat still was a copy of the revealed INTRO CARD (a menu illustration that had
+  // never been near the battlefield), and there were no strips at all, so the boss
+  // fought as a motionless picture.
+  it("gives each reconstructed boss combat art cut from its own sheet", () => {
+    const reconstructed = EPIC_BOSSES.filter((boss) => boss.reconstructed);
+    expect(reconstructed).toHaveLength(3);
+    for (const boss of reconstructed) {
+      expect(boss.bossTexture).toBe("boss.png");
+      // A rect proves the still was CUT from the atlas; a copied intro card has none.
+      const frame = boss.staticFrame;
+      expect(frame, boss.id).toHaveLength(4);
+      expect(frame!.every((value) => Number.isInteger(value) && value >= 0), boss.id).toBe(true);
+      expect(Math.min(frame![2], frame![3]), boss.id).toBeGreaterThan(64);
+      expect(frame![0] + frame![2], boss.id).toBeLessThanOrEqual(2048);
+      expect(frame![1] + frame![3], boss.id).toBeLessThanOrEqual(2048);
+    }
+  });
+
+  // Every strip of one boss must share a cell, because RaidScene scales an Epic Boss
+  // token ONCE from the first strip it builds and never recomputes it — strips that
+  // disagree make the boss change size when it changes state. ZF2's own sheets all do
+  // this; the hand-ordered ones have to be packed to match.
+  it("packs every one of a boss's strips into a single cell", () => {
+    for (const boss of EPIC_BOSSES) {
+      const strips = Object.values(boss.animations);
+      if (!strips.length) continue;
+      const cells = new Set(strips.map((strip) => `${strip.cellWidth}x${strip.cellHeight}`));
+      expect(cells, boss.id).toHaveLength(1);
+      for (const strip of strips) expect(strip.frameCount, boss.id).toBeGreaterThan(0);
+    }
+  });
+
+  it("uses the pair-compressed 10-rung HP curve", () => {
+    // Each rung is two authored ones added together: 1x+1.4x, 2.2x+3.6x, … 88x+107x.
+    // Dr. Groundhog is the BOTTOM of the baseHp ramp at 1500 (0.75x the source's 2000),
+    // so its rungs are the curve's shape at three quarters the scale.
+    expect(DR_GROUNDHOG.baseHp).toBe(1_500);
+    expect(epicBossHp(DR_GROUNDHOG, 1)).toBe(3_600);
+    expect(epicBossHp(DR_GROUNDHOG, 2)).toBe(8_700);
+    expect(epicBossHp(DR_GROUNDHOG, 10)).toBe(292_500);
+  });
+
+  it("ramps baseHp across the unlock ladder, ±25% about the middle pair", () => {
+    // The ladder used to be flat, which made the ENTRY event the grindiest one — every
+    // event cost the same total damage, but the army fighting the first is the weakest.
+    // Ordered by unlock level, not by the catalog's own order.
+    const byUnlock = ["dr-groundhog", "bully-frog", "rocky-rhino", "general-larvaelus",
+                      "mystical-mamba", "foul-owl", "skunkarella", "loco-locust"]
+      .map((id) => epicBossById(id)!);
+    expect(byUnlock.every(Boolean)).toBe(true);
+    // Monotone, and the two middle events hold ZF2's own BaseHP — they are the fixed
+    // point the ±25% is stated against, so a drift there moves every other event's meaning.
+    for (let i = 1; i < byUnlock.length; i++) {
+      expect(byUnlock[i].baseHp, byUnlock[i].id).toBeGreaterThanOrEqual(byUnlock[i - 1].baseHp);
+    }
+    expect(byUnlock[3].baseHp).toBe(2_000);
+    expect(byUnlock[4].baseHp).toBe(2_000);
+    expect(byUnlock[0].baseHp / 2_000).toBeCloseTo(0.75, 5);
+    expect(byUnlock[7].baseHp / 2_000).toBeCloseTo(1.25, 5);
   });
 
   it("retains damage and permits an immediate resource-gated retry", () => {
@@ -28,17 +85,17 @@ describe("Dr. Groundhog event", () => {
     expect(gate.ok).toBe(true);
     if (!gate.ok) return;
     run = manager.finish(gate.run, 600, false).run;
-    expect(run.currentHp).toBe(1_400);
+    expect(run.currentHp).toBe(3_000);
     expect(manager.start(run, ["z1"]).ok).toBe(true);
     now = gate.run.encounterStartedAt + DR_GROUNDHOG.encounterMs;
-    expect(manager.normalize(run)?.currentHp).toBe(2_000);
+    expect(manager.normalize(run)?.currentHp).toBe(3_600);
   });
 
-  it("advances immediately through level 20 and completes", () => {
+  it("advances immediately through the top rung and completes", () => {
     let now = 1_000;
     const manager = new EpicBossManager(DR_GROUNDHOG, () => now);
     let run = manager.activate("run");
-    for (let level = 1; level <= 20; level++) {
+    for (let level = 1; level <= DR_GROUNDHOG.maxLevel; level++) {
       const gate = manager.start(run, ["z1"]);
       expect(gate.ok).toBe(true);
       if (!gate.ok) return;
@@ -75,5 +132,49 @@ describe("Dr. Groundhog event", () => {
     const manager = new EpicBossManager(DR_GROUNDHOG, () => 1_000);
     const active = { ...manager.activate("run"), tokenCount: 4 };
     expect(manager.end(active)?.tokenCount).toBe(0);
+  });
+});
+
+describe("runs saved above the ladder (rung-count cuts)", () => {
+  const boss = epicBossById("loco-locust")!;
+
+  it("pulls an in-flight run down to the last rung, at the same HP", () => {
+    const manager = new EpicBossManager(boss, () => 1_000);
+    // A run mid-flight at level 25 when the ladder was cut beneath it — first from 40
+    // rungs to 20, now from 20 to 10. Either way it lands on the current top rung.
+    // Built at the rung's own full HP so "at the same HP" is a real claim: the run is
+    // undamaged before the clamp and must still be undamaged after it.
+    const top = epicBossHp(boss, 25);
+    const stale = { ...manager.activate("run"), level: 25, maxHp: top, currentHp: top };
+    const run = manager.normalize(stale)!;
+    expect(run.level).toBe(boss.maxLevel);
+    // epicBossHp clamps its own index, so an off-the-end level reads as the top rung.
+    expect(run.maxHp).toBe(epicBossHp(boss, 25));
+    expect(run.currentHp).toBe(run.maxHp);
+  });
+
+  it("keeps the damage already dealt to the boss it is part-way through", () => {
+    const manager = new EpicBossManager(boss, () => 1_000);
+    const stale = { ...manager.activate("run"), level: 33, maxHp: 214_000, currentHp: 90_000 };
+    expect(manager.normalize(stale)?.currentHp).toBe(90_000);
+  });
+
+  it("lets that run's next win claim the top prize instead of ending unrewarded", () => {
+    const manager = new EpicBossManager(boss, () => 1_000);
+    const stale = { ...manager.activate("run"), level: 25, maxHp: 214_000, currentHp: 214_000 };
+    const gate = manager.start(stale, ["z1"]);
+    expect(gate.ok).toBe(true);
+    if (!gate.ok) return;
+    const result = manager.finish(gate.run, gate.run.currentHp, true);
+    // The current top rung is what the retuned top-prize quest listens for — an unclamped
+    // run would have reported 25 here, completed, and never granted Vagabond Zombie.
+    expect(result.defeatedLevel).toBe(boss.maxLevel);
+    expect(result.completed).toBe(true);
+  });
+
+  it("leaves a completed run's recorded level alone", () => {
+    const manager = new EpicBossManager(boss, () => 1_000);
+    const done = { ...manager.activate("run"), level: 40, completedAt: 900 };
+    expect(manager.normalize(done)?.level).toBe(40);
   });
 });

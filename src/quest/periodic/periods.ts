@@ -9,7 +9,7 @@
 export const DAY_MS = 86_400_000;
 export const WEEK_MS = 7 * DAY_MS;
 
-/** UTC day index ? the number of whole days since the epoch. */
+/** UTC day index — the number of whole days since the epoch. */
 export function dayIndex(now: number): number {
   return Math.floor(now / DAY_MS);
 }
@@ -17,8 +17,8 @@ export function dayIndex(now: number): number {
 /** Monday-aligned week index.
  *
  *  Epoch day 0 (1970-01-01) was a THURSDAY, so shifting by 3 days puts a Monday on
- *  every multiple of seven: day 4 (Mon 1970-01-05) ? week 1, day 10 (Sun) ? week 1,
- *  day 11 (Mon) ? week 2. */
+ *  every multiple of seven: day 4 (Mon 1970-01-05) → week 1, day 10 (Sun) → week 1,
+ *  day 11 (Mon) → week 2. */
 export function weekIndex(now: number): number {
   return Math.floor((dayIndex(now) + 3) / 7);
 }

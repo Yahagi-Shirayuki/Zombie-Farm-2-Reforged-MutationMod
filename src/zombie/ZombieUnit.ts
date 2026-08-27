@@ -1,5 +1,5 @@
 ﻿// One owned zombie on the farm, assembled from its PER-TYPE model (reverse-
-// engineered from ZombieSheet â€” real body/head/features per group x tier) and
+// engineered from ZombieSheet — real body/head/features per group x tier) and
 // tinted by its authentic unit colour. It idles/wanders the farm, routing around
 // placed objects via A* over the occupancy grid, and can be selected (a glowing
 // foot ring) to inspect its stats.
@@ -81,7 +81,7 @@ export class ZombieUnit {
   private field: Field;
   private root = new Container();
   // Head parts live as flat siblings in `root` (sorted by their own zIndex, like the
-  // engine's single-layer draw order â€” so a z8 beard sits over the z7 front arm), and
+  // engine's single-layer draw order — so a z8 beard sits over the z7 front arm), and
   // are tilted for the idle/walk head-nod by rotating each around the neck point every
   // frame instead of via a wrapping container (which would collapse them to one z).
   private neck = { x: 0, y: 0 };
@@ -150,7 +150,7 @@ export class ZombieUnit {
     return this.data;
   }
 
-  /** Zombie GROUP ("Garden", "Regular", â€¦) â€” used to find fertilizers. */
+  /** Zombie GROUP ("Garden", "Regular", …) — used to find fertilizers. */
   get group(): string {
     return this.data.group;
   }
@@ -162,7 +162,7 @@ export class ZombieUnit {
     return this.data.name;
   }
 
-  /** Instantly move to a world spot and pause there a beat â€” a Garden zombie
+  /** Instantly move to a world spot and pause there a beat — a Garden zombie
    *  "teleports" to a crop it fertilizes, then resumes wandering. */
   teleportTo(wx: number, wy: number) {
     this.walker.moveTo(wx, wy);
@@ -225,7 +225,7 @@ export class ZombieUnit {
     this.renderScale = scale;
     // Both feet are resolved from the model below, or stubbed at the end for a rig
     // that has none (Headless). Cleared first so a rebuild cannot hold on to the
-    // previous rig's â€” by then destroyed â€” sprites.
+    // previous rig's — by then destroyed — sprites.
     this.footF = this.footB = undefined as unknown as Sprite;
     this.root.sortableChildren = true;
     this.neck = { x: m.neck.x, y: m.neck.y };
@@ -284,7 +284,7 @@ export class ZombieUnit {
         headForeground.push(eyeball);
       }
     }
-    // Attach crop-mutation parts from the unit's mask (onion head, celery arm, â€¦).
+    // Attach crop-mutation parts from the unit's mask (onion head, celery arm, …).
     // Independent of species: a combined zombie shows exactly the mutations it
     // carries. Head parts join headParts (tilt with the head-nod); the rest sit flat.
     this.addMutations(assets, m, replaceable, headForeground, shown.mutation, shownMutationIds);
@@ -306,7 +306,7 @@ export class ZombieUnit {
 
   /** Reassemble this unit's rig from the same data, picking up a changed display
    *  preference (mutations hidden / species body colour). Nothing about the unit
-   *  itself changes â€” only how it is drawn â€” so its position, path, sleep state and
+   *  itself changes — only how it is drawn — so its position, path, sleep state and
    *  selection survive. Cheap enough for the whole farm: the same work spawning one
    *  zombie already does. */
   rebuildAppearance(assets: GameAssets) {
@@ -333,7 +333,7 @@ export class ZombieUnit {
     this.eyesClosed = false; // fresh eye sprites are open; setEyesClosed early-outs otherwise
     this.build(assets);
     this.setEyesClosed(closed);
-    // build() recomputes hitH, and the invasion bubble hangs off it â€” a rig that just
+    // build() recomputes hitH, and the invasion bubble hangs off it — a rig that just
     // lost its mutation art is shorter, so re-place the bubble rather than leaving it
     // floating at the old silhouette's height.
     this.syncInvasionBubble();
@@ -362,7 +362,7 @@ export class ZombieUnit {
     model: ZombieModel,
     replaceable: Record<MutationReplacement, Sprite[]>,
     headForeground: Sprite[],
-    // The mask to DRAW â€” the unit's own, unless the player turned mutations off.
+    // The mask to DRAW — the unit's own, unless the player turned mutations off.
     mask: number,
     mutationIds: readonly string[] = [],
   ) {
@@ -381,7 +381,7 @@ export class ZombieUnit {
       if (replacement) {
         for (const basePart of replaceable[replacement]) basePart.visible = false;
         if (replacement === "head") {
-          // The face either rides in front of the new head or is part of it â€” see
+          // The face either rides in front of the new head or is part of it — see
           // mutationCoversFace. A pumpkin brings its own.
           const covers = mutationCoversFace(ref);
           for (const basePart of headForeground) {
@@ -507,7 +507,7 @@ export class ZombieUnit {
   private repath() {
     const g = screenToGrid(this.wx, this.wy);
     const from = { col: Math.round(g.col), row: Math.round(g.row) };
-    // Standing inside a placed object â€” bought onto an occupied tile, or one
+    // Standing inside a placed object — bought onto an occupied tile, or one
     // dropped on top of where it stood. Every wander candidate within reach is
     // blocked too, so walk out through the object first; wandering resumes from
     // the open ground on the far side.

@@ -56,7 +56,10 @@ export function statEffectsOf(def: Pick<ResolvedMutationDef, "stats">): { stat: 
 // Original mutation list
 const CATALOG: readonly MutationSpec[] = [
 	{ key: "tomato",	  name: "Tomatohead",	  slot: "head",		  stats: { str: 1, con: 1 } },
-	{ key: "onion",	    name: "Onionhead",	  slot: "head",		  stats: { con: 1 } },
+	// +1 focus alongside the life. Onionhead sits ONE rung above Tomatohead, which pays
+	// life AND attack, so a pure +1 life lost every Pot conflict to the strictly better
+	// mutation below it — see mutationRedundancy.test.ts.
+	{ key: "onion",	    name: "Onionhead",	  slot: "head",		  stats: { con: 1, wis: 1 } },
 	{ key: "carrot",	  name: "Carrot-eyed",	slot: "hair_eye",	stats: { dex: 1 } },
 	{ key: "turnip",	  name: "Turnip-Arm",	  slot: "arm",		  stats: { str: 2 } },
 	{ key: "potato",	  name: "Potatohead",	  slot: "head",		  stats: { con: 2, str: 1 } },
@@ -69,6 +72,17 @@ const CATALOG: readonly MutationSpec[] = [
 	{ key: "flytrap",	  name: "Flytrap",	    slot: "neck",		  stats: { str: 2, con: 2 } },
 	{ key: "dragon",	  name: "Dragon-arm",	  slot: "arm",		  stats: { str: 4, dex: 1, wis: 1 } },
 	{ key: "pumpking",	name: "Pumpking",	    slot: "head",		  stats: { str: 3, con: 2, wis: 1 } },
+	// The two Tier-4 crops. The art (public/assets/zombie/mutations.json), the crops
+	// (plants.json levels 44 and 45) and CROP_MUTATIONS all already name these; only the
+	// catalog rows were missing, so heartichoke resolved to nothing and eyebiscus fell
+	// back to Carrot-eyed's Tier-1 bonus. Appended, so bits 0-13 above are untouched and
+	// every mutated zombie already in a save keeps the mutation it has.
+	//
+	// Eyebiscus is the eye attachment Carrot-eyed is, so it stays in hair_eye.
+	// Heartichoke is not: heartichokeBody replaces the BODY, exactly as limaBeanBody
+	// does, which is the slot its art has always drawn it in.
+	{ key: "eyebiscus",	name: "Eyebiscus",	  slot: "hair_eye",	stats: { str: 1, dex: 2 } },
+	{ key: "heartichoke",	name: "Heartichoke",	slot: "body",		  stats: { con: 5 } },
 ];
 // Addition modded mutation
 const AUTHORED_MODDED_MUTATIONS: Readonly<Record<MutationKey, ModdedMutationDef>> = Object.freeze({
@@ -130,6 +144,7 @@ export const ALL_MODDED_MUTATION_IDS: readonly string[] = Object.freeze(Object.k
 const PINNED_ORDER: readonly MutationKey[] = [
   "tomato", "onion", "carrot", "turnip", "potato", "coffee", "celery",
   "broccoli", "garlic", "cauli", "limabean", "flytrap", "dragon", "pumpking",
+  "eyebiscus", "heartichoke",
 ];
 
 export const MUTATION_LIST: readonly MutationDef[] = CATALOG.map((spec, index) => ({

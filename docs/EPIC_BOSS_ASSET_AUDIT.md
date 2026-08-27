@@ -37,10 +37,16 @@ All filenames below are relative to
 > Do not treat a filename in this document as evidence that the asset is in the runtime; check
 > the boss's directory.
 >
-> **Runtime status (2026-07-25):** all eight bosses ship a `catalog.json` and are exported from
+> **Runtime status (2026-08-14):** all eight bosses ship a `catalog.json` and are exported from
 > `src/epicBoss/catalog.ts`; each directory carries `boss.png`, `portrait.png`, `loot-icon.png`,
 > `quest-icon.png`, `intro-1..3.png`, `music.wav`, `punch.wav`, `intro.caf`, and its backgrounds
-> (15 for the five early bosses, 12 for EPB 8-10).
+> (15 for the five early bosses, 12 for the three late ones). All eight also ship playable
+> combat animations — see "What is actually missing" for which of those were recovered and
+> which were reconstructed.
+>
+> This file is an **asset** cross-reference. For how the fights actually work — the ten-rung
+> ladder, damage ramp, costs and rewards — read `EPIC_BOSS_MECHANICS.md`, which owns that and
+> is the one to trust if the two ever disagree.
 
 ## Shared event assets
 
@@ -178,19 +184,27 @@ All filenames below are relative to
 ## What is actually missing
 
 The shipped bundle contains enough art to identify and display all eight sets above.
-The material gap is not images; it is configuration for EPB 8-10:
+The material gap is not images; it is *recovered configuration* for the three late bosses —
+Rocky Rhino, General Larvaelus and Mystical Mamba:
 
-- no `EpicEventEnemy` definitions for Rocky Rhino, General Larvaelus, or Mystical Mamba;
-- no plist/frame-coordinate metadata paired with their 2048x2048 boss textures;
-- no recovered level animation lists or quest chains for those three bosses. Their stats and
-  loot thresholds are no longer absent but **reconstructed, not recovered**: each ships
-  `baseHp` / `multipliers` / `maxLevel` / `unitStats` and a loot ladder (Rocky Rhino and General
-  Larvaelus `[10,20,30,35,40]`, Mystical Mamba `[15,30,40]`), flagged `"reconstructed": true`
-  where the five early bosses carry `false`. Their `animations` object is still empty, and they
-  ship `source-sheet.png` with no `source-sheet.plist`;
+- no `EpicEventEnemy` definitions for any of the three;
+- no plist/frame-coordinate metadata paired with their 2048x2048 boss textures (they ship
+  `source-sheet.png` with no `source-sheet.plist`);
+- no recovered level animation lists or quest chains. Each ships two quest ids against the
+  nine that Foul Owl and Loco Locust carry;
 - no boss-specific battle background beyond the 12 shared `bg_*` layers; and
 - no trustworthy Rambo Raccoon Epic Boss set.
 
-The late boss textures may still be recoverable by reconstructing their transparent
-frame cells or finding configuration in a different app version/server payload. They
-should not be treated as runtime-ready animation atlases yet.
+**What has since been reconstructed, and what that word means here.** All three now ship
+`baseHp` / `multipliers` / `maxLevel` / `unitStats` *and playable combat animations* — their
+strips were cut from the sheets by geometry with hand-authored frame ordering, so
+`animations` is no longer empty and all eight bosses animate in a fight. Every one of those
+values carries `"reconstructed": true` in its catalog, where the five early bosses carry
+`false`; that flag is the honest marker, and `src/epicBoss/market.ts` sorts on it. Nothing
+above was *recovered* — if the real configuration ever surfaces in another app version or a
+server payload, it should replace this wholesale rather than being reconciled with it.
+
+Loot thresholds are not stable enough to quote here: they moved with the ladder when it went
+from 40 rungs to 20 to 10, and will move again if it changes. Read the `loot` array in each
+`public/assets/epic-bosses/<boss>/catalog.json`; `docs/EPIC_BOSS_MECHANICS.md` explains how
+the rungs are priced.

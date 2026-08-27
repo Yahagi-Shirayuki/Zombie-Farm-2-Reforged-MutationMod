@@ -11,10 +11,12 @@ const DEF = {
 // A field where the listed tiles are covered by an object, everything else walkable.
 function fieldStub(blocked: string[], w = 30, h = 30) {
   const keys = new Set(blocked);
+  const open = (c: number, r: number) =>
+    c >= 0 && r >= 0 && c < w && r < h && !keys.has(`${c},${r}`);
   return {
     inBounds: (c: number, r: number) => c >= 0 && r >= 0 && c < w && r < h,
-    isPassable: (c: number, r: number) =>
-      c >= 0 && r >= 0 && c < w && r < h && !keys.has(`${c},${r}`),
+    isPassable: open,
+    isOpenGround: open, // no priced terrain in the stub: walkable == somewhere to stand
   };
 }
 
@@ -78,7 +80,19 @@ describe("where a server-granted zombie turns up", () => {
     zombies.reconcileServerRoster([purchase]);
 
     expect((zombies as never as { state: { recordZombieDiscovered: ReturnType<typeof vi.fn> } })
-      .state.recordZombieDiscovered).toHaveBeenCalledWith(DEF.key);
+      .state.recordZombieDiscovered).toHaveBeenCalledWith(DEF.key, purchase.mutation);
+  });
+
+  // The mask rides along so the Mutation Almanac is credited by the same call. A
+  // server-granted mutant is the case that has no other route: nothing on this client
+  // spawned it, so nothing else would ever see what it is wearing.
+  it("credits the mutations a server-granted zombie arrives wearing", () => {
+    const zombies = subject(fieldStub([]), () => ({ col: 12, row: 9 }));
+
+    zombies.reconcileServerRoster([{ ...purchase, mutation: 5 }]);
+
+    expect((zombies as never as { state: { recordZombieDiscovered: ReturnType<typeof vi.fn> } })
+      .state.recordZombieDiscovered).toHaveBeenCalledWith(DEF.key, 5);
   });
 
   it("does not credit the Almanac for a zombie returned by a cancelled sale", () => {
@@ -103,5 +117,40 @@ describe("where a server-granted zombie turns up", () => {
 
     const [unit] = zombies.roster();
     expect({ col: unit.col, row: unit.row }).toEqual({ col: 7, row: 6 });
+  });
+});
+
+// A zombie collected from a Zombie Pot belongs to the POT, not to whoever pressed
+// the button. Collecting from across the farm used to hand the child to the farmer,
+// which reads as the farmer having grown it himself.
+describe("where a zombie collected from an object turns up", () => {
+  // The Pot covers cols 10-11 / rows 8-9; its anchor tile is the front corner (11,9).
+  function potField() {
+    const blocked: string[] = [];
+    for (let r = 8; r < 10; r++) for (let c = 10; c < 12; c++) blocked.push(`${c},${r}`);
+    return {
+      ...fieldStub(blocked),
+      objectAnchorTile: (id: string) => (id === "pot-1" ? { col: 11, row: 9 } : null),
+    };
+  }
+
+  it("puts the child on open ground beside the pot, not on the farmer", () => {
+    const field = potField();
+    const zombies = subject(field, () => ({ col: 2, row: 2 }));
+
+    const at = zombies.objectArrivalTile("pot-1");
+
+    expect(field.isOpenGround(at.col, at.row)).toBe(true);
+    expect(Math.abs(at.col - 11)).toBeLessThanOrEqual(1);
+    expect(Math.abs(at.row - 9)).toBeLessThanOrEqual(1);
+  });
+
+  it("falls back to the farmer when the pot is gone", () => {
+    // Sold, or dropped by an object reconcile, between opening the panel and the
+    // collection landing. (0,0) is not an answer — see arrivalTile.
+    const zombies = subject(potField(), () => ({ col: 2, row: 3 }));
+
+    expect(zombies.objectArrivalTile("pot-gone")).toEqual({ col: 2, row: 3 });
+    expect(zombies.objectArrivalTile(null)).toEqual({ col: 2, row: 3 });
   });
 });

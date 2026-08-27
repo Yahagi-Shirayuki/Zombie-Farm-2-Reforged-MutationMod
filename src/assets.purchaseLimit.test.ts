@@ -36,4 +36,14 @@ describe("placeablePurchaseLimit", () => {
     expect(bucket?.category).toBe("functional");
     expect(placeablePurchaseLimit(bucket!)).toBe(3);
   });
+
+  it("puts no cap on Memorial Statues", () => {
+    // One statue remembers one zombie, so the farm needs as many as the player has
+    // lost — it is `functional` for the Market tab and the tap behaviour, not for
+    // the one-per-farm rule that category otherwise implies.
+    const statue = (placeables as PlaceableDef[]).find((e) => e.key === "memorialStatue");
+    expect(statue?.category).toBe("functional");
+    expect(statue?.memorial ?? statue?.key === "memorialStatue").toBeTruthy();
+    expect(placeablePurchaseLimit(statue!)).toBeUndefined();
+  });
 });

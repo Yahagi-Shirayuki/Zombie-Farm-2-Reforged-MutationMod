@@ -3,15 +3,15 @@
 // ---------------------------------------------------------------------------
 // A mutated zombie used to advertise its mutations only INDIRECTLY: the boosted
 // stat tiles render green, and the rig wears the vegetable. Neither says WHICH
-// mutations it carries â€” which is what a player needs to know before pairing it in
+// mutations it carries — which is what a player needs to know before pairing it in
 // the Zombie Pot (slots are one-per-body-part and the higher bit wins a conflict).
 // This module turns a mask into the per-mutation rows the card shows.
 //
 // Two things are deliberately NOT re-derived here:
-//   â€¢ the effect is reported in DISPLAYED units, not the raw 1â€“4 points â€” the tiles
+//   • the effect is reported in DISPLAYED units, not the raw 1–4 points — the tiles
 //     normalize against a per-stat reference, so Carrot's "+1 dex" reads +23 Speed
 //     while Tomato's "+1 str" reads +4 Damage (see statDisplay).
-//   â€¢ each mutation's contribution is measured by chaining through the same
+//   • each mutation's contribution is measured by chaining through the same
 //     rounding boundaries the tile uses, so the rows always SUM to the "Mutation"
 //     line in the stat breakdown rather than drifting a point away from it.
 //
@@ -25,9 +25,9 @@ import {
 } from "./mutations";
 import { STATS, displayStat, wisToFocusBonus } from "./traits";
 
-// ZF2's own 40x40 mutation icons (MutationIcons.png â€” the vegetable in a lab flask),
+// ZF2's own 40x40 mutation icons (MutationIcons.png — the vegetable in a lab flask),
 // sliced by tools/prep_mutation_icons.py. The set covers all 13 primaries and both
-// Tier-4 variants; only Pumpking, which never had an authored entry, is composed â€”
+// Tier-4 variants; only Pumpking, which never had an authored entry, is composed —
 // its rig head placed in the same flask.
 const MI = BASE + "assets/ui/mutation/";
 const iconFile = (name: string) => `${MI}icon_mutation_${name}.png`;
@@ -78,13 +78,13 @@ export interface MutationVariant {
 }
 
 /** Tier-4 variants share a lower tier's MUTATION for stats and slot occupancy but ship
- *  their OWN art and name â€” Eyebiscus rides Carrot's, Heartichoke rides Cauliflower's.
+ *  their OWN art and name — Eyebiscus rides Carrot's, Heartichoke rides Cauliflower's.
  *  Naming such a zombie's mutation off the shared one alone is simply wrong (the
  *  reported "Cauli-hair" text on Heartichoke), so the two species get an explicit
  *  override here, art included: the game authored icons for both.
  *
  *  Species key -> mutation key -> what that species shows instead. MIRRORS
- *  `mutationOverrides` in zombie/models.json â€” pinned against it by the tests. */
+ *  `mutationOverrides` in zombie/models.json — pinned against it by the tests. */
 export const MUTATION_VARIANTS: Record<string, Record<string, MutationVariant>> = {
   ZombieActorRegularTier4Eyebiscus: {
     carrot: { part: "eyebiscusHat", name: "Eyebiscus", icon: iconFile("eyebiscus") },
@@ -130,10 +130,10 @@ export interface MutationCardEntry {
   ref?: MutationRef;
   /** Present only for vanilla bitmask mutations; modded mutations use ref as a string id. */
   bit?: number;
-  /** mutations.json key for the RIG art â€” the variant part when the species overrides it. */
+  /** mutations.json key for the RIG art — the variant part when the species overrides it. */
   partKey: string;
   icon: string; // the card's 40x40 icon URL
-  name: string; // "Onionhead", "Eyebiscus", â€¦
+  name: string; // "Onionhead", "Eyebiscus", …
   slotLabel: string; // which body slot it occupies (one mutation per slot)
   /** Every stat this mutation moves, in str/dex/con order. A mutation may trade one
    *  stat for another, so this can mix gains and penalties; it is never empty for a
@@ -144,7 +144,7 @@ export interface MutationCardEntry {
 /** The minimum a zombie must carry for its mutation rows. `str`/`dex`/`con`
  *  already INCLUDE the mutation bonuses (makeOwned bakes them in). */
 export interface MutationSource {
-  key: string; // species key â€” resolves the Tier-4 variant art/name
+  key: string; // species key — resolves the Tier-4 variant art/name
   str: number;
   dex: number;
   con: number;
@@ -170,7 +170,7 @@ export function mutationEntries(z: MutationSource): MutationCardEntry[] {
 
 /** The card rows for an explicit set of mutation defs applied to explicit UNMUTATED
  *  stats. Split out from mutationEntries so the row maths can be exercised against a
- *  mutation the shipped catalog doesn't contain â€” which is the only way to cover a
+ *  mutation the shipped catalog doesn't contain — which is the only way to cover a
  *  multi-stat or penalty-carrying mutation before one ships. */
 export function mutationEntriesFrom(
   defs: readonly ResolvedMutationDef[],
@@ -220,7 +220,7 @@ export function mutationEffectText(effect: MutationCardEffect): string {
   return `${effect.delta >= 0 ? "+" : ""}${effect.delta} ${effect.statLabel}`;
 }
 
-/** The tooltip body for one mutation â€” the tile itself is unlabelled, so this is where
+/** The tooltip body for one mutation — the tile itself is unlabelled, so this is where
  *  the effect is read. One line per stat it moves, then the slot. Penalties carry
  *  `zeff-down` so the card can colour a trade-off differently from a pure gain. */
 export function mutationTipText(entry: MutationCardEntry): string {

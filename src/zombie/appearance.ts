@@ -2,8 +2,8 @@
 
 /** What a zombie should actually be DRAWN as, after this device's display prefs.
  *
- *  Every rig that assembles a zombie â€” the farm actor, the raid actor, the mutation
- *  portraits behind every card and menu tile â€” resolves its mask and tint through
+ *  Every rig that assembles a zombie — the farm actor, the raid actor, the mutation
+ *  portraits behind every card and menu tile — resolves its mask and tint through
  *  here, so the two toggles apply everywhere a zombie is visible at once.
  *
  *  `color` undefined means "no inherited tint": the caller falls back to the model

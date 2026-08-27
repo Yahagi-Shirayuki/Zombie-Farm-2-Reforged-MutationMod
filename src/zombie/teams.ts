@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Zombie teams ? saved farm line-ups
+// Zombie teams — saved farm line-ups
 // ---------------------------------------------------------------------------
 // A team is nothing but a NAME and an ORDERED list of owned zombie ids: "Garden
 // Crew", "Raid Squad", "Circus team". Assembling one puts exactly those zombies
@@ -7,7 +7,7 @@
 // fertilizing garden line-up for a fighting one in a single tap instead of
 // storing a dozen zombies by hand.
 //
-// Teams grant NOTHING. They own no stats, no bonuses and no server state ? every
+// Teams grant NOTHING. They own no stats, no bonuses and no server state — every
 // move an assembly makes is an ordinary store/deploy that goes through the same
 // authoritative path the Mausoleum's own buttons use. That is deliberate: it
 // keeps the whole feature client-side presentation data (see SaveManager's
@@ -16,7 +16,7 @@
 //
 // Membership is deliberately NOT pruned when a zombie leaves the roster. A team
 // is read against the live roster every time it is shown or assembled, and
-// missing members are simply skipped ? "assemble what is left of it". Pruning
+// missing members are simply skipped — "assemble what is left of it". Pruning
 // would be actively dangerous: online, the roster is empty for the moment
 // between boot and the first authoritative projection, and a prune in that
 // window would quietly delete every team the player owns.
@@ -131,7 +131,7 @@ export function nextTeamId(teams: readonly ZombieTeam[]): string {
   return `t${n}`;
 }
 
-/** Rewrite member ids through an id map ? used when optimistic local ids are
+/** Rewrite member ids through an id map — used when optimistic local ids are
  *  exchanged for the server's authoritative ones, exactly as the raid party's
  *  saved selection is (see raid/partySelection.reconcilePartySelection). Teams
  *  whose members did not move are returned unchanged. */
@@ -156,8 +156,8 @@ export function settleTeamMembers(
  *
  * Everyone not in the team leaves the farm and everyone in it comes back, but both
  * halves are capacity-bound: the army holds `armyCap` and the Mausoleum `cryptCap`.
- * The two constraints feed each other ? storing a non-member frees an army slot,
- * deploying a member frees a crypt slot ? so the moves are interleaved rather than
+ * The two constraints feed each other — storing a non-member frees an army slot,
+ * deploying a member frees a crypt slot — so the moves are interleaved rather than
  * done in two passes. Storing goes first whenever the crypt has room, because that
  * is the move that unblocks the other one; when the crypt is full (nothing can be
  * stored) a deploy runs first to open a slot, and the loop comes back round.
@@ -183,7 +183,7 @@ export function planTeamAssembly(
   const wantedSet = new Set(wanted);
 
   const present = wanted.filter((id) => !owned.get(id)!.stored);
-  // Non-members in roster order ? the order they were listed in is as good as any,
+  // Non-members in roster order — the order they were listed in is as good as any,
   // and it keeps a re-assembly of the same team deterministic.
   const evict = roster.filter((unit) => !unit.stored && !wantedSet.has(unit.id)).map((unit) => unit.id);
   const recall = wanted.filter((id) => owned.get(id)!.stored);
@@ -219,14 +219,14 @@ export function planTeamAssembly(
 }
 
 /**
- * Why an assembly could not finish ? so the player is told the thing they can act
+ * Why an assembly could not finish — so the player is told the thing they can act
  * on rather than a generic "no room".
  *
  * The distinction that matters: running out of ARMY slots means the team itself is
  * too big for the farm (nothing but a bigger farm fixes it), while running out of
  * CRYPT slots means the zombies being displaced have nowhere to go (a Mausoleum,
- * or a bigger one, fixes it). The two look identical from inside the loop above ?
- * both just stop moving ? so they are told apart here by whether there was anyone
+ * or a bigger one, fixes it). The two look identical from inside the loop above —
+ * both just stop moving — so they are told apart here by whether there was anyone
  * left to evict when it stopped.
  */
 function shortfallOf(
@@ -256,15 +256,15 @@ export function assembleReport(teamName: string, result: TeamAssembleResult): st
 
   // Name the fix, not just the symptom.
   if (shortfall === "army_cap") {
-    line += ` ${blocked} could not come out ? your farm is full at ${present + deployed}.`;
+    line += ` ${blocked} could not come out — your farm is full at ${present + deployed}.`;
   } else if (shortfall === "no_mausoleum") {
     line += blocked
-      ? ` ${blocked} could not come out ? build a Mausoleum so the others can step aside.`
-      : ` ${left} had nowhere to rest ? build a Mausoleum.`;
+      ? ` ${blocked} could not come out — build a Mausoleum so the others can step aside.`
+      : ` ${left} had nowhere to rest — build a Mausoleum.`;
   } else if (shortfall === "mausoleum_full") {
     line += blocked
-      ? ` ${blocked} could not come out ? your Mausoleum is full.`
-      : ` ${left} stayed on the farm ? your Mausoleum is full.`;
+      ? ` ${blocked} could not come out — your Mausoleum is full.`
+      : ` ${left} stayed on the farm — your Mausoleum is full.`;
   }
   if (missing) line += ` ${missing} no longer in your roster.`;
   return line;
@@ -274,15 +274,15 @@ export function assembleReport(teamName: string, result: TeamAssembleResult): st
 export function shortfallNotice(plan: TeamAssembly): string | null {
   switch (plan.shortfall) {
     case "army_cap":
-      return `Too big for your farm ? ${plan.blocked.length} would stay in the Mausoleum.`;
+      return `Too big for your farm — ${plan.blocked.length} would stay in the Mausoleum.`;
     case "no_mausoleum":
       return plan.blocked.length
-        ? `Needs a Mausoleum ? ${plan.blocked.length} can't come out until the others have somewhere to rest.`
-        : `Needs a Mausoleum ? ${plan.left.length} would stay on the farm.`;
+        ? `Needs a Mausoleum — ${plan.blocked.length} can't come out until the others have somewhere to rest.`
+        : `Needs a Mausoleum — ${plan.left.length} would stay on the farm.`;
     case "mausoleum_full":
       return plan.blocked.length
-        ? `Mausoleum full ? ${plan.blocked.length} can't come out.`
-        : `Mausoleum full ? ${plan.left.length} would stay on the farm.`;
+        ? `Mausoleum full — ${plan.blocked.length} can't come out.`
+        : `Mausoleum full — ${plan.left.length} would stay on the farm.`;
     default:
       return null;
   }

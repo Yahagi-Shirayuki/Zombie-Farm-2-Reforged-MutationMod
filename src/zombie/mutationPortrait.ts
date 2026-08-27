@@ -118,11 +118,11 @@ export function buildZombiePortraitRig(
 /** How many times one key/mask/color may fail before it stops being retried. A
  *  failing extraction costs as much as a successful one (~30ms of blocked main
  *  thread), and the panels that request portraits rebuild their whole list on every
- *  tap â€” so without a ceiling a single zombie whose textures never loaded re-pays
+ *  tap — so without a ceiling a single zombie whose textures never loaded re-pays
  *  that cost on every interaction, forever. */
 export const MAX_PORTRAIT_ATTEMPTS = 2;
 
-/** Hand the main thread back between extractions. Each one blocks on a GPUâ†’CPU
+/** Hand the main thread back between extractions. Each one blocks on a GPU→CPU
  *  readback, so a panel that asks for fifty at once used to run them as a single
  *  uninterruptible task (~1.5s frozen on a full roster). Spacing them across frames
  *  keeps input and rendering alive while the portraits fill in. */
@@ -135,16 +135,30 @@ function yieldToNextFrame(): Promise<void> {
 }
 
 /** Cache the GPU extraction for each immutable key/mask/color combination. */
+/** Thrown when a queued portrait is no longer wanted. Distinct from a real extraction
+ *  failure so it never counts against the retry budget. */
+class PortraitAbandoned extends Error {
+  constructor(cacheKey: string) { super(`portrait abandoned for ${cacheKey}`); }
+}
+
 export class MutationPortraits {
   private cache = new Map<string, Promise<string>>();
   /** Consecutive failures per cache key, capped by MAX_PORTRAIT_ATTEMPTS. */
   private failures = new Map<string, number>();
-  /** Tail of the extraction chain â€” see enqueue(). */
+  /** Tail of the extraction chain — see enqueue(). */
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private renderer: Renderer, private assets: GameAssets) {}
 
-  get(key: string, mutation: number, color?: [number, number, number], mutationIds: readonly string[] = []): Promise<string> {
+  /** `wanted` is upstream's cancellation hook: extraction blocks the main thread for
+   *  ~30 ms and a roster asks for many, so a tile that has since left the DOM says so
+   *  here and its turn in the queue is skipped. Abandoning is not a failure — it must
+   *  not count toward MAX_PORTRAIT_ATTEMPTS, or scrolling a long list would poison
+   *  the cache for portraits that are perfectly fine. */
+  get(
+    key: string, mutation: number, color?: [number, number, number],
+    mutationIds: readonly string[] = [], wanted?: () => boolean,
+  ): Promise<string> {
     // Normalize through the display prefs BEFORE the cache key is formed: a portrait
     // is cached by what it will look like, so flipping "show mutations" or the body
     // colour mode addresses a different entry instead of returning a stale one.
@@ -156,9 +170,14 @@ export class MutationPortraits {
     if ((this.failures.get(cacheKey) ?? 0) >= MAX_PORTRAIT_ATTEMPTS) {
       return Promise.reject(new Error(`portrait extraction gave up for ${cacheKey}`));
     }
-    const pending = this.enqueue(() => this.extract(key, mutation, color, mutationIds)).catch((error) => {
+    const pending = this.enqueue(() => {
+      if (wanted && !wanted()) throw new PortraitAbandoned(cacheKey);
+      return this.extract(key, mutation, color, mutationIds);
+    }).catch((error) => {
       this.cache.delete(cacheKey);
-      this.failures.set(cacheKey, (this.failures.get(cacheKey) ?? 0) + 1);
+      if (!(error instanceof PortraitAbandoned)) {
+        this.failures.set(cacheKey, (this.failures.get(cacheKey) ?? 0) + 1);
+      }
       throw error;
     });
     this.cache.set(cacheKey, pending);

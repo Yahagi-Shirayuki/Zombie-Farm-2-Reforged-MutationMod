@@ -1,7 +1,7 @@
 ﻿// The live battle simulation (Phase 3+): a pure, RNG-free, real-time stepping
-// model that the RaidScene renders. No Pixi, no DOM â€” positions, health, focus
+// model that the RaidScene renders. No Pixi, no DOM — positions, health, focus
 // charge, ballistic boss projectiles, and attack clocks over a 1D combat lane.
-// This is the AUTHORITY for a raid's outcome â€” the game ALWAYS plays it out; there is
+// This is the AUTHORITY for a raid's outcome — the game ALWAYS plays it out; there is
 // no instant/auto-resolve (CombatEngine.resolveRaid is retained only for the ZF.runRaid
 // dev hook + headless tests).
 //
@@ -13,23 +13,23 @@
 //   RIGHT edge; zombies stop at a front line to their LEFT and never pass them.
 //   The BOSS perches on its structure (top-right) and TOSSES projectiles in an arc
 //   at the zombies (preferring Garden zombies). Throws are ballistic and use lazy
-//   circle collision â€” a fast/small zombie can be missed. Once the minions are
+//   circle collision — a fast/small zombie can be missed. Once the minions are
 //   cleared the boss descends and fights as a ground unit.
 //
 // Now implemented: focus-bar distractions (butterfly/brain bubbles, with
 // Concentration bypass), activated abilities (windup/cooldown/stun/knockback),
 // boss specials, ballistic projectiles, boss summon reinforcements, the
 // carrotWall/junkWall blockers, the Circus trapeze carried-grab (grabberOf), and the
-// Beach crab carry-off (crabOf). The trapeze and crab are CLIENT-ONLY â€” the server
+// Beach crab carry-off (crabOf). The trapeze and crab are CLIENT-ONLY — the server
 // verifier replays the un-harassed fight and the client concedes via clientWin.
 // NOTE: a ground-crossing obstacle/grab hazard once lived here. It was NOT a base-game
-// mechanic â€” it was fabricated during development â€” and has been removed entirely.
+// mechanic — it was fabricated during development — and has been removed entirely.
 // Do not reintroduce it without ground truth from the binary.
 //
 // Combat numbers are the GROUND-TRUTH fight-data model (combatStats.ts, recovered from
-// the binary): maxHp = con*100 and cadence = attackCooldownMs (2s zombie / 1s enemy Ã· dex)
+// the binary): maxHp = con*100 and cadence = attackCooldownMs (2s zombie / 1s enemy ÷ dex)
 // arrive on the CombatUnit; per-swing damage = finalPower(str*10) * mult, then the player
-// lineup-depth band (1.0/0.85/0.7/0.55; enemies Ã—1.0). See combatStats.lineupDamageBand.
+// lineup-depth band (1.0/0.85/0.7/0.55; enemies ×1.0). See combatStats.lineupDamageBand.
 import type { BossActionChoice, BossSpecial, BossThrowConfig, CombatUnit, CrabConfig, GrabberConfig, RaidOutcome } from "./types";
 import { ACTIVATED_ABILITY, activatedKeyFor, teamAbilitiesIn } from "../zombie/abilities";
 import { clampResolvedRawStat } from "../zombie/traits";
@@ -105,7 +105,7 @@ const COL_GAP = 52; // depth spacing between columns
 
 // Anti-one-shot safeguard (INFERRED from `-[Actor damage:]` 0x3a064). A single ENEMY hit
 // blow can't take a player zombie from above the floor straight to death or below 10% of max
-// HP â€” its HP snaps to exactly 1 instead, so it survives to act once more. Protection is
+// HP — its HP snaps to exactly 1 instead, so it survives to act once more. Protection is
 // latched as consumed so healing above 1 HP cannot re-arm it; the next lethal hit kills it.
 // This models the in-binary state bit 0x10 that eventually permits the killing blow, which
 // we can't fully pin. `turnZombie` deliberately bypasses it because that action converts the
@@ -123,7 +123,7 @@ export function focusChargeMs(focus: number): number {
   return CHARGE_MS / mult;
 }
 
-// Mini Buddy: the binary sets the carrier to 4Ã— walking speed. On arrival it
+// Mini Buddy: the binary sets the carrier to 4× walking speed. On arrival it
 // stuns the enemy for 2 seconds and the carrier for 1 second.
 const MINI_MOUNT_MS = 500;
 const MINI_CARRIER_SPEED_MULT = 4;
@@ -142,25 +142,25 @@ const GROUND_Y = BAND_BOT + 24; // a throw that reaches here has missed (fizzles
 const ZOMBIE_HIT_R = 30; // zombie collision radius in sim units
 const PROJ_HIT_FACTOR = 0.4; // projectile radius = spriteSize * this
 // Predictive lead: throws aim where the target WILL be after the flight time, but the
-// lead speed is CAPPED here â€” a target moving faster than this is led only as much as a
+// lead speed is CAPPED here — a target moving faster than this is led only as much as a
 // "lowish speed" zombie would be, so the throw lands behind it and a fast zombie outruns
-// the shot. Normal/slow zombies (â‰¤ cap) are led accurately and get hit. Chosen against
-// advanceSpeed(dex) (90â€“260): ~dex 1â€“4 (â‰¤178) are led enough to connect; dex 5+ (â‰¥200)
+// the shot. Normal/slow zombies (≤ cap) are led accurately and get hit. Chosen against
+// advanceSpeed(dex) (90–260): ~dex 1–4 (≤178) are led enough to connect; dex 5+ (≥200)
 // under-lead into a miss on the longer lobs to the back of the lane.
-const PREDICT_SPEED_CAP = 150; // sim px/s â€” never lead a target faster than this
+const PREDICT_SPEED_CAP = 150; // sim px/s — never lead a target faster than this
 // Above this per-step displacement, a unit was teleported (knockback re-slot, boss
-// perchâ†”ground) rather than walking â€” its measured velocity is discarded (max real
-// step is moveSpeedâ‰¤260 Ã— dtâ‰¤0.05s â‰ˆ 13 px).
+// perch↔ground) rather than walking — its measured velocity is discarded (max real
+// step is moveSpeed≤260 × dt≤0.05s ≈ 13 px).
 export const TELEPORT_PX = 40;
 // Boss-action throw damage is an independently authored chip value applied VERBATIM:
 // `ZFFightPhysics throwProjectile:` reads the bossAction's @"damage" straight into the
 // projectile's `damageAmount`, and the contact handler passes that to `[zombie damage:]`.
-// No conversion, no scaling â€” McDonnell's 6/12/18 really are 6/12/18 against conÃ—100 HP.
+// No conversion, no scaling — McDonnell's 6/12/18 really are 6/12/18 against con×100 HP.
 
 // ---- Round timer + enrage (ZFFightMan updateTimer:/showEnrageTimer) ----
 // The fight is a countdown; when it expires the boss ENRAGES. The reference build
 // shows a 3:00 round. On enrage the boss throws twice as fast, recovers its special
-// actions faster, and hits ~1.5Ã— harder (chip â†’ threat if you stall).
+// actions faster, and hits ~1.5× harder (chip → threat if you stall).
 const DEFAULT_ROUND_MS = 3 * 60 * 1000; // 3:00
 const ENRAGE_THROW_MULT = 0.5; // throw interval halves
 export const THROW_WINDUP_MS = 550;
@@ -171,7 +171,7 @@ const ENRAGE_DMG_MULT = 1.5; // boss melee damage grows
 // alienLaser fires a fast straight bolt (flat 200, ALIEN_LASER_DAMAGE); pixelFire sets
 // ONE zombie on fire; turnZombie removes your front zombie (it's turned against you);
 // telekinesis lifts + slams a zombie for knockback and stun but NO damage. summonBoss
-// spawns a capped reinforcement and wall spawns a single standing blocker â€” both go
+// spawns a capped reinforcement and wall spawns a single standing blocker — both go
 // through spawnEnemy and join the normal queue. Damage values are all ground truth
 // (see combatStats); only the telekinesis hold below is un-recovered.
 const LASER_SPEED = 900; // straight-bolt speed (sim px/s)
@@ -181,16 +181,16 @@ const TELEKINESIS_STUN_MS = 1000;
 
 // ---- Knockback (Actor knockBackBy:force:) ----
 // A knockback attack interrupts the struck zombie and, in the source, calls
-// `setZombieToLastIndex` â€” it's sent to the BACK of the line. Here it's shoved back
+// `setZombieToLastIndex` — it's sent to the BACK of the line. Here it's shoved back
 // down the lane and re-slotted last, so it must charge to the front again.
 const KNOCKBACK_PX = 150; // how far back the zombie is shoved (sim units)
 
 // ---- Carried-grab hazard (Circus Trapeze Artist `grabZombie`) ----
 // GROUND TRUTH (Enemies.json Trapeze Artist + StageActor doActionsForString:): the actor
 // sweeps in from the LEFT across the combat band, grabs the rear-most deployed zombie
-// (collidedAction grabZombie â†’ the zombie goes inactive), pauses ~1s, then RISES to carry
+// (collidedAction grabZombie → the zombie goes inactive), pauses ~1s, then RISES to carry
 // it off (changeSpeed_0.5 : setRotationTo_90). The player taps it (touchedAction
-// damageSelf_100, tapDelay 0.25) to whittle its HP; killed â†’ dyingAction dropZombie frees
+// damageSelf_100, tapDelay 0.25) to whittle its HP; killed → dyingAction dropZombie frees
 // the zombie back into the fight; if it reaches its exit still carrying, that zombie DIES.
 // movingAnimation `rotateTo_180_17`: Actor.parseAnimationString interprets this
 // as a 180-degree target over 17 animation ticks (the stage cadence is 0.1 s).
@@ -204,7 +204,7 @@ const GRABBER_SWING_RADIUS_X = FIELD_W * 0.5;
 const GRABBER_CONTACT_DEG = 90;
 const GRABBER_RISE_SPEED = 92; // carry-off rise speed (sim px/s), the slow 0.5 speed
 const GRABBER_CARRY_PAUSE_MS = 1000; // changeStateWithDelay_run_1: hold 1s before rising
-const GRABBER_TAP_CD_MS = 250; // tapDelay 0.25 â€” min gap between registered taps
+const GRABBER_TAP_CD_MS = 250; // tapDelay 0.25 — min gap between registered taps
 // The renderer places this pivot at horizontal center and one-quarter viewport above
 // the top edge. The logical x is retained for target-angle and snapshot calculations.
 const GRABBER_PIVOT_X = FIELD_W * 0.5;
@@ -219,9 +219,9 @@ const GRABBER_ESCAPE_ZOMBIE_Y = -FIELD_H;
 const GRABBER_SPAWN_MS = 7000; // respawn cadence after one leaves (initial from config)
 // ---- Beach crab hazard (BeachStageActorCrab) ----
 // Disassembled: wanders, grabs a zombie on contact, holds 2 s, then carries it off the
-// LEFT edge (source destination x = âˆ’100) where the zombie leaves the fight. Tapped to
-// death â†’ the zombie is released and resumes. See types.ts CrabConfig.
-const CRAB_WALK_SPEED = 70; // lane speed (sim px/s). NOT ground truth â€” the source sets
+// LEFT edge (source destination x = −100) where the zombie leaves the fight. Tapped to
+// death → the zombie is released and resumes. See types.ts CrabConfig.
+const CRAB_WALK_SPEED = 70; // lane speed (sim px/s). NOT ground truth — the source sets
 // this via a scaled setWalkingSpeed: the disassembly did not resolve; tuned to read as a
 // scuttle that a player has time to react to.
 const CRAB_CARRY_SPEED = 95; // speed while hauling a zombie toward the left edge
@@ -237,8 +237,8 @@ const CRAB_WANDER_MAX_X = 760;
 
 // ---- Boss summon / wall specials ----
 const SUMMON_CAP = 3; // most extra minions a boss can summon in one fight
-// Per-tap chip on a boss wall (ground truth ZFFightWall ccTouchEnded â†’ damage: = const/20,
-// const â‰ˆ the wall's HP 1500 â†’ 75). Zombies do the bulk; tapping is an assist.
+// Per-tap chip on a boss wall (ground truth ZFFightWall ccTouchEnded → damage: = const/20,
+// const ≈ the wall's HP 1500 → 75). Zombies do the bulk; tapping is an assist.
 const WALL_TAP_DAMAGE = 75;
 // Walls materialize where Garden support normally holds. Zombies that had already
 // crossed that point when the cast began keep fighting ahead; everyone behind it must
@@ -247,7 +247,7 @@ const WALL_MELEE_GAP = ENGAGE;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-/** Deterministic 0..1 hash (no RNG â€” keeps the sim replayable). */
+/** Deterministic 0..1 hash (no RNG — keeps the sim replayable). */
 function hash(n: number): number {
   const s = Math.sin(n * 12.9898) * 43758.5453;
   return s - Math.floor(s);
@@ -289,7 +289,7 @@ export type UnitState =
   | "advance" // released, moving to the front line
   | "fight" // trading blows
   | "carried" // Small zombie riding a Large zombie via Mini Buddy
-  | "grabbed" // seized by the Trapeze Artist â€” inactive, being carried off (rescue by tapping)
+  | "grabbed" // seized by the Trapeze Artist — inactive, being carried off (rescue by tapping)
   | "queued" // enemy off-screen, not yet emerged
   | "descending" // boss coming down off the structure + exiting out the back
   | "emerging" // enemy walking to its holding spot (or boss re-entering)
@@ -338,13 +338,13 @@ export interface SimUnit {
   charge: number; // 0..1 focus fill (zombies only)
   focus: number; // 0..100 focus stat: distraction resistance (ground truth Help.json)
   // ---- focus-bubble minigame (zombies, while charging) ----
-  distracted: boolean; // butterfly bubble showing â€” fill paused until popped
-  awaitRelease: boolean; // brain bubble showing â€” full, gated until popped
+  distracted: boolean; // butterfly bubble showing — fill paused until popped
+  awaitRelease: boolean; // brain bubble showing — full, gated until popped
   distractStep: number; // how many CHARGE_STEPS have fired (0..4)
   distractSeed: number; // per-unit seed for the deterministic distraction roll
   bubbleMs: number; // ms until the current bubble auto-resolves
   struckThisTick: boolean;
-  vx: number; // measured velocity over the last step (sim px/s) â€” drives throw lead
+  vx: number; // measured velocity over the last step (sim px/s) — drives throw lead
   vy: number;
   prevX: number; // position at the start of the current step (velocity bookkeeping)
   prevY: number;
@@ -362,7 +362,7 @@ export interface SimUnit {
   /** Headless units push to the front. Sending one to the back temporarily clears
    * this flag so the row behind can fill the vacancy while it recovers. */
   frontPriority: boolean;
-  lineupIndex: number; // front-to-back rank among committed zombies (0 = front) â†’ damage band
+  lineupIndex: number; // front-to-back rank among committed zombies (0 = front) → damage band
   slotX: number; // assigned formation position
   slotY: number;
   // ---- abilities ----
@@ -386,15 +386,19 @@ export interface SimUnit {
   critRollSeq: number; // replay-safe physical crit sequence
   usedAbilities: string[]; // one-use activated abilities already consumed
   resurrectUsed: boolean; // one-use automatic Resurrect latch
-  stunMs: number; // ms of stun left â€” can't act while > 0 (enemies AND zombies)
+  stunMs: number; // ms of stun left — can't act while > 0 (enemies AND zombies)
   freezeMs: number; // presentation-only freeze overlay left; mechanics use stunMs
   // ---- enemy attack effects inflicted on a struck zombie ----
   knockBack: boolean; // this enemy's attack shoves the zombie back down the lane
   stunInflictMs: number; // stun this enemy applies to a zombie on hit (ms)
   attackDamageTiming: number; // 0..1 fraction of the swing when it connects (enemy anim)
-  isWall: boolean; // boss-summoned blocker (carrotWall / junkWall) â€” tappable, no attacks
+  isWall: boolean; // boss-summoned blocker (carrotWall / junkWall) — tappable, no attacks
+  /** Conjured mid-fight by the boss (a summoned minion or a wall) rather than being
+   *  part of the enemy roster the fight started with. Set by spawnEnemy. Read only by
+   *  teamTotals, which leaves these out of the enemy bar — see the note there. */
+  isSpawned: boolean;
   passedWall: boolean; // latched when already beyond a newly summoned wall
-  /** Carried off the field by a Beach crab: still ALIVE (it comes home after the raid â€”
+  /** Carried off the field by a Beach crab: still ALIVE (it comes home after the raid —
    *  source state 38 is not the death path) but out of this fight, so it counts as a
    *  survivor while no longer keeping the battle alive. */
   taken: boolean;
@@ -411,7 +415,7 @@ export interface SimCrab {
   x: number;
   y: number;
   state: "wander" | "hold" | "carry" | "gone";
-  dir: -1 | 1; // current wander heading (âˆ’1 = toward the zombies / left)
+  dir: -1 | 1; // current wander heading (−1 = toward the zombies / left)
   wanderMs: number; // time left on the current heading
   hp: number;
   maxHp: number;
@@ -560,7 +564,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     vy: 0,
     prevX: home.x,
     prevY: home.y,
-    // Ground-truth per-swing damage BEFORE the lineup band: finalPower(strÃ—10) Ã— attackMult.
+    // Ground-truth per-swing damage BEFORE the lineup band: finalPower(str×10) × attackMult.
     // Enemies use this as-is (band always 1.0); a player zombie's normal swing multiplies it by
     // lineupDamageBand(lineupIndex) at hit time (activated specials use the unbanded value).
     damage: Math.max(1, Math.round(deriveHitDamage(u.str * POWER_PER_STR, mult))),
@@ -603,6 +607,7 @@ function toSim(u: CombatUnit, i: number): SimUnit {
     stunInflictMs: isPlayer ? 0 : u.stunMs ?? 0,
     attackDamageTiming: u.attackDamageTiming ?? 0.5,
     isWall: false,
+    isSpawned: false,
     passedWall: false,
     taken: false,
     mirrorsOpponentSpeed: !isPlayer && !!u.mirrorsOpponentSpeed,
@@ -633,7 +638,7 @@ export class BattleSim {
   private roundLeft: number;
   private _enraged = false;
   escaped = false;
-  // ---- boss actions (throws AND specials share ONE budget â€” see stepBossActions) ----
+  // ---- boss actions (throws AND specials share ONE budget — see stepBossActions) ----
   private specials: BossSpecial[];
   private actions: BossActionChoice[] = []; // the merged weighted roll table
   private nextAction: BossActionChoice | null = null; // pre-rolled, so the renderer can telegraph
@@ -659,9 +664,9 @@ export class BattleSim {
   private engageDistance: number;
   private frontX: number;
   private supportX: number;
-  /** Distinct ACTIVATED moves present in the army (fixed) â€” the tappable strip. */
+  /** Distinct ACTIVATED moves present in the army (fixed) — the tappable strip. */
   readonly activatedKeys: string[];
-  /** Distinct TEAM-passive abilities present (fixed) â€” the strip's info icons. */
+  /** Distinct TEAM-passive abilities present (fixed) — the strip's info icons. */
   readonly teamKeys: string[];
 
   constructor(
@@ -723,14 +728,14 @@ export class BattleSim {
     }
     // Own it: enrage halves `intervalMs` IN PLACE (see applyEnrage), and the verifier is
     // handed the same pinned config object every time it builds a sim. Sharing it meant a
-    // second sim off one config started with an already-enraged boss â€” the replay silently
+    // second sim off one config started with an already-enraged boss — the replay silently
     // stopped being a pure function of (config, transcript).
     this.bossThrow = bossThrow ? { ...bossThrow } : null;
     this.specials = this.boss ? bossSpecials : [];
     this.actions = this.buildActionBudget();
     this.rollNextAction();
     // `bossActionCooldownTimer` is only ever written by bossUpdate:, so it starts at
-    // ObjC's zero â€” the boss's first action resolves as soon as it becomes active.
+    // ObjC's zero — the boss's first action resolves as soon as it becomes active.
     this.actionCd = 0;
     this.roundLeft = roundMs;
     this.summonTemplate = this.boss ? summonTemplate : null;
@@ -884,7 +889,7 @@ export class BattleSim {
     );
   }
 
-  /** A deployed zombie that has reached striking range â€” IN POSITION to attack,
+  /** A deployed zombie that has reached striking range — IN POSITION to attack,
    *  whether or not an enemy happens to be standing in front of it this instant.
    *
    *  This is the sim's own attack gate (see the advance step: `inCombatZone ||
@@ -901,13 +906,13 @@ export class BattleSim {
     return p.x >= this.frontX - MAX_ROWS * COL_GAP - 12;
   }
 
-  /** Whether a move has any carrier inside its DISPLAY window â€” the span over which
+  /** Whether a move has any carrier inside its DISPLAY window — the span over which
    *  the battle strip keeps its button on screen. Wider than `readyToActivate`
    *  (which also demands off-cooldown and not-already-winding-up) precisely so the
    *  button stays put while its zombie charges and recharges.
    *
    *  Mini Buddy's window is the narrowest of all: exactly while a carrier stands in
-   *  the charge slot deciding whether to go â€” before that it is queued at the back,
+   *  the charge slot deciding whether to go — before that it is queued at the back,
    *  after it there is nothing left to mount. */
   private abilityPresent(key: string): boolean {
     if (key === "attachMini") {
@@ -943,6 +948,51 @@ export class BattleSim {
       key,
       count: deployed.filter((p) => p.abilities.includes(key)).length,
     }));
+  }
+
+  /** Totals behind the two top-HUD team bars.
+   *
+   *  NUMERATOR AND DENOMINATOR MUST COME FROM THE SAME UNITS. The scene used to divide a
+   *  live HP sum by a constant captured at construction from the roster buildPlayerUnits
+   *  handed over — and that roster's con, so its maxHp, already carries the FULL team aura
+   *  (chivalry / grace / fortitude), while refreshTeamAuras only pays the aura to zombies
+   *  that have actually DEPLOYED. Before the first zombie marched in, every carrier's live
+   *  maxHp therefore sat BELOW the number the bar divided by, so an army holding an aura
+   *  carrier opened the fight with a partly dark bar while every zombie in it was at full
+   *  health. Summing maxHp here tracks the aura in lockstep. Dead units keep their maxHp,
+   *  so a loss still reads as a loss.
+   *
+   *  Walls and summoned minions are left OUT of the enemy total. They are transient things
+   *  the boss conjures mid-fight, and adding their HP to a numerator whose denominator was
+   *  captured before they existed pinned the enemy bar at full for as long as one stood.
+   *  Both keep their own on-field bars. The head COUNT still includes them — that is a
+   *  tally of what is on the field, not a share of a total. */
+  teamTotals(): {
+    playerHp: number; playerMax: number; playerAlive: number;
+    enemyHp: number; enemyMax: number; enemyAlive: number;
+  } {
+    let playerHp = 0, playerMax = 0, playerAlive = 0;
+    let enemyHp = 0, enemyMax = 0, enemyAlive = 0;
+    for (const u of this.units) {
+      // Totals count every unit, including a zombie still waiting to charge and an
+      // enemy still queued off-screen.
+      if (u.team === "player") {
+        playerHp += Math.max(0, u.hp);
+        playerMax += u.maxHp;
+        if (u.alive) playerAlive++;
+      } else {
+        if (u.alive) enemyAlive++;
+        // `=== true` on purpose: a checkpoint written before this field existed
+        // resumes without it, and an undefined must read as "part of the roster".
+        if (u.isWall || u.isSpawned === true) continue;
+        enemyHp += Math.max(0, u.hp);
+        enemyMax += u.maxHp;
+      }
+    }
+    return {
+      playerHp, playerMax: Math.max(1, playerMax), playerAlive,
+      enemyHp, enemyMax: Math.max(1, enemyMax), enemyAlive,
+    };
   }
 
   /** Recompute type auras from currently deployed carriers. Their source behavior
@@ -1008,8 +1058,8 @@ export class BattleSim {
     pick.windupTotal = windup;
     pick.abilityCdMs = ab.cooldownMs;
     // A one-use move is spent when the player COMMITS it, not when it pays off. The
-    // wind-up is cancellable â€” knockback, pixelFire, and the two client-only grabs all
-    // clear `windupKey` â€” and Explode carries no cooldown to cover the gap, so marking
+    // wind-up is cancellable — knockback, pixelFire, and the two client-only grabs all
+    // clear `windupKey` — and Explode carries no cooldown to cover the gap, so marking
     // it at the payoff handed the move straight back every time its charge was
     // interrupted. On a hazard raid only the CLIENT interrupts, so only the client
     // re-armed, and the server refused the second tap as `illegal_ability`.
@@ -1040,7 +1090,7 @@ export class BattleSim {
     this.attacksLanded++;
     p.windupKey = null;
     p.windupMs = 0;
-    // `useOnce` was already spent at activate() â€” a cancelled charge must not refund it.
+    // `useOnce` was already spent at activate() — a cancelled charge must not refund it.
     p.timerMs = this.cycleMs(p, null); // resume normal attacks after a beat
   }
 
@@ -1142,7 +1192,7 @@ export class BattleSim {
     return this.enemies.find((e) => e.alive && e.isWall && u.x <= e.x + 0.5) ?? null;
   }
 
-  /** The FRONT-MOST player within an enemy's striking range â€” the single zombie
+  /** The FRONT-MOST player within an enemy's striking range — the single zombie
    *  nearest the enemy down the lane, NOT the whole front row. Enemies commit all
    *  their damage to this one target (a big/slow hit knocks it back or drops it
    *  rather than chipping the entire line), so losses are more focused. Among the
@@ -1168,7 +1218,7 @@ export class BattleSim {
    *  throws arc over the frontline tanks and land on the support/healers massed
    *  behind them. "Deployed" = released from the focus bar (brain popped) and now
    *  advancing/fighting on the lane; zombies still waiting or charging are off-limits.
-   *  Returns null when nothing is deployed â€” so the boss doesn't throw at an empty
+   *  Returns null when nothing is deployed — so the boss doesn't throw at an empty
    *  lane. The lead (see leadVelocity) is applied at launch. */
   private throwTarget(): SimUnit | null {
     const deployed = this.players.filter(
@@ -1181,7 +1231,7 @@ export class BattleSim {
   /** The velocity a throw leads a target by: its MEASURED velocity (how it actually
    *  moved last step), CLAMPED to PREDICT_SPEED_CAP. So a slow/normal zombie is led by
    *  its true speed (and gets hit), while a fast one is led only as if it were "lowish
-   *  speed" â€” the shot lands behind it and it outruns the throw. Zero when it's not
+   *  speed" — the shot lands behind it and it outruns the throw. Zero when it's not
    *  moving (parked at its slot, fighting), so a stationary target is aimed at directly. */
   private leadVelocity(u: SimUnit): { vx: number; vy: number } {
     const spd = Math.hypot(u.vx, u.vy);
@@ -1257,7 +1307,7 @@ export class BattleSim {
     u.laserTimerMs += interval;
   }
 
-  /** One attack cycle in ms for `u` while facing `foe` â€” ground truth
+  /** One attack cycle in ms for `u` while facing `foe` — ground truth
    *  `-[Actor getFightAttackSpeed]`. `cooldownMs` already carries the raw dex clock
    *  (2/dex zombie, 1/dex enemy) times the attack's `speedMultiplier`; on top of that:
    *   - a player zombie deeper than the front five swings slower (lineupSpeedBand);
@@ -1288,7 +1338,7 @@ export class BattleSim {
       this.dealPlayerDamage(u, foe, hit.amount, hit.critLayers);
 
       // Girl `damageIn:` uses integer rolls >.70 and >.95. Double Strike adds
-      // the authored 0.25Ã— Power strike; Random Stun holds the target for 1s.
+      // the authored 0.25× Power strike; Random Stun holds the target for 1s.
       if (u.abilities.includes("doubleStrike") && this.abilityRoll(u) > 70 && foe.alive) {
         const bonus = this.playerPhysicalDamageResult(
           u,
@@ -1340,7 +1390,7 @@ export class BattleSim {
     p.windupKey = null;
     p.windupMs = 0;
     p.x = Math.max(CHARGE_X, p.x - KNOCKBACK_PX);
-    p.formOrder = this.releaseSeq++; // last in the formation â†’ back column
+    p.formOrder = this.releaseSeq++; // last in the formation → back column
     p.frontPriority = false;
     p.state = "advance";
     p.timerMs = this.cycleMs(p, null);
@@ -1515,7 +1565,7 @@ export class BattleSim {
 
   /** Deterministic per-segment distraction roll. GROUND TRUTH (`-[FightFocusBar
    *  update:]`): at each 0.25 charge segment a zombie is distracted iff
-   *  `rand01 > focus/100` â€” so focus 100 (premium) is NEVER distracted, and a
+   *  `rand01 > focus/100` — so focus 100 (premium) is NEVER distracted, and a
    *  focus-40 starter is distracted ~60% of the time per segment. Uses the
    *  replayable `hash` (keyed by the unit's seed + which segment) instead of an RNG
    *  so the sim stays deterministic/replayable. */
@@ -1601,7 +1651,7 @@ export class BattleSim {
     rear.sort((a, b) => a.formOrder - b.formOrder);
 
     // Lineup index = front-to-back rank across the committed army (front-most = 0), driving
-    // the depth-damage band. Mirrors `[fightMan zombies] indexOfObject:` â€” knockback bumps a
+    // the depth-damage band. Mirrors `[fightMan zombies] indexOfObject:` — knockback bumps a
     // zombie's formOrder to the back (setZombieToLastIndex), so it re-sorts to a deeper band.
     [...frontline, ...rear].forEach((p, i) => {
       p.lineupIndex = i;
@@ -1640,7 +1690,7 @@ export class BattleSim {
     this.stepEnrage(dtMs);
 
     // Throws and specials draw from ONE action budget (ground truth: the boss rolls a
-    // single weighted pick over `bossActions` per cycle â€” see stepBossActions).
+    // single weighted pick over `bossActions` per cycle — see stepBossActions).
     this.stepBossActions(dtMs);
     this.stepGrabbers(dtMs);
     this.stepCrabs(dtMs);
@@ -1653,12 +1703,12 @@ export class BattleSim {
     // Zombies.
     for (const p of this.players) {
       if (!p.alive) continue;
-      if (p.state === "grabbed") continue; // seized by the trapeze â€” position driven by stepGrabbers
+      if (p.state === "grabbed") continue; // seized by the trapeze — position driven by stepGrabbers
       if (p.abilityCdMs > 0) p.abilityCdMs -= dtMs; // activated-move recharge
       switch (p.state) {
         case "waiting": {
           // Idle in the back group: stand STILL most of the time, with only an
-          // occasional brief shuffle to a nearby spot â€” so the crowd looks alive
+          // occasional brief shuffle to a nearby spot — so the crowd looks alive
           // without the old constant pacing. Deterministic (cycle-indexed hash, no
           // RNG): each zombie holds a spot for ~85% of its cycle, then eases a few
           // px to the next spot in the last ~15%. No vertical hover.
@@ -1668,7 +1718,7 @@ export class BattleSim {
           const cyc = Math.floor(raw);
           const ph = raw - cyc; // 0..1 within the cycle
           const MOVE_FRAC = 0.12; // only the last 12% of the cycle is a shuffle
-          const AMP = 14; // shuffle reach in sim px (was a Â±26 constant pace) â€” big
+          const AMP = 14; // shuffle reach in sim px (was a ±26 constant pace) — big
           // enough that the brief shuffle clears the walk-anim threshold (a real
           // step, not a glide), while the long still stretch keeps them planted
           const spot = (c: number) => (hash(c * 1.73 + p.mill) - 0.5) * 2 * AMP;
@@ -1704,7 +1754,7 @@ export class BattleSim {
           break;
         }
         default: {
-          // Stunned by an enemy hit â€” can't move or attack until it wears off.
+          // Stunned by an enemy hit — can't move or attack until it wears off.
           if (p.stunMs > 0) {
             p.stunMs -= dtMs;
             p.freezeMs = Math.max(0, p.freezeMs - dtMs);
@@ -1729,7 +1779,7 @@ export class BattleSim {
             p.y = p.slotY;
           }
           if (wasWalking) this.stepLaser(p, dtMs);
-          // The formation is only for spacing / projectile hitboxes â€” EVERY zombie
+          // The formation is only for spacing / projectile hitboxes — EVERY zombie
           // that has reached the combat zone attacks the enemy once it has arrived
           // (not just the front row). The enemy still only strikes those in melee
           // range (the front), so front-row / headless zombies take the hits.
@@ -1746,7 +1796,7 @@ export class BattleSim {
             Math.abs(blockingWall.x - p.x) <= WALL_MELEE_GAP + 2;
           if (foe && enemyArrived && (inCombatZone || atBlockingWall)) {
             p.state = "fight";
-            // A charging zombie makes no normal attacks â€” it's winding up the big
+            // A charging zombie makes no normal attacks — it's winding up the big
             // hit; deliver the payoff when the wind-up fills. Otherwise attack.
             if (p.windupKey) this.stepWindup(p, foe, dtMs);
             else this.tryAttack(p, foe, dtMs);
@@ -1805,7 +1855,7 @@ export class BattleSim {
         // Leave the perch by heading OUT THE RIGHT SIDE (through the entrance),
         // staying up at structure height; the renderer slides it off-screen behind
         // the structure. Only once fully off-screen does it drop to the ground and
-        // re-enter â€” no floating diagonally toward the middle.
+        // re-enter — no floating diagonally toward the middle.
         const sx = (EMERGE_SPEED * dtMs) / 1000;
         e.x = Math.min(ENEMY_SPAWN_X, e.x + sx); // walk out to the hidden spawn
         e.timerMs = this.cycleMs(e, null);
@@ -1817,7 +1867,7 @@ export class BattleSim {
         continue;
       }
       if (e.state === "emerging") {
-        // Re-enter from the right at ground level and walk left to the hold spot â€”
+        // Re-enter from the right at ground level and walk left to the hold spot —
         // exactly where the normal enemies attack from.
         const sx = (EMERGE_SPEED * dtMs) / 1000;
         e.x = Math.max(ENEMY_HOLD_X, e.x - sx);
@@ -1830,7 +1880,7 @@ export class BattleSim {
         }
         continue;
       }
-      // Stunned (by an Explode) â€” can't act; hold its attack clock.
+      // Stunned (by an Explode) — can't act; hold its attack clock.
       if (e.stunMs > 0) {
         e.stunMs -= dtMs;
         e.freezeMs = Math.max(0, e.freezeMs - dtMs);
@@ -1848,7 +1898,7 @@ export class BattleSim {
     }
 
     // Measure each unit's velocity from this step's movement (for boss-throw lead).
-    // A big jump is a teleport (knockback re-slot, boss perchâ†”ground) not real motion â€”
+    // A big jump is a teleport (knockback re-slot, boss perch↔ground) not real motion —
     // zero it so a throw doesn't lead a phantom high-speed vector.
     const dtSec = dtMs / 1000;
     if (dtSec > 0) {
@@ -1880,8 +1930,8 @@ export class BattleSim {
       return null;
     }
     if (this.isCastingWall()) return null;
-    if (this.nextAction?.kind !== "throw") return null; // a special is up next â€” arm rests
-    if (!this.throwTarget()) return null; // empty lane â†’ arm rests
+    if (this.nextAction?.kind !== "throw") return null; // a special is up next — arm rests
+    if (!this.throwTarget()) return null; // empty lane → arm rests
     const visualTimer = Math.max(0, this.actionCd - visualLeadMs);
     if (visualTimer > windowMs) return 0;
     return clamp(1 - visualTimer / windowMs, 0, 1);
@@ -1906,7 +1956,7 @@ export class BattleSim {
     return !!b && b.alive && (b.state === "structure" || b.state === "hold" || b.state === "fight");
   }
 
-  /** Round countdown â†’ enrage. When the timer expires the boss enrages once: throws
+  /** Round countdown → enrage. When the timer expires the boss enrages once: throws
    *  come faster, specials recover faster, and its melee hits harder. */
   private stepEnrage(dtMs: number) {
     if (this._enraged || !this.boss || !this.boss.alive) return;
@@ -1923,12 +1973,12 @@ export class BattleSim {
     this.boss.damage = Math.max(1, Math.round(this.boss.damage * ENRAGE_DMG_MULT));
   }
 
-  /** Boss action scheduler â€” GROUND TRUTH (`CivilianActorFight bossUpdate:` 0x67e8c).
+  /** Boss action scheduler — GROUND TRUTH (`CivilianActorFight bossUpdate:` 0x67e8c).
    *  When the boss's action cooldown expires it makes ONE weighted roll over its whole
    *  `bossActions` list (`rollAgainstFrequencyInArray:`) and dispatches on the chosen
    *  action's name: `throw` launches a projectile and recovers for the raid's
    *  `throwSpeed`; every other action winds up for its `castTime` and then recovers for
-   *  its `cooldownTime`. Throws therefore COMPETE with specials for the same slot â€”
+   *  its `cooldownTime`. Throws therefore COMPETE with specials for the same slot —
    *  a boss whose list is all throws (most of them) tosses on a plain interval, while
    *  the Robot BrainBot (75 % throws) and the Video Games boss (27 %) throw
    *  proportionally less because their specials consume the budget.
@@ -1957,9 +2007,9 @@ export class BattleSim {
     }
     this.actionCd -= dtMs;
     if (this.actionCd > 0) return;
-    // The source checks each action's `allowedToâ€¦` gate AFTER the roll but BEFORE arming
+    // The source checks each action's `allowedTo…` gate AFTER the roll but BEFORE arming
     // any timer, so an action it cannot perform right now (a second wall, an exhausted
-    // summon) costs nothing â€” it simply re-rolls on the next tick instead of burning the
+    // summon) costs nothing — it simply re-rolls on the next tick instead of burning the
     // slot on a no-op cast.
     if (!this.canPerform(next)) {
       this.rollNextAction();
@@ -1982,7 +2032,7 @@ export class BattleSim {
     this.specialCast = Math.max(0, next.special.castMs);
   }
 
-  /** The source's per-action `allowedToâ€¦` gates: a wall while one already stands and a
+  /** The source's per-action `allowedTo…` gates: a wall while one already stands and a
    *  summon past the cap are refused, and the boss picks again rather than casting a
    *  no-op. Everything else is always performable. */
   private canPerform(action: BossActionChoice): boolean {
@@ -2006,7 +2056,7 @@ export class BattleSim {
     return true;
   }
 
-  /** Roll the next action from the merged budget (deterministic â€” no RNG). */
+  /** Roll the next action from the merged budget (deterministic — no RNG). */
   private rollNextAction() {
     this.nextAction = weightedPick(this.actions, this.actionCount, 0x51ec1a1);
     if (this.nextAction) this.actionCount++;
@@ -2033,7 +2083,7 @@ export class BattleSim {
   private runSpecial(sp: BossSpecial) {
     switch (sp.name) {
       case "alienLaser": {
-        // Flat 200 per bolt â€” a hard constant in the source, not a stat-derived value
+        // Flat 200 per bolt — a hard constant in the source, not a stat-derived value
         // (`AlienStageBullet collidedWith:` passes the immediate 200.0f to `damage:`).
         const target = this.throwTarget();
         if (target) {
@@ -2045,12 +2095,12 @@ export class BattleSim {
       }
       case "pixelFire": {
         // Source (`ZFFightMan pixelFire`): picks ONE random eligible zombie and calls
-        // `setOnFire` â€” single-target, and an INTERRUPT rather than a damage-over-time.
+        // `setOnFire` — single-target, and an INTERRUPT rather than a damage-over-time.
         // `setOnFire` cancels the zombie's scheduled swing and puts it in the burning
         // state, but with its destination set to its own position, so the state burns for
         // exactly one frame and leaves. That is the whole effect: a cancelled attack, the
         // stun sfx + pixel-explosion particles, and ~0.08 % of max HP. See
-        // combatStats.BURN_MAX_HP_FRACTION_PER_SEC â€” do NOT turn this back into a DoT.
+        // combatStats.BURN_MAX_HP_FRACTION_PER_SEC — do NOT turn this back into a DoT.
         const eligible = this.players.filter(
           (p) => p.alive && !p.taken && (p.state === "advance" || p.state === "fight")
         );
@@ -2070,7 +2120,7 @@ export class BattleSim {
         break;
       }
       case "turnZombie": {
-        // Zedzox turns a zombie against you â€” model as losing your front unit.
+        // Zedzox turns a zombie against you — model as losing your front unit.
         const victim = this.frontFighter();
         if (victim) {
           this.dealDamage(victim, victim.hp, false);
@@ -2131,6 +2181,7 @@ export class BattleSim {
    *  emerges through the normal one-at-a-time queue. */
   private spawnEnemy(template: CombatUnit): SimUnit {
     const su = toSim({ ...template, id: `spawn${this.spawnSeq++}` }, this.enemies.length);
+    su.isSpawned = true;
     su.state = "queued";
     su.hp = su.maxHp;
     su.alive = true;
@@ -2158,8 +2209,8 @@ export class BattleSim {
 
   /** Advance the Trapeze Artist grab hazard. Spawns one at a time on a cadence; successive
    *  appearances alternate right-to-left and left-to-right, seize a selected zombie on
-   *  contact, hold ~1s, then rise to carry it off. Tapping (tapGrabber) whittles its HP â€” killed â†’ the
-   *  zombie DROPS back into the fight; escaped off the top â†’ the carried zombie DIES. */
+   *  contact, hold ~1s, then rise to carry it off. Tapping (tapGrabber) whittles its HP — killed → the
+   *  zombie DROPS back into the fight; escaped off the top → the carried zombie DIES. */
   private stepGrabbers(dtMs: number) {
     if (!this.grabberCfg) return;
     // Spawn one at a time on a cadence, only while there's a deployed zombie to threaten.
@@ -2222,7 +2273,7 @@ export class BattleSim {
         z.prevX = z.x;
         z.prevY = z.y;
         if (z.y <= GRABBER_ESCAPE_ZOMBIE_Y) {
-          z.hp = 0; // carried off â€” the zombie is lost
+          z.hp = 0; // carried off — the zombie is lost
           z.alive = false;
           z.state = "dead";
           g.grabbedId = null;
@@ -2239,7 +2290,7 @@ export class BattleSim {
   /** Advance the Beach crab hazard. Ground truth (`BeachStageActorCrab update:`): spawns on
    *  the obstacle timer up to `limit` alive at once, wanders, grabs the first deployed
    *  zombie it touches (that zombie goes inert + invincible), holds `holdMs`, then hauls it
-   *  off the LEFT edge â€” at which point the zombie leaves the fight (`taken`, source state
+   *  off the LEFT edge — at which point the zombie leaves the fight (`taken`, source state
    *  38: NOT death, it comes home afterwards). Tapping it to death (`tapCrab`) frees the
    *  zombie and returns the spawn slot. */
   private stepCrabs(dtMs: number) {
@@ -2330,7 +2381,7 @@ export class BattleSim {
 
   /** Player tapped a crab: one tap of damage (rate-limited). Ground truth 100 damage vs
    *  1000 HP = exactly 10 taps. Killing it releases any zombie it holds back onto the lane
-   *  (source state 9 â†’ 10, invincibility off) and frees its spawn slot. */
+   *  (source state 9 → 10, invincibility off) and frees its spawn slot. */
   tapCrab(id: string): boolean {
     const c = this.crabs.find((x) => x.id === id && x.state !== "gone");
     if (!c || c.tapCdMs > 0) return false;
@@ -2463,8 +2514,8 @@ export class BattleSim {
     return this.grabbers.find((g) => g.state === "carry") ?? null;
   }
 
-  /** Player tapped a boss-summoned wall: chip it (ground truth ZFFightWall ccTouchEnded â†’
-   *  damage: â‰ˆ maxHp/20). Returns true if a wall took the tap. */
+  /** Player tapped a boss-summoned wall: chip it (ground truth ZFFightWall ccTouchEnded →
+   *  damage: ≈ maxHp/20). Returns true if a wall took the tap. */
   tapWall(id: string): boolean {
     const w = this.enemies.find((e) => e.id === id && e.isWall && e.alive);
     if (!w) return false;
@@ -2534,14 +2585,14 @@ export class BattleSim {
       pr.rot += pr.rotSpeed * dt;
       const hitR = ZOMBIE_HIT_R + pr.spriteSize * PROJ_HIT_FACTOR;
       for (const p of this.players) {
-        // A thrown item can only strike zombies that have moved out to fight â€”
+        // A thrown item can only strike zombies that have moved out to fight —
         // ones still waiting in the group or charging up are safe.
         if (!p.alive || (p.state !== "advance" && p.state !== "fight")) continue;
         const dx = p.x - pr.x;
         const dy = p.y - pr.y;
         if (dx * dx + dy * dy <= hitR * hitR) {
           // Carried grabs are the Trapeze Artist (stepGrabbers) and the Beach crab
-          // (stepCrabs), not projectiles â€” a projectile only ever deals damage.
+          // (stepCrabs), not projectiles — a projectile only ever deals damage.
           this.dealEnemyDamage(p, pr.damage);
           p.struckThisTick = true;
           this.projectileImpactsThisTick++;

@@ -52,4 +52,34 @@ INSERT OR IGNORE INTO d1_migrations (name) VALUES
   ('0041_roster_color.sql'),
   ('0042_service_state.sql'),
   ('0043_black_market_brain_payout.sql'),
-  ('0044_black_market_mutation_width.sql');
+  ('0044_black_market_mutation_width.sql'),
+  ('0045_black_market_gold.sql'),
+  -- Data repair only (clamps in-flight Epic Boss runs to the 20-rung ladder); a fresh
+  -- database has no rows to repair, so baselining it is a no-op.
+  ('0046_epic_boss_twenty_level_ladder.sql'),
+  ('0047_fallen_zombies.sql'),
+  ('0048_fallen_released_at.sql'),
+  ('0049_periodic_quests.sql'),
+  -- Data repair only (retires the lower-tier mutation bit the two Tier-4 variants used
+  -- to ride); a fresh database has no rows to repair, so baselining it is a no-op.
+  ('0050_tier4_variant_mutations.sql'),
+  -- Data repair only (pulls runs parked above the re-cut 10-rung Epic ladder down to its
+  -- top and corrects their HP); a fresh database has no rows to repair, so baselining it
+  -- is a no-op.
+  ('0051_epic_boss_ten_rung_ladder.sql'),
+  -- Data repair only (re-fits in-flight Epic runs onto the per-boss baseHp ramp); a fresh
+  -- database has no rows to repair, so baselining it is a no-op.
+  ('0052_epic_boss_per_boss_base_hp.sql'),
+  -- Data repair only (buries Epic Boss casualties that settled before the graveyard
+  -- write existed); a fresh database has no rows to repair, so baselining it is a no-op.
+  ('0053_epic_boss_graveyard_backfill.sql'),
+  -- Adds epic_boss_runs_v3.started_crop, which schema.sql already creates on a fresh
+  -- database, so re-running the ALTER would fail on a duplicate column.
+  ('0054_epic_boss_started_crop.sql'),
+  -- Creates pvp_sessions_v3 (friend invasions), which schema.sql already creates
+  -- on a fresh database.
+  ('0055_pvp_invasions.sql'),
+  -- Data repair only (empties the pinned config of already-finished raid and Epic Boss
+  -- sessions); a fresh database has no finished sessions, so baselining it is a no-op.
+  ('0056_release_spent_fight_configs.sql'),
+  ('0057_pvp_rework.sql');

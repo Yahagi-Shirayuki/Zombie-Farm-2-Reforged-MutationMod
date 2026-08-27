@@ -7,6 +7,7 @@ import {
 } from "../../src/blackMarketRules";
 import { OBJECTS } from "./objectCatalog";
 import { applyBodyTypeRestriction } from "../../src/zombie/mutations";
+import { upgradeVariantMutations } from "../../src/zombie/variantMutations";
 
 // Server-side zombie catalog. Mirrors the `cost` of each unit in
 // public/assets/zombies.json so the server can price a SELL exactly (sell = the
@@ -115,15 +116,31 @@ export function isHeadlessZombie(key: string): boolean {
   return HEADLESS_ZOMBIES.has(key);
 }
 
-/** The mutation mask a unit of `key` may legally carry: head and hair/eye bits are
- *  dropped for the headless family (a Party Zombie can't be carrot-eyed), except the
- *  Pumpking that stands in for the head it hasn't got. Everyone else keeps whatever
- *  they are given — including a Pumpking inherited in the Pot, which is the only way
- *  a zombie with a head of its own can get one (it cannot be grown on them). The
+/** The mutation mask a unit of `key` may legally carry ON A TRUSTED WRITE.
+ *
+ *  EPIC zombies never carry mutations (owner's rule, 2026-08-24). Epics are the
+ *  Almanac's own Epic page — the Epic Boss event prizes, `EPIC_QUEST_ZOMBIE_REWARDS`,
+ *  the same set `isRewardOnlyZombie` names. Every ORGANIC path to a mutated epic is
+ *  already shut: mutations only grow on crop-grown zombies, epics are refused as
+ *  Zombie Pot parents (both at start and at collect), and the Pot's promotion child
+ *  is always a tier-5 Special, never an epic. This strip closes the one remaining
+ *  door — a trusted write that supplies its own mask (the one-time save migration,
+ *  a dev fixture) — so the rule holds structurally rather than by coincidence.
+ *
+ *  SPECIALS ARE NOT COVERED, deliberately: the tier-5s, the Pot promotions and the
+ *  brain-market legends may all carry mutations, and a special in Pot slot 1 still
+ *  inherits its partner's. Only the Epic page is exempt.
+ *
+ *  For everyone else: head and hair/eye bits are dropped for the headless family
+ *  (a Party Zombie can't be carrot-eyed), except the Pumpking that stands in for the
+ *  head it hasn't got. Everyone else keeps whatever they are given — including a
+ *  Pumpking inherited in the Pot, which is the only way a zombie with a head of its
+ *  own can get one (it cannot be grown on them). The headless scrub is the
  *  server-side twin of the client's makeOwned, which scrubs the same bits wherever a
  *  mask lands on a unit — both must agree or the unit's stats diverge. */
 export function legalMutation(key: string, mask: number): number {
-  return applyBodyTypeRestriction(mask, isHeadlessZombie(key));
+  if (isRewardOnlyZombie(key)) return 0;
+  return applyBodyTypeRestriction(upgradeVariantMutations(key, mask), isHeadlessZombie(key));
 }
 
 const TRADABLE_ZOMBIES = new Set(

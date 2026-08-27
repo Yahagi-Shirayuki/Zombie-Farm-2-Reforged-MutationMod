@@ -3,6 +3,7 @@ import { resolveRaid, buildEnemyUnits, buildPlayerUnits } from "./CombatEngine";
 import { activeAbilities, naturalLeaderAllStatsMult } from "../zombie/abilities";
 import type { CombatUnit } from "./types";
 import type { OwnedZombie } from "../zombie/types";
+import { mutationBonus } from "../zombie/mutations";
 import shippedStats from "../../public/assets/raids/enemy_stats.json";
 import shippedAttacks from "../../public/assets/raids/attacks.json";
 
@@ -227,10 +228,15 @@ describe("buildPlayerUnits — level-scaling is applied", () => {
 // off, runs the chain, and adds it back. Baking it in before the ramp — the old
 // behaviour — left a full 5-slot set worth ~25 % of its face value at level 12.
 describe("buildPlayerUnits — mutations apply last, as a flat bonus", () => {
-  // Garlichead (+3 str, head) | Dragon-arm (+4 str, arm) | Carrot-eyed (+1 dex, hair_eye)
+  // Garlichead (head) | Dragon-arm (arm) | Carrot-eyed (hair/eye) — one bit per slot, so
+  // the mask is legal and the bonus is the sum of all three. Read from the catalog
+  // rather than typed out: what this describes is the ORDER the bonus is applied in,
+  // and re-stating the catalog's numbers here only makes it drift when they are retuned.
+  // mutations.test.ts is where those values are pinned.
   const MASK = 256 | 4096 | 4;
-  const MUT_STR = 7;
-  const MUT_DEX = 1;
+  const MUT = mutationBonus(MASK);
+  const MUT_STR = MUT.str;
+  const MUT_DEX = MUT.dex;
 
   /** A Blue Regular (base str 5 / dex 2 / con 5 — exactly the Regular endpoints, so the
    *  level ramp is a no-op on the base and any level dependence must come from the
@@ -260,12 +266,17 @@ describe("buildPlayerUnits — mutations apply last, as a flat bonus", () => {
 
   it("veterancy multiplies the base stat only, not the flat mutation", () => {
     const master = buildPlayerUnits(mutant({ invasions: 5 }), { playerLevel: 25 })[0];
-    expect(master.str).toBeCloseTo(5 * 1.25 + MUT_STR); // 13.25, not 12 × 1.25 = 15
+    // Rank 5 is +25 %. It multiplies the base 5 and leaves the mutation alone:
+    // 5 × 1.25 + MUT_STR, never (5 + MUT_STR) × 1.25.
+    expect(master.str).toBeCloseTo(5 * 1.25 + MUT_STR);
+    expect(master.str).not.toBeCloseTo((5 + MUT_STR) * 1.25);
   });
 
   it("still ramps the UNMUTATED base while paying the mutation in full", () => {
-    // Headless con: endpoint 11, base 29.7, +3 con from Cauli-hair -> listed 32.7.
-    const mask = 512;
+    // Headless con: endpoint 11, base 29.7, +3 con from Lima Bean -> listed 32.7.
+    // Lima Bean deliberately, not a hair/eye mutation: this unit is HEADLESS, which
+    // may hold body/arm/neck bits and nothing else (HEADLESS_SLOTS).
+    const mask = 1024;
     const head = (): OwnedZombie[] => [
       { ...mutant()[0], group: "Headless", key: "ZombieActorHeadless", mutation: mask,
         str: 11, dex: 1, con: 29.7 + 3 },
@@ -341,12 +352,26 @@ describe("buildPlayerUnits — binary-authentic zombie abilities", () => {
     expect(buffedRegular.maxHp).toBeCloseTo(regularSolo.maxHp * 1.20);
   });
 
-  it("Protect reduces damage for every group except Headless", () => {
+  it("Protect shields the rest of the line, and a carrier does not shield itself", () => {
+    // Headless used to be cut out of its own group's aura entirely, which left the game's
+    // tank bodies as the only ones that could not be shielded — a Bombie carries the
+    // highest hit points in the roster and still took every blow raw. Ruleset v38 grants
+    // it to every body type, keeping only the self-exclusion: the aura is what a Protect
+    // zombie gives the OTHERS, so one carrier alone is still worth nothing to itself.
     const regular = owned("regular", "Regular", "Green");
     const headless = owned("protector", "Headless", "Blue");
-    const built = buildPlayerUnits([regular, headless], { abilityUnlocked: unlocked });
-    expect(built[0].damageReduction).toBeCloseTo(0.20);
-    expect(built[1].damageReduction).toBe(0);
+    const one = buildPlayerUnits([regular, headless], { abilityUnlocked: unlocked });
+    expect(one[0].damageReduction).toBeCloseTo(0.20); // shielded by the carrier
+    expect(one[1].damageReduction).toBe(0); // …which does not shield itself
+
+    // A second carrier shields the first — the case the old exclusion could never reach.
+    const built = buildPlayerUnits(
+      [regular, headless, owned("protector-2", "Headless", "Blue")],
+      { abilityUnlocked: unlocked }
+    );
+    expect(built[0].damageReduction).toBeCloseTo(0.40); // both carriers
+    expect(built[1].damageReduction).toBeCloseTo(0.20); // the other one
+    expect(built[2].damageReduction).toBeCloseTo(0.20);
   });
 
   it("stacks duplicate Protect carriers additively", () => {
@@ -481,6 +506,8 @@ describe("buildEnemyUnits — attack cadence", () => {
       ],
     },
     PirateStageActorScallywag: { str: 50, dex: 0.5, con: 40, attacks: [{ name: "poke", frequency: 100 }] },
+    PirateStageActorBoss: { str: 500, dex: 0.4, con: 120, attacks: [{ name: "poke", frequency: 100 }] },
+    PirateStageActorSwashbuckler: { str: 8, dex: 2, con: 25, attacks: [{ name: "poke", frequency: 100 }] },
   };
   const attacks = {
     poke: {},
@@ -507,8 +534,13 @@ describe("buildEnemyUnits — attack cadence", () => {
     expect(dps).toBeCloseTo(22.5, 1);
   });
 
-  it("flags the Scallywag as mirroring its opponent's speed", () => {
+  it("flags BOTH pirates as mirroring their opponent's speed", () => {
+    // The Scallywag's mirror is recovered ground truth; the boss's is a deliberate
+    // divergence (ruleset v38) — see combatStats.PIRATE_BOSS_KEY. Nothing outside the
+    // pirate family mirrors.
     expect(build("PirateStageActorScallywag").mirrorsOpponentSpeed).toBe(true);
+    expect(build("PirateStageActorBoss").mirrorsOpponentSpeed).toBe(true);
+    expect(build("PirateStageActorSwashbuckler").mirrorsOpponentSpeed).toBe(false);
     expect(build("Farmhand").mirrorsOpponentSpeed).toBe(false);
   });
 

@@ -3,13 +3,15 @@
 // requirement dispatches the quest's reward and unlocks any quest gated behind it.
 //
 // Quests activate when their prerequisite is complete AND the player meets the level
-// gate. All 105 shipped quest records load; the farm loop, raids/invasions (loot/perfect/success),
+// gate. All 122 shipped quest records load (106 recovered from Quests.plist via quests.json,
+// plus 16 Reforged-original ones from quests_reforged.json — assets.ts merges the two into one
+// map, ids disjoint by construction); the farm loop, raids/invasions (loot/perfect/success),
 // and the Zombie Pot combiner have live emitters (see LIVE_EVENTS below). Quests
 // gated on still-unsupported categories (social and photo/camera) simply never
 // advance — dormant, not broken. Epic quests are selected per active boss event.
 import { GameState } from "../GameState";
 import { QuestBus, QuestEvent } from "./events";
-import { QuestDef, QuestView, RewardType, questRewardInfo } from "./types";
+import { QuestDef, QuestView, RewardType, questBonusRewardInfo, questRewardInfo } from "./types";
 import { QuestSave } from "../save/schema";
 import { questSubjectMatches } from "./matching";
 
@@ -26,8 +28,12 @@ const LIVE_EVENTS = new Set<string>([
   QuestEvent.CropHarvested, QuestEvent.ZombieHarvested, QuestEvent.ItemBought,
   // raids / invasions
   QuestEvent.InvasionSuccessful, QuestEvent.InvasionPerfectGame, QuestEvent.LootItemWon,
+  // elite invasions + combat technique (derived from the fight's RaidFeats)
+  QuestEvent.EliteInvasionSuccessful, QuestEvent.ElitePerfectGame,
+  QuestEvent.EnemyDefeatedByAbility, QuestEvent.BossDefeatedByAbility,
+  QuestEvent.ZombieResurrected,
   // mutation combiner (Zombie Pot)
-  QuestEvent.CombinerCombined, QuestEvent.CombinerHarvested,
+  QuestEvent.CombinerCombined, QuestEvent.CombinerHarvested, QuestEvent.CombinerCollected,
   // Epic Boss events are additionally gated by setEpicBossActive().
   QuestEvent.EpicStageEnemyDefeated, QuestEvent.EpicBossEpicItemWon,
 ]);
@@ -150,12 +156,53 @@ export class QuestSystem {
 
   private complete(id: string) {
     const def = this.defs.get(id);
-    if (!def || this.completed.has(id)) return;
+    // Retire it from the rail BEFORE the already-completed guard. Bailing out with the
+    // id still in `active` is what would turn `sweepSatisfied` into an infinite loop —
+    // it re-finds the same satisfied quest every pass, never empties `finished`, and
+    // freezes the tab outright. No path reaches that today (every writer to `active`
+    // fences on `completed`), which is exactly why it is worth making unreachable by
+    // construction rather than by audit.
     this.active.delete(id);
+    if (!def || this.completed.has(id)) return;
     this.completed.add(id);
     this.dispatchReward(def);
     this.hooks.completed(def); // celebrate with the completion popup
     this.tryActivate(); // a completed prerequisite may unlock the next quest(s)
+  }
+
+  /** Close out any active quest whose requirements are ALREADY satisfied.
+   *
+   *  Completion used to be tested ONLY inside an event that advanced a counter, so a
+   *  quest that arrived on the rail already finished stayed there forever, unrewarded:
+   *  a capped requirement bails out of onEvent before `advanced` is set, so no later
+   *  event can re-run the check. That is not hypothetical — lowering a requirement's
+   *  countTotal (Master Combiner went from 50 collections to 15) turns every save
+   *  holding a count at or above the new target into exactly this state: "Collect 15
+   *  zombies from the Zombie Pot (15/15) ✓", stuck in the quest log.
+   *
+   *  Online the server owns completion (it re-checks every eligible quest on each
+   *  command batch, so it heals itself), and self-completing here would grant a reward
+   *  the server never agreed to — hence the authoritative bail-out.
+   *
+   *  Completing can unlock a successor, so this repeats until it finds nothing new.
+   *  It terminates: every pass moves at least one id into `completed`, which
+   *  `eligible` then permanently excludes. */
+  private sweepSatisfied(): boolean {
+    if (this.hooks.authoritative) return false;
+    let closedAny = false;
+    for (;;) {
+      const finished: string[] = [];
+      for (const [id, counts] of this.active) {
+        const def = this.defs.get(id);
+        if (!def) continue;
+        if (def.epicEvent && (!this.epicBossActive || !this.epicBossQuestIds.has(id))) continue;
+        if (def.requirements.every((r, i) => (counts[i] ?? 0) >= r.countTotal)) finished.push(id);
+      }
+      if (!finished.length) return closedAny;
+      closedAny = true;
+      // Complete after the loop so we don't mutate `active` mid-iteration.
+      for (const id of finished) this.complete(id);
+    }
   }
 
   private dispatchReward(def: QuestDef) {
@@ -185,6 +232,8 @@ export class QuestSystem {
         if (def.rewardItemKey) this.hooks.grantZombie(def.rewardItemKey);
         break;
     }
+    // Paid on top of whichever reward the switch handled, never instead of it.
+    if (def.rewardBrains) this.state.addBrains(def.rewardBrains);
   }
 
   /** True if any requirement listens to an event that currently has an emitter. */
@@ -209,6 +258,7 @@ export class QuestSystem {
         icon: def.sprite,
         tip: def.tip,
         reward: questRewardInfo(def),
+        bonus: questBonusRewardInfo(def),
         objectives: def.requirements.map((r, i) => ({
           text: r.text,
           count: displayCounts[i],
@@ -217,6 +267,11 @@ export class QuestSystem {
         })),
       });
     }
+    // Playable first, then by id. The id ordering is also what keeps the four-slot rail
+    // showing PROGRESSION: the imported catalog stops at 10011 and the Reforged
+    // achievements start at 20001, so a long-running achievement can never displace the
+    // next authored quest — it waits in the quest log instead. That is a real ordering
+    // guarantee, not a coincidence of the numbers (quest/reforgedQuests.test.ts).
     out.sort((a, b) =>
       (this.actionable(b.id) ? 1 : 0) - (this.actionable(a.id) ? 1 : 0) ||
       Number(a.id) - Number(b.id)
@@ -280,7 +335,35 @@ export class QuestSystem {
         [...nextIds].every((id) => this.epicBossQuestIds.has(id))) return;
     this.epicBossActive = active;
     this.epicBossQuestIds = nextIds;
-    if (active) this.tryActivate();
+    if (active) {
+      this.tryActivate();
+      // An epic quest carries lifetime progress across events, so the one that comes
+      // back into view can already be at target (see sweepSatisfied).
+      this.sweepSatisfied();
+    }
+    this.hooks.render(this.views());
+  }
+
+  /** Put an event's finished quests back on the rail for a new run of it.
+   *
+   *  Activating an Epic Boss again re-offers its quest chain, prizes included, so the
+   *  event's signature zombie is earnable on every run rather than once per account.
+   *  Offline this IS the reset; online the Worker does the same to the authoritative
+   *  document and this applies its answer (see reopenEpicQuests in epicBoss/rewards).
+   *  Untouched quests keep their lifetime progress, which is why only completed ids
+   *  are cleared here. */
+  reopenEpicQuests(questIds: readonly string[]): void {
+    let changed = false;
+    for (const id of questIds) {
+      if (!this.completed.delete(id)) continue;
+      changed = true;
+      this.active.delete(id);
+      this.authoritativePreview.delete(id);
+      this.optimisticallyCelebrated.delete(id);
+      this.authoritativeCompletionRequested.delete(id);
+    }
+    if (!changed) return;
+    this.tryActivate();
     this.hooks.render(this.views());
   }
 
@@ -320,6 +403,8 @@ export class QuestSystem {
       }
     }
     this.tryActivate();
+    // A restored count can already satisfy its requirement (see sweepSatisfied).
+    this.sweepSatisfied();
     this.hooks.render(this.views());
   }
 
@@ -357,6 +442,10 @@ export class QuestSystem {
       );
     }
     this.tryActivate();
+    // Offline path only (importing an online export into Local Farm): the merged
+    // counts can already be at target with the quest still open. Online this is a
+    // no-op — `state.completed` is the server's answer and it stays the authority.
+    this.sweepSatisfied();
     this.hooks.render(this.views());
   }
 

@@ -1,4 +1,5 @@
 import * as api from "./api";
+import { crumb } from "../breadcrumbs";
 import {
   COMMAND_BATCH_LIMIT,
   COMMAND_BATCH_WINDOW_MS,
@@ -98,6 +99,15 @@ export class CommandQueue {
   /** The single place `paused` is assigned, so no path can pause without saying why.
    *  The reason is diagnostic only — nothing branches on it. */
   private setPaused(reason: string): void {
+    // Crumb the TRANSITION, not the state: this is called on every bootstrap, and a
+    // healthy session would otherwise fill the ring with "still running". "Gameplay
+    // paused — reconnect to continue" was reported twice on connections that were
+    // demonstrably fine, and the paste could not say which of a dozen paths paused it,
+    // whether anything resumed, or how long it had been stuck. Now it can.
+    if (!!reason !== this.paused || reason !== this.pausedReason) {
+      if (reason) crumb("queue:paused", reason);
+      else if (this.paused) crumb("queue:resumed", `after ${this.pausedReason || "unknown"}`);
+    }
     this.paused = !!reason;
     this.pausedReason = reason;
   }
@@ -160,7 +170,21 @@ export class CommandQueue {
     return sequence;
   }
 
+  /** Fold a new mutation into the last command that has NOT yet been sent.
+   *
+   *  `merge` receives that command and returns its replacement, or null to decline —
+   *  in which case the caller enqueues normally. Only the very last pending entry is
+   *  offered, so merging can never reorder anything: whatever the caller folds in still
+   *  lands after every command already ahead of it.
+   *
+   *  This exists for the drag-paint strokes, which produce one plow/plant per plot and
+   *  can cover the entire board. The Worker's rolling-minute budget counts SEMANTIC
+   *  commands, so unmerged they cannot fit through it; merged, a whole field is one.
+   *
+   *  Returns the sequence the command was folded into, or null if it was not merged. */
   coalesceLast(merge: (last: GameplayCommand) => GameplayCommand | null): number | null {
+    // A paused queue declines rather than throwing: the caller falls through to
+    // `enqueue`, which is the one place that reports `gameplay_unavailable`.
     if (this.paused) return null;
     const last = this.pending[this.pending.length - 1];
     if (!last) return null;
@@ -168,6 +192,9 @@ export class CommandQueue {
     if (!merged) return null;
     last.command = merged;
     this.persist();
+    // Deliberately no `scheduleFromFirstCommand`: the batch window belongs to the FIRST
+    // command in the queue, and a stroke that keeps folding must not keep pushing its
+    // own deadline back.
     return last.sequence;
   }
 
@@ -191,6 +218,13 @@ export class CommandQueue {
 
   async retry(): Promise<void> {
     if (typeof navigator !== "undefined" && !navigator.onLine) return;
+    // A lost lease is not a transport failure, and this is the one caller that clears a
+    // pause without consulting a projection. `reloadAfterConflict` retries straight
+    // after a rebase that may have just discovered the writer moved; un-pausing there
+    // fires a batch at a lease this document no longer owns, which answers 423, clears
+    // the credential and drops the player behind the takeover gate — from what was only
+    // ever a version conflict. Leave it paused and let a bootstrap decide.
+    if (this.writerLost) return;
     this.setPaused("");
     await this.flush();
   }
@@ -229,6 +263,7 @@ export class CommandQueue {
         this.persist();
         return;
       }
+      crumb("queue:applied", `${this.inFlight.commands.length} commands`);
       this.accountVersion = response.accountVersion;
       this.writerGeneration = response.writerGeneration;
       this.writerLost = false;
@@ -271,6 +306,10 @@ export class CommandQueue {
         const transient = error.status === 0 || error.status === 429 || [500, 502, 503, 504].includes(error.status);
         if (!transient) return this.dissolveAndPause(error.code);
         if (attempt === delays.length) return this.pause(error.code);
+        // A transient failure that later succeeds never reaches `setPaused`, so without
+        // this a session that spent two minutes retrying looks identical to one that
+        // never faltered. Repeats collapse, so a long retry run costs one line.
+        crumb("queue:retry", `${error.status} ${error.code}`);
         const retryAfter = Number((error.body as { retryAfterMs?: unknown } | undefined)?.retryAfterMs);
         const base = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : delays[attempt];
         await new Promise<void>((resolve) => setTimeout(resolve, Math.round(base * (0.8 + this.random() * 0.4))));

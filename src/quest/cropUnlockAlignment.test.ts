@@ -132,7 +132,9 @@ function earliestCropFor(ref: MutationRef): number | null {
 
 describe("market mutants vs the crops that grow their mutation", () => {
   it("never unlocks a mutant more than five levels before its crop", () => {
-    expect(mutants).toHaveLength(16);
+    // A tripwire, not a rule: the loop below is only meaningful if it has the whole
+    // roster to walk. 16 are ZF2's, the 17th is this build's own market mutant.
+    expect(mutants).toHaveLength(17);
     for (const m of mutants) {
       const refs = mutationRefs(m.mutation ?? 0, m.mutationIds);
       const crop = Math.min(...refs.map(earliestCropFor).filter((level): level is number => level !== null));

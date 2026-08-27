@@ -6,16 +6,18 @@ import { GameState } from "./GameState";
 import { farmerHeadHasEffect, farmerHeadXp } from "./farmer";
 import { CropConfig } from "./Field";
 import { harvestXp } from "./farmRewards";
+import { buyXp } from "./economy";
 import { PlaceableDef, BoostDef, FarmSizeUpgrade, ClimateUpgrade, upgradeIcon, placeablePurchaseLimit } from "./assets";
 import type { FarmerBodyDef, FarmerCatalog, FarmerHeadDef, PetCatalog, PetDef } from "./assets";
 import { EPIC_BOSS_FIGHT_BRAIN_COST, type EpicBossPayment } from "./epicBoss/tokens";
 import { AudioManager } from "./audio";
 import { RosterEntry } from "./zombie/types";
 import {
-  bitAllowed, MUTATION_LIST, mutationLabel, mutationBonus,
+  bitAllowed, MUTATION_LIST, mutationBonus, mutationLabel,
 } from "./zombie/mutations";
 import { hasLuckyboxPalette, LUCKYBOX_PALETTE_STEP_MS, luckyboxPaletteColor } from "./zombie/appearance";
 import { maskHas } from "./zombie/mutationMask";
+import { visibleMutations } from "./zombie/mutationVisibility";
 import { QuestView } from "./quest/types";
 import type { RaidCardView, RaidPartyView, RaidResultView, RaidLaunchOpts, LootDrop } from "./raid/RaidManager";
 import { lootDropLabel } from "./raid/RaidManager";
@@ -29,19 +31,31 @@ import {
   type DayNightMode, type FarmBackground, type ZombieAppearancePrefs,
 } from "./prefs";
 import { fmtCooldown, MCDONNELL_ID, VOUCHER_KEY } from "./raid/RaidCatalog";
+import { BRAIN_TICKET_KEY } from "./raid/eliteInvasion";
 import { marketPageSize } from "./marketPageSize";
 import { veterancy } from "./zombie/traits";
 import { COMBINE_SPECIAL_LEVEL } from "./zombie/combineSpecies";
+import type { AlmanacGuideTopic } from "./zombie/almanacGuide";
+import type { MutationAlmanacEntry } from "./zombie/mutationAlmanac";
 import { BASE } from "./base";
 import { compareCropMarketOrder, compareItemMarketOrder } from "./marketOrder";
 import { decorAvailable, themeLabel, themeOf } from "./decorThemes";
-import { fillPartySelection, orderPartyRoster } from "./raid/partySelection";
+import { orderPartyRoster } from "./raid/partySelection";
+import {
+  compactOrder, fillSlots, selectedCount, toggleSlot, type OrderSlots,
+} from "./raid/attackOrderSlots";
+import { PVP_ARMY_SIZE, PVP_UI_ENABLED } from "./raid/pvp";
+import { openInvasionsPanel } from "./ui/panels/invasions";
+import type {
+  PvpDefenseInfoView, PvpOverviewView, PvpRewardView, PvpScoutView,
+} from "./ui/panels/invasions";
 import { otherPlayMode, playModeDestinationLabel, type PlayMode } from "./playMode";
 import { isPowderMachineKey, powderMachinePrice, type PowderColor } from "./powderMachine";
 import { isZombieColorMixerBucketKey, zombieColorMixerBucketPrice } from "./zombieColorMixerBucket";
 import type { UpdateCheckResult } from "./updateCheck";
 import type {
-  BlackMarketFulfillmentView, BlackMarketHistoryResponse, BlackMarketListResponse,
+  BlackMarketCurrency, BlackMarketFulfillmentView, BlackMarketHistoryResponse,
+  BlackMarketListResponse,
   BlackMarketMutationResponse, BlackMarketOrderKind, BlackMarketOrderView, ClaimedUnit,
   FriendActivity, GiftReward,
 } from "./net/protocol";
@@ -64,6 +78,7 @@ import {
 } from "./ui/Modal";
 import type { ModalHandle } from "./ui/Modal";
 import { onFirstVisible } from "./ui/onFirstVisible";
+import { keepScroll, recallNumber, recallOneOf, remember } from "./ui/viewState";
 import { renderLevelUp, renderQuestComplete, renderObjectActions, renderInfoPanel } from "./ui/panels/dialogs";
 import {
   openSettings as openSettingsPanel, openDevMenu as openDevMenuPanel,
@@ -78,6 +93,7 @@ import {
   openZombieInfo as openZombieInfoPanel,
   openZombiesPanel, rosterInfo, type ZombiesPanelTab,
 } from "./ui/panels/zombies";
+import { openMemorialPanel, type MemorialView } from "./ui/panels/memorial";
 import { openTeamsPanel } from "./ui/panels/teams";
 import type { TeamAssembleResult, ZombieTeam } from "./zombie/teams";
 import {
@@ -85,6 +101,8 @@ import {
 } from "./ui/panels/periodicQuests";
 import type { PeriodicScope, PeriodicScopeView } from "./quest/periodic/types";
 import { openFarmersGuide } from "./ui/panels/farmersGuide";
+import { openStats } from "./ui/panels/stats";
+import type { StatSection } from "./statsView";
 import { showTimNotice } from "./ui/TimNotice";
 // View-model types + the grave classifier live in hudTypes so panel modules can
 // import them without depending on the whole Hud class. Re-exported below for the
@@ -93,7 +111,7 @@ import type {
   Mode, ObjCard, MenuCard, EpicBossMarketView, ZombieInfo, ObjectActions,
   AlmanacEntryView, LevelUpView, QuestCompleteView, ReceivedView,
 } from "./ui/hudTypes";
-import type { MutationAlmanacEntry } from "./zombie/mutationAlmanac";
+
 export { graveNeededFor } from "./ui/hudTypes";
 export type {
   Mode, ObjCard, MenuCard, EpicBossMarketView, ZombieInfo, ObjectActions,
@@ -108,7 +126,11 @@ interface MktEntry {
   level: number;
   brains?: boolean; // priced in brains rather than gold
   sell?: number; // harvest value (plants and fruit trees)
-  xp?: number; // experience granted per harvest (crops)
+  // Experience the card is advertising. Two different things wear the same badge:
+  // a crop's per-harvest XP and, for anything BOUGHT, the XP the purchase itself
+  // pays out. `xpHint` is what tells them apart on hover.
+  xp?: number;
+  xpHint?: string;
   timeLabel?: string; // catalog grow/regrowth time
   qty?: number; // how many units the listed price buys (boost packs)
   graveNeeded?: "Blue" | "Red" | "Silver"; // locked until this colored grave is owned
@@ -116,6 +138,10 @@ interface MktEntry {
   owned?: boolean;
   equipped?: boolean;
   description?: string; // "what does it do" blurb shown by the card's magnifier
+  /** Artist credit for contributed art, shown under the description on the same
+   *  magnifier parchment. Decor has no description of its own, so a credit is on
+   *  its own enough to earn the card a magnifier. */
+  credit?: string;
   /** Zombies: the magnifier opens the species' full inspect card instead of the
    *  description parchment — stats and abilities are the thing worth reading before
    *  buying, and the blurb rides along under the card. */
@@ -256,6 +282,38 @@ const ACTIVITY_LABEL: Record<FriendActivity, string> = {
   away: "seen a while",
 };
 
+/** The Black Market prices each post in one currency, chosen by whoever created it, so
+ *  every amount it shows has to carry which one it is. These three are the whole of it:
+ *  the coin art, the wording ("500 gold" / "5 brains"), and the max the form accepts. */
+const MARKET_COIN: Record<BlackMarketCurrency, string> = {
+  BRAINS: "topbar_brain_icon.png",
+  GOLD: "topbar_money_icon.png",
+};
+const MARKET_MAX_PRICE = 10_000_000;
+function marketPrice(amount: number, currency: BlackMarketCurrency): string {
+  if (currency === "GOLD") return `${amount.toLocaleString()} gold`;
+  return `${amount.toLocaleString()} brain${amount === 1 ? "" : "s"}`;
+}
+
+/** "2d 4h" / "5h 12m" / "18m" — how long until a Black Market post expires, or until
+ *  its owner may bump it again. Deliberately coarser than fmtCooldown, which is built
+ *  to tick down a two-hour raid timer and would render three days as "71h 59m". */
+function fmtMarketWait(ms: number): string {
+  const minutes = Math.max(0, Math.ceil(ms / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+/** A 0..1 chance as a short percentage. Drop rates run from 0.8% to ~15%, so keep enough
+ *  precision at the low end to tell 0.8% from 1% without printing "6.30%" at the high end. */
+function pctOdds(chance: number): string {
+  const v = Math.max(0, chance) * 100;
+  const s = v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2);
+  return `${s.includes(".") ? s.replace(/\.?0+$/, "") : s}%`;
+}
+
 /** Player-facing wording for what a gift paid out ("a brain 🧠", "300 gold 💰"). */
 function giftRewardLabel(reward: GiftReward): string {
   if (reward.kind === "brain") {
@@ -264,14 +322,16 @@ function giftRewardLabel(reward: GiftReward): string {
   return `${reward.amount.toLocaleString()} gold 💰`;
 }
 
-
-
 export class Hud {
   mode: Mode = "walk";
   onModeChange: (() => void) | null = null;
   // Rotate tool tap: main handles it contextually (flip the placement ghost / the
   // carried object / enter the standalone rotate mode). Null falls back to setMode.
   onRotateTool: (() => void) | null = null;
+  /** Extra lines for the diagnostics report — the online layer's live state, which is
+   *  otherwise invisible in a paste. "Gameplay paused" and "a healthy pause" look
+   *  identical without it. Null offline: there is nothing to say. */
+  getDiagnosticExtras: (() => Record<string, string>) | null = null;
   // Public (not private) so the extracted panel modules in ui/panels/* can render
   // into the HUD root and read shared services. Treat as internal to the HUD.
   readonly el: HTMLElement;
@@ -296,6 +356,7 @@ export class Hud {
   private periodicViews: PeriodicScopeView[] = [];
   private periodicModal: ModalHandle | null = null;
   private periodicButton: HTMLButtonElement | null = null;
+  /** Set by main.ts. Collecting a finished daily/weekly quest. */
   onPeriodicQuestClaim: ((scope: PeriodicScope, questId: string) => void) | null = null;
   private tools: Record<string, HTMLButtonElement> = {};
   private menuCol!: HTMLElement;
@@ -322,6 +383,7 @@ export class Hud {
   private cropHoverX = 0;
   private cropHoverY = 0;
   private temporaryPanMode: Mode | null = null;
+  private battleLoading: HTMLElement | null = null;
   onTemporaryPanChange: (() => void) | null = null;
 
   get planting(): CropConfig | null {
@@ -729,24 +791,28 @@ export class Hud {
     this.renderPeriodicButton();
   }
 
+  /** Daily/weekly quests get their own rail button rather than a slot on the quest
+   *  rail: they are a separate board with a separate lifecycle, and mixing them in
+   *  would push the progression quests off a four-slot rail every day. */
   private renderPeriodicButton() {
     if (!this.questCol) return;
     this.periodicButton?.remove();
     this.periodicButton = null;
     if (!this.periodicViews.length) return;
     const claimable = this.periodicViews.reduce(
-      (total, scope) => total + scope.quests.filter((q) => q.done && !q.claimed).length, 0
-    );
+      (total, scope) => total + scope.quests.filter((q) => q.done && !q.claimed).length, 0);
     const button = document.createElement("button");
     button.className = "quest qperiodic" + (claimable ? " ready" : "");
-    button.title = claimable
-      ? `${claimable} quest reward${claimable === 1 ? "" : "s"} to collect`
+    button.title = claimable ? `${claimable} quest reward${claimable === 1 ? "" : "s"} to collect`
       : "Daily & weekly quests";
     button.setAttribute("aria-label", button.title);
     const glyph = document.createElement("span");
     glyph.className = "qperiodic-glyph";
     glyph.textContent = "★";
     button.appendChild(glyph);
+    // Only badge what needs COLLECTING. A count of open quests would sit there all day
+    // saying five, which trains players to ignore it — the point of the badge is that
+    // it means "there is XP waiting for you right now".
     if (claimable) {
       const badge = document.createElement("span");
       badge.className = "qbadge";
@@ -758,6 +824,7 @@ export class Hud {
     this.periodicButton = button;
   }
 
+  /** Push authoritative (or locally generated) daily/weekly state into the HUD. */
   setPeriodicQuests(views: PeriodicScopeView[]) {
     this.periodicViews = views;
     this.renderPeriodicButton();
@@ -831,6 +898,17 @@ export class Hud {
         const rewardLabel = document.createElement("span");
         rewardLabel.textContent = `Reward: ${q.reward.label}`;
         reward.append(rewardIcon, rewardLabel);
+        // A few achievements pay a brain ON TOP of their XP. Shown as a second chip so
+        // the headline reward keeps its usual shape.
+        if (q.bonus) {
+          const bonusIcon = document.createElement("img");
+          bonusIcon.src = UI(q.bonus.icon);
+          bonusIcon.alt = "";
+          bonusIcon.onerror = () => { bonusIcon.style.visibility = "hidden"; };
+          const bonusLabel = document.createElement("span");
+          bonusLabel.textContent = q.bonus.label;
+          reward.append(bonusIcon, bonusLabel);
+        }
         body.appendChild(reward);
       }
       item.append(img, body);
@@ -885,6 +963,16 @@ export class Hud {
       const label = document.createElement("span");
       label.textContent = q.reward.label;
       reward.append(icon, label);
+      // The brain a few achievements pay alongside their XP (see questBonusRewardInfo).
+      if (q.bonus) {
+        const bonusIcon = document.createElement("img");
+        bonusIcon.src = UI(q.bonus.icon);
+        bonusIcon.alt = "";
+        bonusIcon.onerror = () => { bonusIcon.style.visibility = "hidden"; };
+        const bonusLabel = document.createElement("span");
+        bonusLabel.textContent = q.bonus.label;
+        reward.append(bonusIcon, bonusLabel);
+      }
       panel.append(heading, reward);
     }
   }
@@ -1400,12 +1488,24 @@ export class Hud {
   getRoster: (() => RosterEntry[]) | null = null;
   /** The Zombie Almanac's entry list (every obtainable species + discovery counts). */
   getAlmanac: (() => AlmanacEntryView[]) | null = null;
-  /** The Mutation Almanac's entry list (vanilla bits + local modded string ids). */
+  /** The Almanac's field notes: the systems a one-line obtain hint cannot explain
+   *  (the Zombie Pot, Brain Tickets, the Epic Boss events). Catalog prices and the
+   *  event lineup are folded in by main, so the panel just renders what it gets. */
+  getAlmanacGuide: (() => AlmanacGuideTopic[]) | null = null;
+  /** The Mutation Almanac's entry list: every mutation + its discovery count. */
   getMutationAlmanac: (() => MutationAlmanacEntry[]) | null = null;
+  /** The Statistics panel's rows, already resolved and formatted by main.ts (it owns
+   *  the catalogs a crop key has to be read through). Null while the game is still
+   *  booting, which is the one state in which the Account menu can be opened without
+   *  a farm behind it. */
+  getStats: (() => StatSection[]) | null = null;
   /** Portrait image URL for a zombie type key (per-type composite). */
   zombiePortraitOf: ((key: string) => string) | null = null;
   /** Render one owned zombie with its complete individual mutation mask. */
-  zombieMutationPortraitOf: ((key: string, mutation: number, color?: [number, number, number], mutationIds?: readonly string[]) => Promise<string>) | null = null;
+  zombieMutationPortraitOf: ((
+    key: string, mutation: number, color?: [number, number, number],
+    mutationIds?: readonly string[], wanted?: () => boolean,
+  ) => Promise<string>) | null = null;
   /** Base model tint for ordinary zombies that have no individual mixed colour. */
   zombieBaseColorOf: ((key: string) => [number, number, number] | undefined) | null = null;
   /** Take a deployed zombie off the farm (into the Mausoleum). */
@@ -1450,22 +1550,28 @@ export class Hud {
   zombieCostsBrains: ((key: string) => boolean) | null = null;
   getBlackMarketOrders: ((query: {
     kind: BlackMarketOrderKind; zombieClass?: string; zombieGroup?: string;
+    currency?: BlackMarketCurrency;
     sort?: "newest" | "price_asc" | "price_desc"; mine?: boolean;
   }) => Promise<BlackMarketListResponse>) | null = null;
   onCreateBlackMarketOrder: ((input:
-    | { kind: "SELL_ZOMBIE"; unitId: string; priceBrains: number }
-    | { kind: "BUY_ZOMBIE"; zombieKey: string; mutated: boolean; mutationRequired?: number; priceBrains: number }
+    | { kind: "SELL_ZOMBIE"; unitId: string; price: number; currency: BlackMarketCurrency }
+    | { kind: "BUY_ZOMBIE"; zombieKey: string; mutated: boolean; mutationRequired?: number;
+        price: number; currency: BlackMarketCurrency }
   ) => Promise<BlackMarketMutationResponse>) | null = null;
   onCancelBlackMarketOrder: ((orderId: string) => Promise<BlackMarketMutationResponse>) | null = null;
+  /** Bump one of the player's own open posts back to the top of "newest" and restart
+   *  its three-day life. Rejects with `repost_cooldown` when it is bumped too soon. */
+  onRepostBlackMarketOrder: ((orderId: string) => Promise<BlackMarketMutationResponse>) | null = null;
   onFulfillBlackMarketOrder: ((order: BlackMarketOrderView, unitId?: string) => Promise<BlackMarketMutationResponse>) | null = null;
   /** The caller's settled-but-uncollected trades (both sides). */
   getBlackMarketFulfillments: (() => Promise<BlackMarketFulfillmentView[]>) | null = null;
   /** Collect one settled trade: takes delivery of the zombie it owes (returning the
-   *  unit that landed) and the brains the market held for it, and acknowledges it.
+   *  unit that landed) and the payment the market held for it, and acknowledges it.
+   *  `paid` is that payment, in the post's own currency (0 when there was none).
    *  Rejects with `no_room` when a delivery has nowhere to go. */
   onCollectBlackMarketOrder:
     ((orderId: string, awaitingClaim: boolean) =>
-      Promise<{ claimed: ClaimedUnit | null; brainsPaid: number }>) | null = null;
+      Promise<{ claimed: ClaimedUnit | null; paid: number }>) | null = null;
   /** Completed-trade ledger (both roles) + lifetime aggregates. */
   getBlackMarketHistory: (() => Promise<BlackMarketHistoryResponse>) | null = null;
   /** The speed-grow (Insta-Grow) boost + a live owned-count getter, for the
@@ -1485,6 +1591,9 @@ export class Hud {
   onClaimReceived: ((index: number) => void) | null = null;
   /** Place a decoration reward at `index` on the farm (enters placement mode). */
   onPlaceReceived: ((index: number) => void) | null = null;
+  /** Put a decoration reward at `index` straight into the shed, without placing it
+   *  on the farm first. Returns false when the shed has no room for it. */
+  onStoreReceived: ((index: number) => Promise<boolean> | boolean) | null = null;
   /** Permanently sell a sellable decoration directly from Received. */
   onSellReceived: ((index: number) => Promise<boolean> | boolean) | null = null;
 
@@ -1518,6 +1627,10 @@ export class Hud {
   /** Collect a finished combine; returns the new zombie's name (or null).
    *  `stored` sends the child straight to the Mausoleum instead of the farm. */
   onCollectCombine: ((stored?: boolean) => string | null | Promise<string | null>) | null = null;
+  /** Spend one Insta-Grow on the open pot's running combine. The tool has always been
+   *  able to do this by tapping the pot; this is the same action offered from the panel
+   *  the player is already looking at. Returns false when nothing was spent. */
+  onPotInstaGrow: (() => boolean) | null = null;
   /** Tears down the open combiner's countdown ticker. Held on the instance because
    *  openCombiner can replace a panel it did not build, and dropping that panel's
    *  DOM does not stop the interval its closure owns. */
@@ -1560,11 +1673,20 @@ export class Hud {
   getRaidCards: (() => RaidCardView[]) | null = null;
   /** Eligible army + default selection for the Army screen. */
   getRaidParty: (() => RaidPartyView) | null = null;
-  /** Live cooldown (ms left, 0 = ready) + Invasion Voucher count. */
-  getRaidStatus: (() => { cooldownMs: number; voucherCount: number }) | null = null;
-  /** Battle-consumable stock for a raid: owned Concentration + Golden Dice, and the
-   *  most dice worth spending on this raid (its rare-tier depth). */
-  getRaidBoosts: ((raidId: number) => { concentration: number; dice: number; maxDice: number }) | null = null;
+  /** Live cooldown (ms left, 0 = ready) + Invasion Voucher and Brain Ticket counts. */
+  getRaidStatus: (() => {
+    cooldownMs: number;
+    voucherCount: number;
+    brainTicketCount: number;
+  }) | null = null;
+  /** Battle-consumable stock for a raid: owned Concentration + Golden Dice, the most
+   *  dice worth spending on this raid (its rare-tier depth), and owned Brain Tickets. */
+  getRaidBoosts: ((raidId: number) => {
+    concentration: number;
+    dice: number;
+    maxDice: number;
+    brainTickets: number;
+  }) | null = null;
   /** Launch the live battle scene for the chosen party. Returns true if it took over
    *  (it will show the result itself on finish); false means it declined (cooldown /
    *  a raid already running). There is no instant/auto-resolve fallback. `opts` carries
@@ -1630,6 +1752,30 @@ export class Hud {
   onGiftBrainOnline: ((friendId: string) => Promise<string | null>) | null = null;
   /** Open a read-only view of this friend's farm (by account id + display name). */
   onVisitFriend: ((friendId: string, name: string) => void) | null = null;
+  /** Launch a friend invasion against this friend (online only): opens the PvP army
+   *  picker, then the battle. Nobody risks anything; the winner takes boosts. */
+  onInvadeFriend: ((friendId: string, name: string) => void) | null = null;
+  // ---- Invasions panel hooks (online only; see ui/panels/invasions.ts) ----
+  /** Whether the deployed Worker accepts friend invasions (bootstrap capability).
+   *  The Social hub shows the Invasions entry only when this is true, so the whole
+   *  feature launches (and parks) with the Worker's PVP_ENABLED var alone. */
+  pvpAvailable: (() => boolean) | null = null;
+  /** The player's current level, for the invasion level gate's client-side face. */
+  getPlayerLevel: (() => number) | null = null;
+  /** History + stats + claim backlog, in one server round trip. */
+  getPvpOverview: (() => Promise<PvpOverviewView | null>) | null = null;
+  /** Scout one friend's defense before attacking (score, tier, line-up). */
+  onScoutPvpDefense: ((friendId: string) => Promise<PvpScoutView | null>) | null = null;
+  /** The player's own defense loadout + how attackers would meet it. */
+  getPvpDefense: (() => Promise<PvpDefenseInfoView | null>) | null = null;
+  /** Save (or clear, with []) the authored defense order. Error code or null. */
+  onSavePvpDefense: ((unitIds: string[]) => Promise<string | null>) | null = null;
+  /** Claim every outstanding defense reward. Null = nothing granted. */
+  onClaimAllPvpDefense:
+    | (() => Promise<{ claimed: number; rewards: PvpRewardView[] } | null>)
+    | null = null;
+  /** Open the replay viewer for one recorded fight. */
+  onWatchPvpReplay: ((sessionId: string) => void) | null = null;
   /** Pull the gift inbox from the server into the cache. */
   refreshInbox: (() => Promise<void>) | null = null;
   /** Cached unclaimed gifts addressed to me. */
@@ -1670,6 +1816,13 @@ export class Hud {
   /** Player-facing lighting mode. Auto follows the device's local clock. */
   getDayNightMode: (() => DayNightMode) | null = null;
   onSetDayNightMode: ((mode: DayNightMode) => void) | null = null;
+  /** The farmer's night lantern. Also toggled by tapping him after dark. */
+  getFarmerLantern: (() => boolean) | null = null;
+  onSetFarmerLantern: ((on: boolean) => void) | null = null;
+  /** Whether tapping the farmer toggles that lantern at all. Off leaves the Settings
+   *  row as the only switch, so the tap falls through to the ground under him. */
+  getFarmerLanternTap: (() => boolean) | null = null;
+  onSetFarmerLanternTap: ((on: boolean) => void) | null = null;
   /** Current farm-background (foliage density) choice. */
   getFarmBackground: (() => FarmBackground) | null = null;
   /** Change the farm background — rebuilds the foliage ring live. */
@@ -1683,6 +1836,36 @@ export class Hud {
    *  can take over the screen. Raid panels stay visible. */
   setRaiding(on: boolean) {
     this.el.classList.toggle("raiding", on);
+    if (!on) this.setBattleLoading(false);
+  }
+
+  /** The screen between "the farm went away" and "the battle is on screen".
+   *
+   *  Entering a battle hides the farm and every piece of farm chrome, and the battle's
+   *  own HUD — bars, timer, Retreat — is drawn INSIDE the scene. So for as long as the
+   *  scene is loading there is nothing on screen at all: just the stage's clear colour,
+   *  which is the farm's grass green. Reported as an Epic Boss "not loading" and taking
+   *  the player to a green screen, and it was reported as a crash rather than as a wait
+   *  because a blank screen does not look like loading. It says so now. */
+  setBattleLoading(on: boolean, label = "Loading battle…") {
+    if (!on) {
+      this.battleLoading?.remove();
+      this.battleLoading = null;
+      return;
+    }
+    if (!this.battleLoading) {
+      this.battleLoading = document.createElement("div");
+      this.battleLoading.className = "battle-loading";
+      const spinner = document.createElement("div");
+      spinner.className = "battle-loading-spinner";
+      const text = document.createElement("div");
+      text.className = "battle-loading-label";
+      text.setAttribute("aria-live", "polite");
+      this.battleLoading.append(spinner, text);
+      this.el.appendChild(this.battleLoading);
+    }
+    const text = this.battleLoading.querySelector(".battle-loading-label");
+    if (text) text.textContent = label;
   }
 
   // ---- Tim Buckwheat guided tutorial seams (used by TutorialController) ----
@@ -1743,7 +1926,10 @@ export class Hud {
     document.querySelector("#hud .mkt-bg")?.remove();
   }
 
-  openMarket(initialTab: string = "Crops") {
+  // `initialTab` is a deliberate destination (Storage's "Buy", an Epic Boss card, the
+  // tutorial) and always wins; opening the Market with no argument returns to
+  // whichever shelf it was last left on.
+  openMarket(initialTab?: string) {
     this.closeMarket();
     const tutorialBoostMarket = this.el.classList.contains("tutorial") &&
       this.tutorialMenuTarget === "Market";
@@ -1835,14 +2021,32 @@ export class Hud {
       name === "Farmer" && this.state.hasBonusHead()
         ? [...SUBTABS.Farmer, "Bonus"]
         : SUBTABS[name];
-    let tab = SUBTABS[initialTab] ? initialTab : "Crops";
-    let sub = subsFor(tab)[0] ?? "";
+    let tab = initialTab && SUBTABS[initialTab]
+      ? initialTab
+      : recallOneOf("market.tab", Object.keys(SUBTABS), "Crops");
+    const firstSub = subsFor(tab);
+    let sub = firstSub.length ? recallOneOf(`market.sub.${tab}`, firstSub, firstSub[0]) : "";
+
+    // One key per (tab, sub-tab, search) view: the page the player was on and how far
+    // that page was scrolled are remembered per shelf, so page 15 of Decors is still
+    // page 15 of Decors after a trip through Boosts. The tutorial's single-card
+    // Market is a scripted view, never a place to come back to, so it records nothing.
+    const viewKey = () => `${tab}|${sub}|${search.trim().toLowerCase()}`;
+    const pageKey = () => `market.page.${viewKey()}`;
+    const scrollKey = () => `market.scroll.${viewKey()}|${page}`;
+    const recordView = tutorialBoostMarket ? () => {} : () => {
+      remember("market.tab", tab);
+      if (sub) remember(`market.sub.${tab}`, sub);
+      remember(pageKey(), page);
+    };
+    if (!tutorialBoostMarket) page = recallNumber(pageKey(), 0);
 
     const entriesFor = (): MktEntry[] => {
       if (tab === "Crops" && sub === "Plants")
         return this.plantCards.map((c) => ({
           name: c.name, portrait: c.portrait, cost: c.cost, level: c.level, sell: c.sell,
-          xp: this.cropXp(c.cfg), timeLabel: c.timeLabel,
+          xp: this.cropXp(c.cfg), xpHint: "Experience each time you harvest it",
+          timeLabel: c.timeLabel,
           onPick: () => { this.setPlanting(c.cfg); bg.remove(); },
         }));
       if (tab === "Crops" && sub === "Zombies")
@@ -1908,10 +2112,22 @@ export class Hud {
             cost: specialPrice?.cost ?? (potPriced ? 3 : c.cost), level: c.level,
             brains: specialPrice?.brains ?? (potPriced ? true : c.brainsNeeded),
             sell: c.category === "tree" ? c.def.harvestValue : undefined,
+            // Buying an item pays XP, and until now the only way to find out how much
+            // was to buy one. Deliberately the same call the PURCHASE makes (main.ts
+            // tryPlaceObject), against the price actually shown — so a repeat Zombie
+            // Pot advertises what its 3-brain charge really pays, not the first one's.
+            xp: buyXp(
+              potPriced ? 3 : c.cost,
+              c.def.xp,
+              potPriced ? true : !!c.brainsNeeded,
+              c.def.category,
+            ) || undefined,
+            xpHint: "Experience for buying it",
             timeLabel: c.category === "tree" && c.def.growMs
               ? fmtCooldown(c.def.growMs)
               : undefined,
-            description: functionalDescription(c.def), tint: c.def.color,
+            description: functionalDescription(c.def), credit: c.def.credit,
+            tint: c.def.color,
             theme: themeLabel(themeOf(c.def)),
             onPick: () => { if (this.onBuy) this.onBuy(c.def); bg.remove(); },
           };
@@ -1956,6 +2172,7 @@ export class Hud {
             // Unowned heads advertise the XP the purchase itself pays out, the same
             // way a crop card advertises its harvest XP.
             xp: owned ? undefined : farmerHeadXp(head) || undefined,
+            xpHint: "Experience for buying it",
             owned,
             equipped: this.state.farmerHeadId === head.id,
             onPick: async () => {
@@ -2025,6 +2242,11 @@ export class Hud {
             level: pet.level,
             brains: pet.brains,
             description: pet.description,
+            // What buying it pays out, on the card rather than after the fact. An
+            // owned pet has nothing left to earn, so it shows none (same rule the
+            // Farmer heads use).
+            xp: owned ? undefined : pet.xp || undefined,
+            xpHint: "Experience for buying it",
             owned,
             equipped: this.state.activePet === pet.key,
             onPick: async () => {
@@ -2072,7 +2294,6 @@ export class Hud {
 
     const renderGrid = () => {
       grid.innerHTML = "";
-      grid.scrollTop = 0;
       // Farm Size lays out as 2 columns so each row is one tier (gold | brains);
       // Ground uses the normal card grid.
       grid.classList.toggle("mkt-grid--upgrade", tab === "Upgrade" && sub === "Farm Size");
@@ -2084,11 +2305,15 @@ export class Hud {
         pager.style.display = "none";
         if (sub === "Ground") this.renderGroundGrid(grid, refreshCur, renderGrid);
         else this.renderUpgradeGrid(grid, refreshCur, renderGrid);
+        recordView();
+        keepScroll(grid, scrollKey());
         return;
       }
       if (tab === "Epic Boss") {
         pager.style.display = "none";
         this.renderEpicBossGrid(grid, refreshCur, renderGrid);
+        recordView();
+        keepScroll(grid, scrollKey());
         return;
       }
       const all = entriesFor();
@@ -2126,6 +2351,10 @@ export class Hud {
         prevBtn.disabled = page <= 0;
         nextBtn.disabled = page >= pages - 1;
       }
+      // Recorded after the clamp above, so a remembered page that no longer exists
+      // (a narrower window, a shorter catalog) is corrected rather than kept.
+      recordView();
+      keepScroll(grid, scrollKey());
     };
 
     prevBtn.onclick = () => { if (page > 0) { page--; this.audio.play("menuClick"); renderGrid(); } };
@@ -2163,7 +2392,8 @@ export class Hud {
       if (searchInput.value) {
         searchInput.value = "";
         search = "";
-        page = 0;
+        // Back to the unfiltered shelf — and to the page it was left on.
+        page = recallNumber(pageKey(), 0);
         searchRow.classList.remove("has-query");
         renderGrid();
       } else {
@@ -2186,7 +2416,13 @@ export class Hud {
         const b = document.createElement("button");
         b.className = "mkt-subtab" + (s === sub ? " sel" : "");
         b.textContent = s;
-        b.onclick = () => { this.audio.play("menuClick"); sub = s; page = 0; renderSubs(); renderGrid(); };
+        b.onclick = () => {
+          this.audio.play("menuClick");
+          sub = s;
+          page = recallNumber(pageKey(), 0);
+          renderSubs();
+          renderGrid();
+        };
         subsEl.appendChild(b);
       }
     };
@@ -2200,11 +2436,13 @@ export class Hud {
       b.onclick = () => {
         this.audio.play("menuClick");
         tab = name;
-        sub = subsFor(name)[0] ?? "";
-        page = 0;
+        // Each category reopens on the sub-tab and page it was last browsing.
+        const subs = subsFor(name);
+        sub = subs.length ? recallOneOf(`market.sub.${name}`, subs, subs[0]) : "";
         // A new category starts a fresh search.
         search = "";
         searchInput.value = "";
+        page = recallNumber(pageKey(), 0);
         searchRow.classList.remove("has-query");
         tabsEl.querySelectorAll(".mkt-tab").forEach((e) => e.classList.remove("sel"));
         b.classList.add("sel");
@@ -2256,6 +2494,15 @@ export class Hud {
           `<p class="${view.levelLocked ? "epic-wait" : ""}">Available at player level ${view.unlockLevel}.</p>` +
           (view.reconstructed ? `<p class="epic-wait">Recovered static battle art.</p>` : "") +
           (view.completed ? "<p>Previous run completed!</p>" : view.expired ? "<p>Previous run expired.</p>" : "")) +
+      // Every boss has one crop it cannot leave alone (epicBoss/favoriteCrops.ts). Shown
+      // on the active card too — during the event that crop is where the extra Boss
+      // Tokens come from, which is exactly when the player wants to be told.
+      (view.favoriteCrop
+        ? `<p class="epic-market-favorite">Favourite crop: <b>${view.favoriteCrop}</b>` +
+          (view.active
+            ? " — harvest it during the event for more Boss Tokens.</p>"
+            : " — harvesting it may lure this boss to the farm.</p>")
+        : "") +
       `<details><summary>Possible rewards</summary><div>${view.rewards.join("<br>")}</div>` +
         (view.zombieRewards.length
           ? `<p class="epic-zombie-rewards"><b>Special zombie milestones</b><br>${view.zombieRewards.join("<br>")}</p>`
@@ -2312,7 +2559,9 @@ export class Hud {
       host: this.el, bgClass: "army-bg", replaceSelector: ".army-bg", backdropClose: false,
     });
     if (!party?.eligible.length) { panel.insertAdjacentHTML("beforeend", `<h2>Choose your army</h2><p>You have no deployed zombies.</p>`); return; }
-    const order: string[] = [];
+    // Slotted attack order, same as the invasion picker: un-picking leaves the slot
+    // empty and the next tap fills the lowest one (see raid/attackOrderSlots).
+    let order: OrderSlots = [];
     const preferred = this.getEpicBossView?.().find((view) => view.active)?.run?.attackOrder ?? [];
     const eligible = orderPartyRoster(party.eligible, preferred);
     const wrap = document.createElement("div"); wrap.className = "army-wrap";
@@ -2332,9 +2581,10 @@ export class Hud {
       if (payment === "brains" && this.state.brains < EPIC_BOSS_FIGHT_BRAIN_COST && tokens > 0) payment = "token";
       pay.value = payment;
       const canPay = payment === "token" ? tokens > 0 : this.state.brains >= EPIC_BOSS_FIGHT_BRAIN_COST;
-      head.innerHTML = `<h2>Send your army — ${bossName}</h2><span class="army-count">${order.length}/${party.cap} · min 1</span>`;
-      start.textContent = order.length ? `Fight with ${order.length}` : "Choose a zombie";
-      start.disabled = !order.length || !canPay;
+      const n = selectedCount(order);
+      head.innerHTML = `<h2>Send your army — ${bossName}</h2><span class="army-count">${n}/${party.cap} · min 1</span>`;
+      start.textContent = n ? `Fight with ${n}` : "Choose a zombie";
+      start.disabled = !n || !canPay;
       cards.querySelectorAll<HTMLElement>(".army-card").forEach((el) => { const at = order.indexOf(el.dataset.id!); el.classList.toggle("sel", at >= 0); const tick = el.querySelector<HTMLElement>(".tick"); if (tick) tick.textContent = at >= 0 ? String(at + 1) : ""; });
     };
     for (const z of eligible) {
@@ -2352,21 +2602,21 @@ export class Hud {
       const name = document.createElement("div"); name.className = "army-nm"; name.textContent = z.name;
       const type = document.createElement("div"); type.className = "army-ty"; type.textContent = z.typeName;
       card.append(tick, portrait, name, type);
-      card.onclick = () => { const at = order.indexOf(z.id); if (at >= 0) order.splice(at, 1); else if (order.length < party.cap) order.push(z.id); refresh(); };
+      card.onclick = () => { order = toggleSlot(order, z.id, party.cap); refresh(); };
       cards.appendChild(card);
     }
     const pick = document.createElement("button"); pick.className = "raid-quick"; pick.textContent = "Pick for me";
     pay.onchange = () => { payment = pay.value as EpicBossPayment; refresh(); };
     pick.onclick = () => {
-      order.splice(0, order.length, ...fillPartySelection(
-        order, preferred, eligible.map((z) => z.id), party.cap
-      ));
+      order = fillSlots(order, preferred, eligible.map((z) => z.id), party.cap);
       refresh();
     };
     start.onclick = async () => {
-      if (!order.length || !this.onLaunchEpicBoss) return;
+      // Any gaps left while picking are closed here: the fight gets a continuous order.
+      const attackOrder = compactOrder(order);
+      if (!attackOrder.length || !this.onLaunchEpicBoss) return;
       start.disabled = true;
-      if (await this.onLaunchEpicBoss([...order], payment)) {
+      if (await this.onLaunchEpicBoss(attackOrder, payment)) {
         close();
         this.closeMarket();
       } else start.disabled = false;
@@ -2427,12 +2677,14 @@ export class Hud {
       s.innerHTML = `<img src="${UI("topbar_money_icon.png")}">+${en.sell}`;
       body.appendChild(s);
     }
-    // Harvest XP, so a plant's payoff can be judged on level progress and not just
-    // gold. Zombie crops deliberately don't set it (see the Crops/Zombies entries).
+    // XP, so a card's payoff can be judged on level progress and not just gold: a
+    // crop's per-harvest award, or what BUYING the item pays out. Zombie crops
+    // deliberately don't set it (see the Crops/Zombies entries).
     if (en.xp) {
       const x = document.createElement("div");
       x.className = "mkt-xp";
       x.innerHTML = `<img src="${UI("topbar_exp_icon.png")}">+${en.xp}`;
+      x.title = en.xpHint ?? "Experience";
       body.appendChild(x);
     }
     // Pack size: how many uses the price below buys (Insta-Grow sells 20 at a time).
@@ -2472,9 +2724,14 @@ export class Hud {
     if (en.inspect) {
       card.appendChild(magnifierButton(
         `See ${en.name}'s card`, "See this zombie's card", en.inspect));
-    } else if (en.description) {
-      card.appendChild(magnifierButton(
-        `What does ${en.name} do?`, "What does this do?", () => this.showItemInfo(en)));
+    } else if (en.description || en.credit) {
+      // A credited item may have no description at all (decor never does), so the
+      // label asks about the item rather than about what it does.
+      card.appendChild(en.description
+        ? magnifierButton(`What does ${en.name} do?`, "What does this do?",
+          () => this.showItemInfo(en))
+        : magnifierButton(`About ${en.name}`, "About this item",
+          () => this.showItemInfo(en)));
     }
     if (!en.equipped && !locked && !poor && !graveLock && !limitLock) card.onclick = en.onPick;
     return card;
@@ -2499,10 +2756,23 @@ export class Hud {
     const name = document.createElement("div");
     name.className = "info-name";
     name.textContent = en.name;
-    const desc = document.createElement("div");
-    desc.className = "info-desc";
-    desc.textContent = en.description ?? "";
-    box.append(close, img, name, desc);
+    box.append(close, img, name);
+    // Decor carries a credit but no blurb; an empty .info-desc would still spend a
+    // row of the box's flex gap, so it is only added when there is something in it.
+    if (en.description) {
+      const desc = document.createElement("div");
+      desc.className = "info-desc";
+      desc.textContent = en.description;
+      box.appendChild(desc);
+    }
+    // Artist credit for contributed art. Its own line under the blurb rather than
+    // appended to it: it is about who drew the thing, not about the thing.
+    if (en.credit) {
+      const credit = document.createElement("div");
+      credit.className = "info-credit";
+      credit.textContent = en.credit;
+      box.appendChild(credit);
+    }
     bg.appendChild(box);
     bindBackdropDismiss(bg, () => bg.remove());
     this.el.appendChild(bg);
@@ -2666,7 +2936,7 @@ export class Hud {
   // comes from the placed shed's tier; pets and received are unlimited.
   // Opened by clicking the shed, Pet Pen, or the Storage button.
   // Storage panel (Items/Pets/Boosts/Received) lives in ui/panels/storage.ts.
-  openStorage(initialTab: string = "Items", managePen = false) {
+  openStorage(initialTab?: string, managePen = false) {
     openStoragePanel(this, initialTab, managePen);
   }
 
@@ -2708,31 +2978,41 @@ export class Hud {
     const list = document.createElement("div");
     list.className = "pm-list";
 
-    let zcat: "normal" | "special" | "mutant" = "normal";
+    // The tutorial's constrained menu is a scripted view, so it neither reads nor
+    // writes the remembered screen/category.
+    const CATS = ["normal", "special", "mutant"] as const;
+    let zcat: "normal" | "special" | "mutant" =
+      onlyKey ? "normal" : recallOneOf("plantmenu.cat", CATS, "normal");
 
     const pick = (card: MenuCard) => {
       onPick(card.cfg);
       bg.remove();
     };
-    const renderList = (cards: MenuCard[]) => {
+    const renderList = (cards: MenuCard[], view: string) => {
       list.innerHTML = "";
-      list.scrollTop = 0;
       // In tutorial mode, lock every card except the target so only it is tappable.
       for (const c of cards)
         list.appendChild(this.buildCard(c, pick, !!onlyKey && c.cfg.key !== onlyKey));
+      if (onlyKey) list.scrollTop = 0;
+      else keepScroll(list, `plantmenu.scroll.${view}`);
     };
     const showZombieTabs = (on: boolean) => (subtabs.style.display = on ? "flex" : "none");
 
     const showPlants = () => {
       showZombieTabs(false);
-      renderList(this.plantCards);
+      if (!onlyKey) remember("plantmenu.screen", "Plants");
+      renderList(this.plantCards, "Plants");
     };
     const showZombies = () => {
       showZombieTabs(true);
       subtabs.querySelectorAll(".pm-subtab").forEach((e) =>
         e.classList.toggle("sel", (e as HTMLElement).dataset.cat === zcat)
       );
-      renderList(this.zombieCards.filter((z) => z.category === zcat));
+      if (!onlyKey) {
+        remember("plantmenu.screen", "Zombies");
+        remember("plantmenu.cat", zcat);
+      }
+      renderList(this.zombieCards.filter((z) => z.category === zcat), `Zombies.${zcat}`);
     };
 
     const screenBtns: Record<string, HTMLButtonElement> = {};
@@ -2776,9 +3056,11 @@ export class Hud {
       subtabs.style.display = "none";
       return;
     }
-    // Open on the Plants screen.
-    screenBtns["Plants"].classList.add("sel");
-    showPlants();
+    // Open on whichever screen was last used (Plants the first time).
+    const screen = recallOneOf("plantmenu.screen", ["Plants", "Zombies"] as const, "Plants");
+    screenBtns[screen].classList.add("sel");
+    if (screen === "Zombies") showZombies();
+    else showPlants();
   }
 
   /** XP one harvest of this crop pays out — the same number JobSystem awards, so a
@@ -2890,6 +3172,18 @@ export class Hud {
 
     const switchActions = document.createElement("div");
     switchActions.className = "zbtns";
+    // The lifetime tally belongs to the farm this menu is about, so it opens from
+    // here rather than from Settings (which is device preferences).
+    if (this.getStats) {
+      const stats = document.createElement("button");
+      stats.className = "zbtn locate";
+      stats.textContent = "Statistics";
+      stats.onclick = () => {
+        close();
+        openStats(this.el, this.getStats!());
+      };
+      switchActions.appendChild(stats);
+    }
     const switchFarm = document.createElement("button");
     switchFarm.className = "zbtn locate";
     const destination = otherPlayMode(this.playMode);
@@ -3024,6 +3318,19 @@ export class Hud {
     market.appendChild(marketNote);
     market.onclick = () => { close(); this.openBlackMarket(); };
     choices.append(friends, market);
+    // Friend invasions — shown only when the deployed Worker accepts them, so the
+    // feature launches with a single Worker-var flip (PVP_ENABLED) and no client
+    // redeploy. PVP_UI_ENABLED stays as the hard client-side kill switch.
+    if (PVP_UI_ENABLED && (this.pvpAvailable?.() ?? false)) {
+      const invasions = document.createElement("button");
+      invasions.className = "social-choice";
+      invasions.append("Invasions");
+      const invasionsNote = document.createElement("span");
+      invasionsNote.textContent = "Raid friends' farms, arrange your defense";
+      invasions.appendChild(invasionsNote);
+      invasions.onclick = () => { close(); openInvasionsPanel(this); };
+      choices.appendChild(invasions);
+    }
     panel.append(choices);
   }
 
@@ -3042,17 +3349,27 @@ export class Hud {
     close.onclick = () => bg.remove();
     const balance = document.createElement("div");
     balance.className = "mkt-cur";
-    // Brains the market is holding: settled sales this player has not collected yet.
-    // Shown beside their own balance so the money is visibly SOMEWHERE while it waits.
-    let heldBrains = 0;
+    // What the market is holding: settled sales this player has not collected yet, per
+    // currency. Shown beside the matching balance so the money is visibly SOMEWHERE
+    // while it waits.
+    const held: Record<BlackMarketCurrency, number> = { BRAINS: 0, GOLD: 0 };
     const refreshBalance = () => {
-      balance.innerHTML = `<span><img src="${UI("topbar_brain_icon.png")}">${this.state.brains}</span>`;
-      if (heldBrains <= 0) return;
-      const held = document.createElement("span");
-      held.className = "bm-held";
-      held.textContent = `+${heldBrains} held`;
-      held.title = "Brains your settled sales are holding. Collect them above.";
-      balance.appendChild(held);
+      balance.replaceChildren();
+      // Both wallets are always shown: a post can be priced in either, so "can I afford
+      // this?" is a question about whichever one the listing in front of them uses.
+      for (const currency of ["GOLD", "BRAINS"] as const) {
+        const span = document.createElement("span");
+        const coin = document.createElement("img");
+        coin.src = UI(MARKET_COIN[currency]);
+        span.append(coin, (currency === "GOLD" ? this.state.gold : this.state.brains).toLocaleString());
+        balance.appendChild(span);
+        if (held[currency] <= 0) continue;
+        const waiting = document.createElement("span");
+        waiting.className = "bm-held";
+        waiting.textContent = `+${held[currency].toLocaleString()} held`;
+        waiting.title = `${currency === "GOLD" ? "Gold" : "Brains"} your settled sales are holding. Collect them above.`;
+        balance.appendChild(waiting);
+      }
     };
     refreshBalance();
 
@@ -3092,6 +3409,12 @@ export class Hud {
     for (const option of BLACK_MARKET_GROUP_FILTERS) {
       classFilter.append(new Option(option.label, option.value));
     }
+    // Prices in gold and prices in brains are not comparable, so "Lowest price" over a
+    // mixed board would be meaningless — this narrows it to one currency.
+    const currencyFilter = document.createElement("select");
+    currencyFilter.setAttribute("aria-label", "Currency filter");
+    currencyFilter.append(new Option("Gold & brains", ""), new Option("Gold only", "GOLD"),
+      new Option("Brains only", "BRAINS"));
     const sort = document.createElement("select");
     sort.setAttribute("aria-label", "Sort orders");
     sort.append(new Option("Newest", "newest"), new Option("Lowest price", "price_asc"),
@@ -3103,7 +3426,7 @@ export class Hud {
     const refresh = document.createElement("button");
     refresh.className = "prof-btn play";
     refresh.textContent = "Refresh";
-    toolbar.append(categoryFilter, classFilter, sort, mineLabel, refresh);
+    toolbar.append(categoryFilter, classFilter, currencyFilter, sort, mineLabel, refresh);
 
     // Fulfilled posts awaiting collection. The trade already settled server-side
     // (brains/zombie landed when the counterparty accepted); this strip is where
@@ -3162,10 +3485,22 @@ export class Hud {
     });
     mutationLabelEl.append(mutationMode, mutationChoices);
     const priceLabel = document.createElement("label");
-    priceLabel.append("Price in brains");
+    const priceCaption = document.createElement("span");
+    priceLabel.appendChild(priceCaption);
+    const priceRow = document.createElement("div");
+    priceRow.className = "bm-price-row";
     const price = document.createElement("input");
-    price.type = "number"; price.min = "1"; price.max = "1000000"; price.step = "1";
-    priceLabel.appendChild(price);
+    price.type = "number"; price.min = "1"; price.max = String(MARKET_MAX_PRICE); price.step = "1";
+    // Gold first, and the default: it is the currency players actually hold in quantity,
+    // and the one this ceiling is scaled for. Brains posts stay available for anyone
+    // who wants to trade in the scarce currency instead.
+    const currencyPicker = document.createElement("select");
+    currencyPicker.setAttribute("aria-label", "Price currency");
+    currencyPicker.append(new Option("Gold", "GOLD"), new Option("Brains", "BRAINS"));
+    priceRow.append(price, currencyPicker);
+    priceLabel.appendChild(priceRow);
+    const composeCurrency = (): BlackMarketCurrency =>
+      currencyPicker.value === "BRAINS" ? "BRAINS" : "GOLD";
     const escrowNote = document.createElement("div");
     escrowNote.className = "bm-meta";
     const submit = document.createElement("button");
@@ -3217,6 +3552,7 @@ export class Hud {
       const missingMutation = !selling && mutationMode.value === "specific" &&
         selectedMutationMask() === 0;
       mutationChoices.hidden = selling || mutationMode.value !== "specific";
+      priceCaption.textContent = composeCurrency() === "GOLD" ? "Price in gold" : "Price in brains";
       escrowNote.textContent = selling
         ? "This zombie leaves your roster while the post is open."
         : purchaseLock?.label ??
@@ -3224,7 +3560,7 @@ export class Hud {
             ? "Select at least one specific mutation."
             : mutationMode.value === "specific"
               ? "Same-slot choices are alternatives; choices in different slots are all required."
-              : "The full brain offer is removed while the request is open.");
+              : `The full ${composeCurrency() === "GOLD" ? "gold" : "brain"} offer is removed while the request is open.`);
       escrowNote.classList.toggle("bm-lock", !!purchaseLock || missingMutation);
       submit.disabled = !asset.value || !!purchaseLock || missingMutation || !this.socialOnline?.();
     };
@@ -3272,13 +3608,21 @@ export class Hud {
       if (!bg.isConnected) return;
       fulfillStrip.replaceChildren();
       fulfillStrip.hidden = !rows.length;
-      heldBrains = rows.reduce((total, row) => total + (row.awaitingPayout ? row.priceBrains : 0), 0);
+      for (const currency of ["GOLD", "BRAINS"] as const) {
+        held[currency] = rows.reduce((total, row) =>
+          total + (row.awaitingPayout && row.currency === currency ? row.price : 0), 0);
+      }
       refreshBalance();
       if (!rows.length) return;
+      // A player can be owed both currencies at once, so the headline names whichever
+      // is actually waiting rather than assuming one.
+      const waiting = (["GOLD", "BRAINS"] as const)
+        .filter((currency) => held[currency] > 0)
+        .map((currency) => marketPrice(held[currency], currency));
       const header = document.createElement("div");
       header.className = "bm-fulfill-title";
-      header.textContent = heldBrains
-        ? `Trades settled! The market is holding ${heldBrains} brains for you — collect them.`
+      header.textContent = waiting.length
+        ? `Trades settled! The market is holding ${waiting.join(" and ")} for you — collect it.`
         : rows.some((row) => row.awaitingClaim)
           ? "Trades settled! Collect to take delivery."
           : "Your posts went through! Collect to dismiss.";
@@ -3304,7 +3648,8 @@ export class Hud {
         // species portrait and say nothing about mutations.
         if (entry.mutation !== undefined && this.zombieMutationPortraitOf) {
           onFirstVisible(portrait, () => {
-            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!, entry.color)
+            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!, entry.color,
+              undefined, () => card.isConnected)
               .then((source) => { if (card.isConnected) portrait.src = source; })
               .catch(() => { /* retain the static species portrait */ });
           });
@@ -3330,8 +3675,8 @@ export class Hud {
         const room = this.canTakeZombieDelivery?.() ?? true;
         meta.textContent = sold
           ? `Bought by ${entry.fulfilledBy} · ${when}\n${paying
-            ? `The market is holding ${entry.priceBrains} brains — collect to bank them.`
-            : "The brains are already in your balance."}`
+            ? `The market is holding ${marketPrice(entry.price, entry.currency)} — collect to bank it.`
+            : `${entry.currency === "GOLD" ? "The gold is" : "The brains are"} already in your balance.`}`
           : claiming
             ? `From ${entry.fulfilledBy} · ${when}\n${room
               ? "Waiting for you — collect to bring it home."
@@ -3339,10 +3684,10 @@ export class Hud {
             : `Delivered by ${entry.fulfilledBy} · ${when}\nThe zombie is already on your farm.`;
         const cost = document.createElement("div");
         cost.className = "bm-price";
-        cost.append(String(entry.priceBrains));
-        const brain = document.createElement("img");
-        brain.src = UI("topbar_brain_icon.png");
-        cost.appendChild(brain);
+        cost.append(entry.price.toLocaleString());
+        const coin = document.createElement("img");
+        coin.src = UI(MARKET_COIN[entry.currency]);
+        cost.appendChild(coin);
         body.append(name, traits, meta, cost);
         const action = document.createElement("button");
         action.textContent = "Collect";
@@ -3353,12 +3698,13 @@ export class Hud {
             const claimed = result?.claimed ?? null;
             card.remove();
             if (!rail.childElementCount) fulfillStrip.hidden = true;
-            heldBrains = Math.max(0, heldBrains - (result?.brainsPaid ?? 0));
+            held[entry.currency] = Math.max(0, held[entry.currency] - (result?.paid ?? 0));
             refreshBalance();
+            const coinEmoji = entry.currency === "GOLD" ? "💰" : "🧠";
             this.showToast(sold
-              ? result?.brainsPaid
-                ? `Cha-ching! ${result.brainsPaid} brains collected — ${zombieName} sold to ${entry.fulfilledBy}. 🧠`
-                : `Cha-ching! ${zombieName} sold to ${entry.fulfilledBy} for ${entry.priceBrains} brains. 🧠`
+              ? result?.paid
+                ? `Cha-ching! ${marketPrice(result.paid, entry.currency)} collected — ${zombieName} sold to ${entry.fulfilledBy}. ${coinEmoji}`
+                : `Cha-ching! ${zombieName} sold to ${entry.fulfilledBy} for ${marketPrice(entry.price, entry.currency)}. ${coinEmoji}`
               : claimed?.stored
                 ? `${zombieName} is resting in your Mausoleum — deploy it when there's room. 🧟`
                 : `${zombieName} has joined your horde! 🧟`);
@@ -3402,9 +3748,20 @@ export class Hud {
         statsRow.appendChild(chip);
       };
       const { sold, bought, mostTraded } = result.stats;
-      stat(`🧟 Sold ${sold.count} · earned ${sold.brains} 🧠`);
-      stat(`🛒 Bought ${bought.count} · spent ${bought.brains} 🧠`);
-      if (sold.best) stat(`🏆 Best sale: ${nameOf(sold.best.zombieKey)} for ${sold.best.priceBrains} 🧠`);
+      // Gold and brains never sum, so each total lists whichever currencies it actually
+      // contains — a brains-only trader's chips read exactly as they did before gold.
+      const earnings = (totals: { brains: number; gold: number }) => {
+        const parts: string[] = [];
+        if (totals.gold) parts.push(`${totals.gold.toLocaleString()} 💰`);
+        if (totals.brains || !totals.gold) parts.push(`${totals.brains.toLocaleString()} 🧠`);
+        return parts.join(" · ");
+      };
+      stat(`🧟 Sold ${sold.count} · earned ${earnings(sold)}`);
+      stat(`🛒 Bought ${bought.count} · spent ${earnings(bought)}`);
+      for (const best of [sold.best, sold.bestGold]) {
+        if (!best) continue;
+        stat(`🏆 Best sale: ${nameOf(best.zombieKey)} for ${best.price.toLocaleString()} ${best.currency === "GOLD" ? "💰" : "🧠"}`);
+      }
       if (mostTraded) stat(`⭐ Most traded: ${nameOf(mostTraded.zombieKey)} ×${mostTraded.count}`);
       historyView.appendChild(statsRow);
 
@@ -3425,7 +3782,8 @@ export class Hud {
         portrait.src = this.zombiePortraitOf?.(entry.zombieKey) ?? cardFor(entry.zombieKey)?.portrait ?? "";
         if (entry.mutation && this.zombieMutationPortraitOf) {
           onFirstVisible(portrait, () => {
-            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!, entry.color)
+            void this.zombieMutationPortraitOf?.(entry.zombieKey, entry.mutation!, entry.color,
+              undefined, () => row.isConnected)
               .then((source) => { if (row.isConnected) portrait.src = source; })
               .catch(() => { /* retain the static species portrait */ });
           });
@@ -3451,10 +3809,10 @@ export class Hud {
         body.append(title, detail);
         const delta = document.createElement("div");
         delta.className = entry.earned ? "bm-ledger-gain" : "bm-ledger-loss";
-        delta.append(`${entry.earned ? "+" : "−"}${entry.priceBrains}`);
-        const brain = document.createElement("img");
-        brain.src = UI("topbar_brain_icon.png");
-        delta.appendChild(brain);
+        delta.append(`${entry.earned ? "+" : "−"}${entry.price.toLocaleString()}`);
+        const coin = document.createElement("img");
+        coin.src = UI(MARKET_COIN[entry.currency]);
+        delta.appendChild(coin);
         row.append(portrait, body, delta);
         ledger.appendChild(row);
       }
@@ -3471,9 +3829,14 @@ export class Hud {
         const result = await this.getBlackMarketOrders({
           kind, zombieClass: categoryFilter.value || undefined,
           zombieGroup: classFilter.value || undefined,
+          currency: (currencyFilter.value || undefined) as BlackMarketCurrency | undefined,
           sort: sort.value as "newest" | "price_asc" | "price_desc", mine: mine.checked,
         });
         if (generation !== renderGeneration || !bg.isConnected) return;
+        // Both countdowns are differences between two SERVER timestamps, so they are
+        // measured against the server's clock. Reading the device's would let a
+        // skewed phone report a fresh post as expired (or the reverse).
+        const serverNow = result.summary?.serverTime ?? Date.now();
         list.replaceChildren();
         if (!result.orders.length) {
           const empty = document.createElement("div"); empty.className = "bm-empty";
@@ -3490,7 +3853,10 @@ export class Hud {
           // therefore deliberately retain the neutral species portrait.
           if (order.kind === "SELL_ZOMBIE" && this.zombieMutationPortraitOf) {
             onFirstVisible(portrait, () => {
-              void this.zombieMutationPortraitOf?.(order.zombieKey, order.mutation ?? 0, order.color)
+              void this.zombieMutationPortraitOf?.(order.zombieKey, order.mutation ?? 0, order.color,
+                // A refreshed board or a closed panel both retire this card, and both
+                // happen constantly here (every filter, sort and trade rebuilds the list).
+                undefined, () => generation === renderGeneration && marketCard.isConnected)
                 .then((source) => {
                   if (generation === renderGeneration && marketCard.isConnected) portrait.src = source;
                 })
@@ -3508,20 +3874,69 @@ export class Hud {
             : `Mutated: ${order.mutated
               ? `Yes${order.mutation ? ` — ${mutationLabel(order.mutation)}` : ""}`
               : "No"}${order.invasions ? ` · ${veterancy(order.invasions)}` : ""}`;
-          meta.textContent = `${mutationText}\n${order.mine ? "Your post" : order.creatorName}`;
+          // Every post now has a shelf life, so every card says how much of it is
+          // left — a listing quietly vanishing three days on would otherwise look
+          // like it had been taken down. An older Worker sends no `expiresAt`, and
+          // then the line is simply omitted.
+          //
+          // An EXPIRED post can only reach this board one way: it is the caller's own
+          // sale, and the sweep could not hand the zombie back because their farm and
+          // Mausoleum are both full (see blackMarket.list). Say exactly that, because
+          // the fix is theirs to make and Cancel Post is the button that finishes it.
+          const expiresIn = order.expiresAt === undefined
+            ? ""
+            : order.expiresAt <= serverNow
+              ? " · EXPIRED — free a farm or Mausoleum slot to take this zombie back"
+              : ` · expires in ${fmtMarketWait(order.expiresAt - serverNow)}`;
+          marketCard.classList.toggle(
+            "bm-expired", order.expiresAt !== undefined && order.expiresAt <= serverNow
+          );
+          meta.textContent =
+            `${mutationText}\n${order.mine ? "Your post" : order.creatorName}${expiresIn}`;
           const cost = document.createElement("div"); cost.className = "bm-price";
-          cost.append(String(order.priceBrains));
-          const brain = document.createElement("img"); brain.src = UI("topbar_brain_icon.png"); cost.appendChild(brain);
+          cost.append(order.price.toLocaleString());
+          const coin = document.createElement("img"); coin.src = UI(MARKET_COIN[order.currency]); cost.appendChild(coin);
           body.append(name, meta, cost); marketCard.append(portrait, body);
           // Filled in for other players' listings: inspecting one offers the trade.
           let inspectLock: string | undefined;
           let inspectTrade: (() => Promise<void>) | undefined;
           if (order.mine) {
+            // Bump: re-dates the post so it leads "newest" again and its three days
+            // start over. Offered only once the cooldown has passed — a disabled
+            // button that names the wait is clearer than hiding it and leaving the
+            // player to guess whether the feature exists. An already-expired post is
+            // NOT bumpable (the server refuses it): it is waiting to be cancelled,
+            // not to be put back on the front page.
+            const expired = order.expiresAt !== undefined && order.expiresAt <= serverNow;
+            if (this.onRepostBlackMarketOrder && order.repostableAt !== undefined && !expired) {
+              const wait = order.repostableAt - serverNow;
+              const bump = document.createElement("button");
+              bump.className = "bm-repost";
+              bump.textContent = wait > 0 ? `Bump in ${fmtMarketWait(wait)}` : "Bump to Top";
+              bump.disabled = wait > 0;
+              bump.title = "Move this post back to the top of Newest and restart its three days.";
+              bump.onclick = async (event) => {
+                event.stopPropagation();
+                bump.disabled = true;
+                try {
+                  await this.onRepostBlackMarketOrder?.(order.id);
+                  this.showToast("Post bumped to the top — it has three more days.");
+                  await renderOrders();
+                } catch (error) {
+                  const code = error instanceof Error ? error.message : "";
+                  this.showToast(code.startsWith("repost_cooldown")
+                    ? "That post was bumped too recently — try again later."
+                    : "Could not bump that post. Refresh and try again.");
+                  await renderOrders();
+                }
+              };
+              marketCard.appendChild(bump);
+            }
             const action = document.createElement("button");
             action.className = "cancel"; action.textContent = "Cancel Post";
             action.onclick = async (event) => {
               event.stopPropagation();
-              if (!await this.confirmInGame("Cancel this post?", "The escrowed zombie or brains will be returned.", "Cancel Post")) return;
+              if (!await this.confirmInGame("Cancel this post?", "The escrowed zombie or payment will be returned.", "Cancel Post")) return;
               action.disabled = true;
               try {
                 await this.onCancelBlackMarketOrder?.(order.id);
@@ -3553,7 +3968,8 @@ export class Hud {
             const completeTrade = async (rowAction?: HTMLButtonElement) => {
               if (purchaseLock) { this.showToast(purchaseLock.label); return; }
               let unitId: string | undefined;
-              let detail = `Spend ${order.priceBrains} brains for this zombie?`;
+              const asking = marketPrice(order.price, order.currency);
+              let detail = `Spend ${asking} for this zombie?`;
               // Buying with nowhere to put it is allowed — the zombie waits on the
               // Collect card rather than being forced somewhere — but say so up front
               // instead of letting it look like the purchase went nowhere.
@@ -3563,7 +3979,7 @@ export class Hud {
               if (order.kind === "BUY_ZOMBIE") {
                 const match = await this.chooseBlackMarketZombie(order);
                 if (!match) { this.showToast("You do not own a matching available zombie."); return; }
-                unitId = match.id; detail = `Trade ${match.name} for ${order.priceBrains} brains?`;
+                unitId = match.id; detail = `Trade ${match.name} for ${asking}?`;
               }
               if (!await this.confirmInGame("Complete this trade?", detail, "Trade")) return;
               if (rowAction) rowAction.disabled = true;
@@ -3572,8 +3988,8 @@ export class Hud {
                 refreshBalance();
                 const zombieName = cardFor(order.zombieKey)?.name ?? order.zombieKey;
                 this.showToast(order.kind === "SELL_ZOMBIE"
-                  ? `Bought ${zombieName} for ${order.priceBrains} brains — collect it above! 🧟`
-                  : `Sold your ${zombieName} for ${order.priceBrains} brains! 🧠`);
+                  ? `Bought ${zombieName} for ${asking} — collect it above! 🧟`
+                  : `Sold your ${zombieName} for ${asking}! ${order.currency === "GOLD" ? "💰" : "🧠"}`);
                 await renderOrders();
                 // The purchase now waits as a collectable delivery, so surface its card
                 // straight away rather than at the next time the panel opens.
@@ -3581,8 +3997,8 @@ export class Hud {
               }
               catch (error) {
                 const code = error instanceof Error ? error.message : "";
-                if (code.startsWith("insufficient_brains"))
-                  this.showToast(`You need ${order.priceBrains} brains to buy this zombie.`);
+                if (code.startsWith("insufficient_brains") || code.startsWith("insufficient_gold"))
+                  this.showToast(`You need ${asking} to buy this zombie.`);
                 else if (code.startsWith("black_market_level_locked"))
                   this.showToast("Reach the required level before purchasing this zombie.");
                 else if (code.startsWith("counterparty_busy"))
@@ -3627,23 +4043,28 @@ export class Hud {
     salesTab.onclick = () => { composing = false; viewingHistory = false; kind = "SELL_ZOMBIE"; setTabs(); void renderOrders(); };
     historyTab.onclick = () => { composing = false; viewingHistory = true; setTabs(); void renderHistory(); };
     composeTab.onclick = () => { composing = true; setTabs(); };
-    for (const control of [categoryFilter, classFilter, sort, mine]) control.onchange = () => void renderOrders();
+    for (const control of [categoryFilter, classFilter, currencyFilter, sort, mine]) control.onchange = () => void renderOrders();
     refresh.onclick = () => { void renderOrders(); void renderFulfillments(); };
     composeKind.onchange = updateCompose;
     asset.onchange = refreshComposeStatus;
+    currencyPicker.onchange = refreshComposeStatus;
     mutationMode.onchange = refreshComposeStatus;
     for (const input of mutationChecks) input.onchange = refreshComposeStatus;
     submit.onclick = async () => {
-      const priceBrains = Number(price.value);
-      if (!Number.isSafeInteger(priceBrains) || priceBrains < 1 || priceBrains > 1_000_000) {
-        this.showToast("Enter a whole brain price between 1 and 1,000,000."); return;
+      const amount = Number(price.value);
+      const currency = composeCurrency();
+      if (!Number.isSafeInteger(amount) || amount < 1 || amount > MARKET_MAX_PRICE) {
+        this.showToast(`Enter a whole ${currency === "GOLD" ? "gold" : "brain"} price between 1 and ${MARKET_MAX_PRICE.toLocaleString()}.`);
+        return;
       }
       const selling = composeKind.value === "SELL_ZOMBIE";
       if (!selling) {
         const purchaseLock = purchaseLockFor(asset.value);
         if (purchaseLock) { this.showToast(purchaseLock.label); return; }
       }
-      const warning = selling ? "The selected zombie will be held in escrow." : `${priceBrains} brains will be held in escrow.`;
+      const warning = selling
+        ? "The selected zombie will be held in escrow."
+        : `${marketPrice(amount, currency)} will be held in escrow.`;
       if (!await this.confirmInGame("Create Black Market post?", warning, "Create Post")) return;
       submit.disabled = true;
       try {
@@ -3651,13 +4072,14 @@ export class Hud {
           ? selectedMutationMask()
           : undefined;
         await this.onCreateBlackMarketOrder?.(selling
-          ? { kind: "SELL_ZOMBIE", unitId: asset.value, priceBrains }
+          ? { kind: "SELL_ZOMBIE", unitId: asset.value, price: amount, currency }
           : {
               kind: "BUY_ZOMBIE",
               zombieKey: asset.value,
               mutated: mutationMode.value !== "false",
               ...(mutationRequired ? { mutationRequired } : {}),
-              priceBrains,
+              price: amount,
+              currency,
             });
         // Land the player back on the board the new post just joined, so on a
         // compact layout the post they created is what they see next.
@@ -3678,6 +4100,8 @@ export class Hud {
           this.showToast("You have reached today's limit of 50 Black Market posts.");
         else if (code.startsWith("insufficient_brains"))
           this.showToast("You do not have enough brains for that request.");
+        else if (code.startsWith("insufficient_gold"))
+          this.showToast("You do not have enough gold for that request.");
         else if (code.startsWith("black_market_level_locked"))
           this.showToast("Reach the required level before requesting this zombie.");
         else this.showToast("Could not create that post. Refresh and try again.");
@@ -3721,7 +4145,7 @@ export class Hud {
         row.appendChild(buildZombieCard(this, rosterInfo(this, zombie), modal.panel));
         const choose = document.createElement("button");
         choose.className = "zbtn sell";
-        choose.textContent = `Sell this zombie for ${order.priceBrains} brains`;
+        choose.textContent = `Sell this zombie for ${marketPrice(order.price, order.currency)}`;
         choose.onclick = () => finish(zombie);
         row.appendChild(choose);
         list.appendChild(row);
@@ -3765,7 +4189,7 @@ export class Hud {
     panel.appendChild(buildZombieCard(this, info, panel));
     const note = document.createElement("div");
     note.className = lockLabel ? "bm-lock" : "bm-meta";
-    note.textContent = lockLabel ?? `${order.priceBrains} brains · ${order.creatorName}`;
+    note.textContent = lockLabel ?? `${marketPrice(order.price, order.currency)} · ${order.creatorName}`;
     panel.appendChild(note);
     if (!order.mine && trade) {
       const action = document.createElement("button");
@@ -4333,6 +4757,8 @@ export class Hud {
           visit.title = `Look around ${f.name}'s farm (read-only)`;
           visit.onclick = () => this.onVisitFriend?.(f.id, f.name);
           acts.appendChild(visit);
+          // Friend invasions launch from the Invasions panel (Social → Invasions),
+          // not from this drawer — see ui/panels/invasions.ts.
           // Unfriend / block (online). Remove tears down the edge; Block also
           // prevents re-adding and future gifts.
           const del = document.createElement("button");
@@ -4420,6 +4846,9 @@ export class Hud {
           : "Sign in to connect with friends online. You can still keep a local list below.";
     };
 
+    // (Friend-invasion history and defense claims moved to the Invasions panel —
+    // Social → Invasions, ui/panels/invasions.ts.)
+
     // The toolbar's "Gift all (N)" count and the rows both read the same cooldown
     // state, so gifting one friend has to repaint BOTH — repainting only the list
     // left the count one gift stale.
@@ -4449,6 +4878,12 @@ export class Hud {
   /** Single-zombie inspect modal (used by main.ts taps and the Mausoleum). */
   openZombieInfo(info: ZombieInfo, refresh?: () => void) {
     openZombieInfoPanel(this, info, refresh);
+  }
+
+  /** A tapped Memorial Statue: its occupant's read-only card, or the graveyard to
+   *  pick one from. */
+  openMemorial(view: MemorialView) {
+    openMemorialPanel(this, view);
   }
 
   // Info popup for the crop/zombie still growing in the plot at (col,row): its
@@ -4545,7 +4980,7 @@ export class Hud {
 
   // The "Zombies" tab (right bar): the My Zombies roster + the Zombie Almanac
   // collection, both rendered by ui/panels/zombies.ts.
-  openZombieList(tab: ZombiesPanelTab = "roster") {
+  openZombieList(tab?: ZombiesPanelTab) {
     openZombiesPanel(this, tab);
   }
 
@@ -4597,6 +5032,8 @@ export class Hud {
         }
       }
 
+      // Saved line-ups live with the building that holds the zombies they swap in
+      // and out. Offered even with no teams yet — this is the only door to them.
       foot.innerHTML = "";
       const teams = document.createElement("button");
       teams.className = "zbtn store";
@@ -4621,6 +5058,9 @@ export class Hud {
         };
         foot.appendChild(button);
       }
+      // Deploying or inspecting a zombie rebuilds every slot; an upgraded crypt is
+      // dozens of tiles long, so hold the player's place in it.
+      keepScroll(grid, "mausoleum.grid");
     };
     render();
   }
@@ -4795,6 +5235,18 @@ export class Hud {
       toCrypt.textContent = "To Mausoleum";
       toCrypt.onclick = () => void collect(toCrypt, true);
 
+      // Finish the wait from the panel you are already looking at. The Insta-Grow tool
+      // has always worked on a running pot, but only by closing this panel, equipping
+      // the tool and tapping the building. Only offered while the combine is still
+      // RUNNING and the player owns a use — there is nothing to hurry once it is ready.
+      const growBoost = this.getSpeedGrowBoost?.();
+      const hurry = document.createElement("button");
+      hurry.className = "cmb-go cmb-hurry";
+      hurry.onclick = () => {
+        if (!this.onPotInstaGrow?.()) return;
+        renderBusy(); // the job is ready now: swap straight to the collect layout
+      };
+
       let fill: HTMLElement | null = null;
       if (done) {
         // Nothing goes in the pot any more — show only what came out of it.
@@ -4843,6 +5295,7 @@ export class Hud {
         const buttons = document.createElement("div");
         buttons.className = "cmb-actions";
         buttons.append(go, toCrypt);
+        if (growBoost && this.onPotInstaGrow) buttons.appendChild(hurry);
         wrap.append(head, slots, bar, note, buttons);
       }
 
@@ -4869,6 +5322,16 @@ export class Hud {
         // reads as a bug, and the crypt is a real choice only once one is placed.
         toCrypt.style.display = s.canStore ? "" : "none";
         toCrypt.disabled = collecting || !s.ready;
+        if (growBoost) {
+          // The count is live: spending the last one elsewhere (or here) retires the
+          // button rather than leaving an offer the player can no longer take.
+          const held = growBoost.count();
+          hurry.innerHTML =
+            `<img class="cmb-hurry-i" src="${growBoost.icon}" alt=""> ${growBoost.name}` +
+            `<span class="cmb-hurry-ct">x${held}</span>`;
+          hurry.title = `Finish this combine now for one ${growBoost.name}.`;
+          hurry.style.display = held > 0 && !s.ready ? "" : "none";
+        }
       };
       tick();
       stop();
@@ -4993,6 +5456,11 @@ export class Hud {
         else renderIdle();
       };
       wrap.append(head, slots, ruleNote, list, go);
+      // Picking a zombie re-renders this whole view, and the picker is as long as the
+      // roster — without this, every tap threw a player scrolled deep into their army
+      // back to the first tile. Restored after the list is in the document: an
+      // unattached element cannot be scrolled.
+      keepScroll(list, "pot.picker");
     };
 
     const st0 = this.getPotStatus?.();
@@ -5031,6 +5499,53 @@ export class Hud {
     buy.onclick = () => {
       if (!this.onBuyBoost?.(voucher)) {
         this.showToast(`You need ${voucher.cost.toLocaleString()} gold for an Invasion Voucher.`);
+        return;
+      }
+      close();
+      onBought();
+    };
+    btns.append(cancel, buy);
+    panel.append(msg, btns);
+  }
+
+  /** Buy a Brain Ticket from the Army screen, with what it costs AND what it does to
+   *  the fight stated before the gold leaves. The elite warning belongs here as well as
+   *  in Tim's one-off notice: Tim speaks once ever, and this is the screen where the
+   *  choice is actually made. */
+  private openBrainTicketPrompt(onBought: () => void) {
+    const ticket = this.boosts.find((boost) => boost.key === BRAIN_TICKET_KEY);
+    if (!ticket) {
+      this.showToast("Brain Tickets are unavailable right now.");
+      return;
+    }
+    const { panel, close } = openModal({
+      host: this.el, bgClass: "raid-ticket-bg", panelClass: "confirm-panel",
+      title: "Buy a Brain Ticket?", replaceSelector: ".raid-ticket-bg",
+    });
+
+    const msg = document.createElement("p");
+    msg.className = "confirm-msg";
+    msg.textContent =
+      "Quadruples this invasion's brain and rare-zombie odds, and skips the wait.";
+    const warning = document.createElement("span");
+    warning.className = "confirm-warn";
+    warning.textContent =
+      "It also makes the invasion ELITE — far stronger than usual. Zombies lost are gone for good.";
+    msg.append(document.createElement("br"), warning);
+
+    const btns = document.createElement("div");
+    btns.className = "zbtns";
+    const cancel = document.createElement("button");
+    cancel.className = "zbtn locate";
+    cancel.textContent = "Cancel";
+    cancel.onclick = () => close();
+    const buy = document.createElement("button");
+    buy.className = "zbtn sell";
+    buy.textContent = `Buy Ticket · ${ticket.cost.toLocaleString()} Gold`;
+    markPrimary(buy); // Enter buys
+    buy.onclick = () => {
+      if (!this.onBuyBoost?.(ticket)) {
+        this.showToast(`You need ${ticket.cost.toLocaleString()} gold for a Brain Ticket.`);
         return;
       }
       close();
@@ -5086,9 +5601,21 @@ export class Hud {
     // Default selection: first unlocked raid, else the first card.
     let selId = (cards.find((c) => c.unlocked) ?? cards[0])?.id ?? -1;
 
+    /** Redraw ONLY the cooldown-dependent footer of the mounted detail pane.
+     *
+     *  The 1s ticker used to call renderDetail, which wipes and rebuilds the whole pane.
+     *  Everything above the footer is static for a given raid, so that was a full
+     *  relayout once a second: the drop-rate lines (`.rd-drop`, flex-wrap) re-wrapped,
+     *  which changed the pane's height, which toggled its own overflow-y scrollbar,
+     *  which changed the available width and re-wrapped them again — text visibly
+     *  pulsing while an invasion cooled down. It also reset the scroll position every
+     *  second, so a long drop list could not be read at all. Set by renderDetail. */
+    let refreshFoot: (() => void) | null = null;
+
     const renderDetail = () => {
       const c = cards.find((r) => r.id === selId);
       detail.innerHTML = "";
+      refreshFoot = null;
       if (!c) {
         detail.innerHTML = `<p class="rd-intro">No invasions available.</p>`;
         return;
@@ -5105,7 +5632,14 @@ export class Hud {
         `<div class="rd-title">${c.name}</div>` +
         (c.bossName ? `<div class="rd-boss">${c.bossName}</div>` : "") +
         `<div class="rd-meta">Recommended level ${c.recommendedLevel}` +
-        (c.firstClearXp > 0 ? ` · First clear: ${c.firstClearXp} XP` : "") +
+        // The XP the NEXT win pays: the big one-time first-clear bonus while it is still
+        // unclaimed, then the per-raid repeat trickle from then on. Only ever one of the
+        // two — they never stack, so advertising both would overstate the reward.
+        (c.firstClearXp > 0
+          ? ` · First clear: ${c.firstClearXp} XP`
+          : (c.repeatXp ?? 0) > 0
+            ? ` · ${c.repeatXp} XP per win`
+            : "") +
         `</div>`;
       hero.append(por, info);
 
@@ -5117,58 +5651,116 @@ export class Hud {
             : `${c.introText}`)
         : c.introText;
 
+      // What a win here is actually worth, in numbers: the brain odds, this raid's own
+      // rare zombie, and the boosts on its loot table. The old one-of-each-tier item
+      // preview is gone — a list of decorations told the player nothing about which
+      // invasion to pick. NOTE: the brain/zombie pity floors stay unmentioned by design.
       const rewards = document.createElement("div");
-      rewards.className = "rd-rewards";
-      for (const r of c.rewardPreview.slice(0, 6)) {
-        const chip = document.createElement("span");
-        chip.className = "rd-chip";
-        chip.textContent = r;
-        rewards.appendChild(chip);
-      }
+      rewards.className = "rd-drops";
+      const dropRow = (label: string): HTMLElement => {
+        const row = document.createElement("div");
+        row.className = "rd-drop";
+        const k = document.createElement("span");
+        k.className = "rd-drop-k";
+        k.textContent = label;
+        const v = document.createElement("span");
+        v.className = "rd-drop-v";
+        row.append(k, v);
+        rewards.appendChild(row);
+        return v;
+      };
 
-      const st = this.getRaidStatus
-        ? this.getRaidStatus()
-        : { cooldownMs: 0, voucherCount: 0 };
-      const cd = st.cooldownMs;
-      if (cd <= 0) stop(); // ready again — no need to keep ticking
+      const tiers = c.brainOdds.tiers
+        .map((t) => `${t.amount} ${t.amount === 1 ? "brain" : "brains"} ${pctOdds(t.chance)}`)
+        .join(" · ");
+      dropRow("Brains").textContent =
+        `${pctOdds(c.brainOdds.chance)} per boss win (${tiers})` +
+        ` · ${pctOdds(c.eliteBrainOdds.chance)} on a Brain Ticket`;
+      if (c.zombieDrop) {
+        dropRow(c.zombieDrop.name).textContent =
+          `${pctOdds(c.zombieDrop.rate)} per win · ${pctOdds(c.zombieDrop.eliteRate)} on a` +
+          " Brain Ticket · Golden Dice raise it";
+      }
+      const boostVal = dropRow("Boosts");
+      if (!c.boostDrops.length) {
+        boostVal.textContent = "None";
+      } else {
+        for (const b of c.boostDrops) {
+          const chip = document.createElement("span");
+          chip.className = "rd-chip";
+          chip.textContent = b.qty > 1 ? `${b.name} ×${b.qty}` : b.name;
+          boostVal.appendChild(chip);
+        }
+      }
 
       const foot = document.createElement("div");
       foot.className = "rd-foot";
-      const army = document.createElement("span");
-      army.className = "rd-army" + (haveN < minN ? " short" : "");
-      army.textContent = `Zombies ready: ${haveN} (need ${minN})`;
-      const go = document.createElement("button");
-      go.className = "raid-go";
 
-      // Button state: lock reason > cooldown (with optional voucher bypass) > ready.
-      let useVoucher = false;
-      let buyVoucher = false;
-      if (!c.unlocked) {
-        go.textContent = c.lockReason || "Locked";
-        go.disabled = true;
-      } else if (cd > 0) {
-        if (st.voucherCount > 0) {
-          go.textContent = "Use Voucher & Invade";
-          go.disabled = !canFight;
-          useVoucher = true;
-          army.textContent = `${st.voucherCount} voucher${st.voucherCount > 1 ? "s" : ""} · skips the ${fmtCooldown(cd)} wait`;
+      // Everything below is cooldown-dependent, so it — and only it — is what the 1s
+      // ticker redraws. See `refreshFoot`.
+      const renderFoot = () => {
+        foot.innerHTML = "";
+        const st = this.getRaidStatus
+          ? this.getRaidStatus()
+          : { cooldownMs: 0, voucherCount: 0, brainTicketCount: 0 };
+        const cd = st.cooldownMs;
+        if (cd <= 0) stop(); // ready again — no need to keep ticking
+
+        const army = document.createElement("span");
+        army.className = "rd-army" + (haveN < minN ? " short" : "");
+        army.textContent = `Zombies ready: ${haveN} (need ${minN})`;
+        const go = document.createElement("button");
+        go.className = "raid-go";
+
+        // Button state: lock reason > cooldown (with optional voucher bypass) > ready.
+        let useVoucher = false;
+        let buyVoucher = false;
+        // A Brain Ticket skips the wait too, so owning one has to open the same door a
+        // voucher does. Without this branch a player holding tickets but no voucher was
+        // pushed into buying a voucher to reach the Army screen — the only screen the
+        // ticket can be spent from.
+        let armElite = false;
+        // ...but the ticket must not become the ONLY door either: holding one used to
+        // hide the 2,000g voucher entirely, so a player who bought a ticket and backed
+        // out of the elite confirm could never again skip a wait without fighting ELITE.
+        // When the ticket branch owns the main button, the voucher stays offered beside it.
+        let offerVoucherBuy = false;
+        const voucherCost = this.boosts.find((b) => b.key === VOUCHER_KEY)?.cost ?? 2000;
+        if (!c.unlocked) {
+          go.textContent = c.lockReason || "Locked";
+          go.disabled = true;
+        } else if (cd > 0) {
+          if (st.brainTicketCount > 0 && st.voucherCount <= 0) {
+            go.textContent = "Use Brain Ticket & Invade";
+            go.disabled = !canFight;
+            armElite = true;
+            offerVoucherBuy = true;
+            army.textContent =
+              `${st.brainTicketCount} Brain Ticket${st.brainTicketCount > 1 ? "s" : ""}` +
+              ` · skips the ${fmtCooldown(cd)} wait, but the invasion turns ELITE`;
+          } else if (st.voucherCount > 0) {
+            go.textContent = "Use Voucher & Invade";
+            go.disabled = !canFight;
+            useVoucher = true;
+            army.textContent = `${st.voucherCount} voucher${st.voucherCount > 1 ? "s" : ""} · skips the ${fmtCooldown(cd)} wait`;
+          } else {
+            // Buying a voucher is available from every unlocked invasion. Do not gate
+            // the purchase on army size: McDonnell's eased minimum (1/4 zombies) made
+            // this look tutorial-only while every other invasion normally needs 8.
+            // The Army screen still enforces the selected raid's real launch minimum.
+            go.textContent = "Buy Ticket & Invade";
+            go.disabled = false;
+            buyVoucher = true;
+            army.className = "rd-army short";
+            army.textContent =
+              `Ready in ${fmtCooldown(cd)} · raid ticket: ${voucherCost.toLocaleString()} gold`;
+          }
         } else {
-          // Buying a voucher is available from every unlocked invasion. Do not gate
-          // the purchase on army size: McDonnell's eased minimum (1/4 zombies) made
-          // this look tutorial-only while every other invasion normally needs 8.
-          // The Army screen still enforces the selected raid's real launch minimum.
-          go.textContent = "Buy Ticket & Invade";
-          go.disabled = false;
-          buyVoucher = true;
-          army.className = "rd-army short";
-          army.textContent = `Ready in ${fmtCooldown(cd)} · raid ticket: 2,000 gold`;
+          go.textContent = "Invade";
+          go.disabled = !canFight;
         }
-      } else {
-        go.textContent = "Invade";
-        go.disabled = !canFight;
-      }
-      go.onclick = () => {
-        if (buyVoucher) {
+        // Buy an Invasion Voucher, then straight on to the Army screen with it armed.
+        const beginVoucherBuy = () => {
           const voucher = this.boosts.find((boost) => boost.key === VOUCHER_KEY);
           if (!voucher) {
             this.showToast("Invasion Vouchers are unavailable right now.");
@@ -5178,12 +5770,30 @@ export class Hud {
             close();
             this.openRaidArmy(c, true);
           });
-          return;
+        };
+        go.onclick = () => {
+          if (buyVoucher) {
+            beginVoucherBuy();
+            return;
+          }
+          close();
+          this.openRaidArmy(c, useVoucher, armElite);
+        };
+        const acts = document.createElement("div");
+        acts.className = "rd-acts";
+        if (offerVoucherBuy) {
+          const alt = document.createElement("button");
+          alt.className = "raid-quick";
+          alt.textContent = `Buy Voucher · ${voucherCost.toLocaleString()}g`;
+          alt.title = "Skip the wait the normal way — no elite wave.";
+          alt.onclick = beginVoucherBuy;
+          acts.appendChild(alt);
         }
-        close();
-        this.openRaidArmy(c, useVoucher);
+        acts.appendChild(go);
+        foot.append(army, acts);
       };
-      foot.append(army, go);
+      refreshFoot = renderFoot;
+      renderFoot();
 
       detail.append(hero, intro, rewards, foot);
     };
@@ -5226,16 +5836,20 @@ export class Hud {
       }
     }
     renderDetail();
-    // Live-update the countdown only if a cooldown is currently active.
+    // Live-update the countdown only if a cooldown is currently active. The ticker
+    // touches the FOOTER only — rebuilding the whole pane once a second is what made
+    // the drop-rate text pulse (see refreshFoot).
     if ((this.getRaidStatus?.().cooldownMs ?? 0) > 0) {
-      tick = window.setInterval(renderDetail, 1000);
+      tick = window.setInterval(() => refreshFoot?.(), 1000);
     }
   }
 
   // Army select: pick which owned zombies go on the raid. Auto-selects the
   // strongest up to the cap; toggle individual zombies; Start gated at the min.
-  // `useVoucher` carries a cooldown-bypass intent from the Raid Select screen.
-  openRaidArmy(raid: RaidCardView, useVoucher = false) {
+  // `useVoucher` carries a cooldown-bypass intent from the Raid Select screen, and
+  // `armElite` pre-arms the Brain Ticket when that screen's only way past the cooldown
+  // was a ticket — so the choice the player already made is not silently forgotten here.
+  openRaidArmy(raid: RaidCardView, useVoucher = false, armElite = false) {
     document.querySelector("#hud .army-bg")?.remove();
     const tutorialRaid = this.el.classList.contains("tutorial") && this.tutorialMenuTarget === "Invade";
     const party = this.getRaidParty ? this.getRaidParty() : null;
@@ -5277,29 +5891,34 @@ export class Hud {
     // Ordered selection: index in the array = attack position (first attacks first).
     // Starts EMPTY so any cards the player clicks land at the FRONT of the order — e.g.
     // click two new headless zombies to lead, then "Pick for me" fills the rest from
-    // last raid's order. Clicking a card appends it; clicking a picked card removes it
-    // and renumbers the rest.
-    const order: string[] = [];
+    // last raid's order. Un-picking a card leaves its slot EMPTY and the next card
+    // tapped drops into the lowest empty slot, so swapping out whoever leads the charge
+    // doesn't renumber (or mean re-picking) the whole line. Gaps are closed on launch —
+    // see raid/attackOrderSlots.
+    let order: OrderSlots = [];
 
     // Battle consumables for this raid: Concentration (skip the focus minigame) +
-    // Golden Dice (each raises the loot to a rarer tier, capped by the raid's tier depth).
+    // Golden Dice (each raises the loot to a rarer tier, capped by the raid's tier depth)
+    // + the Brain Ticket (elite invasion, quadrupled brain odds).
     const boosts = this.getRaidBoosts
       ? this.getRaidBoosts(raid.id)
-      : { concentration: 0, dice: 0, maxDice: 0 };
+      : { concentration: 0, dice: 0, maxDice: 0, brainTickets: 0 };
     const diceMax = Math.min(boosts.dice, boosts.maxDice);
     let useConcentration = false;
     let diceChosen = 0;
+    let useBrainTicket = armElite && boosts.brainTickets > 0;
     const launchOpts = (): RaidLaunchOpts => ({
       useVoucher,
       concentration: useConcentration,
       dice: diceChosen,
+      brainTicket: useBrainTicket,
     });
 
     const start = document.createElement("button");
     start.className = "raid-go";
 
     const refresh = () => {
-      const n = order.length;
+      const n = selectedCount(order);
       head.innerHTML =
         `<h2>Send your army — ${raid.name}</h2>` +
         `<span class="army-count${n < min ? " short" : ""}">${n}/${cap} · min ${min}</span>`;
@@ -5345,9 +5964,7 @@ export class Hud {
       tick.className = "tick"; // order number, filled in by refresh()
       card.append(tick, por, nm, ty, st);
       card.onclick = () => {
-        const at = order.indexOf(z.id);
-        if (at >= 0) order.splice(at, 1);
-        else if (order.length < cap) order.push(z.id);
+        order = toggleSlot(order, z.id, cap);
         refresh();
       };
       grid.appendChild(card);
@@ -5386,6 +6003,49 @@ export class Hud {
       stepper.append(lbl, dec, inc);
       boostRow.appendChild(stepper);
     }
+    // Brain Ticket. Unlike the other two this is always offered, owned or not: it is the
+    // only route to an elite invasion, and hiding it behind "buy one first" would leave
+    // the whole feature undiscoverable from the screen it is used on. Buying happens
+    // through the same confirm prompt as the raid ticket, so the 10,000 gold is never
+    // spent on a stray tap.
+    // …but only once the Brain Ticket is unlocked. Below its catalog level the server
+    // refuses the buy outright ("locked"), so an ungated button here is a dead end: the
+    // prompt opens, the player agrees to spend 10,000 gold, and nothing happens. The
+    // elite ladder's bottom rung is well above what a fresh farm can field, which is why
+    // the gate exists at all — see the catalog level in boosts.json.
+    const ticketDef = this.boosts.find((b) => b.key === BRAIN_TICKET_KEY);
+    const ticketUnlocked = this.state.level >= (ticketDef?.level ?? 0);
+    let ticketsHeld = boosts.brainTickets;
+    const eliteBtn = document.createElement("button");
+    eliteBtn.className = "raid-boost-btn raid-elite-btn";
+    const eliteNote = document.createElement("p");
+    eliteNote.className = "raid-elite-note";
+    const drawElite = () => {
+      eliteBtn.innerHTML = ticketsHeld > 0
+        ? `🎟 Brain Ticket <span class="rb-ct">x${ticketsHeld}</span>`
+        : `🎟 Brain Ticket <span class="rb-ct">buy · ${(this.boosts.find((b) => b.key === BRAIN_TICKET_KEY)?.cost ?? 0).toLocaleString()}g</span>`;
+      eliteBtn.classList.toggle("on", useBrainTicket);
+      eliteNote.textContent = useBrainTicket
+        ? "ELITE invasion: 4x brain and rare-zombie odds — and enemies far above this invasion's usual strength."
+        : "";
+    };
+    eliteBtn.title =
+      "Spend a Brain Ticket: skips the wait and quadruples the brain and rare-zombie " +
+      "odds, but the invasion turns ELITE and hits much harder.";
+    eliteBtn.onclick = () => {
+      if (useBrainTicket) { useBrainTicket = false; drawElite(); return; }
+      if (ticketsHeld > 0) { useBrainTicket = true; drawElite(); return; }
+      this.openBrainTicketPrompt(() => {
+        ticketsHeld++;
+        useBrainTicket = true;
+        drawElite();
+      });
+    };
+    drawElite();
+    // A held ticket still works below the gate (it may have been bought before a
+    // rollback, or gifted): hide the button only when there is nothing to spend and
+    // nothing that could be bought.
+    if (ticketUnlocked || ticketsHeld > 0) boostRow.append(eliteBtn, eliteNote);
     if (boostRow.childElementCount) wrap.insertBefore(boostRow, foot);
 
     // "Pick for me": KEEP whatever the player has already selected (in the order they
@@ -5397,21 +6057,37 @@ export class Hud {
     pick.className = "raid-quick";
     pick.textContent = "Pick for me";
     pick.onclick = () => {
-      order.splice(0, order.length, ...fillPartySelection(
+      order = fillSlots(
         order, party.orderedSelectedIds, party.eligible.map((z) => z.id), cap,
-      ));
+      );
       refresh();
     };
 
     start.onclick = async () => {
-      if (order.length < min) return;
+      // Gaps are a picking convenience only: the invasion is launched with a
+      // continuous attack order.
+      const attackOrder = compactOrder(order);
+      if (attackOrder.length < min) return;
       // Always play the live battle scene — there is no instant/auto-resolve. Launch
       // may be async (an online server cooldown gate). Guard against a double-tap
       // while the gate is in flight. If it declines (cooldown, or a raid already
       // running), leave this screen up so the player can retry.
       if (!this.onLaunchRaid || start.disabled) return;
+      // ELITE is the one launch the player can't back out of once it starts: the
+      // ticket is charged, the wave is scaled several rungs above the card, and the
+      // casualties are permanent. Ask HERE — before onLaunchRaid opens a server
+      // session — so the warning is a decision rather than an announcement. (It used
+      // to be a post-launch Tim notice with an OK button: by the time it was read the
+      // army was already on the field. See main.ts.)
+      if (useBrainTicket && !await this.confirmInGame(
+        "Start an ELITE invasion?",
+        `This spends a Brain Ticket. ${raid.name} will be fought at ELITE strength — ` +
+        "far above its usual line — for 4x brain and rare-zombie odds. Zombies lost " +
+        "are gone for good.",
+        "Invade (Elite)"
+      )) return;
       start.disabled = true;
-      const launched = await this.onLaunchRaid(raid.id, [...order], launchOpts());
+      const launched = await this.onLaunchRaid(raid.id, attackOrder, launchOpts());
       if (launched) bg.remove();
       else start.disabled = false;
     };
@@ -5423,6 +6099,126 @@ export class Hud {
   // slides in from the RIGHT while the survivors march off, listing the outcome
   // top-to-bottom with a finish button. `onClose` runs when the button is pressed
   // (the live scene uses it to tear itself down and return to the farm).
+  /** Friend-invasion lineup: pick EXACTLY eight zombies, in attack order, then launch.
+   *  A trimmed cousin of openRaidArmy — no cooldown, no vouchers, no battle boosts
+   *  (PvP always fights at full focus), and the min IS the cap. */
+  openPvpArmy(friendName: string, onLaunch: (orderedIds: string[]) => void) {
+    document.querySelector("#hud .army-bg")?.remove();
+    const party = this.getRaidParty ? this.getRaidParty() : null;
+    const bg = document.createElement("div");
+    bg.className = "panelbg army-bg";
+    const panel = document.createElement("div");
+    panel.className = "panel";
+    const x = document.createElement("button");
+    x.className = "panelclose";
+    const xi = document.createElement("img");
+    xi.src = UI("button_close.png");
+    x.appendChild(xi);
+    x.onclick = () => bg.remove();
+    panel.appendChild(x);
+    bg.appendChild(panel);
+    bindBackdropDismiss(bg, () => bg.remove());
+    this.el.appendChild(bg);
+
+    const cap = PVP_ARMY_SIZE;
+    if (!party || party.eligible.length < cap) {
+      panel.insertAdjacentHTML("beforeend",
+        `<h2>Invade ${friendName}'s farm</h2><p class="rd-intro">A friend invasion needs ` +
+        `${cap} zombies on your farm. Grow a bigger army first.</p>`);
+      return;
+    }
+
+    const wrap = document.createElement("div");
+    wrap.className = "army-wrap";
+    const head = document.createElement("div");
+    head.className = "army-head";
+    const grid = document.createElement("div");
+    grid.className = "army-grid";
+    const foot = document.createElement("div");
+    foot.className = "army-foot";
+    wrap.append(head, grid, foot);
+    panel.appendChild(wrap);
+
+    let order: OrderSlots = [];
+    const start = document.createElement("button");
+    start.className = "raid-go";
+
+    const refresh = () => {
+      const n = selectedCount(order);
+      head.innerHTML =
+        `<h2>Invade ${friendName}'s farm</h2>` +
+        `<span class="army-count${n < cap ? " short" : ""}">${n}/${cap}</span>`;
+      start.textContent = n < cap ? `Pick ${cap - n} more` : `Invade with ${cap}`;
+      start.disabled = n < cap;
+      for (const el of grid.querySelectorAll<HTMLElement>(".army-card")) {
+        const pos = order.indexOf(el.dataset.id!);
+        el.classList.toggle("sel", pos >= 0);
+        const tick = el.querySelector<HTMLElement>(".tick");
+        if (tick) tick.textContent = pos >= 0 ? String(pos + 1) : "";
+      }
+    };
+
+    for (const z of party.eligible) {
+      const card = document.createElement("div");
+      card.className = "army-card";
+      card.dataset.id = z.id;
+      const por = document.createElement("div");
+      por.className = "army-por";
+      if (z.portrait) por.style.backgroundImage = `url(${z.portrait})`;
+      if (this.zombieMutationPortraitOf) {
+        onFirstVisible(por, () => {
+          void this.zombieMutationPortraitOf?.(
+            z.key, visibleMutations(z.id, z.mutation), z.color, undefined, () => por.isConnected,
+          )
+            .then((image) => { if (por.isConnected) por.style.backgroundImage = `url(${image})`; })
+            .catch(() => { /* retain the static species portrait */ });
+        });
+      }
+      const nm = document.createElement("div");
+      nm.className = "army-nm";
+      nm.textContent = z.name;
+      const ty = document.createElement("div");
+      ty.className = "army-ty";
+      ty.textContent = z.typeName;
+      const st = document.createElement("div");
+      st.className = "army-st";
+      st.textContent = `P${z.dispPower} S${z.dispSpeed} L${z.dispLife}`;
+      const tick = document.createElement("span");
+      tick.className = "tick";
+      card.append(tick, por, nm, ty, st);
+      card.onclick = () => {
+        order = toggleSlot(order, z.id, cap);
+        refresh();
+      };
+      grid.appendChild(card);
+    }
+
+    const pick = document.createElement("button");
+    pick.className = "raid-quick";
+    pick.textContent = "Pick for me";
+    pick.onclick = () => {
+      order = fillSlots(
+        order, party.orderedSelectedIds, party.eligible.map((z) => z.id), cap,
+      );
+      refresh();
+    };
+
+    start.onclick = () => {
+      const attackOrder = compactOrder(order);
+      if (attackOrder.length !== cap) return;
+      bg.remove();
+      onLaunch(attackOrder);
+    };
+
+    const note = document.createElement("p");
+    note.className = "rd-intro";
+    note.textContent =
+      "Friendly fight — nobody loses zombies, no cooldown. " +
+      "Stronger defenders give more boosts.";
+    foot.append(note, pick, start);
+    refresh();
+  }
+
   openRaidResult(view: RaidResultView, onClose?: () => void) {
     const bg = document.createElement("div");
     bg.className = "raid-res-bg";
@@ -5437,9 +6233,11 @@ export class Hud {
       ["Gold Plundered", String(view.gold), GOLD_ICON],
       ["Brains Plundered", String(view.brains), BRAIN_ICON],
     ];
-    // First-time XP bonus ("You earned Nxp for beating this enemy for the first
-    // time.") — only shown when it was actually granted (first clear of this raid).
-    if (view.xp > 0) rows.push(["First-Time XP", String(view.xp), ""]);
+    // XP, under whichever of the two rules paid it: the one-time first-clear bonus
+    // ("You earned Nxp for beating this enemy for the first time.") or the per-raid
+    // trickle every later win pays. Labelled apart because the amounts overlap — the
+    // panel must never make a routine repeat look like a first clear.
+    if (view.xp > 0) rows.push([view.firstClear ? "First-Time XP" : "XP Earned", String(view.xp), ""]);
     const rowHtml = rows
       .map(
         ([label, val, icon]) =>
@@ -5528,7 +6326,9 @@ export class Hud {
       portrait.alt = "";
       if (this.zombieMutationPortraitOf) {
         onFirstVisible(portrait, () => {
-          void this.zombieMutationPortraitOf?.(zombie.key, zombie.mutation, zombie.color)
+          void this.zombieMutationPortraitOf?.(
+            zombie.key, visibleMutations(zombie.id, zombie.mutation), zombie.color,
+            undefined, () => portrait.isConnected)
             .then((image) => { if (portrait.isConnected) portrait.src = image; })
             .catch(() => { /* retain the static species portrait */ });
         });
@@ -5814,3 +6614,4 @@ export class Hud {
     this.nameEl.textContent = acct?.name || "Zombie Farmer";
   }
 }
+

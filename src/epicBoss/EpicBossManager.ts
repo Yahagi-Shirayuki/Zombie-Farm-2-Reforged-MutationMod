@@ -28,6 +28,19 @@ export class EpicBossManager {
   normalize(value: EpicBossRun | null | undefined): EpicBossRun | null {
     if (!value || value.bossId !== this.def.id) return null;
     const run = copy(value);
+    // A run saved before the ladders were cut from 40 rungs to 20 can sit above the
+    // new top. Pull it down to the last rung instead of leaving it out of bounds: the
+    // fight is identical either way (levels 20-40 all shared the same 107x HP tier —
+    // see EpicBossDef.maxLevel), but a level the ladder no longer has would show as
+    // "25/20", would never satisfy the retuned top-prize quest, and would end the run
+    // on the next win with the omega zombie unclaimable. Clamped, that same win is a
+    // level-20 win: it fires the quest and pays the top-tier bonus. Mirrored
+    // server-side by migration 0046 and the read-time clamp in v3/epicBoss.ts.
+    if (!run.completedAt && run.level > this.def.maxLevel) {
+      run.level = this.def.maxLevel;
+      run.maxHp = epicBossHp(this.def, run.level);
+      run.currentHp = Math.max(1, Math.min(run.currentHp, run.maxHp));
+    }
     if (run.completedAt || this.now() >= run.expiresAt) {
       run.tokenCount = 0;
       return run;

@@ -5,12 +5,19 @@ import type { QuestDef } from "./quest/types";
 import type { RaidDef, EnemyStat, AttackDef } from "./raid/types";
 import { setZombieNames } from "./zombie/names";
 import { extraZombieFacingPartFiles } from "./zombie/facingPartTexture";
+
+// Value import, and safe from a cycle: mutationVisual takes only TYPES from this module.
+import { hidesHeadMutationArt } from "./zombie/mutationVisual";
 import { BASE } from "./base";
 import { AssetHttpError, fetchJson, mapConcurrent } from "./assetLoading";
+
+import { noteAssetFailure } from "./assetFailures";
+import { isFencePanel } from "./pathCosts";
 import { MAX_ZOMBIE_POTS } from "./placementLimit";
+import { setRigClips } from "./raid/clipRuntime";
+import type { ClipSet } from "./raid/clipRuntime";
 import { isPowderMachineKey, POWDER_MACHINE_PURCHASE_LIMIT } from "./powderMachine";
 import { isZombieColorMixerBucketKey, ZOMBIE_COLOR_MIXER_BUCKET_LIMIT } from "./zombieColorMixerBucket";
-import { isFencePanel } from "./pathCosts";
 
 export interface Tile {
   terrain: string;
@@ -46,8 +53,10 @@ export interface ZombieModelPart {
   ay: number;
   z: number;
   tint: boolean;
-  /** Per-attachment scale from the source actor. Named specials sometimes resize
-   *  a replacement part (Skittles' candy body is 0.8x). */
+  /** Per-attachment scale, about the part's own pivot. Named specials carry theirs
+   *  from the source actor (Skittles' candy body is 0.8x); the growable models take
+   *  theirs from PART_SCALE in prep_zombie_models.py (the Flower zombies' 1.2x
+   *  sunflower). Absent means 1. */
   scale?: number;
 }
 // A full per-type zombie model (from tools/prep_zombie_models.py). Reverse-
@@ -90,7 +99,9 @@ export interface EnemyPart {
   px: number; py: number; ax: number; ay: number; z: number; rot: number;
   group: "head" | "leg" | "arm" | "wing" | "wheel" | "body";
   back: boolean;
-  /** This part does not take the actor's runtime color. */
+  /** This part does NOT take the actor's runtime colour — the source's
+   *  `setInheritColor: NO`. Only the alien minion sets it (its face and body detail stay
+   *  grey while the rest of the body takes a random hue); see EnemyActor.applyTint. */
   noTint?: boolean;
 }
 export interface EnemyModel {
@@ -144,14 +155,38 @@ const SPECIAL_GROUP_SCALE: Record<string, number> = {
 };
 
 // These actors paint their complete face into their dedicated head attachments.
-// Keeping the ordinary facial details produces a second face over the authored one.
-const COMPLETE_SPECIAL_FACES = new Set([
+// Keeping the ordinary facial details produces a second face over the authored one:
+// a mouth floating on a diving helmet, eyes on top of a ninja mask, a green jaw under
+// a robot's grille. Each one here supplies a Head (or, for the Diver, a whole helmet)
+// with its expression already drawn on.
+// Exported so the BAKED portrait can be pinned to the same list the live rig uses:
+// tools/prep_assets.py composites the same actors and had none of these rules, which
+// is how a Zombug ended up with the default eyes on its card but not on the farm.
+// See src/zombie/specialPortrait.test.ts.
+export const COMPLETE_SPECIAL_FACES = new Set([
   "ZombieActorZombug",
   "ZombieActorZwampThing",
+  "ZombieActorMasterNinjombie",
+  "ZombieActorNinjombie",
+  "ZombieActorMerZombie",
+  "ZombieActorProto",
+  "ZombieActorZombieBot",
+  "ZombieActorOmegaZombieBot",
+  "ZombieActorZomtar",
+  "ZombieActorZomdini",
 ]);
-const DEFAULT_FACE_SLOTS = new Set([
-  "EyeL", "EyeR", "UpperTeeth", "LowerTeeth", "Scar",
+// A named actor whose face is a MASK — a beard, a space helmet, a wall of leaves —
+// keeps the ordinary head and eyes behind it (they read through or around the mask by
+// design), but must not inherit the mouth that would show below it.
+//
+// The membership itself lives in zombie/mutationVisual, because the SAME set of actors
+// has to suppress head-mutation art for the same reason (a pumpkin drawn over a beard
+// has nowhere to sit). Two lists would be two chances to add the fourth masked actor to
+// one rule and not the other, and the failure would be silent art.
+export const DEFAULT_FACE_SLOTS = new Set([
+  "EyeL", "EyeR", "UpperTeeth", "LowerTeeth", "Scar", "Jaw",
 ]);
+export const MASKED_FACE_SLOTS = new Set(["LowerTeeth"]);
 
 /** Merge a named actor's replacement attachments over the ordinary skeleton.
  *  The source special-zombie plists are deltas, not complete actors: for example,
@@ -165,14 +200,21 @@ export function mergeSpecialZombieModel(
   const slot = (file: string) => file.replace(/^default/, "").replace(/\.png$/i, "");
   const replaced = new Set(manifest.parts.map((part) => slot(part.file)));
   const hasCompleteSpecialFace = COMPLETE_SPECIAL_FACES.has(def.key);
+  const isMasked = hidesHeadMutationArt(def.key);
+  // An actor that brings its OWN jaw brings its own mouth line with it: the default
+  // lower teeth are placed against the DEFAULT jaw and land wrong on any other shape,
+  // which is what put a second set of teeth on the Dapper Zombie's chin.
+  const ownJaw = replaced.has("Jaw");
   const headDx = replaced.has("Head") ? manifest.neck.x - base.neck.x : 0;
   const headDy = replaced.has("Head") ? manifest.neck.y - base.neck.y : 0;
   const inherited = manifest.floatingHead
     ? []
     : base.parts.filter((part) => {
       const partSlot = slot(part.file);
-      return !replaced.has(partSlot)
-        && !(hasCompleteSpecialFace && DEFAULT_FACE_SLOTS.has(partSlot));
+      if (replaced.has(partSlot)) return false;
+      if (hasCompleteSpecialFace && DEFAULT_FACE_SLOTS.has(partSlot)) return false;
+      if (isMasked && MASKED_FACE_SLOTS.has(partSlot)) return false;
+      return !(ownJaw && partSlot === "LowerTeeth");
     }).map((part) => ({
       ...part,
       px: part.px + (part.group === "head" ? headDx : 0),
@@ -319,6 +361,11 @@ export interface PlaceableDef {
    *  A labelled row is buyable only while its label is on the market allow-list;
    *  see src/decorThemes.ts. */
   theme?: string;
+  /** Who drew this object's art, when it was drawn FOR this project rather than
+   *  extracted from the original game's atlases ("Art by LennyFaze"). Present only
+   *  on contributed rows (see tools/contributed_art.py); the Market shows it on the
+   *  card's magnifier parchment, which is the one place an item's own text lives. */
+  credit?: string;
   tileW: number; // footprint width in tiles
   tileH: number; // footprint height in tiles
   // Movement collision can be WIDER than the placement footprint. A fence occupies a
@@ -330,25 +377,45 @@ export interface PlaceableDef {
   collideExtend?: { dc: number; dr: number }[];
   movable: boolean;
   rotations: number;
+  /** This object's art must never be mirrored — see `canMirrorObject`. */
+  noMirror?: boolean;
   tapSound?: string; // signature audio played when this decor is tapped (e.g. belltoll.mp3)
   sprite: string; // filename under /assets/objects/
   /** Far-side art (the source's `childNodes` layer), drawn on the SAME canvas as
    *  `sprite` but behind anything standing inside the object. Only the Pet Pen has
    *  one: its far wall, which pets have to walk in front of. */
   backSprite?: string;
-  /** Working-state art. The Zombie Pot uses these while a combine cooks and once
-   *  it is ready to collect. */
+  /** Working-state art. The source ships each state of a functional object as its
+   *  own tile with the SAME footprint and ground point: the Zombie Pot is bare
+   *  while idle (`sprite`), wears a clamped-down lid while a combine cooks
+   *  (`busySprite`), and sprouts the finished zombie's arm once it is done
+   *  (`readySprite`). Both are taller than the idle art; bottom-center anchoring
+   *  keeps the pot itself in exactly the same place. */
   busySprite?: string;
   readySprite?: string;
   nativeW: number;
   nativeH: number;
   pivotX: number;
   pivotY: number;
+  /** Ground-hugging art (roads, ponds, rocks, the zombie patch). Its pieces are
+   *  drawn to meet each other seam-to-seam, which only works if each one hangs off
+   *  its own authored pivot instead of being bottom-centered on its footprint —
+   *  see `anchorX`/`anchorY` and Field.flatTileOffset. */
+  flatTile?: boolean;
+  /** Cocos anchor point of a flat tile's art (y measured UP from the bottom edge),
+   *  already rebased onto the trimmed PNG we ship. Only present with `flatTile`. */
+  anchorX?: number;
+  anchorY?: number;
+  /** Orientations this object is drawn in, when turning it means swapping ART rather
+   *  than mirroring one sprite. Only the two road bends have these — see ROAD_TURNS
+   *  in tools/prep_placeables.py and `turnArt`. Index 0 always restates the def's own
+   *  sprite, so a def with `turns` and one without are read the same way. */
+  turns?: TurnState[];
   armyMax?: number; // functional: increases zombie army cap by this on placement
   storageSlots?: number; // functional: storage shed item capacity (8..64)
   petPen?: boolean; // Pet Pen: manages up to four displayed pets
   zombieStorage?: boolean; // functional: the Mausoleum — stores owned zombies
-  zombieSlots?: number; // functional: Mausoleum zombie capacity (15..35 by tier)
+  zombieSlots?: number; // functional: Mausoleum zombie capacity (15..60 by tier)
   graveColor?: "Blue" | "Red" | "Silver"; // colored grave: unlocks planting that zombie class
   zombiePatch?: boolean; // functional: the Zombie Patch — gathers zombies to nap on it
   plowFree?: boolean; // functional: Plowing Monolith — plowing costs no gold
@@ -356,11 +423,93 @@ export interface PlaceableDef {
   mutantMonolith?: boolean; // functional: Mutant Monolith — halves mutant-zombie grow times
   combineFast?: boolean; // functional: Clay Monolith — Zombie Pot combines in 15 min (0.25x)
   zombiePot?: boolean; // functional: Zombie Pot — enables combining two zombies
+  /** functional: Memorial Statue — one perished zombie can be enshrined on it,
+   *  rendered as a stone statue standing on the plinth. */
+  memorial?: boolean;
+  /** Where a `memorial` object's statue stands, as fractions of the sprite (x from
+   *  the left edge, y UP from the bottom edge) — the centre of the plinth's top
+   *  face. Authored by tools/memorial_statue.py; absent on every other object. */
+  mountX?: number;
+  mountY?: number;
   // fruit trees: repeatable harvest. growMs = time to regrow fruit; harvestValue
   // = gold per harvest; growingSprite = the pre-harvest (fruitless) sprite.
   growMs?: number;
   harvestValue?: number;
   growingSprite?: string;
+}
+
+/** One orientation of an object whose corners are separate pieces of art.
+ *
+ *  Everything else on the farm turns by mirroring its one sprite, which in iso is a
+ *  quarter turn. That fails for a road bend: the mirror swaps the two grid axes, so a
+ *  bend's arms swap with each other and the corner comes back as ITSELF, redrawn a few
+ *  pixels out of line. The source authored the corners as separate tiles instead, and
+ *  this is one of them: its own art, its own anchor, and (for the apex-south piece) a
+ *  measured whole-tile render offset. See ROAD_TURNS in tools/prep_placeables.py. */
+export interface TurnState {
+  sprite: string;
+  nativeW: number;
+  nativeH: number;
+  /** Flat-tile anchor of THIS state's art (see `anchorX`/`anchorY`). */
+  anchorX: number;
+  anchorY: number;
+  /** This state is the mirror of its art — the fourth corner the source never drew. */
+  flip?: boolean;
+  /** Tile offset applied to where the art hangs, NOT to the footprint. */
+  dc?: number;
+  dr?: number;
+}
+
+/** How many orientations the Rotate tool cycles this object through: one per authored
+ *  turn state, or the plain mirrored/unmirrored pair for ordinary art. */
+export function turnCount(def: Pick<PlaceableDef, "turns">): number {
+  return def.turns?.length ?? 2;
+}
+
+/** The art (sprite + anchors + offsets) a given orientation draws. Falls back to the
+ *  def's own fields, so a caller never has to ask whether this object has turn states. */
+export function turnArt(
+  def: PlaceableDef, turn: number,
+): Pick<PlaceableDef, "sprite" | "nativeW" | "nativeH" | "anchorX" | "anchorY" | "flatTile">
+  & { dc?: number; dr?: number } {
+  const state = def.turns?.[turn];
+  return state ? { ...state, flatTile: def.flatTile } : def;
+}
+
+/** Is this orientation mirrored? For a def with turn states the answer belongs to the
+ *  state (only the fourth corner is a mirror); for everything else turn 1 IS the
+ *  mirror. Orientation is one number end to end — save, ghost, placed object — so the
+ *  flip is always derived here rather than tracked alongside it. */
+export function turnFlip(def: Pick<PlaceableDef, "turns" | "noMirror">, turn: number): boolean {
+  if (def.turns) return !!def.turns[turn]?.flip;
+  return turn === 1 && canMirrorObject(def);
+}
+
+/** The orientation an object will actually stand in: out-of-range indexes wrap, and a
+ *  mirror this art must never take (`canMirrorObject`) collapses to unturned — so a
+ *  stored turn and the flip derived from it can never disagree. */
+export function normalizeTurn(def: Pick<PlaceableDef, "turns" | "noMirror">, turn: number): number {
+  const n = turnCount(def);
+  const t = ((Math.trunc(turn) % n) + n) % n;
+  return def.turns || turnFlip(def, t) ? t : 0;
+}
+
+/** Can the Rotate tool turn this object?
+ *
+ *  "Rotate" is a horizontal mirror, which for isometric art is exactly a quarter turn —
+ *  a shed facing front-left comes back facing front-right, and that is right for almost
+ *  everything on the farm. It is wrong for art with WRITING baked into it: mirroring the
+ *  Ice Cream Stand hands you a sign reading "MAERC ECI", which is what players reported.
+ *
+ *  There is no mechanical repair for that. Un-mirroring the lettering afterwards would
+ *  need it re-skewed onto a plank now leaning the other way, which is drawing, not a
+ *  transform. So these objects simply do not rotate, and the tool says so rather than
+ *  turning them into nonsense. Flag any object whose art carries readable text; anything
+ *  merely asymmetric (a banner's crest, a mailbox's flag) mirrors fine and should not be
+ *  listed. The flag is authored in tools/prep_placeables.py — placeables.json is
+ *  generated, so editing it alone is undone by the next asset regen. */
+export function canMirrorObject(def: Pick<PlaceableDef, "noMirror">): boolean {
+  return !def.noMirror;
 }
 
 /** Convert an authored RGB triplet to the packed tint format used by Pixi. */
@@ -378,12 +527,15 @@ export function multiplyObjectTint(a: number, b: number): number {
 }
 
 /** Maximum simultaneously-owned copies of a Market placeable. Functional items
- * default to one; the Zombie Pot is the explicit higher-limit exception. Stored
- * objects still count as owned. Undefined means no special purchase limit. */
+ * default to one; the Zombie Pot is the explicit higher-limit exception, and the
+ * Memorial Statue has no limit at all (one per zombie you want to remember).
+ * Stored objects still count as owned. Undefined means no special purchase limit. */
 export function placeablePurchaseLimit(def: Pick<PlaceableDef, "key" | "category">): number | undefined {
   if (def.category !== "functional") return undefined;
   if (isPowderMachineKey(def.key)) return POWDER_MACHINE_PURCHASE_LIMIT;
   if (isZombieColorMixerBucketKey(def.key)) return ZOMBIE_COLOR_MIXER_BUCKET_LIMIT;
+
+  if (def.key === "memorialStatue") return undefined;
   return def.key === "zombieCombiner" ? MAX_ZOMBIE_POTS : 1;
 }
 
@@ -414,8 +566,11 @@ export interface GameAssets {
   raidAttacks: Record<string, AttackDef>; // attack name -> definition
   drops: Record<string, DropDef>; // loot item name -> icon + brains/gold flags
   objects: Record<string, Texture>; // object sprite filename -> texture
-  background: Texture; // green-hills + sky backdrop behind the farm
-  scenery: Texture[]; // decorative foliage [tree, shrub, shrub, bush] for the grass
+  background: Texture; // green-hills + sky backdrop behind the farm (the grass default)
+  // Per-climate backdrop repaints, keyed by filename. Loaded lazily by
+  // ensureBackgroundTexture when a ground skin is applied; seeded with the grass one.
+  backgrounds: Record<string, Texture>;
+  scenery: Record<string, Texture>; // dedicated temperate foliage art, filename -> texture
   upgrades: UpgradeData; // Market "Upgrade" tab: farm-size expansions + ground skins
 }
 
@@ -611,6 +766,7 @@ async function loadLooseMutationParts(
         zombiePartTex[file] = (await Assets.load(url)) as Texture;
       } catch {
         console.warn(`[assets] mutation part "${file}" not found at ${url}`);
+        noteAssetFailure(url); // ...and into the report, not only the console
       }
     },
   );
@@ -641,7 +797,8 @@ export async function loadAssets(): Promise<GameAssets> {
     retryDelay: 350,
   };
 
-  const [field, groundIndex, rig, plants, baseZombies, moddedZombies, placeables, boosts, quests,
+  const [field, groundIndex, rig, plants, baseZombies, moddedZombies, placeables, boosts,
+    importedQuests, reforgedQuests,
     raids, enemyStats, raidAttacks, zombieNames, drops, upgrades, farmer, pets] = await Promise.all([
     json<FieldData>(BASE + "assets/field_default.json"),
     json<GroundIndex>(BASE + "assets/ground_index.json"),
@@ -656,6 +813,7 @@ export async function loadAssets(): Promise<GameAssets> {
     json<PlaceableDef[]>(BASE + "assets/placeables.json"),
     json<BoostDef[]>(BASE + "assets/boosts.json"),
     json<Record<string, QuestDef>>(BASE + "assets/quests.json"),
+    json<Record<string, QuestDef>>(BASE + "assets/quests_reforged.json"),
     json<RaidDef[]>(BASE + "assets/raids/raids.json"),
     json<Record<string, EnemyStat>>(BASE + "assets/raids/enemy_stats.json"),
     json<Record<string, AttackDef>>(BASE + "assets/raids/attacks.json"),
@@ -666,33 +824,54 @@ export async function loadAssets(): Promise<GameAssets> {
     json<PetCatalog>(BASE + "assets/pets/catalog.json"),
   ]);
   const zombies = mergeModdedZombies(baseZombies, moddedZombies);
+  // Two quest catalogs, one map. quests.json is GENERATED by tools/prep_quests.py from
+  // the original Quests.plist, so anything hand-written there is lost on the next
+  // regeneration — the Reforged-original achievements therefore live in their own
+  // authored file. Ids are disjoint by construction (imported quests stop at 10011,
+  // authored ones start at 20001); the spread puts the authored set last so a
+  // collision would at least be deterministic rather than order-dependent.
+  const quests: Record<string, QuestDef> = { ...importedQuests, ...reforgedQuests };
   setZombieNames(zombieNames); // seed the random-name picker before any zombie is built
   const invasionBubble = (await Assets.load(
     BASE + "assets/ui/thoughtBubbleBrains.png"
   )) as Texture;
 
-  // Fence panels are 1 tile for placement but their rail bridges into a neighbour, so
-  // movement collision extends one tile. A spaced fence wall only SEALS if the overhang
-  // points into the gap between panels — which way depends on how the run is laid/flipped.
-  // ┌── TOGGLE for testing: base (unflipped) overhang offset. A horizontal flip swaps
-  // │   dc<->dr at runtime, so this one value covers both flip states of a run.
-  // │   Candidates (only these two seal anything; negatives point the wrong way):
-  // │     [{ dc: 1, dr: 0 }]  — seals col-walls unflipped / row-walls flipped
-  // │     [{ dc: 0, dr: 1 }]  — seals col-walls flipped   / row-walls unflipped
-  // │   Or block BOTH neighbours to seal EVERY orientation: [{ dc: 1, dr: 0 }, { dc: 0, dr: 1 }]
-  // └── (null disables the overhang entirely).
+  // Fence panels are 1 tile for placement but their rail is roughly twice that wide and
+  // BRIDGES into the next tile, so movement collision extends one tile to match. Which
+  // neighbour depends on the flip, and Field.extensionOffsets swaps dc<->dr to follow it.
+  //
+  // The offset has to be the one the ART actually bridges along, and for these panels
+  // that is the ROW axis: measure pen_01.png and the rail rises to the right, which in
+  // this projection is -row, with its two posts exactly two row-steps apart. It is the
+  // same axis the 1x5 gates run along, which is what lets a run meet a gate end to
+  // end. Mirrored, the rail bridges +col instead, and Field.extensionOffsets swaps
+  // dc<->dr to follow it. Do not re-derive this axis from a screenshot of a RUN —
+  // panels overlap each other by half their length, so a run reads as a wall whichever
+  // way it was laid, and it is only the single panel that tells you anything.
+  //
+  // Field.objectRenderY drops the art half a tile so its posts land on the lattice
+  // corners either end of this pair; the two have to agree or the art and the wall it
+  // stands for part company.
+  //
+  // WHICH objects get it is `isFencePanel` — every one-tile barrier in the catalog,
+  // derived from the terrain price list rather than named here. This used to be four
+  // hard-coded keys, one per fence family, so the six colour variants beside them
+  // (Pink / Blue / Red / Black Fence, Pink Iron Fence, Christmas Fence) drew the same
+  // two-tile rail while blocking only one tile: a spaced run of any of them looked
+  // solid and had a walkable hole at every gap.
   const FENCE_OVERHANG: { dc: number; dr: number }[] | null = [{ dc: 0, dr: 1 }];
 
   // Flag functional items by key. (TODO: bake these into prep_placeables.py so
   // they're source-driven rather than derived here.)
   for (const p of placeables) {
-    if (FENCE_OVERHANG && isFencePanel(p)) p.collideExtend = FENCE_OVERHANG;
     // Footprints are whole tiles in the base game (`-[Tile dimensions]` reads
     // tileWidth/tileHeight via integerValue, truncating). Coerce any authored
     // fractional size (e.g. coolerLarge 1.5) to an integer so occupancy and the
-    // depth footprint cover exact tiles with no half-tile hole.
+    // depth footprint cover exact tiles with no half-tile hole. BEFORE the panel
+    // test below, which asks how many tiles the footprint really covers.
     p.tileW = Math.max(1, Math.floor(p.tileW));
     p.tileH = Math.max(1, Math.floor(p.tileH));
+    if (FENCE_OVERHANG && isFencePanel(p)) p.collideExtend = FENCE_OVERHANG;
     if (/^mausoleum/i.test(p.key)) p.zombieStorage = true;
     const grave = /^gravestone(Blue|Red|Silver)$/.exec(p.key);
     if (grave) p.graveColor = grave[1] as "Blue" | "Red" | "Silver";
@@ -703,6 +882,7 @@ export async function loadAssets(): Promise<GameAssets> {
     if (p.key === "monolithCombine") p.combineFast = true; // Clay Monolith
     if (p.key === "zombieCombiner") p.zombiePot = true;
     if (p.key === "pettingZoo") p.petPen = true;
+    if (p.key === "memorialStatue") p.memorial = true;
   }
 
   // Load every ground-tile variant texture.
@@ -770,7 +950,7 @@ export async function loadAssets(): Promise<GameAssets> {
   // Per-type zombie models: one shared atlas (ZombieSheet.png) sliced into part
   // sub-textures via frames.json, plus models.json (composition per unit type).
   const [zombieModels, zombieFrames, mutationParts, sheet, enemyModels,
-    specialModels, specialFrames, specialSheet] = await Promise.all([
+    specialModels, specialFrames, specialSheet, enemyClips, zombieClips] = await Promise.all([
     json<Record<string, ZombieModel>>(BASE + "assets/zombie/models.json"),
     json<Record<string, { x: number; y: number; w: number; h: number }>>(
       BASE + "assets/zombie/frames.json"
@@ -783,7 +963,14 @@ export async function loadAssets(): Promise<GameAssets> {
       BASE + "assets/zombie/special_frames.json"
     ),
     Assets.load(BASE + "assets/zombie/SpecialZombieSheet.png") as Promise<Texture>,
+    // Animations authored in the Rig Studio, if any have been. Optional by design: a rig
+    // with no clip keeps running the procedural pose in EnemyActor/RaidActor, so a
+    // missing file is the ordinary case rather than a failure. See raid/clipRuntime.ts.
+    json<ClipSet>(BASE + "assets/raids/enemies/clips.json").catch(() => ({})),
+    json<ClipSet>(BASE + "assets/zombie/clips.json").catch(() => ({})),
   ]);
+  setRigClips("enemy", enemyClips);
+  setRigClips("zombie", zombieClips);
   const zombiePartTex: Record<string, Texture> = {};
   for (const [name, f] of Object.entries(zombieFrames)) {
     zombiePartTex[name] = new Texture({
@@ -826,23 +1013,41 @@ export async function loadAssets(): Promise<GameAssets> {
   // plain DOM <img>, so browsing does not pay any Pixi/texture cost.
   const objects: Record<string, Texture> = {};
 
-  // The static hills-and-sky backdrop that sits behind the farm.
+  // The static hills-and-sky backdrop that sits behind the farm. Only the grass
+  // one is preloaded; the other climates' repaints load when their skin is applied.
   const background = (await Assets.load(BASE + "assets/farm_background.png")) as Texture;
+  const backgrounds: Record<string, Texture> = { "farm_background.png": background };
 
-  // Decorative foliage (tree + shrubs + bush) scattered on the grass around the
-  // farm. Order matters: index 0 is the tall tree, 1..3 are shrubs/bushes.
-  const scenery = await mapConcurrent(
-    ["tree.png", "shrub1.png", "shrub2.png", "shrub3.png"],
+  // Dedicated foliage art (tree + shrubs + bush) for the temperate surroundings —
+  // the only scenery that isn't drawn from the placeable-object library. Preloaded
+  // because it dresses the default (grass) farm every player starts on.
+  const sceneryFiles = ["tree.png", "shrub1.png", "shrub2.png", "shrub3.png"];
+  const sceneryTex = await mapConcurrent(
+    sceneryFiles,
     STARTUP_ASSET_CONCURRENCY,
     (f) => Assets.load(`${BASE}assets/scenery/${f}`) as Promise<Texture>,
   );
+  const scenery: Record<string, Texture> = {};
+  sceneryFiles.forEach((f, i) => { scenery[f] = sceneryTex[i]; });
 
   return {
     field, groundIndex, rig, ground, player, farmer, pets, soil, crop, cropTop, cropIcon,
     invasionBubble,
     zombieModels, enemyModels, zombiePartTex, mutationParts, plants, zombies, placeables, boosts, quests,
-    raids, enemyStats, raidAttacks, drops, objects, background, scenery, upgrades,
+    raids, enemyStats, raidAttacks, drops, objects, background, backgrounds, scenery, upgrades,
   };
+}
+
+/** Lazily load (and cache) one of the per-climate hills-and-sky backdrops. The
+ *  variants are all the same dimensions as the base art, so a swap needs no re-fit. */
+export async function ensureBackgroundTexture(
+  assets: GameAssets,
+  file: string
+): Promise<Texture> {
+  if (!assets.backgrounds[file]) {
+    assets.backgrounds[file] = await Assets.load(`${BASE}assets/${file}`);
+  }
+  return assets.backgrounds[file];
 }
 
 /** Path to a raid image (boss portrait, stage background) under /assets/raids/. */
@@ -860,15 +1065,21 @@ export async function ensureObjectTexture(
 }
 
 /** Every /assets/objects/ file a placed object draws: its own art, the pre-harvest
- *  frame a fruit tree shows, and the far-side layer the Pet Pen renders behind its
- *  contents. Callers preload the whole list — a missing back layer would leave the
- *  pen showing only its near wall. */
+ *  frame a fruit tree shows, the far-side layer the Pet Pen renders behind its
+ *  contents, and the working-state frames the Zombie Pot swaps to. Callers preload
+ *  the whole list — a missing back layer would leave the pen showing only its near
+ *  wall, and a missing lid would pop the pot back to idle art mid-combine. */
 export function objectSpriteFiles(def: PlaceableDef): string[] {
-  return [def.sprite, def.growingSprite, def.backSprite, def.busySprite, def.readySprite]
-    .filter((f): f is string => !!f);
+  return [...new Set(
+    [def.sprite, def.growingSprite, def.backSprite, def.busySprite, def.readySprite,
+      // Every corner of a road bend, so the Rotate tool never lands on a blank frame.
+      // Two of the four share one file, hence the dedupe.
+      ...(def.turns ?? []).map((t) => t.sprite)]
+      .filter((f): f is string => !!f))];
 }
 
 /** Preload every texture `def` needs before it can be placed on the farm. */
 export async function ensureObjectTextures(assets: GameAssets, def: PlaceableDef): Promise<void> {
   await Promise.all(objectSpriteFiles(def).map((file) => ensureObjectTexture(assets, file)));
 }
+

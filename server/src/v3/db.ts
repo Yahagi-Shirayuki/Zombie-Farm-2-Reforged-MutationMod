@@ -9,11 +9,16 @@ import type {
 import { GAMEPLAY_PROTOCOL } from "../../../src/net/protocol";
 import type { WriterProjection } from "./writer";
 import * as legacyDb from "../db";
-import { applyCommandBatch, freshGameplayState, zombieDefaultMutation } from "./engine";
-import { levelForXp } from "../levels";
+import {
+  applyCommandBatch, freshGameplayState, zombieDefaultMutation,
+  MEMORIAL_GRAVEYARD_CAP, MAX_FUNCTIONAL_OBJECTS,
+} from "./engine";
+import { XP_THRESHOLDS, levelForXp } from "../levels";
 import { projectRun } from "./epicBoss";
 import { RAID_RULESET_VERSION } from "../raidVerifier";
 import { parseRosterColor, serializeRosterColor } from "./rosterColor";
+import { refreshPeriodicState, xpToNextLevel } from "../../../src/quest/periodic/generate";
+import type { PeriodicQuestState } from "../../../src/quest/periodic/types";
 import { normalizeMutationIds } from "../../../src/zombie/mutations";
 import { sanitizePowderGrinds, sanitizePowderStorage } from "../../../src/powderMachine";
 import {
@@ -31,7 +36,6 @@ interface RuntimeRow {
   active_batch_id: string | null;
   last_batch_id: string | null;
   last_first_sequence: number | null;
-  last_result_json: string | null;
   command_window_start: number;
   command_window_count: number;
 }
@@ -39,8 +43,6 @@ interface RuntimeRow {
 interface DocumentRow {
   version: number;
   current_json: string;
-  previous_version?: number | null;
-  previous_json?: string | null;
 }
 
 interface CoreRow { current_json: string }
@@ -56,6 +58,19 @@ interface RosterRow {
   from_escrow: number;
   /** JSON "[r,g,b]" inherited body tint, or NULL for the catalog colour. */
   color: string | null;
+}
+/** One row of the graveyard (see migration 0047). */
+interface FallenRow {
+  unit_id: string;
+  zombie_key: string;
+  name: string | null;
+  mutation: number;
+  invasions: number;
+  color: string | null;
+  died_at: number;
+  /** When it last came off a statue; NULL if it never has (see migration 0048). */
+  released_at: number | null;
+  memorial_object_id: string | null;
 }
 interface RaidRow {
   id: string;
@@ -135,6 +150,9 @@ async function ensureV3(db: D1Database, accountId: string, now: number): Promise
     db.prepare(`INSERT OR IGNORE INTO quest_documents_v3
       (account_id, current_json, updated_at) VALUES (?, ?, ?)`)
       .bind(accountId, JSON.stringify({ completed: [], progress: [] }), now),
+    db.prepare(`INSERT OR IGNORE INTO periodic_quest_documents_v3
+      (account_id, current_json, updated_at) VALUES (?, ?, ?)`)
+      .bind(accountId, JSON.stringify({ daily: null, weekly: null }), now),
     db.prepare(`INSERT OR IGNORE INTO gameplay_documents_v3
       (account_id, current_json, updated_at) VALUES (?, ?, ?)`)
       .bind(accountId, JSON.stringify(coreFrom(fresh)), now),
@@ -145,18 +163,53 @@ async function ensureV3(db: D1Database, accountId: string, now: number): Promise
   ]);
 }
 
-async function loadRows(db: D1Database, accountId: string, now: number) {
-  await ensureV3(db, accountId, now);
-  const [runtime, balance, farm, objects, quests, core, presentation, roster, raid, raidState, raidRevival, epicBoss] = await Promise.all([
-    db.prepare("SELECT * FROM account_runtime_v3 WHERE account_id = ?").bind(accountId).first<RuntimeRow>(),
+/** Every row a projection is built from, fanned out in one round of reads.
+ *
+ *  Columns are named rather than `SELECT *`, and that is the whole point rather than a
+ *  style preference. These tables carry the player's save as JSON, so a `*` bills every
+ *  read for whatever the widest column happens to hold — and two of them are dead weight
+ *  on this path:
+ *
+ *    account_runtime_v3.last_result_json   avg 9.4 KB, max 67 KB in production
+ *    farm_documents_v3.previous_json       avg 3.9 KB, max 38 KB in production
+ *
+ *  Neither is read here. `last_result_json` has exactly one consumer — the idempotent
+ *  replay in applyBatch, which now fetches it only when the batch ids actually match —
+ *  and `previous_json` is written by the farm document update and read by nothing at all,
+ *  anywhere in the repo. Together they were roughly 13 KB per request of pure carry.
+ *
+ *  This is also why cost per request GREW through the beta rather than staying flat: both
+ *  columns are copies of the player's own save, so every request got more expensive as the
+ *  farm it belonged to got bigger. A `SELECT *` on a save table is a per-request cost that
+ *  scales with how much the player has played. */
+async function readAll(db: D1Database, accountId: string) {
+  const [runtime, balance, farm, objects, quests, periodic, core, presentation, roster, fallen, raid, raidState, raidRevival, epicBoss] = await Promise.all([
+    db.prepare(`SELECT account_version, writer_device_id, writer_generation, writer_last_activity_at,
+        active_batch_expires_at, active_batch_id, last_batch_id, last_first_sequence,
+        command_window_start, command_window_count
+      FROM account_runtime_v3 WHERE account_id = ?`).bind(accountId).first<RuntimeRow>(),
     db.prepare("SELECT gold, brains, xp FROM balances WHERE account_id = ?").bind(accountId).first<BalanceRow>(),
-    db.prepare("SELECT * FROM farm_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
-    db.prepare("SELECT * FROM object_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
-    db.prepare("SELECT * FROM quest_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
+    db.prepare("SELECT version, current_json FROM farm_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
+    db.prepare("SELECT version, current_json FROM object_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
+    db.prepare("SELECT version, current_json FROM quest_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
+    db.prepare("SELECT version, current_json FROM periodic_quest_documents_v3 WHERE account_id = ?").bind(accountId).first<DocumentRow>(),
     db.prepare("SELECT current_json FROM gameplay_documents_v3 WHERE account_id = ?").bind(accountId).first<CoreRow>(),
     db.prepare("SELECT version, current_json FROM presentations_v3 WHERE account_id = ?").bind(accountId).first<PresentationRow>(),
     db.prepare(`SELECT unit_id, zombie_key, mutation, invasions, stored, locked_by_raid, from_escrow, color
       FROM roster_v3 WHERE account_id = ? ORDER BY created_at, unit_id`).bind(accountId).all<RosterRow>(),
+    // Newest first, and capped: the graveyard is a memento list, and MEMORIAL_GRAVEYARD_CAP
+    // is what stops a long-lived farm carrying an unbounded list of its dead into
+    // every bootstrap. Enshrined zombies are pinned ahead of the cap below.
+    //
+    // "Newest" is COALESCE(released_at, died_at) — a zombie taken back off a statue
+    // rejoins at the top rather than at its (usually old) date of death. Same
+    // expression as the settlement trim in v3/raid.ts; they must agree or the row the
+    // bootstrap shows is not the row that survives.
+    db.prepare(`SELECT unit_id, zombie_key, name, mutation, invasions, color, died_at,
+        released_at, memorial_object_id
+      FROM fallen_v3 WHERE account_id = ?
+      ORDER BY (memorial_object_id IS NULL), COALESCE(released_at, died_at) DESC, unit_id
+      LIMIT ?`).bind(accountId, MEMORIAL_GRAVEYARD_CAP + MAX_FUNCTIONAL_OBJECTS).all<FallenRow>(),
     db.prepare(`SELECT id, raid_id, roster_json, started_at, earliest_finish_at, expires_at
       FROM raid_sessions_v3 WHERE account_id = ? AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1`)
       .bind(accountId).first<RaidRow>(),
@@ -168,8 +221,36 @@ async function loadRows(db: D1Database, accountId: string, now: number) {
     db.prepare("SELECT * FROM epic_boss_runs_v3 WHERE account_id = ?")
       .bind(accountId).first<EpicRunRow>(),
   ]);
-  if (!runtime || !balance || !farm || !objects || !quests || !core || !presentation || !raidState) throw new Error("v3_state_init_failed");
-  return { runtime, balance, farm, objects, quests, core, presentation, roster: roster.results ?? [], raid, raidState, raidRevival, epicBoss };
+  return { runtime, balance, farm, objects, quests, periodic, core, presentation, roster, fallen,
+    raid, raidState, raidRevival, epicBoss };
+}
+
+/** Whether the rows `ensureV3` seeds are all present. */
+const seeded = (r: Awaited<ReturnType<typeof readAll>>): boolean =>
+  !!(r.runtime && r.balance && r.farm && r.objects && r.quests && r.periodic && r.core
+    && r.presentation && r.raidState);
+
+async function loadRows(db: D1Database, accountId: string, now: number) {
+  // Read FIRST, seed only if something is actually missing.
+  //
+  // `ensureV3` is a nine-statement INSERT OR IGNORE batch, and it used to run ahead of
+  // every single read — 689k executions of its first statement alone in a month of beta,
+  // the fourth most expensive query on the server by total time, every one of them a no-op
+  // after the account's first ever request. Now an established account pays nothing, and a
+  // brand-new one pays a single extra round of reads, once in its life.
+  //
+  // The inversion is safe under concurrency because the seeding is INSERT OR IGNORE: two
+  // requests racing a new account both find rows missing, both seed, and the second one's
+  // inserts are ignored rather than conflicting.
+  let rows = await readAll(db, accountId);
+  if (!seeded(rows)) {
+    await ensureV3(db, accountId, now);
+    rows = await readAll(db, accountId);
+  }
+  const { runtime, balance, farm, objects, quests, periodic, core, presentation, raidState } = rows;
+  if (!runtime || !balance || !farm || !objects || !quests || !periodic || !core || !presentation || !raidState) throw new Error("v3_state_init_failed");
+  return { runtime, balance, farm, objects, quests, periodic, core, presentation, roster: rows.roster.results ?? [],
+    fallen: rows.fallen.results ?? [], raid: rows.raid, raidState, raidRevival: rows.raidRevival, epicBoss: rows.epicBoss };
 }
 
 function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection {
@@ -207,6 +288,20 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
         : {}),
     };
   });
+  const fallen = rows.fallen.map((f) => {
+    const color = parseRosterColor(f.color);
+    return {
+      id: f.unit_id,
+      key: f.zombie_key,
+      ...(f.name ? { name: f.name } : {}),
+      mutation: f.mutation,
+      invasions: f.invasions,
+      ...(color ? { color } : {}),
+      diedAt: f.died_at,
+      ...(f.released_at != null ? { releasedAt: f.released_at } : {}),
+      ...(f.memorial_object_id ? { memorialObjectId: f.memorial_object_id } : {}),
+    };
+  });
   const epicBoss = projectRun(rows.epicBoss);
   if (epicBoss) {
     const owned = new Set(roster.map((unit) => unit.id));
@@ -217,6 +312,10 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
     farm: { version: rows.farm.version, plots: parse(rows.farm.current_json, {}) },
     objects: { version: rows.objects.version, objects: parse(rows.objects.current_json, []) },
     quests: { version: rows.quests.version, ...parse(rows.quests.current_json, { completed: [], progress: [] }) },
+    periodicQuests: {
+      version: rows.periodic.version,
+      ...parse(rows.periodic.current_json, { daily: null, weekly: null }),
+    },
     inventory: core.inventory ?? {},
     storage: core.storage ?? { received: {}, stored: {} },
     powderStorage: sanitizePowderStorage(core.powderStorage),
@@ -238,6 +337,7 @@ function project(rows: Awaited<ReturnType<typeof loadRows>>): GameplayProjection
     tutorialRewarded: core.tutorialRewarded ?? false,
     potSlots: core.potSlots ?? {},
     roster,
+    fallen,
     raids: { progress: parse(rows.raidState.progress_json, {}), lastRaidAt: rows.raidState.last_started_at },
     raidRevival: rows.raidRevival ? {
       sessionId: rows.raidRevival.session_id,
@@ -260,6 +360,35 @@ function resumable(row: RaidRow | null): ResumableRaidProjection | null {
   };
 }
 
+/** Generate or roll over the authoritative periodic board before bootstrap projects it.
+ *
+ * Periodic documents are born with both scopes null. Command batches refresh them before
+ * applying gameplay, but bootstrap is what draws the panel; returning the null document
+ * there makes an eligible player act once before they can even see today's objectives.
+ * This refresh is projection-only. The generator is deterministic, and the next command
+ * or raid settlement performs the same rollover and persists it. Keeping bootstrap free
+ * of a document write avoids racing an in-flight command batch while still showing the
+ * player the exact authoritative board that batch will use.
+ */
+export function refreshPeriodicForBootstrap(
+  accountId: string,
+  rows: Awaited<ReturnType<typeof loadRows>>,
+  now: number,
+): void {
+  const state = parse<PeriodicQuestState>(rows.periodic.current_json, { daily: null, weekly: null });
+  const level = levelForXp(rows.balance.xp);
+  const changed = refreshPeriodicState(state, {
+    accountId,
+    level,
+    xpToNext: xpToNextLevel(level, XP_THRESHOLDS),
+    now,
+  });
+  if (!changed) return;
+
+  const currentJson = JSON.stringify({ daily: state.daily, weekly: state.weekly });
+  rows.periodic = { ...rows.periodic, version: rows.periodic.version + 1, current_json: currentJson };
+}
+
 export async function bootstrap(
   db: D1Database,
   accountId: string,
@@ -269,6 +398,7 @@ export async function bootstrap(
   writer?: WriterProjection
 ): Promise<BootstrapResponse> {
   const rows = await loadRows(db, accountId, now);
+  refreshPeriodicForBootstrap(accountId, rows, now);
   const [friends, incomingRequestCount, inboxCount] = await Promise.all([
     legacyDb.listFriends(db, accountId),
     legacyDb.countIncomingRequests(db, accountId),
@@ -310,15 +440,35 @@ export async function applyBatch(
 ): Promise<BatchFailure> {
   const rows = await loadRows(db, accountId, now);
   const runtime = rows.runtime;
-  if (runtime.last_batch_id === body.batchId && runtime.last_result_json) {
-    const cached = parse<CommandBatchResponse>(runtime.last_result_json, null as never);
+  // Fetched here rather than carried by loadRows: this is the ONLY reader of
+  // last_result_json, it averages 9.4 KB (peaking at 67 KB), and it matters only when a
+  // client actually retries a batch id. Reading it on the id match instead of on every
+  // request trades one rare extra query for ~9 KB off the cost of all of them.
+  const replay = runtime.last_batch_id === body.batchId
+    ? await db.prepare("SELECT last_result_json FROM account_runtime_v3 WHERE account_id = ?")
+        .bind(accountId).first<{ last_result_json: string | null }>()
+    : null;
+  if (replay?.last_result_json) {
+    const cached = parse<CommandBatchResponse>(replay.last_result_json, null as never);
     // The projection timestamps are absolute server epochs, but serverTime is the
     // response-time clock anchor used to translate them into the browser's clock
     // domain. Refresh only that anchor when replaying an idempotent result; reusing
     // the original value would add the whole retry/offline interval to every timer.
     return { status: 200, response: { ...cached, serverTime: now } };
   }
-  if (runtime.active_batch_id) return { status: 409, error: "batch_in_progress" };
+  // An EXPIRED operation marker must not block a batch. `beginOperation` and `release`
+  // both treat one past its TTL as absent; this was the last reader that did not, and
+  // the marker is SHARED - a raid, gift, black-market or presentation request killed
+  // between `beginOperation` and `endOperation` leaves one behind. Without the expiry
+  // clause that orphan answers every subsequent batch with 409 forever: nothing sweeps
+  // it (D1 has no TTL), the only writers that clear it are the operation that owns it
+  // and a sign-out release, and the account is left holding a live lease that applies
+  // nothing - "Gameplay paused - reconnect to continue" on a farm the server thinks is
+  // perfectly healthy. The CAS below carries the same clause; relaxing only one of them
+  // just changes which 409 the player is stuck behind.
+  if (runtime.active_batch_id && runtime.active_batch_expires_at > now) {
+    return { status: 409, error: "batch_in_progress" };
+  }
   if (body.expectedAccountVersion !== runtime.account_version) {
     return { status: 409, error: "state_conflict", body: { accountVersion: runtime.account_version, writerGeneration: runtime.writer_generation } };
   }
@@ -350,10 +500,11 @@ export async function applyBatch(
   if (windowCount > 120) return { status: 429, error: "command_rate_limited", body: { retryAfterMs: Math.max(1, windowStart + 60_000 - now) } };
 
   const before = project(rows);
-  const engine = applyCommandBatch(before, body.commands, { now });
+  const engine = applyCommandBatch(before, body.commands, { now, accountId });
   if (engine.farmChanged) engine.state.farm.version++;
   if (engine.objectChanged) engine.state.objects.version++;
   if (engine.questChanged) engine.state.quests.version++;
+  if (engine.periodicChanged && engine.state.periodicQuests) engine.state.periodicQuests.version++;
   const accountVersion = runtime.account_version + 1;
   const response: CommandBatchResponse = {
     protocolVersion: GAMEPLAY_PROTOCOL,
@@ -382,9 +533,11 @@ export async function applyBatch(
       writer_device_id = COALESCE(writer_device_id, ?),
       writer_generation = CASE WHEN writer_device_id IS NULL THEN writer_generation + 1 ELSE writer_generation END,
       command_window_start = ?, command_window_count = ?, updated_at = ?
-    WHERE account_id = ? AND account_version = ? AND active_batch_id IS NULL
+    WHERE account_id = ? AND account_version = ?
+      AND (active_batch_id IS NULL OR active_batch_expires_at <= ?)
       AND (writer_device_id IS NULL OR writer_device_id = ?)`)
-    .bind(body.batchId, now + 120_000, body.deviceId, windowStart, windowCount, now, accountId, runtime.account_version, body.deviceId));
+    .bind(body.batchId, now + 120_000, body.deviceId, windowStart, windowCount, now,
+      accountId, runtime.account_version, now, body.deviceId));
   statements.push(db.prepare(`UPDATE balances SET gold = ?, brains = ?, xp = ?, claimed_level = ?
     WHERE account_id = ? AND ${guard}`)
     .bind(engine.state.balance.gold, engine.state.balance.brains, engine.state.balance.xp,
@@ -402,6 +555,12 @@ export async function applyBatch(
   if (engine.questChanged) statements.push(db.prepare(`UPDATE quest_documents_v3 SET
       version = version + 1, current_json = ?, updated_at = ? WHERE account_id = ? AND ${guard}`)
     .bind(JSON.stringify({ completed: engine.state.quests.completed, progress: engine.state.quests.progress }), now, accountId, accountId, body.batchId));
+  if (engine.periodicChanged) statements.push(db.prepare(`UPDATE periodic_quest_documents_v3 SET
+      version = version + 1, current_json = ?, updated_at = ? WHERE account_id = ? AND ${guard}`)
+    .bind(JSON.stringify({
+      daily: engine.state.periodicQuests?.daily ?? null,
+      weekly: engine.state.periodicQuests?.weekly ?? null,
+    }), now, accountId, accountId, body.batchId));
   if (before.raids.lastRaidAt !== engine.state.raids.lastRaidAt) {
     statements.push(db.prepare(`UPDATE raid_state_v3 SET last_started_at = ?
       WHERE account_id = ? AND ${guard}`)
@@ -412,6 +571,41 @@ export async function applyBatch(
     statements.push(db.prepare(`UPDATE epic_boss_runs_v3 SET token_count=?
       WHERE account_id=? AND run_id=? AND ${guard}`)
       .bind(engine.state.epicBoss.tokenCount, accountId, engine.state.epicBoss.runId, accountId, body.batchId));
+  }
+  // A run the batch INVENTED: harvesting a boss's favourite crop lured it onto the farm
+  // (engine.ts maybeLureEpicBoss). This is the only path that can create an epic-boss
+  // row outside /epic-boss/activate, and it charges nothing, so there is no balance
+  // statement to pair with it — the quest reopen it performs rides along in the ordinary
+  // quest-document write, which `questChanged` has already noticed.
+  //
+  // The DO UPDATE carries the SAME liveness condition /epic-boss/activate puts on its
+  // own upsert, and it is not redundant with the engine's check. The engine tested the
+  // state this batch was READ from, and the batch writer lock does not cover
+  // /epic-boss/activate — that route touches this table without ever taking
+  // account_runtime_v3. So a purchase committing between our read and our write would,
+  // unguarded, be silently replaced here by a free level-1 run for some other boss,
+  // with the brains already spent and no way to notice. A paid event outranks a lucky
+  // one, always; on that interleaving the lure is simply lost, which costs the player
+  // nothing they paid for.
+  //
+  // The response was serialized before this point and still describes the lured run, so
+  // a refusal leaves it optimistic for one round trip. That is the accepted cost and it
+  // self-heals: the client adopts whatever the next projection carries (readRun ->
+  // onEpicBossState), and an event it never gets is not one it can spend anything on.
+  if (engine.state.epicBoss && engine.state.epicBoss.runId !== before.epicBoss?.runId) {
+    const lured = engine.state.epicBoss;
+    statements.push(db.prepare(`INSERT INTO epic_boss_runs_v3
+      (account_id,run_id,boss_id,activated_at,expires_at,level,max_hp,current_hp,started_crop)
+      SELECT ?,?,?,?,?,?,?,?,? WHERE ${guard}
+      ON CONFLICT(account_id) DO UPDATE SET
+      run_id=excluded.run_id,boss_id=excluded.boss_id,activated_at=excluded.activated_at,
+      expires_at=excluded.expires_at,level=excluded.level,max_hp=excluded.max_hp,
+      current_hp=excluded.current_hp,encounter_started_at=0,retry_ready_at=0,
+      token_count=0,completed_at=0,attack_order_json='[]',started_crop=excluded.started_crop
+      WHERE epic_boss_runs_v3.completed_at != 0 OR epic_boss_runs_v3.expires_at <= ?`)
+      .bind(accountId, lured.runId, lured.bossId, lured.activatedAt, lured.expiresAt,
+        lured.level, lured.maxHp, lured.currentHp, lured.startedCrop ?? "", accountId, body.batchId,
+        now));
   }
 
   const oldRoster = new Map(before.roster.map((u) => [u.id, u]));
@@ -432,6 +626,24 @@ export async function applyBatch(
         locked_by_raid=excluded.locked_by_raid, color=excluded.color`)
       .bind(accountId, unit.id, unit.key, unit.mutation, unit.invasions, unit.stored ? 1 : 0,
         unit.lockedByRaid ?? null, now, serializeRosterColor(unit.color), accountId, body.batchId));
+  }
+  // The graveyard, diffed exactly like the roster above. Commands only ever move a
+  // zombie ON or OFF a statue (memorial.enshrine / memorial.clear) — nothing in the
+  // engine can add or remove a fallen zombie, which is why there is no INSERT here:
+  // rows are born at raid settlement and die when the account does.
+  const oldFallen = new Map((before.fallen ?? []).map((f) => [f.id, f]));
+  for (const fallen of engine.state.fallen ?? []) {
+    const old = oldFallen.get(fallen.id);
+    if (old && old.memorialObjectId === fallen.memorialObjectId &&
+        old.releasedAt === fallen.releasedAt) continue;
+    // `released_at` rides along because it is stamped by the same move that clears
+    // the statue (see releaseMemorial) — it is what keeps the released zombie at the
+    // top of the graveyard instead of at its date of death.
+    statements.push(db.prepare(`UPDATE fallen_v3
+      SET memorial_object_id = ?, released_at = ?, name = COALESCE(?, name)
+      WHERE account_id = ? AND unit_id = ? AND ${guard}`)
+      .bind(fallen.memorialObjectId ?? null, fallen.releasedAt ?? null, fallen.name ?? null,
+        accountId, fallen.id, accountId, body.batchId));
   }
   const durableKinds = new Set(["power.buy", "object.buy", "object.refund", "object.upgrade", "storage.claim", "roster.sell", "roster.combine_start", "roster.combine", "farmer.buy", "pet.buy"]);
   body.commands.forEach((entry, index) => {
@@ -469,6 +681,27 @@ export async function applyBatch(
   const committed = await db.batch(statements);
   if ((committed[0]?.meta.changes ?? 0) !== 1) return { status: 409, error: "state_conflict" };
   return { status: 200, response };
+}
+
+/** The presentation blob as stored, or null when the account has none yet (or it is
+ *  unreadable). Read on the ONE path that has to look at what is already there:
+ *  carrying a lifetime tally forward past a client too old to send one — see
+ *  statsToCarryForward in index.ts. Everything else writes the blob wholesale. */
+export async function readPresentationData(
+  db: D1Database,
+  accountId: string
+): Promise<Record<string, unknown> | null> {
+  const row = await db.prepare("SELECT current_json FROM presentations_v3 WHERE account_id = ?")
+    .bind(accountId).first<{ current_json: string }>();
+  if (!row?.current_json) return null;
+  try {
+    const parsed = JSON.parse(row.current_json) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function writePresentation(

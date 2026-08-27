@@ -250,7 +250,12 @@
       "bodyId": 0,
       "sort": 23,
       "cost": 15,
-      "brains": true
+      "brains": true,
+      "description": "+25% farmer movement speed",
+      "effect": {
+        "key": "farmerSpeed",
+        "amount": 0.25
+      }
     },
     {
       "id": 22,
@@ -259,7 +264,12 @@
       "bodyId": 1,
       "sort": 24,
       "cost": 15,
-      "brains": true
+      "brains": true,
+      "description": "+25% farmer movement speed",
+      "effect": {
+        "key": "farmerSpeed",
+        "amount": 0.25
+      }
     },
     {
       "id": 25,

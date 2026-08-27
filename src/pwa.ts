@@ -11,6 +11,7 @@
 // reload mid-raid would be awful). Instead we surface a small toast and let the
 // player tap "Reload" when they're ready.
 import { registerSW } from "virtual:pwa-register";
+import { repairStaleArtCache } from "./artCacheRepair";
 import type { PlayMode } from "./playMode";
 import {
   activateWaitingWorker,
@@ -62,6 +63,12 @@ function showUpdateRetryToast(message: string): void {
 
 /** Wire up the service worker. Call once at startup. Safe to call in dev. */
 export function initPwa(mode: PlayMode): void {
+  // Before anything else, and independent of the service worker: evict art whose
+  // cached copy is known to be broken. The runtime art cache is CacheFirst on stable
+  // filenames, so a corrected asset otherwise never reaches an existing install.
+  // Fire-and-forget — the textures it drops are re-fetched on first use.
+  void repairStaleArtCache();
+
   // Skip where service workers aren't available (older browsers, some embedded
   // webviews) — the game runs fine without offline caching.
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;

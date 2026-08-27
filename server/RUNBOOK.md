@@ -3,19 +3,17 @@
 Operational companion to [`../SECURITY.md`](../SECURITY.md). Covers what the Worker
 logs, what to alert on, and how to respond.
 
-Last reviewed: 2026-07-25.
+Last reviewed: 2026-08-14.
 
-> **Protocol-v3 notice (2026-07-25):** the v2 save/action/sync routes are retired behind a
-> `410` middleware (`retiredV2` in `src/index.ts`), which runs as `app.use("*")` and therefore
-> short-circuits *before* those handlers. Their `slog()` calls still exist in the source but
-> are **unreachable** — see the dead-events table in §2. Protocol v3 emits request metrics and
-> durable audit rows; individual semantic command rejections inside an HTTP-200 batch are still
-> not emitted through `slog()`. Do not assume quiet logs prove v3 traffic is clean.
+> **Stop a live gameplay-integrity incident:** set `MUTATIONS_DISABLED=1` and deploy. That is
+> the one lever that halts every mutation route. `MIN_PROTOCOL_VERSION` stops stale
+> `/commands` clients *only* — `/raid/*`, `/epic-boss/*`, `/black-market/*` and
+> `PUT /presentation` are gated instead by the writer lease's `X-Integrity-Version` check
+> under `WRITER_LEASE_MODE=enforce`.
 >
-> For an active gameplay-integrity incident, set `MUTATIONS_DISABLED=1` and deploy.
-> Raising `MIN_PROTOCOL_VERSION` stops stale `/commands` clients only. The other mutation
-> routes (`/raid/*`, `/epic-boss/*`, `/black-market/*`, `PUT /presentation`) are gated instead
-> by the writer lease's `X-Integrity-Version` check under `WRITER_LEASE_MODE=enforce`.
+> **Quiet logs do not prove clean traffic.** Semantic command rejections inside an HTTP-200
+> `/commands` batch never reach `slog()` at all, and the retired v2 handlers' `slog()` calls
+> are unreachable behind the `410` middleware (§2, dead events).
 
 The Worker is a Cloudflare Worker (`src/index.ts`) backed by one D1 database named
 `zombiefarm` (see `wrangler.toml`). Logs go to stdout; view them live with
@@ -50,14 +48,14 @@ wrangler tail --format json | grep '"lvl":"alert"'
 
 ## 2. Events, meaning, and alert thresholds
 
-| `sec` | `lvl` | Meaning | Alert when |
-|---|---|---|---|
 **Live under protocol v3:**
 
 | `sec` | `lvl` | Meaning | Alert when |
 |---|---|---|---|
 | `dev_auth_rejected` | alert | A `devSub` (dev-bypass) sign-in hit a **prod** server (`DEV_AUTH` unset). Should be impossible in normal use. | **any** occurrence → page. Confirm `DEV_AUTH` is unset in prod. |
 | `account_command_rejected` | alert | An account exceeded its hourly/daily command-volume ceiling and was refused. | **any** sustained occurrence → automation or a runaway client on that account. |
+| `command_batch_invalid` | alert | A `/commands` envelope failed structural validation and was refused `400`. Carries `build`, `integrityVersion` and `describeInvalidBatch`'s reason (envelope faults named before any command). Unrecoverable for that account — the client will retry the same bad batch forever. | **any** occurrence → a shipped client is emitting batches the server won't take. Read `build` first; a single build id across many accounts is a release regression. |
+| `black_market_sweep_failed` | warn | The opportunistic expiry sweep of stale Black Market posts threw. The request it rode on still succeeds. | Repeated → posts are not expiring; check the 3-day expiry query against `created_at`. |
 | `auth_token_invalid` | warn | A Google ID token failed verification. | > ~20/min globally, or a burst from one IP → credential/endpoint probing. |
 | `auth_denied` | info | A request was rejected at auth. `stage:"token"` = bad/expired/absent JWT (routine). `stage:"session"` = valid signature but the session is revoked / idle-expired / mismatched. | Spike in `stage:"session"` → possible **leaked-token replay after a revoke**. Investigate the account; consider logout-all + secret rotation. |
 | `rate_limited` | warn | A route's per-key limit tripped (`route`, `who`). | Sustained for one `who` → abuse or a stuck client. Global spike across routes → attack/DDoS. |
@@ -81,9 +79,6 @@ Their call sites still exist in `src/index.ts`, but every route that reaches the
 by the `retiredV2` `410` middleware, so they can no longer fire. (The live v3 raid path logs to
 `audit_events_v3` instead.) An older alert rule keyed on these will be silent forever — which
 reads as "clean" and is not.
-
-Note the previous edition of this table listed `gift_credit_deferred`; no such event exists. The
-real name is `gift_claim_deferred`.
 
 **General rule:** a single `warn` is usually a modified client poking one account —
 scope the response to that account. A **global** rise in `warn`/`alert` across many
@@ -181,10 +176,10 @@ loss — the local save keeps the player whole until writes resume.
 ## 5. After any incident
 
 1. Confirm the triggering `sec`/`lvl` rate has returned to baseline (`wrangler tail`).
-2. If a client-side forgery got through, add a regression case to the integration
-   suite so it can't recur silently — and add it to `v3.spec.ts` or `blackMarket.spec.ts`,
-   which are the only two files `vitest.integration.config.ts` actually runs. A spec added
-   elsewhere under `test/integration/` will never execute.
+2. If a client-side forgery got through, add a regression case to the integration suite so
+   it can't recur silently. `vitest.integration.config.ts` globs the directory, so a new
+   `*.spec.ts` runs the day it is written — only the four retired v2 specs named in its
+   `exclude` are skipped. See `test/integration/README.md` for what those still leave dark.
 3. Note the event + response here if the procedure was missing or wrong.
 
 ---
@@ -268,4 +263,60 @@ that settled under the new Worker and is genuinely waiting to be collected:
 wrangler d1 execute zombiefarm --remote --json --command \
   "SELECT COUNT(*) AS suspect FROM black_market_orders \
    WHERE status='FULFILLED' AND payout_at IS NULL AND closed_at < <deploy_epoch_ms>"
+```
+
+### Applying migration `0045_black_market_gold`
+
+Adds `black_market_orders.currency` and widens the price CHECK to 10,000,000, so a post
+can be priced in gold. **Migrate first, then deploy** — the safe order, and unlike 0043
+there is no window to sweep afterwards:
+
+* Migration before Worker: every existing row backfills to `'BRAINS'`, which is what it
+  was, and the old Worker keeps inserting brains posts (it never names the column, so the
+  DEFAULT applies). Nothing behaves differently until the new Worker is live.
+* Worker before migration: the new code names `currency` in its INSERT, so every post
+  500s until the migration lands. Same failure shape as 0043.
+
+The migration is a table REBUILD, and `black_market_receipts` cascades from the table it
+drops — it is written in 0044's order (receipts dropped first) for that reason, and
+rehearsed against real SQLite in `test/migration0045.test.ts`. After applying, the
+receipts ledger must be intact and every pre-existing post must read as brains:
+
+```sh
+wrangler d1 execute zombiefarm --remote --json --command \
+  "SELECT (SELECT COUNT(*) FROM black_market_receipts) AS receipts, \
+          (SELECT COUNT(*) FROM black_market_orders WHERE currency NOT IN ('BRAINS','GOLD')) AS bad_currency"
+```
+
+### Applying migration `0049_periodic_quests`
+
+Adds `periodic_quest_documents_v3` (daily/weekly quests) and backfills a row for every
+existing account. **Migrate first, then deploy — and this one is not a partial outage.**
+
+`ensureV3` writes this table and `loadRows` selects from it on EVERY `/bootstrap`, with no
+guard around either. The two orders are not comparable:
+
+* Migration before Worker: the table sits there unread — the old Worker never names it —
+  and the backfill means the new Worker finds a row for everyone the moment it goes live.
+  Nothing behaves differently in between.
+* Worker before migration: `no such table` on every bootstrap, so **nobody can play at
+  all** until the migration lands. 0043 and 0045 only 500'd the Black Market; this one
+  takes the whole game down.
+
+The backfill is what makes the order forgiving in the safe direction, and it also closes a
+narrower hole: `/raid/finish` reads this row DIRECTLY (it loads no v3 projection) and
+answers `state_conflict` when it is missing, which is a WON invasion paying nothing. That
+path additionally does its own `INSERT OR IGNORE`, so it is covered even on a database
+where the backfill was skipped. Rehearsed against real SQLite in
+`test/migration0049.test.ts`.
+
+After applying, every account should have exactly one board and no account should be
+missing one:
+
+```sh
+wrangler d1 execute zombiefarm --remote --json --command \
+  "SELECT (SELECT COUNT(*) FROM accounts) AS accounts, \
+          (SELECT COUNT(*) FROM periodic_quest_documents_v3) AS boards, \
+          (SELECT COUNT(*) FROM accounts a WHERE NOT EXISTS ( \
+             SELECT 1 FROM periodic_quest_documents_v3 p WHERE p.account_id = a.id)) AS missing"
 ```

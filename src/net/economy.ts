@@ -1,4 +1,5 @@
 import type { GameState } from "../GameState";
+import { crumb } from "../breadcrumbs";
 import * as api from "./api";
 import { CommandQueue } from "./commandQueue";
 import {
@@ -7,7 +8,9 @@ import {
   type CommandBatchResponse,
   type GameplayCommand,
   type PeriodicQuestProjection,
+  EPIC_BOSS_TOKEN_GRANT_LIMIT,
 } from "./protocol";
+
 import type { RaidOutcome } from "../raid/types";
 import { RAID_RULESET_VERSION } from "../raid/replay";
 import { epicBossRunToClient, serverTimestampToClient } from "./clock";
@@ -79,6 +82,12 @@ interface OptimisticDelta {
   localUnitId?: string;
   localZombieHarvests?: { id: string; oc: number; or: number }[];
   localObjectId?: string;
+  /** Boss Tokens this command reports, and the run they belong to. The client has
+   *  already added them to the run it is showing, so every server projection that
+   *  arrives before this command settles must be topped up by them or the counter
+   *  visibly drops back and then climbs again. */
+  bossTokens?: number;
+  bossTokenRunId?: string;
 }
 
 interface PendingRaidFinish {
@@ -114,6 +123,14 @@ export class EconomyClient {
   private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private recoveryAttempt = 0;
   private recoveryInFlight = false;
+  /** The takeover gate is up: another live device holds the lease and the player has
+   *  been asked what to do about it. Recovery deliberately stops there — retrying would
+   *  fight a device that is legitimately writing — so this is the ONE state in which
+   *  `ensureRecoveryArmed` may leave gameplay paused with nothing pending. */
+  private writerGated = false;
+  /** Consecutive conflict reloads with no batch applied in between. */
+  private conflictReloads = 0;
+  private conflictReloading = false;
   private ownershipTimer: ReturnType<typeof setTimeout> | null = null;
   private ownershipCheckInFlight = false;
 
@@ -124,6 +141,8 @@ export class EconomyClient {
   onPetState: ((ownedPets: string[], activePet: string | null, penPets: string[]) => void) | null = null;
   onQuestState: ((state: api.QuestStateResult) => void) | null = null;
   onQuestChanges: ((changes: api.QuestChange[]) => void) | null = null;
+  /** Authoritative daily/weekly quest state. Null from a Worker that predates the
+   *  feature, which the client reads as "no periodic quests" rather than as empty. */
   onPeriodicQuestState: ((state: PeriodicQuestProjection | null) => void) | null = null;
   onCropFertilized: ((oc: number, or: number) => void) | null = null;
   onFarmState: ((farm: api.FarmState) => void) | null = null;
@@ -155,6 +174,7 @@ export class EconomyClient {
   onWriterOwned: (() => void) | null = null;
   onWriterAvailable: (() => void) | null = null;
   onCommandRejected: ((command: GameplayCommand | undefined, error: string) => void) | null = null;
+  /** Some — not all — of a bulk plow/plant's plots were refused. */
   onBulkFarmPartial: ((plots: number, error: string) => void) | null = null;
   onAuthoritativeSettled: ((serverTime: number) => void) | null = null;
   onPendingChange: ((pending: number) => void) | null = null;
@@ -179,8 +199,15 @@ export class EconomyClient {
       this.onGameplayUnavailable?.(reason);
       this.scheduleRecovery();
     };
-    this.queue.onWriterReplaced = () => this.onWriterReplaced?.();
-    this.queue.onStateConflict = () => { void this.reloadAfterConflict(); };
+    this.queue.onWriterReplaced = () => this.gateOnWriterReplaced();
+    // Arm the backoff BEFORE dispatching. A 409 pauses the queue through `setPaused`,
+    // which emits no `onUnavailable` and so schedules nothing — this handler was the
+    // only thing standing between that pause and a permanent stall, and it is one
+    // failed bootstrap away from doing nothing at all.
+    this.queue.onStateConflict = () => {
+      this.ensureRecoveryArmed();
+      void this.reloadAfterConflict();
+    };
     this.queue.onSizeChange = (size) => this.onPendingChange?.(size);
     api.setWriterRejectedHandler(() => this.handleWriterLost());
     api.setWriterConfirmedHandler(() => this.scheduleOwnershipCheck());
@@ -214,13 +241,21 @@ export class EconomyClient {
       this.queue.adoptBootstrap(bootstrap);
       this.ready = true;
       this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
+      // Feature capability: whether this Worker accepts friend invasions. Read at
+      // boot only — the client's Invasions surfaces follow the Worker's PVP_ENABLED
+      // flag, so launching (or parking) PvP never needs a client redeploy.
+      this.serverPvpEnabled = bootstrap.pvpEnabled === true;
       if (bootstrap.raidRulesetVersion !== RAID_RULESET_VERSION) {
         this.onRulesetSkew?.(bootstrap.raidRulesetVersion, RAID_RULESET_VERSION);
       }
       if (this.queue.size === 0) this.onAuthoritativeSettled?.(bootstrap.serverTime);
       this.syncOwnershipPolling(bootstrap.writer.status);
       if (bootstrap.writer.status === "mine") this.onWriterAvailable?.();
-      else this.onWriterReplaced?.();
+      else this.gateOnWriterReplaced();
+      // A bootstrap that succeeds but lands paused (mutations halted, protocol floor)
+      // arms nothing on its own: `disable` is never called, so `onUnavailable` never
+      // fires. Boot is as able to strand a client as a mid-session failure is.
+      this.ensureRecoveryArmed();
     } catch {
       this.ready = false;
       this.queue.disable("bootstrap_failed");
@@ -229,6 +264,10 @@ export class EconomyClient {
   }
 
   get available(): boolean { return this.ready && this.queue.available; }
+
+  /** Whether the deployed Worker accepts friend invasions (bootstrap `pvpEnabled`).
+   *  False until the first successful bootstrap. */
+  serverPvpEnabled = false;
 
   /** A compact description of WHY gameplay is unavailable, read live at the moment
    *  it's shown rather than remembered from a callback — several paths pause the
@@ -267,7 +306,7 @@ export class EconomyClient {
     this.queue.markWriterLost();
     this.optimistic.clear();
     this.commandsBySequence.clear();
-    this.onWriterReplaced?.();
+    this.gateOnWriterReplaced();
     void this.refreshReadOnly();
   }
 
@@ -317,6 +356,7 @@ export class EconomyClient {
       this.syncOwnershipPolling(bootstrap.writer.status);
       if (this.queue.size === 0) this.onAuthoritativeSettled?.(bootstrap.serverTime);
     } catch { /* the blocking state remains until a later focus/reconnect */ }
+    finally { this.ensureRecoveryArmed(); }
   }
 
   private clearOwnershipCheck(): void {
@@ -337,6 +377,7 @@ export class EconomyClient {
 
   private syncOwnershipPolling(status: "free" | "mine" | "other"): void {
     if (status === "mine") {
+      this.writerGated = false;
       this.scheduleOwnershipCheck();
       this.onWriterOwned?.();
     } else this.clearOwnershipCheck();
@@ -373,13 +414,69 @@ export class EconomyClient {
     finally {
       this.ownershipCheckInFlight = false;
       this.scheduleOwnershipCheck();
+      // The supervisor. This poll re-arms itself for as long as the tab is visible and
+      // holds a credential, which is precisely the state a stalled client sits in — so
+      // hanging the invariant off it costs no new timer and bounds ANY stall, including
+      // one arriving down a path that does not exist yet, at one poll interval.
+      this.ensureRecoveryArmed();
     }
+  }
+
+  /** Raise the takeover gate and tell the UI. Every `onWriterReplaced` this class
+   *  emits goes through here, so the gate and the callback can never disagree. */
+  private gateOnWriterReplaced(): void {
+    this.writerGated = true;
+    this.onWriterReplaced?.();
+  }
+
+  /** THE invariant: while gameplay is unavailable, a recovery attempt is always
+   *  pending.
+   *
+   *  Every pause path used to be responsible for arming its own retry, and several of
+   *  them didn't — a 409 whose reload bootstrap threw, a recovery that lost the race to
+   *  `recoveryInFlight`, a `retry()` that returned early under `navigator.onLine`
+   *  false. Each left the queue paused with no timer, no dialog and a perfectly healthy
+   *  connection: the farm answers every tap with "Gameplay paused — reconnect to
+   *  continue" until the player reloads by hand, while the lease stays live (other
+   *  writer-protected routes keep renewing it) and the account version never moves.
+   *  That is the reported signature exactly. Enforcing the invariant in one place
+   *  retires the whole class rather than the three instances of it I could find.
+   *
+   *  Two states are deliberately excluded, because retrying fixes neither and both are
+   *  the player's to resolve: signed out, and the takeover gate. */
+  private ensureRecoveryArmed(): void {
+    if (this.available || this.writerGated || !api.getSession()) return;
+    this.scheduleRecovery();
+  }
+
+  /** Whether the invariant above is holding RIGHT NOW, for the diagnostics report. The
+   *  reported signature — a paused farm, a live lease, an account version that has not
+   *  moved in an hour — is indistinguishable from a healthy pause without this. */
+  get recoveryState(): string {
+    if (this.available) return "running";
+    if (this.writerGated) return "gated on another device (no retry by design)";
+    if (!api.getSession()) return "signed out (no retry by design)";
+    if (this.recoveryInFlight) return "recovering now";
+    return this.recoveryTimer ? `retry armed (attempt ${this.recoveryAttempt + 1})` : "STALLED: nothing pending";
+  }
+
+  /** A tap on a paused farm. The player pressing a dead board is the most reliable
+   *  signal that a stall is happening, and the least tolerable moment to keep waiting
+   *  out a backoff, so a refused interaction pulls the next attempt forward instead of
+   *  merely reporting the pause. */
+  nudgeRecovery(): void {
+    if (this.available || this.writerGated || this.recoveryInFlight) return;
+    if (!api.getSession()) return;
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = null;
+    void this.recover();
   }
 
   private scheduleRecovery(): void {
     if (this.recoveryTimer || typeof window === "undefined") return;
     const delays = [2_000, 5_000, 10_000, 30_000, 60_000];
     const delay = delays[Math.min(this.recoveryAttempt, delays.length - 1)];
+    crumb("queue:retry-armed", `in ${Math.round(delay / 1000)}s (attempt ${this.recoveryAttempt + 1})`);
     this.recoveryTimer = setTimeout(() => {
       this.recoveryTimer = null;
       void this.recover();
@@ -387,9 +484,14 @@ export class EconomyClient {
   }
 
   private async recover(): Promise<void> {
-    // A resume can race the backoff timer; one recovery attempt at a time.
+    // A resume can race the backoff timer; one recovery attempt at a time. Bailing
+    // here is safe only because the attempt already running re-arms in its own
+    // `finally` — the timer that fired to get here has already cleared itself, so
+    // while the re-arm lived on the exit paths below, losing this race quietly ended
+    // the loop.
     if (this.recoveryInFlight) return;
     this.recoveryInFlight = true;
+    crumb("queue:recovering");
     try {
       let bootstrap = await api.bootstrap(true);
       bootstrap = await this.recoverResumableRaid(bootstrap);
@@ -401,28 +503,46 @@ export class EconomyClient {
       if (!this.queue.available) {
         // Another live device owns the lease: the takeover gate owns this state, so
         // stop retrying and let the player decide.
-        if (bootstrap.writer.status === "other") { this.onWriterReplaced?.(); return; }
+        if (bootstrap.writer.status === "other") { this.gateOnWriterReplaced(); return; }
         if (bootstrap.writer.status === "free" &&
             await this.reclaimFreeWriter(bootstrap.writer.generation)) return;
         // Still paused (mutations disabled server-side, protocol skew, or a lost claim
-        // race). Keep the backoff alive: nothing else re-arms this timer, and dropping
-        // it here leaves the farm frozen behind "Gameplay paused — reconnect to
-        // continue" with no retry and no dialog until the player reloads by hand.
+        // race). Widen the backoff; the `finally` keeps it armed.
         this.recoveryAttempt++;
-        this.scheduleRecovery();
         return;
       }
-      this.recoveryAttempt = 0;
       await this.queue.retry();
+      // Reset the ladder on GAMEPLAY coming back, not on the bootstrap succeeding.
+      // `retry()` can decline (offline, a lost lease) or re-pause inside the flush it
+      // starts, and a condition that answers every bootstrap cheerfully and every batch
+      // with a conflict then resets the counter on each pass — pinning recovery at its
+      // shortest delay and turning the backoff into a poll.
+      if (this.available) this.recoveryAttempt = 0;
+      else this.recoveryAttempt++;
     } catch {
       this.recoveryAttempt++;
-      this.scheduleRecovery();
     } finally {
       this.recoveryInFlight = false;
+      // The invariant, enforced on EVERY exit — including the early returns above and
+      // any added later. Nothing in this method may leave gameplay paused with no
+      // attempt pending.
+      this.ensureRecoveryArmed();
     }
   }
 
+  /** A CAS race resolves in ONE reload: bootstrap replaces the projection, the rebase
+   *  rebuilds the envelope against the new version, and the retry lands. So a conflict
+   *  that keeps coming back is not a race that can be won by trying harder — it is a
+   *  standing condition (an operation marker the server has not expired yet, another
+   *  writer mid-handoff), and retrying it immediately is a hot loop: each turn spends a
+   *  bootstrap and a batch, applies nothing, and renews the lease on the way past, so
+   *  the account looks alive from the outside while its version never moves. Past this
+   *  burst the conflict is handed to the ordinary recovery backoff. */
+  private static readonly CONFLICT_RELOAD_BURST = 3;
+
   private async reloadAfterConflict(): Promise<void> {
+    if (this.conflictReloading) return;
+    this.conflictReloading = true;
     try {
       let bootstrap = await api.bootstrap(true);
       bootstrap = await this.recoverResumableRaid(bootstrap);
@@ -431,15 +551,30 @@ export class EconomyClient {
       this.optimistic.clear();
       this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
       this.syncOwnershipPolling(bootstrap.writer.status);
+      if (++this.conflictReloads > EconomyClient.CONFLICT_RELOAD_BURST) {
+        this.recoveryAttempt++;
+        this.queue.disable("state_conflict_loop");
+        return;
+      }
       await this.queue.retry();
     } catch {
+      // This bootstrap failing is ordinary — it runs over the same network the batch
+      // just failed on. What was not ordinary is that reporting it used to be ALL that
+      // happened: the 409 had already paused the queue without emitting
+      // `onUnavailable`, so nothing was ever scheduled and the farm stayed dead until
+      // the player reloaded by hand. The `finally` now guarantees the retry.
+      this.recoveryAttempt++;
       this.onGameplayUnavailable?.("state_conflict");
+    } finally {
+      this.conflictReloading = false;
+      this.ensureRecoveryArmed();
     }
   }
 
   private enqueue(command: GameplayCommand, delta: Partial<OptimisticDelta> = {}): number | null {
     if (this.options.requireReady && !this.available) {
       this.onGameplayUnavailable?.("gameplay_unavailable");
+      this.nudgeRecovery();
       return null;
     }
     try {
@@ -458,11 +593,14 @@ export class EconomyClient {
         localUnitId: delta.localUnitId,
         localZombieHarvests: delta.localZombieHarvests,
         localObjectId: delta.localObjectId,
+        bossTokens: delta.bossTokens,
+        bossTokenRunId: delta.bossTokenRunId,
       });
       this.reconcile();
       return sequence;
     } catch {
       this.onGameplayUnavailable?.("gameplay_unavailable");
+      this.nudgeRecovery();
       return null;
     }
   }
@@ -471,6 +609,19 @@ export class EconomyClient {
    * Callers must use a semantic command or a server-derived quest/raid reward. */
   record(_currency: api.Currency, _delta: number, _reason: string): void {}
 
+  /** Fold a plow/plant into the command already waiting at the back of the outbox.
+   *
+   *  The farmer emits one of these per plot as it works down the queue, and a drag-paint
+   *  stroke can cover the whole board. Unmerged, that is hundreds of semantic commands,
+   *  which the Worker's rolling-minute budget cannot pass — so the outbox spends minutes
+   *  draining behind 429s, `settle()` holds the next invasion launch behind it, and any
+   *  pause along the way strands the rest of the queue. Merged, one stroke is one
+   *  command and the whole field clears in a single request.
+   *
+   *  Only the LAST pending command is a candidate, so a fold can never jump a plot
+   *  ahead of a harvest, a purchase, or anything else queued between the two.
+   *
+   *  Returns the sequence it merged into, or null when it must be enqueued on its own. */
   private coalesceFarmPlot(input: FarmActionInput): number | null {
     let folded: GameplayCommand | null = null;
     const sequence = this.queue.coalesceLast((last) => {
@@ -478,20 +629,21 @@ export class EconomyClient {
         if (last.type !== "farm.plow_many" || last.plots.length >= FARM_BULK_LIMIT) return null;
         folded = { ...last, plots: [...last.plots, { oc: input.oc, or: input.or }] };
       } else if (input.type === "plant") {
+        // One crop per command: a stroke plants one thing, and a player who switches
+        // seed mid-queue simply starts a new command.
         if (last.type !== "farm.plant_many" || last.cropKey !== (input.cropKey ?? "")) return null;
         if (last.plots.length >= FARM_BULK_LIMIT) return null;
         folded = {
           ...last,
           plots: [...last.plots, {
-            oc: input.oc,
-            or: input.or,
-            fertilized: !!input.fertilized,
-            variant: input.variant,
+            oc: input.oc, or: input.or, fertilized: !!input.fertilized, variant: input.variant,
           }],
         };
       }
       return folded;
     });
+    // Keep the rejection-reporting map pointed at what was actually sent, so a refusal
+    // names the merged command rather than the one-plot version it started as.
     if (sequence !== null && folded) this.commandsBySequence.set(sequence, folded);
     return sequence;
   }
@@ -500,9 +652,13 @@ export class EconomyClient {
     input: FarmActionInput,
     optimistic: { gold?: number; brains?: number; xp?: number; powderCrystals?: Partial<Record<PowderColor, number>> }
   ): void {
+    // Plow and plant always go out in their BULK form, even for a single plot, so the
+    // next plot the farmer finishes has something to fold into.
     if (input.type === "plow" || input.type === "plant") {
       const merged = this.coalesceFarmPlot(input);
       if (merged !== null) {
+        // The fold carries the plot's own cost and XP onto the command it joined, so the
+        // optimistic balance still moves per plot and still unwinds as one unit.
         const pending = this.optimistic.get(merged);
         if (pending) {
           pending.gold += optimistic.gold ?? 0;
@@ -686,6 +842,17 @@ export class EconomyClient {
     this.enqueue({ type: "object.status", instanceId, status });
   }
 
+  /** Move a fallen zombie on or off a Memorial Statue. Server-owned so a visitor
+   *  sees the same statue the owner does — the visit projection reads the
+   *  authoritative graveyard, never this client's presentation blob. Costs nothing,
+   *  so there is no optimistic balance to apply. */
+  submitMemorial(command:
+    | { type: "memorial.enshrine"; instanceId: string; unitId: string; name?: string }
+    | { type: "memorial.clear"; instanceId: string }
+  ): void {
+    this.enqueue(command);
+  }
+
   submitTreeHarvest(instanceIds: string[], optimisticGold = 0): void {
     if (instanceIds.length) this.enqueue(
       { type: "object.harvest_trees", instanceIds },
@@ -748,10 +915,40 @@ export class EconomyClient {
     this.enqueue({ type: "tutorial.complete" }, { gold: 200 });
   }
 
+  /** Report a Boss Token the client rolled on a harvest. The token is already showing
+   *  on the farm; this only records it, and the server does not second-guess the roll.
+   *
+   *  Folded into a pending grant for the same run exactly like a drag-paint stroke:
+   *  an Insta-Harvest over a full field can turn up a dozen tokens in one frame, and
+   *  the Worker's budget counts SEMANTIC commands. */
+  submitEpicBossToken(runId: string, count = 1): void {
+    if (!runId || count < 1) return;
+    let folded: GameplayCommand | null = null;
+    const merged = this.queue.coalesceLast((last) => {
+      if (last.type !== "epicBoss.token" || last.runId !== runId) return null;
+      if ((last.count ?? 1) + count > EPIC_BOSS_TOKEN_GRANT_LIMIT) return null;
+      folded = { ...last, count: (last.count ?? 1) + count };
+      return folded;
+    });
+    if (merged !== null && folded) {
+      const pending = this.optimistic.get(merged);
+      if (pending) pending.bossTokens = (pending.bossTokens ?? 0) + count;
+      this.commandsBySequence.set(merged, folded);
+      return;
+    }
+    this.enqueue({ type: "epicBoss.token", runId, count }, { bossTokens: count, bossTokenRunId: runId });
+  }
+
   submitQuest(_questId: string): void {
     // Completion and reward happen inside the accepted command/raid transaction.
   }
 
+  /** Collect a finished daily/weekly quest. Unlike the catalog quests above this IS a
+   *  real command, because a periodic reward is only paid when the player asks for it.
+   *
+   *  Flushed immediately rather than batched: the player pressed a button expecting XP,
+   *  and the reward is refused outright once the period rolls over — so a claim sitting
+   *  in a 30s window near midnight would be silently worth nothing. */
   submitPeriodicQuestClaim(scope: "daily" | "weekly", questId: string, xp: number): boolean {
     const sequence = this.enqueue({ type: "quest.periodic_claim", scope, questId }, { xp });
     if (sequence === null) return false;
@@ -783,15 +980,23 @@ export class EconomyClient {
       }
       throw error;
     }
-    this.base = result.balance;
+    // An EXPIRED session settles with a body carrying none of these — no balance, no
+    // lastRaidAt, no outcome — because the server zeroes it without replaying the
+    // fight. Adopting them unconditionally set `base` to undefined (silently skipping
+    // every later reconcile) and pushed NaN through the cooldown clock. Guard them the
+    // way the other two settlement call sites already do.
+    if (result.balance) this.base = result.balance;
     if (result.inventory) this.serverInv = { ...result.inventory };
     if (result.storage) this.state.syncStorage(result.storage.received, result.storage.stored);
     if (result.raidProgress) this.state.syncRaidProgress(result.raidProgress);
-    this.state.syncRaidCooldown(serverTimestampToClient(
+    if (result.lastRaidAt != null) this.state.syncRaidCooldown(serverTimestampToClient(
       result.lastRaidAt,
       result.serverTime ?? Date.now(),
     ));
     this.onQuestChanges?.(result.questChanges ?? []);
+    // An invasion win is the only thing that can advance an invasion daily, and it
+    // never crosses the command lane — so this settlement is the sole place the
+    // periodic panel learns about it.
     if (result.periodicQuests !== undefined) this.onPeriodicQuestState?.(result.periodicQuests);
     this.reconcile();
     this.onRaidSettled?.(result);
@@ -824,7 +1029,7 @@ export class EconomyClient {
     this.adoptGameplay(bootstrap.gameplay, {}, {}, [], bootstrap.serverTime);
     this.syncOwnershipPolling(bootstrap.writer.status);
     if (bootstrap.writer.status !== "mine") {
-      this.onWriterReplaced?.();
+      this.gateOnWriterReplaced();
       throw new Error("writer_replaced");
     }
     // Re-check the queue state so maintenance mode, a protocol gate, or ownership
@@ -863,7 +1068,7 @@ export class EconomyClient {
     this.onQuestChanges?.(result.questChanges);
     this.onQuestState?.({ completed: result.quests.completed, progress: result.quests.progress, questChanges: result.questChanges });
     const serverTime = result.serverTime ?? Date.now();
-    this.onEpicBossState?.(epicBossRunToClient(result.event, serverTime));
+    this.onEpicBossState?.(this.withPendingBossTokens(epicBossRunToClient(result.event, serverTime)));
     if (result.lastRaidAt != null) this.state.syncRaidCooldown(serverTimestampToClient(
       result.lastRaidAt,
       serverTime,
@@ -875,9 +1080,14 @@ export class EconomyClient {
     event: NonNullable<BootstrapResponse["gameplay"]["epicBoss"]>,
     balance: api.Balance,
     serverTime = Date.now(),
+    /** Sent when the activation re-opened this boss's finished quests. */
+    quests?: import("./protocol").QuestProjection,
   ): void {
     this.base = balance;
-    this.onEpicBossState?.(epicBossRunToClient(event, serverTime));
+    this.onEpicBossState?.(this.withPendingBossTokens(epicBossRunToClient(event, serverTime)));
+    // After onEpicBossState, never before: that call is what marks the event active,
+    // and a reopened epic quest is only eligible for the rail while it is.
+    if (quests) this.onQuestState?.({ completed: quests.completed, progress: quests.progress, questChanges: [] });
     this.reconcile();
   }
 
@@ -975,14 +1185,39 @@ export class EconomyClient {
       return bootstrap;
     }
     if (pending?.sessionId === resumable.sessionId) {
-      await this.sendRaidFinish(pending);
-      this.clearPendingRaid(pending.sessionId);
+      // Every one of these throws used to propagate, and this runs inside EVERY
+      // bootstrap — boot, the recovery backoff, the CAS reload, the writer re-claim,
+      // refreshAuthoritative. A finish the server will never accept (400
+      // `bad_roster_partition`, or a persisted outcome a newer bundle validates
+      // differently) therefore failed the whole bootstrap, and because the throw jumped
+      // over `clearPendingRaid` the same transcript was still there to fail the next
+      // one. Nothing else settles the session either, so the account could not load at
+      // all until the server's own 15-minute session TTL expired it — a quarter of an
+      // hour of "reconnecting" for a fight the player had already finished.
+      try {
+        await this.sendRaidFinish(pending);
+        this.clearPendingRaid(pending.sessionId);
+      } catch (error) {
+        // Retryable means the transcript is still good and only the wire failed: keep
+        // it and let the backoff bring us back. Anything else will be refused for as
+        // long as it exists, so it is dropped — the fight's rewards are lost either
+        // way, and keeping it only spreads that loss over everything else.
+        if (this.raidFinishRetryable(error)) this.scheduleRecovery();
+        else this.clearPendingRaid(pending.sessionId);
+        return bootstrap;
+      }
     } else {
       // Second gate, independent of the caller: a session this document is fighting is
       // never abandonable, even from a boot-time bootstrap.
       if (!mayAbandon || this.liveRaidSessionId === resumable.sessionId) return bootstrap;
       if (pending) this.clearPendingRaid(pending.sessionId);
-      await api.raidFinish(resumable.sessionId, 0, [{ seq: 1, tick: 0, type: "retreat" }]);
+      // Same rule for the abandon: settling someone else's orphaned session is a
+      // courtesy, and it must not be able to stop this document from booting.
+      try {
+        await api.raidFinish(resumable.sessionId, 0, [{ seq: 1, tick: 0, type: "retreat" }]);
+      } catch {
+        return bootstrap;
+      }
     }
     return api.bootstrap(true);
   }
@@ -1026,6 +1261,9 @@ export class EconomyClient {
   async syncShop(_size: number, _climates: string[]): Promise<void> {}
 
   private adoptCommandResponse(response: CommandBatchResponse): void {
+    // An applied batch is the only proof the conflict cleared, so it is the only thing
+    // allowed to re-open the reload burst.
+    this.conflictReloads = 0;
     const aliases: Record<string, string> = {};
     const objectAliases: Record<string, string> = {};
     const rejectedObjectIds: string[] = [];
@@ -1036,6 +1274,9 @@ export class EconomyClient {
         if (command?.type === "roster.combine_start") this.combineParents.delete(command.potId);
         this.onCommandRejected?.(command, result.error);
       }
+      // A bulk farm command that mostly worked. Report it once with the plot count, so
+      // "you ran out of gold twelve plots into the field" reaches the player without
+      // twelve separate toasts — and without the silence a per-plot-only path would give.
       if (result.status === "applied" && result.rejectedPlots) {
         this.onBulkFarmPartial?.(result.rejectedPlots, result.rejectedPlotError ?? "no_effect");
       }
@@ -1088,6 +1329,9 @@ export class EconomyClient {
     this.state.zombiePotBought = gameplay.zombiePotBought ?? false;
     this.state.syncRaidProgress(gameplay.raids.progress);
     this.state.syncRaidCooldown(serverTimestampToClient(gameplay.raids.lastRaidAt, serverTime));
+    // Outside the deferStructural gate below: periodic quests are pure display state
+    // with no dependency on the farm reconcile, so holding them back would leave the
+    // panel stale for the whole time a structural pass is in flight.
     this.onPeriodicQuestState?.(gameplay.periodicQuests ?? null);
     const deferStructural = this.commandsBySequence.size > 0;
     const plowed: api.FarmState["plowed"] = [];
@@ -1160,10 +1404,31 @@ export class EconomyClient {
         this.queue.size === 0,
       );
       this.deferredRosterAliases = {};
-      this.onEpicBossState?.(epicBossRunToClient(gameplay.epicBoss, serverTime, clientTime));
+      this.onEpicBossState?.(this.withPendingBossTokens(
+        epicBossRunToClient(gameplay.epicBoss, serverTime, clientTime)
+      ));
       this.onTutorialState?.(gameplay.tutorialRewarded);
     }
     this.reconcile();
+  }
+
+  /** Layer still-unsent Boss Tokens back onto an authoritative run.
+   *
+   *  The client mints these itself (submitEpicBossToken) and shows them immediately, so
+   *  a projection built before the grant reached the server legitimately does not know
+   *  about them; adopting it raw would drop the counter back and then re-climb it.
+   *  adoptGameplay's structural defer gate hides most of those, but the direct epic-boss
+   *  adopts (activation, fight result) have no such gate. Grants naming a different run
+   *  are dropped — that event is over, and its tokens with it. */
+  private withPendingBossTokens(
+    run: ReturnType<typeof epicBossRunToClient>
+  ): ReturnType<typeof epicBossRunToClient> {
+    if (!run || run.completedAt || Date.now() >= run.expiresAt) return run;
+    let pending = 0;
+    for (const delta of this.optimistic.values()) {
+      if (delta.bossTokens && delta.bossTokenRunId === run.runId) pending += delta.bossTokens;
+    }
+    return pending ? { ...run, tokenCount: run.tokenCount + pending } : run;
   }
 
   private reconcile(): void {
@@ -1206,3 +1471,4 @@ export class EconomyClient {
     this.state.syncZombieColorDyes(zombieColorDyes);
   }
 }
+

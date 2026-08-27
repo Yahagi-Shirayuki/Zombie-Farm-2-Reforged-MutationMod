@@ -277,11 +277,19 @@ export async function release(
 ): Promise<boolean> {
   if (!credential) return false;
   const hash = await tokenHash(credential.token);
+  // An EXPIRED operation marker must not block the release. `acquire` and
+  // `beginOperation` both treat a marker past its TTL as absent; this clause was the
+  // odd one out, so an orphaned marker (a request that never reached `endOperation`)
+  // made the holder permanently unable to hand its own lease back. Sign-out and
+  // tab-close then stopped freeing it and the next device had to wait out the full
+  // idle window instead of taking an immediate handoff.
   const result = await db.prepare(`UPDATE account_runtime_v3 SET
       writer_device_id=NULL,writer_session_id=NULL,writer_token_hash=NULL,
-      writer_last_activity_at=?,account_version=account_version+1,updated_at=?
+      writer_last_activity_at=?,account_version=account_version+1,
+      active_batch_id=NULL,active_batch_expires_at=0,updated_at=?
     WHERE account_id=? AND writer_device_id=? AND writer_session_id=?
-      AND writer_generation=? AND writer_token_hash=? AND active_batch_id IS NULL`)
-    .bind(now, now, accountId, credential.clientId, sessionId, credential.generation, hash).run();
+      AND writer_generation=? AND writer_token_hash=?
+      AND (active_batch_id IS NULL OR active_batch_expires_at<=?)`)
+    .bind(now, now, accountId, credential.clientId, sessionId, credential.generation, hash, now).run();
   return (result.meta.changes ?? 0) === 1;
 }

@@ -84,9 +84,9 @@
   "amount": 0,
   "perPurchase": 1,
   "giftZombieKey": "",
- "usableOnFarm": false,
- "info": "Invade immediately!",
- "flavorText": "Use this to remove the wait time for an invasion.",
+  "usableOnFarm": false,
+  "info": "Invade immediately!",
+  "flavorText": "Use this to remove the wait time for an invasion.",
   "icon": "invasion_voucher.png"
  },
  {
@@ -94,7 +94,7 @@
   "name": "Brain Ticket",
   "cost": 10000,
   "brainsNeeded": false,
-  "level": 0,
+  "level": 20,
   "effect": "other",
   "amount": 0,
   "perPurchase": 1,

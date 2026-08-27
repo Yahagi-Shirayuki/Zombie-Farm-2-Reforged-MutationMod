@@ -7,7 +7,7 @@
 //
 // EVERYTHING HERE REQUIRES A WIN. Resurrections and ability kills happen during a
 // losing fight too, but counting them would make deliberately throwing an invasion the
-// cheapest way to farm "revive 25 zombies" ? the fight is short, the roster survives,
+// cheapest way to farm "revive 25 zombies" — the fight is short, the roster survives,
 // and the cooldown is the only cost. Gating on the win removes that entirely.
 
 import type { RaidFeats } from "./types";
@@ -15,7 +15,7 @@ import type { RaidFeats } from "./types";
 /** Display name a quest names an ability by. Both tiers of a move share one subject:
  *  a quest asks you to kill something with an EXPLOSION, and whether that came from
  *  Explode or Explode Ver. 2 is a detail of which zombie you brought. (The boss-kill
- *  quest is still implicitly tier 4, because plain Explode cannot hit a boss at all ?
+ *  quest is still implicitly tier 4, because plain Explode cannot hit a boss at all —
  *  see the hitBoss guard in BattleSim.) */
 export const ABILITY_SUBJECT: Readonly<Record<string, string>> = {
   explode: "Explosion",
@@ -29,7 +29,7 @@ export const EXPLODED_MINI_SUBJECT = "Exploded Mini";
 
 export interface FeatQuestInput {
   win: boolean;
-  /** Nobody fell ? the same condition the perfect-game event already uses. */
+  /** Nobody fell — the same condition the perfect-game event already uses. */
   perfect: boolean;
   /** The invasion ran on a Brain Ticket. Server-pinned on the session. */
   elite: boolean;
@@ -44,7 +44,7 @@ export interface FeatQuestEvent {
 }
 
 /** Elite and technique events for one settled invasion. The ordinary
- *  win / perfect-game / loot events are NOT produced here ? they already have their
+ *  win / perfect-game / loot events are NOT produced here — they already have their
  *  own call sites on both sides, and moving them would change existing behaviour. */
 export function raidFeatQuestEvents(input: FeatQuestInput): FeatQuestEvent[] {
   if (!input.win) return [];

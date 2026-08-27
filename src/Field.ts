@@ -4,21 +4,29 @@
 //   plowed -> planted -> (grows) -> harvest -> dirt (crop) / hole (zombie) -> re-till.
 import { Assets, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import {
-  DIRT_FILE, GameAssets, HOLE_FILE, multiplyObjectTint, objectTint, PlaceableDef, PLOWED_FILE, SEED_FILE,
+  canMirrorObject, DIRT_FILE, GameAssets, HOLE_FILE, multiplyObjectTint, objectTint,
+  normalizeTurn, PlaceableDef, PLOWED_FILE, SEED_FILE, turnArt, turnCount, turnFlip,
 } from "./assets";
 import { clampPointToGrid, footprintOrigin, gridToScreen, HH, HW, screenToGrid, TILE_H, TILE_W, tileCenter } from "./iso";
 import { setFootprint, sortLayer } from "./depthSort";
 import { makeLight, OBJECT_GLOWS } from "./lighting";
 import { mintObjectId, objectIdFloor } from "./objectIds";
-import { leafTexture, ParticleConfig, ParticleField } from "./raid/Particles";
-import type { PlacedObjectSave, PlotSave } from "./save/schema";
-import { plotsTouch } from "./zombie/cropMutations";
-import { isZombieColorMixerBucketKey } from "./zombieColorMixerBucket";
-import { BASE } from "./base";
 import {
-  COST_AVOID, COST_GROUND, COST_PATH, isGate, objectWalkCost, wormholeSide,
+  COST_AVOID,
+  COST_GROUND,
+  COST_PATH,
+  isGate,
+  objectWalkCost,
+  wormholeSide,
 } from "./pathCosts";
 import type { Cell, PathOptions } from "./pathfind";
+import { leafTexture, ParticleConfig, ParticleField, petalTexture } from "./raid/Particles";
+import type { PlacedObjectSave, PlotSave } from "./save/schema";
+import { plotsTouch } from "./zombie/cropMutations";
+import { sanitizeFallenUncapped, type FallenZombie } from "./zombie/memorial";
+import { buildStatueRig } from "./zombie/statueRig";
+import { isZombieColorMixerBucketKey } from "./zombieColorMixerBucket";
+import { BASE } from "./base";
 
 export const PLOT = 4; // tiles per plot side
 export const DIAMINT_KEY = "diamint";
@@ -46,6 +54,42 @@ export function invasiveMintRadiusFor(readyAt: number, now: number): number {
   return Math.floor((now - firstSpreadAt) / INVADING_MINT_GROW_MS) + 1;
 }
 
+/** The tiles a placeable actually covers in a given orientation.
+ *
+ *  The Rotate tool's "flip" is a horizontal mirror of the art — a reflection of the
+ *  screen x axis. In this iso projection screen x is (col - row) and screen y is
+ *  (col + row), so mirroring x negates (col - row) and leaves (col + row) alone:
+ *  that is EXACTLY a col<->row swap about the object's origin tile. (It is the same
+ *  reflection extensionTiles already applies to a fence's overhang offsets.)
+ *
+ *  So a turned object's footprint is its def rectangle TRANSPOSED. Anything
+ *  asymmetric — a 1x5 hedge, a 4x1 banner, a 5x3 tractor — genuinely blocks a
+ *  different set of tiles once it is turned, and the art moves with them. Squares
+ *  are unaffected, which is why this went unnoticed: 371 of the 460 placeables are
+ *  square, and the 89 that are not left an invisible barrier lying across the
+ *  diagonal the hedge USED to run down. */
+export function objectFootprint(
+  def: Pick<PlaceableDef, "tileW" | "tileH">, flipped: boolean,
+): { w: number; h: number } {
+  return flipped
+    ? { w: def.tileH, h: def.tileW }
+    : { w: def.tileW, h: def.tileH };
+}
+
+/** The orientation a saved object comes back in.
+ *
+ *  Two fields, because they mean different things: `rotation` is the old mirror flag
+ *  every object still writes, and `turn` is the corner index a piece with its own art
+ *  per corner writes instead (the road bends). A bend saved before those corners
+ *  existed carries `rotation: 1` — a mirror of the ONE corner it had, which was the
+ *  same corner drawn a few pixels out of line — so it restores unturned rather than
+ *  silently becoming a different corner. */
+export function savedTurn(
+  def: Pick<PlaceableDef, "turns">, s: { rotation?: number; turn?: number },
+): number {
+  return def.turns ? (s.turn ?? 0) : (s.rotation ? 1 : 0);
+}
+
 // Fertilize leaves: the CONTINUOUS effect a fertilized crop shows the whole time it
 // stays fertilized. GROUND TRUTH (`-[Tile applyFarmParticles]`): a cocos2d
 // `CCParticleFlower` emitter textured with leafFX.png, ~3 leaves, ~0.75/sec, life ~4s,
@@ -68,6 +112,53 @@ const FERTILIZE_FX: ParticleConfig = {
 };
 const FERT_EMIT_MS = 900; // one leaf ≈ every 0.9s per fertilized crop (source ~0.75/s)
 const FERT_CANOPY_DY = 52; // leaves emit this far above the crop's ground contact
+
+// Falling blossom, for the Sakura ground skin — the one climate that dresses the
+// farm with WEATHER rather than only with paint and scenery. Nothing in ZF2 does
+// this; the source has no ambient climate effect of any kind, so the numbers below
+// are authored rather than recovered.
+//
+// The petals fall over the farm itself, not just past its edges, so they are seeded
+// uniformly across the whole field rectangle rather than along its top edge. That
+// is what keeps the density even: a top-edge curtain with a survivable lifespan
+// only ever fills the top of a 70x70 farm, and a lifespan long enough to cross one
+// costs many times the particles for the same look. The price is that a petal
+// appears mid-air rather than blowing in, which at 13px and 0.9 alpha is not a
+// thing the eye catches.
+const SAKURA_PETAL_FX: ParticleConfig = {
+  maxParticles: 1, // emitted one at a time on a cadence (see petalEmitMs)
+  angle: -90, angleVariance: 22, // downward, fanning slightly
+  speed: 21, speedVariance: 9,
+  // A steady crosswind (gravityx) plus a gentle downward pull. cocos is y-up, so a
+  // NEGATIVE gravityy accelerates the petal down the screen.
+  gravityx: 9, gravityy: -11,
+  particleLifespan: 5, particleLifespanVariance: 1.4,
+  startParticleSize: 16, finishParticleSize: 13,
+  // Zero: each petal is positioned individually across the view (randomPetalOrigin).
+  sourcePositionVariancex: 0, sourcePositionVariancey: 0,
+  // A rose several shades DEEPER than either the blossom art (#ffa2e7) or the
+  // ground it falls on. Matching the canopy is the obvious choice and the wrong
+  // one: the Sakura skin paints the whole farm pale pink, so a petal the colour of
+  // the tree it fell off is pink on pink and disappears — the fall only reads if
+  // the petals are darker than everything behind them.
+  startColorRed: 0.933, startColorGreen: 0.435, startColorBlue: 0.659, startColorAlpha: 0.95,
+  finishColorAlpha: 0,
+  rotatePerSecond: 65, // petals tumble as they fall
+  blendFuncDestination: 0, // normal, NOT additive — additive turns the pink to white glare
+};
+const SAKURA_TERRAIN = "sakura";
+// Petals alive at once. A flat count, seeded across WHAT THE CAMERA CAN SEE rather
+// than across the farm, which is what makes it flat: spreading a per-tile density
+// over a 70x70 farm puts almost every petal off-screen, so the budget buys
+// invisible weather and the visible fall thins out the more land you own. Seeding
+// the view instead keeps the on-screen density identical at every farm size and
+// every zoom — the petals live in world space, so zooming out shrinks them and
+// widens their spread together, exactly as real distance would.
+const PETAL_TARGET_LIVE = 60;
+// Fraction of a screen height petals are ALSO seeded above the top of the view, so
+// they visibly blow in from off-camera rather than every petal on screen having
+// popped into existence inside it.
+const PETAL_SPAWN_HEADROOM = 0.25;
 
 // Fruit trees are packed closely enough that a full-sprite rectangular tap target
 // makes the transparent space beside one trunk cover its neighbours. Keep a broad
@@ -95,6 +186,12 @@ const FENCE_FRONT_OFFSET_X = 0;
 const FENCE_FRONT_OFFSET_Y = 12;
 const FENCE_BACK_SORT_BIAS = -0.12;
 const FENCE_FRONT_SORT_BIAS = 0.12;
+
+// The stone zombie standing on a Memorial Statue shares the plinth's footprint, so
+// it needs a nudge to draw in FRONT of it. Kept under every actor bias (pets 0.4,
+// zombies 0.5, farmer 0.6) so a character crossing the memorial's tiles still walks
+// in front of the statue rather than behind it.
+const MEMORIAL_RIG_BIAS = 0.2;
 
 export interface CropConfig {
   key: string;
@@ -131,7 +228,11 @@ export interface HarvestResult {
   sell: number;
   xp: number;
   growMs: number;
+  /** The plants.json crop key. `name` is the display string and is not stable enough to
+   *  match on — the Epic Boss favourite-crop pairings key off this.
+   *  Carried under BOTH names: this fork's callers read `cropKey`, upstream's read `key`. */
   cropKey: string;
+  key: string;
   name: string;
   isZombie: boolean;
   fertilized: boolean;
@@ -144,6 +245,33 @@ export interface HarvestResult {
   invasiveStage?: 1 | 2;
   removalFee?: number;
 }
+/** Crops whose GROWING art is a piece of ground, not something standing on it.
+ *
+ *  The ordinary split render (see layoutCrop) puts the plant half in the depth-sorted
+ *  entityLayer so a tall crop can legitimately hide an actor walking behind it. The
+ *  Water Lily's middle stage is a pond: one flat isometric diamond filling the plot
+ *  with nothing standing above the water, so being sorted at all means the farmer and
+ *  any zombie crossing the plot vanish under it. That stage is treated like the flat
+ *  seed stage instead — cropSeedLayer, no footprint, never sorts — so characters
+ *  always walk OVER it.
+ *
+ *  The exception stops at the RIPE stage: that art grows a tall flower well clear of
+ *  the water, so it takes the ordinary split path like every other crop and is allowed
+ *  to occlude whatever stands behind it.
+ *
+ *  Keyed by CROP KEY, in code, on purpose: plants.json is regenerated wholesale by
+ *  tools/prep_market.py, which silently drops hand-added fields (see
+ *  tools/reforge_economy.py on the same trap). */
+const FLAT_GROWTH_CROPS: ReadonlySet<string> = new Set(["water_lily"]);
+
+/** Does this stage render as pure ground — flat, unsorted, below every entity? True
+ *  for the shared seed stage of any crop, and for the pre-ripe stages of the crops
+ *  above (never their final stage). */
+function isFlatStage(cfg: CropConfig, stageFile: string): boolean {
+  if (stageFile === SEED_FILE) return true;
+  return FLAT_GROWTH_CROPS.has(cfg.key) && stageFile !== cfg.stages[cfg.stages.length - 1];
+}
+
 export const CARROT: CropConfig = {
   key: "carrot",
   name: "Carrots",
@@ -232,7 +360,9 @@ export interface TillTarget {
 }
 
 export type TillHandleDirection = "col-" | "col+" | "row-" | "row+";
-type ObjectWork = "busy" | "ready";
+/** What a working object is doing, when that changes its art: "busy" = running,
+ *  "ready" = finished and waiting to be collected. Null/absent = idle. */
+export type ObjectWork = "busy" | "ready";
 
 // A placed farm object (tree/decor) occupying a tileW x tileH footprint.
 interface FarmObject {
@@ -255,17 +385,32 @@ interface FarmObject {
   // Fruit trees only: readyAt = epoch ms the fruit ripens; ready = fruit present.
   readyAt: number;
   ready: boolean;
-  // Working functional objects only: switches to busy/ready art without changing the
-  // object's footprint or saved identity.
+  // Functional objects that LOOK different while they work (the Zombie Pot: lid on
+  // while a combine cooks, the new zombie's arm out once it is done). Driven from
+  // the owning system through setObjectWork, since the job lives outside the Field.
   work?: ObjectWork;
   // Rotated by the Rotate tool: a horizontal mirror (flip on the vertical axis), so
-  // a directional decor (fences!) can face either diagonal. The footprint is a
-  // rectangle centered under the sprite, so mirroring never moves which tiles it
-  // occupies — collision/depth are unaffected; only the art flips.
+  // a directional decor (fences! hedges!) can face either diagonal. In iso that
+  // mirror reflects col<->row, so a flipped object's footprint is its def rectangle
+  // TRANSPOSED — see objectFootprint. Every occupancy/anchor/depth read goes through
+  // that helper, never through def.tileW/tileH directly.
   flipped: boolean;
+  // Which orientation this object is in: an index into `def.turns` for a piece whose
+  // corners are separate art (the road bends), otherwise 0 or 1 for unmirrored /
+  // mirrored. `flipped` is DERIVED from it (turnFlip) and never set independently.
+  turn: number;
+  // Memorial Statue only: the zombie enshrined on it, and the stone rig drawn
+  // standing on its plinth. `memorialRig` is derived — rebuilt whenever `memorial`
+  // changes — so only the snapshot is ever persisted.
+  memorial?: FallenZombie;
+  memorialRig?: Container;
 }
 
 export class Field {
+  /** Fired with a Memorial Statue's occupant when the statue itself is removed from
+   *  the farm, so the graveyard takes the zombie back instead of losing them with
+   *  the object. Never fires for a load/restore, which rebuilds statues wholesale. */
+  onMemorialReleased: ((fallen: FallenZombie) => void) | null = null;
   readonly container = new Container();
   readonly groundLayer = new Container();
   readonly plotLayer = new Container();
@@ -299,6 +444,16 @@ export class Field {
   // leaves draw over crops/actors. The leaves are tinted per the fertilize colour.
   readonly fxLayer = new Container();
   private fx = new ParticleField(leafTexture());
+  // Sakura blossom, on its own field because a ParticleField owns ONE texture and
+  // petals are not leaves. Built on demand: every farm pays for the fertilize
+  // leaves, but only a farm actually wearing the Sakura skin should pay for a
+  // second canvas texture, container and pool. See tickSakuraPetals.
+  private petals: ParticleField | null = null;
+  private petalEmitMs = 0;
+  // What the camera can currently see, in world coordinates. main pushes this each
+  // frame (setViewBounds); until it does, the petals fall over the farm rectangle
+  // instead, which is what a headless test or the very first frame gets.
+  private viewBounds: { x0: number; y0: number; x1: number; y1: number } | null = null;
   // Night lights for glowing objects. main parents this into the NightLayer, which
   // erases them out of the darkness so a glow reveals the scene around it at night.
   readonly objectLights = new Container();
@@ -311,7 +466,14 @@ export class Field {
   private cursorFence = new Graphics();
   private cursorLabel!: Text;
   private objGhost = new Sprite(); // placement/move preview
-  private ghostFlipped = false; // current horizontal-flip of the placement ghost
+  private ghostTurnIndex = 0; // current orientation of the placement ghost (see turnArt)
+  // What the ghost is previewing, so flipping it in place can re-derive the flat-tile
+  // anchor offset (which is not symmetric about the footprint's bottom-center).
+  private ghostDef: PlaceableDef | null = null;
+  // The pointer tile the ghost was last resolved against, and the object being moved
+  // (if any), so a rotate can re-resolve the preview without a pointer move.
+  private ghostTile: { col: number; row: number } | null = null;
+  private ghostIgnoreId: string | undefined;
   // Field dimensions in tiles. Mutable: the Farm Size upgrade grows them at
   // runtime (origin stays at tile 0,0, so all existing plots/objects keep their
   // coordinates — the farm only gains land on its south/east edges).
@@ -320,6 +482,10 @@ export class Field {
   // Current ground/climate skin (a ground_index terrain key). The whole farm's
   // terrain tiles use this; changed by a Market → Upgrade → Ground purchase.
   climate = "grass";
+  // Fired after the skin actually changes — including when a save load applies a
+  // stored one. main uses it to re-theme everything OUTSIDE the farm (the scenery
+  // ring, the hills backdrop, the viewport filler) to match. See surroundings.ts.
+  onClimateChange: ((terrain: string) => void) | null = null;
 
   private ground: Sprite[][] = [];
   private plots = new Map<string, Plot>(); // key "oc,or"
@@ -331,8 +497,12 @@ export class Field {
   // that overhang into a neighbour tile). Keyed tile -> set of object ids blocking it,
   // so overlapping overhangs (two fences meeting) and removal stay correct.
   private fenceBlock = new Map<string, Set<string>>();
+  // Wormhole links, built on demand from the placed pads and dropped whenever
+  // placement changes. See portalMap().
   private portals: Map<string, Cell> | null = null;
+  // Whether a path has been laid anywhere on the farm. Same lifetime as `portals`.
   private paths: boolean | null = null;
+  // The shared search options handed to every walker. Same lifetime again.
   private walkOpts: PathOptions | null = null;
   private nextObjId = 1;
   private highlightedObj: string | null = null;
@@ -496,6 +666,7 @@ export class Field {
         this.fit(sp, ground[file], col, row, 1);
       }
     }
+    this.onClimateChange?.(terrain);
   }
 
   /** Grow the ground grid to at least nw x nh tiles (never shrinks). Only the
@@ -576,6 +747,10 @@ export class Field {
     return col >= 0 && row >= 0 && col < this.w && row < this.h;
   }
 
+  /** What one step onto this tile costs a walker: `COST_GROUND` for plots and bare
+   *  ground, less on a path, more in a pond, ruinously more through a hedge, and
+   *  `Infinity` for a solid object or anything off the field. src/pathCosts.ts owns
+   *  the table and explains the ordering. */
   tileCost(col: number, row: number): number {
     if (!this.inBounds(col, row)) return Infinity;
     const k = `${col},${row}`;
@@ -583,6 +758,12 @@ export class Field {
     const def = own ? this.objects.get(own)?.def : undefined;
     const cost = def ? objectWalkCost(def) : COST_GROUND;
     if (!Number.isFinite(cost)) return Infinity;
+    // A fence panel overhanging from a neighbour tile is as hard to cross as the
+    // fence it belongs to, even though nothing "owns" this tile for placement.
+    //
+    // A GATE is the deliberate hole in a fence run, and the last fence in the run
+    // bridges into the gate's tile (see objectAnchor) — so a gate keeps its own
+    // price. Otherwise sealing a pen would seal its door too.
     const ext = this.fenceBlock.get(k);
     if (ext?.size && !(def && isGate(def))) {
       let worst = cost;
@@ -595,22 +776,35 @@ export class Field {
     return cost;
   }
 
+  // Can an actor walk on this tile at all? Only solid objects and the field edge say
+  // no; a hedge is merely expensive. Used by pathfinding (farmer + wandering zombies).
   isPassable(col: number, row: number): boolean {
     return Number.isFinite(this.tileCost(col, row));
   }
 
+  /** Is this tile somewhere a walker would happily BE — grass, a path, a plot, even
+   *  a pond, but not a hedge or a closed gate? Destinations and arrival spots go
+   *  through this; only the pathfinder itself may cross a barrier. */
   isOpenGround(col: number, row: number): boolean {
     return this.tileCost(col, row) < COST_AVOID;
   }
 
+  /** Where stepping onto this tile comes out, for the tiles of a linked wormhole
+   *  pad — otherwise null. */
   portalExit(col: number, row: number): Cell | null {
     return this.portalMap().get(`${col},${row}`) ?? null;
   }
 
+  /** Is there a working wormhole pair on the farm? A walk that would otherwise be a
+   *  plain straight line has to be searched properly once there is, or the shortcut
+   *  is only ever taken by accident. */
   hasPortals(): boolean {
     return this.portalMap().size > 0;
   }
 
+  /** Is anything on the farm CHEAPER to walk on than bare ground — i.e. has a path
+   *  been laid? Same reason as hasPortals: a straight line over plain grass is
+   *  already the best route there is until a road exists to be drawn onto. */
   hasPaths(): boolean {
     if (this.paths === null) {
       this.paths = false;
@@ -621,18 +815,39 @@ export class Field {
     return this.paths;
   }
 
+  /** The options every walker on this farm searches with: its bounds, its terrain
+   *  prices, and its wormholes.
+   *
+   *  Held rather than rebuilt, because a wandering zombie asks for these once per
+   *  candidate destination — up to a dozen per re-target, for every unit on the farm —
+   *  and the answer only changes when the placement does. Callers that want a variant
+   *  (the farmer's `crossBarriers`) spread it into their own object, so the shared one
+   *  is never written to. */
   pathOptions(): PathOptions {
     if (this.walkOpts) return this.walkOpts;
     const opts: PathOptions = {
       inBounds: (c, r) => this.inBounds(c, r),
       cost: (c, r) => this.tileCost(c, r),
       minTileCost: COST_PATH,
+      // Hedges and shut gates are walls first and expensive second — see findPath.
+      // Callers opt into crossing one; by default a route simply goes round or not
+      // at all, which is what makes a fenced pen actually hold anything.
       avoidCost: COST_AVOID,
     };
+    // Only once a pair is actually placed: `portal` costs the search its heuristic,
+    // which is not a price worth paying on a farm with no wormholes on it.
     if (this.hasPortals()) opts.portal = (c, r) => this.portalExit(c, r);
     return (this.walkOpts = opts);
   }
 
+  // Wormhole pads: tile -> the tile stepping onto it comes out at. Rebuilt lazily
+  // after any placement change (see topologyChanged).
+  //
+  // Pads pair off A-with-B in placement order, so a farm with two of each has two
+  // independent links rather than one four-way junction; a lone pad with no partner
+  // is inert decor. Both tiles of a 1x2 pad lead to the same exit — the partner's
+  // origin tile — and the partner leads back, which makes the link an ordinary
+  // bidirectional edge in the search graph.
   private portalMap(): Map<string, Cell> {
     if (this.portals) return this.portals;
     const map = new Map<string, Cell>();
@@ -651,15 +866,18 @@ export class Field {
     }
     return (this.portals = map);
   }
-
   private linkPad(map: Map<string, Cell>, from: FarmObject, to: FarmObject) {
     const exit = { col: to.oc, row: to.or };
-    this.forEachFootprint(from.oc, from.or, from.def.tileW, from.def.tileH, (t) => map.set(t, exit));
+    const fp = objectFootprint(from.def, from.flipped);
+    this.forEachFootprint(from.oc, from.or, fp.w, fp.h, (t) => map.set(t, exit));
   }
-
+  // Placement changed, so what is derived from it may have. Called from the one
+  // place every add / move / rotate / remove funnels through.
   private topologyChanged() {
     this.portals = null;
     this.paths = null;
+    // Whether the shared options carry a `portal` is derived from the pads, so the
+    // options go too.
     this.walkOpts = null;
   }
 
@@ -1155,15 +1373,19 @@ export class Field {
     c.sprite.anchor.set(0.5, 1); // bottom-center = the crop's ground contact point
     c.sprite.scale.set(scale);
     c.sprite.position.set(p.x, baseY);
-    if (stageFile === SEED_FILE) {
-      // Flat seed stage: KEEP IT ON THE GROUND. This is the shared tilled-soil seed
+    // A FLAT_GROWTH_CROPS crop takes the seed stage's ground treatment while it grows:
+    // that art is ground, so it must not join the depth sort until it stands up (ripe).
+    if (isFlatStage(c.cfg, stageFile)) {
+      // KEEP IT ON THE GROUND. The usual case is the shared tilled-soil seed
       // (planted_dirt) used by veg crops — it reads like plain land, so it lives in
       // cropSeedLayer (above soil, below the entity layer) with NO footprint. It
       // never depth-sorts, so the farmer always walks over it just like the plowed
-      // dirt beneath it. No soil companion is needed (it IS soil); drop any leftover
-      // ground sprite from an earlier growth stage. Zombie crops have no flat seed —
-      // their first stage is already a standing wooden cross, so it falls through to
-      // the split path below and its overhang is protected like every other stage.
+      // dirt beneath it. No soil companion is needed (the whole art IS ground); drop
+      // any leftover ground sprite from an earlier growth stage. Zombie crops have no
+      // flat seed — their first stage is already a standing wooden cross, so it falls
+      // through to the split path below and its overhang is protected like every
+      // other stage. A FLAT_GROWTH_CROPS entry takes this branch for its growing
+      // stages too, and leaves it once it is ripe.
       c.sprite.texture = full;
       this.cropSeedLayer.addChild(c.sprite);
       if (c.groundSprite) { c.groundSprite.parent?.removeChild(c.groundSprite); c.groundSprite.visible = false; }
@@ -1208,6 +1430,7 @@ export class Field {
         xp: INVADING_MINT_CLEAR_XP,
         growMs: cfg.growMs,
         cropKey: cfg.key,
+        key: cfg.key,
         name: cfg.name,
         isZombie: false,
         fertilized: false,
@@ -1226,7 +1449,7 @@ export class Field {
     p.crop = undefined;
     p.state = cfg.isZombie ? "hole" : "dirt";
     this.fit(p.soil, this.assets.soil[cfg.isZombie ? HOLE_FILE : DIRT_FILE], oc, or, PLOT);
-    return { sell, xp: cfg.xp, growMs: cfg.growMs, cropKey: cfg.key, name: cfg.name, isZombie: !!cfg.isZombie,
+    return { sell, xp: cfg.xp, growMs: cfg.growMs, cropKey: cfg.key, key: cfg.key, name: cfg.name, isZombie: !!cfg.isZombie,
       fertilized, icon: cfg.harvestIcon ?? cfg.stages[cfg.stages.length - 1],
       variant: cfg.variant,
       zombieKey: cfg.isZombie ? cfg.key : undefined, mutationContext };
@@ -1298,6 +1521,7 @@ export class Field {
     }
     if (this.advanceInvasiveMint(now)) this.onInvasiveMintChanged?.();
     this.fx.update(dt);
+    this.tickSakuraPetals(dt);
     // Ripen fruit trees: when the timer elapses, swap to the fruit-bearing sprite.
     for (const o of this.objects.values()) {
       if (!o.def.harvestValue || o.ready || now < o.readyAt) continue;
@@ -1318,6 +1542,66 @@ export class Field {
     // front of it (whichever grew most recently "won").
     for (const p of this.plots.values())
       if (p.crop?.groundSprite) p.crop.groundSprite.zIndex = p.crop.sprite.zIndex;
+  }
+
+  /** Falling blossom over a farm wearing the Sakura ground skin.
+   *
+   *  Deliberately keeps ticking after the skin is changed away: petals already in
+   *  the air finish their fall and fade instead of vanishing the instant the player
+   *  buys a different ground. Once the last one dies the field is idle — an empty
+   *  pool — so there is nothing to tear down. */
+  private tickSakuraPetals(dt: number) {
+    const sakura = this.climate === SAKURA_TERRAIN;
+    if (sakura && !this.petals) {
+      this.petals = new ParticleField(petalTexture());
+      this.fxLayer.addChild(this.petals.container);
+    }
+    if (!this.petals) return;
+    if (sakura && this.w > 0 && this.h > 0) {
+      // One petal per (life / target) seconds keeps roughly `target` of them alive
+      // at once, since each lives `particleLifespan` and they are emitted evenly.
+      const emitMs = SAKURA_PETAL_FX.particleLifespan * 1000 / PETAL_TARGET_LIVE;
+      this.petalEmitMs -= dt * 1000;
+      // A loop, not an `if`: after a long frame more than one petal is due, and
+      // dropping the surplus would silently thin the fall out exactly when the
+      // frame rate is already suffering. Bounded so a paused tab cannot come back
+      // and emit a year of blossom in one go.
+      let guard = PETAL_TARGET_LIVE;
+      while (this.petalEmitMs <= 0 && guard-- > 0) {
+        const p = this.randomPetalOrigin();
+        this.petals.burst(SAKURA_PETAL_FX, p.x, p.y, 1);
+        this.petalEmitMs += emitMs;
+      }
+      if (guard <= 0) this.petalEmitMs = emitMs; // drop the rest of a long backlog
+    }
+    this.petals.update(dt);
+  }
+
+  /** Where the camera is looking, in world coordinates, so the blossom falls where
+   *  it can be seen. Cheap enough to push every frame; main derives it from the
+   *  world container's transform. */
+  setViewBounds(x0: number, y0: number, x1: number, y1: number) {
+    this.viewBounds = { x0, y0, x1, y1 };
+  }
+
+  /** A uniformly random point to drop a petal from: across the visible world, and
+   *  some way above the top of it so petals also drift in from off-camera.
+   *
+   *  With no view yet, falls back to the farm itself — uniform in TILE space, not
+   *  in the bounding box, because the field is an iso diamond and seeding its box
+   *  would pile three quarters of the petals off the land to either side. */
+  private randomPetalOrigin(): { x: number; y: number } {
+    const v = this.viewBounds;
+    if (!v) {
+      const at = gridToScreen(Math.random() * this.w, Math.random() * this.h);
+      return { x: at.x, y: at.y };
+    }
+    const height = v.y1 - v.y0;
+    return {
+      x: v.x0 + Math.random() * (v.x1 - v.x0),
+      y: v.y0 - height * PETAL_SPAWN_HEADROOM
+        + Math.random() * height * (1 + PETAL_SPAWN_HEADROOM),
+    };
   }
 
   // Position the cursor. "till" resolves free placement (green valid / red invalid);
@@ -1373,17 +1657,23 @@ export class Field {
   // collideExtend overhangs). A horizontal flip mirrors the art, which in iso reflects
   // col<->row, so a flipped object's overhang offsets swap dc<->dr.
   private extensionTiles(def: PlaceableDef, oc: number, or: number, flipped: boolean): string[] {
-    const ext = def.collideExtend;
-    if (!ext?.length) return [];
     const out: string[] = [];
-    for (const e of ext) {
-      const c = oc + (flipped ? e.dr : e.dc);
-      const r = or + (flipped ? e.dc : e.dr);
+    for (const e of this.extensionOffsets(def, flipped)) {
+      const c = oc + e.dc;
+      const r = or + e.dr;
       if (c >= 0 && r >= 0 && c < this.w && r < this.h) out.push(`${c},${r}`);
     }
     return out;
   }
+  // The overhang offsets in the orientation the object is actually placed in.
+  private extensionOffsets(def: PlaceableDef, flipped: boolean): { dc: number; dr: number }[] {
+    const ext = def.collideExtend;
+    if (!ext?.length) return [];
+    return flipped ? ext.map((e) => ({ dc: e.dr, dr: e.dc })) : ext;
+  }
   private setExtensionBlocks(id: string, def: PlaceableDef, oc: number, or: number, flipped: boolean, add: boolean) {
+    // Every placement change comes through here, whether or not the object has an
+    // overhang, so this is where the derived wormhole links get dropped.
     this.topologyChanged();
     for (const t of this.extensionTiles(def, oc, or, flipped)) {
       let set = this.fenceBlock.get(t);
@@ -1418,41 +1708,125 @@ export class Field {
   private objectScale(): number {
     return TILE_W / this.assets.field.tileW;
   }
-  // One-tile fence art bridges from its occupied tile into the next tile, while
-  // gates use a true multi-tile footprint. Center the fence panel on that bridge
-  // (half a tile lower on screen) so its end posts share the gate's ground points.
+  /** Where an object's art stands: the bottom-centre of its footprint, dropped half a
+   *  tile for a fence panel.
+   *
+   *  A fence panel is not a thing standing ON a tile, it is a wall segment standing on
+   *  the EDGE between two of them. Its rail is two tiles long and bridges into the
+   *  neighbour it also blocks (`collideExtend`); the half-tile drop is what puts its
+   *  two posts on the lattice CORNERS either end of that edge — measured, (c+0.5,
+   *  r-0.5) and (c+0.5, r+1.5) for an unflipped panel at (c,r). Everything about a
+   *  fence line depends on that: runs meet post to post, two runs meet squarely at a
+   *  corner, and a run meets a gate's end post, because all of them land on the same
+   *  lattice of tile corners. Move it and every junction on the farm goes crooked. */
   private objectRenderY(def: PlaceableDef, y: number): number {
     return y + (def.collideExtend?.length ? HH : 0);
   }
   // Which sprite to show: a working object (Zombie Pot) shows the frame for what it
-  // is doing; a fruit tree that isn't ripe shows its growing frame.
-  private objectSpriteName(def: PlaceableDef, ready: boolean, work?: ObjectWork): string {
+  // is doing; a fruit tree that isn't ripe shows its growing frame. A state with no
+  // art of its own falls back to the busy frame, so a pot holding a finished combine
+  // keeps its lid rather than reverting to the idle pot.
+  private objectSpriteName(
+    def: PlaceableDef, ready: boolean, work?: ObjectWork, turn = 0,
+  ): string {
     if (work === "ready" && def.readySprite) return def.readySprite;
     if (work && def.busySprite) return def.busySprite;
-    return !ready && def.growingSprite ? def.growingSprite : def.sprite;
+    if (!ready && def.growingSprite) return def.growingSprite;
+    return turnArt(def, turn).sprite; // a road bend draws the corner it is turned to
   }
   private isGroundObject(def: PlaceableDef): boolean {
     return def.zombiePatch || /road/i.test(def.key);
   }
+  // Bottom-centering an object on its footprint is an approximation, and flat
+  // ground art is where it shows: a road piece is drawn to butt up against the next
+  // one, so a couple of pixels of drift leaves a visible step in the kerb where a
+  // straight meets a crossing.
+  //
+  // GROUND TRUTH `-[Tile anchorPoint]` + `-[Tile loadBaseSprite]`: a tile pins its
+  // art by the authored `(pivotx, pivoty)` cocos anchor (default (0.38, 0)) onto the
+  // position of the GROUND TILE it sits on — which cocos' iso tile map puts at the
+  // bottom-left corner of that tile's 48x24 bounding box. This returns the offset
+  // from where we draw the sprite today to where those two rules put it. Non-flat
+  // objects keep bottom-centering: their pivots are authored for art that stands up
+  // off the ground, and nothing has to line up with them edge to edge.
+  private flatTileOffset(
+    def: PlaceableDef, oc: number, or: number, flipped: boolean, turn = 0,
+  ): { dx: number; dy: number } {
+    const art = turnArt(def, turn);
+    if (!art.flatTile || art.anchorX === undefined || art.anchorY === undefined) {
+      return { dx: 0, dy: 0 };
+    }
+    const s = this.objectScale();
+    const w = art.nativeW * s, h = art.nativeH * s;
+    const fp = objectFootprint(def, flipped);
+    // A turn state may hang its art off a NEIGHBOURING ground tile (the apex-south
+    // road bend does, by a measured whole tile). The footprint is untouched: only
+    // where the art hangs moves, so the block the player placed still blocks.
+    const front = gridToScreen(oc + fp.w - 1 + (art.dc ?? 0), or + fp.h - 1 + (art.dr ?? 0));
+    const p = { x: front.x - HW, y: front.y + TILE_H }; // the ground tile's own position
+    const a = this.footprintAnchor(oc, or, fp.w, fp.h);
+    // A mirrored tile reflects about the centre line of that same ground tile, one
+    // source tile to the right of `p` — the binary's `1 - pivotx - 48/width`.
+    const anchorX = flipped
+      ? 1 - art.anchorX - this.assets.field.tileW / art.nativeW
+      : art.anchorX;
+    return {
+      dx: (p.x - a.x) + w * (0.5 - anchorX),
+      dy: (p.y - a.y) + h * art.anchorY,
+    };
+  }
+  /** Put a Memorial Statue's stone zombie on top of its plinth. The plinth is
+   *  bottom-centered on its footprint like any other object, so the statue's feet
+   *  are the plinth's authored mount point (top-face centre) measured back from
+   *  that bottom-centre anchor. Rendered ABOVE the plinth on the same footprint —
+   *  a bias below every actor's, so a zombie walking past the memorial still
+   *  passes in front of it. */
+  private fitMemorialRig(obj: FarmObject) {
+    const rig = obj.memorialRig;
+    if (!rig) return;
+    const def = obj.def;
+    const s = this.objectScale();
+    const fp = objectFootprint(def, obj.flipped);
+    const anchor = this.footprintAnchor(obj.oc, obj.or, fp.w, fp.h);
+    const mountX = def.mountX ?? 0.5;
+    const mountY = def.mountY ?? 1;
+    // The plinth art is not symmetric, so a flipped plinth mirrors its mount point
+    // about the sprite's centre — otherwise the statue slides off the top face.
+    const offsetX = (obj.flipped ? 1 - mountX : mountX) - 0.5;
+    rig.position.set(
+      anchor.x + def.nativeW * s * offsetX,
+      this.objectRenderY(def, anchor.y) - def.nativeH * s * mountY,
+    );
+    setFootprint(rig, obj.oc, obj.or, obj.oc + fp.w - 1, obj.or + fp.h - 1,
+      MEMORIAL_RIG_BIAS);
+  }
+
   private fitObjectSprite(
     sp: Sprite, def: PlaceableDef, oc: number, or: number, ready = true, flipped = false,
-    extra?: { backSprite?: Sprite; frontOverlay?: Container; paintOverlay?: Sprite; work?: ObjectWork },
+    extra?: {
+      backSprite?: Sprite; frontOverlay?: Container; paintOverlay?: Sprite;
+      work?: ObjectWork; turn?: number;
+    },
   ) {
-    const name = this.objectSpriteName(def, ready, extra?.work);
+    const turn = extra?.turn ?? 0;
+    const name = this.objectSpriteName(def, ready, extra?.work, turn);
     const texture = this.assets.objects[name] ?? this.assets.objects[def.sprite] ?? Texture.EMPTY;
     const tint = objectTint(def.color);
     const s = this.objectScale();
-    // Flip = mirror horizontally (about the sprite's bottom-center anchor), so the
-    // art faces the other way while sitting in the exact same footprint tiles.
-    const a = this.footprintAnchor(oc, or, def.tileW, def.tileH);
-    const scaleX = flipped ? -s : s;
-    const c1 = oc + def.tileW - 1, r1 = or + def.tileH - 1;
+    // Flip = mirror horizontally, which in iso reflects the footprint about the
+    // origin tile — so the art is bottom-centered on the TRANSPOSED rectangle it
+    // actually occupies (objectFootprint), and lands over its own blocked tiles.
+    const fp = objectFootprint(def, flipped);
+    const a = this.footprintAnchor(oc, or, fp.w, fp.h);
+    const off = this.flatTileOffset(def, oc, or, flipped, turn);
+    const scaleX = flipped && canMirrorObject(def) ? -s : s;
+    const c1 = oc + fp.w - 1, r1 = or + fp.h - 1;
     const lay = (sprite: Sprite, tex: Texture) => {
       sprite.texture = tex;
       sprite.tint = tint;
       sprite.anchor.set(0.5, 1);
       sprite.scale.set(scaleX, s);
-      sprite.position.set(a.x, this.objectRenderY(def, a.y));
+      sprite.position.set(a.x + off.dx, this.objectRenderY(def, a.y) + off.dy);
     };
     lay(sp, texture);
     // Depth-sorts by the object's full footprint (see depthSort): an actor on the
@@ -1497,11 +1871,55 @@ export class Field {
     obj.frontOverlay?.removeFromParent();
     obj.frontMask?.removeFromParent();
     obj.paintOverlay?.removeFromParent();
+    this.destroyMemorialRig(obj);
     obj.sprite.destroy();
     obj.backSprite?.destroy();
     obj.frontOverlay?.destroy({ children: true });
     obj.frontMask?.destroy();
     obj.paintOverlay?.destroy();
+  }
+
+  private destroyMemorialRig(obj: FarmObject) {
+    if (!obj.memorialRig) return;
+    obj.memorialRig.removeFromParent();
+    obj.memorialRig.destroy({ children: true });
+    obj.memorialRig = undefined;
+  }
+
+  /** Who is enshrined on this Memorial Statue, or null (unknown id, not a memorial,
+   *  or an empty one). */
+  memorialOccupant(id: string): FallenZombie | null {
+    return this.objects.get(id)?.memorial ?? null;
+  }
+
+  /** Every placed Memorial Statue, with its occupant. Used to keep the graveyard
+   *  list and the statues from ever showing the same zombie twice. */
+  memorials(): { id: string; occupant: FallenZombie | null }[] {
+    const out: { id: string; occupant: FallenZombie | null }[] = [];
+    for (const o of this.objects.values()) {
+      if (o.def.memorial) out.push({ id: o.id, occupant: o.memorial ?? null });
+    }
+    return out;
+  }
+
+  /** Enshrine `fallen` on the statue `id` (or clear it with null), rebuilding the
+   *  stone rig. Returns false when `id` is not a Memorial Statue. Building the rig
+   *  needs the species' part textures, which the zombie catalog loads up front, so
+   *  this is synchronous. */
+  setMemorialOccupant(id: string, fallen: FallenZombie | null): boolean {
+    const obj = this.objects.get(id);
+    if (!obj?.def.memorial) return false;
+    this.destroyMemorialRig(obj);
+    obj.memorial = fallen ?? undefined;
+    if (fallen) {
+      const rig = buildStatueRig(this.assets, fallen);
+      if (rig) {
+        obj.memorialRig = rig;
+        this.entityLayer.addChild(rig);
+        this.fitMemorialRig(obj);
+      }
+    }
+    return true;
   }
 
   // Glowing objects (candle altar, sparklers, glow-flora, ...) emit an additive
@@ -1520,7 +1938,8 @@ export class Field {
   private positionObjectLight(obj: FarmObject) {
     const l = obj.light;
     if (!l) return;
-    const a = this.footprintAnchor(obj.oc, obj.or, obj.def.tileW, obj.def.tileH);
+    const fp = objectFootprint(obj.def, obj.flipped);
+    const a = this.footprintAnchor(obj.oc, obj.or, fp.w, fp.h);
     // Raise the glow off the ground onto the object's body.
     l.position.set(a.x, a.y - (l.height ?? 0) * 0.35);
   }
@@ -1530,14 +1949,18 @@ export class Field {
     obj.light = undefined;
   }
 
-  // Center a def's footprint on the pointer tile.
-  resolveObjectOrigin(def: PlaceableDef, col: number, row: number): { oc: number; or: number } {
-    return { oc: col - Math.floor((def.tileW - 1) / 2), or: row - Math.floor((def.tileH - 1) / 2) };
+  // Center a def's footprint on the pointer tile. A turned object is transposed, so
+  // the centering has to use the orientation it will actually be placed in — else
+  // the ghost sits off the cursor by half the difference between its sides.
+  resolveObjectOrigin(def: PlaceableDef, col: number, row: number, flipped = false): { oc: number; or: number } {
+    const fp = objectFootprint(def, flipped);
+    return { oc: col - Math.floor((fp.w - 1) / 2), or: row - Math.floor((fp.h - 1) / 2) };
   }
-  canPlaceObject(oc: number, or: number, def: PlaceableDef, ignoreId?: string): boolean {
+  canPlaceObject(oc: number, or: number, def: PlaceableDef, ignoreId?: string, flipped = false): boolean {
+    const fp = objectFootprint(def, flipped);
     return (
-      this.footprintFits(oc, or, def.tileW, def.tileH) &&
-      this.footprintFree(oc, or, def.tileW, def.tileH, ignoreId)
+      this.footprintFits(oc, or, fp.w, fp.h) &&
+      this.footprintFree(oc, or, fp.w, fp.h, ignoreId)
     );
   }
 
@@ -1545,10 +1968,11 @@ export class Field {
    *  or null when nothing on the farm can hold it. Object positions live only in the
    *  presentation layout, so this is how the reconcile re-homes a server-owned object
    *  whose saved position was lost — without it that object can never be drawn again. */
-  findFreeOrigin(def: PlaceableDef): { oc: number; or: number } | null {
-    for (let or = 0; or + def.tileH - 1 < this.h; or++)
-      for (let oc = 0; oc + def.tileW - 1 < this.w; oc++)
-        if (this.canPlaceObject(oc, or, def)) return { oc, or };
+  findFreeOrigin(def: PlaceableDef, flipped = false): { oc: number; or: number } | null {
+    const fp = objectFootprint(def, flipped);
+    for (let or = 0; or + fp.h - 1 < this.h; or++)
+      for (let oc = 0; oc + fp.w - 1 < this.w; oc++)
+        if (this.canPlaceObject(oc, or, def, undefined, flipped)) return { oc, or };
     return null;
   }
 
@@ -1556,8 +1980,15 @@ export class Field {
   // trees, `readyAt` sets when fruit ripens (defaults to now + growMs for a fresh
   // placement); a past readyAt means it's already ripe (offline growth). Returns
   // the object id, or null if the footprint isn't valid.
-  placeObject(def: PlaceableDef, oc: number, or: number, id?: string, readyAt?: number, flipped = false): string | null {
-    if (!this.canPlaceObject(oc, or, def, id)) return null;
+  placeObject(def: PlaceableDef, oc: number, or: number, id?: string, readyAt?: number,
+    turn = 0, memorial?: FallenZombie): string | null {
+    // Clamped here rather than at the call sites because this is the ONE door every
+    // object comes through — a purchase, a restored save, a gift, a friend's farm. An
+    // object whose art carries writing keeps its footprint AND its art unturned, so the
+    // two can never disagree, and a save that already stored an orientation self-heals.
+    turn = normalizeTurn(def, turn);
+    const flipped = turnFlip(def, turn);
+    if (!this.canPlaceObject(oc, or, def, id, flipped)) return null;
     const now = Date.now();
     const ra = def.growMs ? readyAt ?? now + def.growMs : 0;
     const ready = def.growMs ? now >= ra : false;
@@ -1568,7 +1999,7 @@ export class Field {
     const frontOverlay = def.petPen ? new Container() : undefined;
     const frontMask = def.petPen ? new Graphics() : undefined;
     if (frontOverlay && frontMask) frontOverlay.mask = frontMask;
-    this.fitObjectSprite(sprite, def, oc, or, ready, flipped, { backSprite, frontOverlay });
+    this.fitObjectSprite(sprite, def, oc, or, ready, flipped, { backSprite, frontOverlay, turn });
     const layer = this.isGroundObject(def) ? this.groundObjectLayer : this.entityLayer;
     if (backSprite) layer.addChild(backSprite);
     layer.addChild(sprite);
@@ -1576,10 +2007,12 @@ export class Field {
     if (frontMask) layer.addChild(frontMask);
     const oid = id ?? this.mintId();
     const obj: FarmObject = { id: oid, def, oc, or, sprite, backSprite,
-      frontOverlay, frontMask, readyAt: ra, ready, flipped };
+      frontOverlay, frontMask, readyAt: ra, ready, flipped, turn };
     this.objects.set(oid, obj);
     this.attachObjectLight(obj);
-    this.forEachFootprint(oc, or, def.tileW, def.tileH, (t) => this.tileObject.set(t, oid));
+    if (memorial) this.setMemorialOccupant(oid, memorial); // restoring an enshrined statue
+    const fp = objectFootprint(def, flipped);
+    this.forEachFootprint(oc, or, fp.w, fp.h, (t) => this.tileObject.set(t, oid));
     this.setExtensionBlocks(oid, def, oc, or, flipped, true);
     return oid;
   }
@@ -1613,18 +2046,6 @@ export class Field {
     return this.zombiePotIds().length;
   }
 
-  /** Show a working object's state art (currently the Zombie Pot). No-op for objects
-   * without state art, and cheap to call every frame because it only repaints on
-   * actual state changes. */
-  setObjectWork(id: string, work: ObjectWork | null): boolean {
-    const obj = this.objects.get(id);
-    if (!obj || !obj.def.busySprite) return false;
-    const next = work ?? undefined;
-    if (obj.work === next) return false;
-    obj.work = next;
-    this.fitObjectSprite(obj.sprite, obj.def, obj.oc, obj.or, obj.ready, obj.flipped, obj);
-    return true;
-  }
 
   zombieColorMixerBucketCount(): number {
     let count = 0;
@@ -1664,7 +2085,10 @@ export class Field {
    * footprint as solid; only cosmetic pen pets use this interior. */
   petPenBounds(): { oc: number; or: number; tileW: number; tileH: number } | null {
     for (const o of this.objects.values()) {
-      if (o.def.petPen) return { oc: o.oc, or: o.or, tileW: o.def.tileW, tileH: o.def.tileH };
+      if (o.def.petPen) {
+        const fp = objectFootprint(o.def, o.flipped);
+        return { oc: o.oc, or: o.or, tileW: fp.w, tileH: fp.h };
+      }
     }
     return null;
   }
@@ -1738,8 +2162,9 @@ export class Field {
     for (const o of this.objects.values()) {
       if (!o.def.zombiePatch) continue;
       const tiles: { col: number; row: number }[] = [];
-      for (let r = o.or; r < o.or + o.def.tileH; r++)
-        for (let c = o.oc; c < o.oc + o.def.tileW; c++) tiles.push({ col: c, row: r });
+      const fp = objectFootprint(o.def, o.flipped);
+      for (let r = o.or; r < o.or + fp.h; r++)
+        for (let c = o.oc; c < o.oc + fp.w; c++) tiles.push({ col: c, row: r });
       return tiles;
     }
     return null;
@@ -1751,18 +2176,20 @@ export class Field {
   replaceObjectDef(id: string, def: PlaceableDef): boolean {
     const o = this.objects.get(id);
     if (!o) return false;
-    this.forEachFootprint(o.oc, o.or, o.def.tileW, o.def.tileH, (t) => this.tileObject.delete(t));
-    if (!this.footprintFits(o.oc, o.or, def.tileW, def.tileH) ||
-        !this.footprintFree(o.oc, o.or, def.tileW, def.tileH, id)) {
+    const was = objectFootprint(o.def, o.flipped);
+    const now = objectFootprint(def, o.flipped);
+    this.forEachFootprint(o.oc, o.or, was.w, was.h, (t) => this.tileObject.delete(t));
+    if (!this.footprintFits(o.oc, o.or, now.w, now.h) ||
+        !this.footprintFree(o.oc, o.or, now.w, now.h, id)) {
       // restore the old footprint occupancy and bail
-      this.forEachFootprint(o.oc, o.or, o.def.tileW, o.def.tileH, (t) => this.tileObject.set(t, id));
+      this.forEachFootprint(o.oc, o.or, was.w, was.h, (t) => this.tileObject.set(t, id));
       return false;
     }
     this.setExtensionBlocks(id, o.def, o.oc, o.or, o.flipped, false);
     o.def = def;
     o.ready = def.growMs ? o.ready : false;
     this.fitObjectSprite(o.sprite, def, o.oc, o.or, true, o.flipped, o);
-    this.forEachFootprint(o.oc, o.or, def.tileW, def.tileH, (t) => this.tileObject.set(t, id));
+    this.forEachFootprint(o.oc, o.or, now.w, now.h, (t) => this.tileObject.set(t, id));
     this.setExtensionBlocks(id, def, o.oc, o.or, o.flipped, true);
     return true;
   }
@@ -1797,20 +2224,43 @@ export class Field {
   }
 
   // Relocate an existing object; false if the destination footprint is invalid.
-  // `flipped`, when given, also commits a new orientation (the Move tool lets you
-  // rotate while carrying); omitted keeps the object's current flip.
-  moveObject(id: string, oc: number, or: number, flipped?: boolean): boolean {
+  // `turn`, when given, also commits a new orientation (the Move tool lets you
+  // rotate while carrying); omitted keeps the object's current one.
+  moveObject(id: string, oc: number, or: number, turn?: number): boolean {
     const obj = this.objects.get(id);
-    if (!obj || !this.canPlaceObject(oc, or, obj.def, id)) return false;
-    this.forEachFootprint(obj.oc, obj.or, obj.def.tileW, obj.def.tileH, (t) => this.tileObject.delete(t));
+    // The drop is validated in the orientation it lands in, not the one it was
+    // picked up in — turning a hedge mid-carry changes which tiles it needs.
+    const asked = turn ?? obj?.turn ?? 0;
+    const nextTurn = obj ? normalizeTurn(obj.def, asked) : asked;
+    const next = obj ? turnFlip(obj.def, nextTurn) : false;
+    if (!obj || !this.canPlaceObject(oc, or, obj.def, id, next)) return false;
+    const was = objectFootprint(obj.def, obj.flipped);
+    this.forEachFootprint(obj.oc, obj.or, was.w, was.h, (t) => this.tileObject.delete(t));
     this.setExtensionBlocks(id, obj.def, obj.oc, obj.or, obj.flipped, false);
     obj.oc = oc;
     obj.or = or;
-    if (flipped !== undefined) obj.flipped = flipped;
+    obj.flipped = next;
+    obj.turn = nextTurn;
     this.fitObjectSprite(obj.sprite, obj.def, oc, or, obj.ready, obj.flipped, obj);
+    this.fitMemorialRig(obj);
     this.positionObjectLight(obj);
-    this.forEachFootprint(oc, or, obj.def.tileW, obj.def.tileH, (t) => this.tileObject.set(t, id));
+    const fp = objectFootprint(obj.def, obj.flipped);
+    this.forEachFootprint(oc, or, fp.w, fp.h, (t) => this.tileObject.set(t, id));
     this.setExtensionBlocks(id, obj.def, oc, or, obj.flipped, true);
+    return true;
+  }
+
+  /** Show a working object's state art (the Zombie Pot's lid while a combine cooks).
+   *  The job itself lives outside the Field, so its owner pushes the state in — see
+   *  the per-pot loop in main.ts. No-op for objects with no state art, and for a
+   *  state that is already showing. Returns true when the look actually changed. */
+  setObjectWork(id: string, work: ObjectWork | null): boolean {
+    const o = this.objects.get(id);
+    if (!o || !o.def.busySprite) return false;
+    const next = work ?? undefined;
+    if (o.work === next) return false;
+    o.work = next;
+    this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, o.ready, o.flipped, o);
     return true;
   }
 
@@ -1862,7 +2312,14 @@ export class Field {
     const obj = this.objects.get(id);
     if (!obj) return null;
     if (this.highlightedObj === id) this.highlightedObj = null;
-    this.forEachFootprint(obj.oc, obj.or, obj.def.tileW, obj.def.tileH, (t) => this.tileObject.delete(t));
+    // A Memorial Statue can be sold or shelved, but the zombie carved on it must
+    // not go with it: the shed stores a key and a count, and a sale stores nothing
+    // at all. Hand the occupant back before the object stops existing. Announced
+    // here rather than at the call sites so every removal path — sell, store, the
+    // Remove tool, and anything added later — is covered by construction.
+    if (obj.memorial) this.onMemorialReleased?.(obj.memorial);
+    const fp = objectFootprint(obj.def, obj.flipped);
+    this.forEachFootprint(obj.oc, obj.or, fp.w, fp.h, (t) => this.tileObject.delete(t));
     this.setExtensionBlocks(id, obj.def, obj.oc, obj.or, obj.flipped, false);
     this.destroyObjectSprites(obj);
     this.destroyObjectLight(obj);
@@ -1902,24 +2359,29 @@ export class Field {
     const o = this.objects.get(id);
     return o ? { oc: o.oc, or: o.or } : null;
   }
-  // Current horizontal-flip of a placed object (for the Move tool to carry it over).
-  objectFlipOf(id: string): boolean {
-    return !!this.objects.get(id)?.flipped;
+  // Current orientation of a placed object (for the Move tool to carry it over).
+  objectTurnOf(id: string): number {
+    return this.objects.get(id)?.turn ?? 0;
   }
-  // Rotate tool: mirror a placed object on the vertical axis. Footprint is unchanged
-  // (see FarmObject.flipped), so only the art flips. Returns the new flip state.
+  // Rotate tool: turn a placed object one step, in place. For most art that is a
+  // mirror on the vertical axis, which transposes the footprint (see objectFootprint)
+  // and so can be BLOCKED — a hedge turned across its neighbours has nowhere to go.
+  // A road bend instead steps to the next corner in its `turns` list.
+  /** Turn a placed object a quarter turn. False when it did not turn — either the
+   *  turned footprint has no room, or the object's art must never be mirrored
+   *  (`canMirrorObject`). Callers check that second case first so they can say which
+   *  it was. */
   flipObject(id: string): boolean {
     const o = this.objects.get(id);
-    if (!o) return false;
-    o.flipped = !o.flipped;
-    this.fitObjectSprite(o.sprite, o.def, o.oc, o.or, o.ready, o.flipped, o);
-    return o.flipped;
+    if (!o || !canMirrorObject(o.def)) return false;
+    return this.moveObject(id, o.oc, o.or, (o.turn + 1) % turnCount(o.def));
   }
   // World point the farmer walks to in order to harvest this object (its base).
   objectWorkPoint(id: string): { x: number; y: number } | null {
     const o = this.objects.get(id);
     if (!o) return null;
-    const base = this.footprintAnchor(o.oc, o.or, o.def.tileW, o.def.tileH);
+    const fp = objectFootprint(o.def, o.flipped);
+    const base = this.footprintAnchor(o.oc, o.or, fp.w, fp.h);
     return clampPointToGrid(base.x, base.y, this.w, this.h);
   }
 
@@ -1942,6 +2404,19 @@ export class Field {
     const ids: string[] = [];
     for (const o of this.objects.values()) if (o.def.key === "powderMachine") ids.push(o.id);
     return ids;
+  }
+
+  /** The front-most tile of a placed object's footprint — the one its art stands on
+   *  (see footprintAnchor, which drops half a tile below this to find the base).
+   *
+   *  It is COVERED by the object, so it is never somewhere to put a zombie down: the
+   *  caller steps out from here to the nearest open ground (see
+   *  ZombieField.objectArrivalTile). Null once the object is gone. */
+  objectAnchorTile(id: string): { col: number; row: number } | null {
+    const o = this.objects.get(id);
+    if (!o) return null;
+    const fp = objectFootprint(o.def, o.flipped);
+    return { col: o.oc + fp.w - 1, row: o.or + fp.h - 1 };
   }
 
   /** Draw a multi-plot plow preview. Invalid plots remain visible in red and are
@@ -2017,7 +2492,8 @@ export class Field {
     const o = this.objects.get(id);
     if (!o) return null;
     const tiles = Math.max(o.def.tileW, o.def.tileH);
-    const base = this.footprintAnchor(o.oc, o.or, o.def.tileW, o.def.tileH);
+    const fp = objectFootprint(o.def, o.flipped);
+    const base = this.footprintAnchor(o.oc, o.or, fp.w, fp.h);
     return { x: base.x, y: base.y - tiles * HH, tiles };
   }
   // Topmost object whose (tall) sprite contains world point (wx,wy) — so a tree
@@ -2032,8 +2508,9 @@ export class Field {
         // diamond. Reject the large transparent corner triangles so clicks beside
         // the pen continue to target the ground instead of opening pet management.
         const grid = screenToGrid(wx, wy);
-        hit = grid.col >= o.oc - 0.5 && grid.col <= o.oc + o.def.tileW - 0.5 &&
-          grid.row >= o.or - 0.5 && grid.row <= o.or + o.def.tileH - 0.5;
+        const fp = objectFootprint(o.def, o.flipped);
+        hit = grid.col >= o.oc - 0.5 && grid.col <= o.oc + fp.w - 0.5 &&
+          grid.row >= o.or - 0.5 && grid.row <= o.or + fp.h - 0.5;
       } else if (o.def.category === "tree") {
         const top = s.y - s.height;
         const canopyBottom = top + s.height * TREE_CANOPY_HEIGHT_RATIO;
@@ -2054,20 +2531,29 @@ export class Field {
 
   // Placement/move preview: a tinted ghost of the object at the snapped origin
   // (green tint if placeable, red if blocked). `ignoreId` = the object being moved.
-  setObjectCursor(def: PlaceableDef, col: number, row: number, ignoreId?: string, flipped = false): { oc: number; or: number; valid: boolean } {
-    const { oc, or } = this.resolveObjectOrigin(def, col, row);
-    const valid = this.canPlaceObject(oc, or, def, ignoreId);
+  setObjectCursor(def: PlaceableDef, col: number, row: number, ignoreId?: string, turn = 0): { oc: number; or: number; valid: boolean } {
+    turn = normalizeTurn(def, turn);
+    const flipped = turnFlip(def, turn);
+    const { oc, or } = this.resolveObjectOrigin(def, col, row, flipped);
+    const valid = this.canPlaceObject(oc, or, def, ignoreId, flipped);
     this.cursorGreen.visible = false;
     this.cursorRed.visible = false;
     this.cursorFence.visible = false;
     this.cursorLabel.visible = false;
     this.cursor.position.set(0, 0); // ghost positions are world-space
-    this.objGhost.texture = this.assets.objects[def.sprite] ?? Texture.EMPTY;
-    this.ghostFlipped = flipped;
+    // The ghost previews the corner it would actually lay, not just a mirrored one.
+    this.objGhost.texture = this.assets.objects[turnArt(def, turn).sprite]
+      ?? this.assets.objects[def.sprite] ?? Texture.EMPTY;
+    this.ghostTurnIndex = turn;
     const s = this.objectScale();
     this.objGhost.scale.set(flipped ? -s : s, s); // preview the chosen orientation
-    const a = this.footprintAnchor(oc, or, def.tileW, def.tileH);
-    this.objGhost.position.set(a.x, this.objectRenderY(def, a.y));
+    const fp = objectFootprint(def, flipped);
+    const a = this.footprintAnchor(oc, or, fp.w, fp.h);
+    const off = this.flatTileOffset(def, oc, or, flipped, turn);
+    this.ghostDef = def;
+    this.ghostTile = { col, row };
+    this.ghostIgnoreId = ignoreId;
+    this.objGhost.position.set(a.x + off.dx, this.objectRenderY(def, a.y) + off.dy);
     this.objGhost.alpha = 0.6;
     this.objGhost.tint = multiplyObjectTint(
       objectTint(def.color),
@@ -2077,15 +2563,23 @@ export class Field {
     this.cursor.visible = true;
     return { oc, or, valid };
   }
-  // Flip the placement ghost in place (no reposition) — the Rotate control uses this
-  // to spin the current preview without waiting for a pointer move.
-  setGhostFlip(flipped: boolean) {
-    this.ghostFlipped = flipped;
-    const s = this.objectScale();
-    this.objGhost.scale.x = flipped ? -s : s;
+  // Turn the placement ghost in place — the Rotate control uses this to spin the
+  // current preview without waiting for a pointer move. Turning an object transposes
+  // its footprint, so this is a full re-resolve against the tile the ghost is
+  // sitting on: where it lands, which tiles it would take, and whether it still
+  // fits all change with the orientation.
+  setGhostTurn(turn: number) {
+    this.ghostTurnIndex = turn;
+    const def = this.ghostDef;
+    if (!def || !this.ghostTile) {
+      const s = this.objectScale();
+      this.objGhost.scale.x = turn === 1 ? -s : s;
+      return;
+    }
+    this.setObjectCursor(def, this.ghostTile.col, this.ghostTile.row, this.ghostIgnoreId, turn);
   }
-  get ghostFlip(): boolean {
-    return this.ghostFlipped;
+  get ghostTurn(): number {
+    return this.ghostTurnIndex;
   }
   hideObjectCursor() {
     this.objGhost.visible = false;
@@ -2243,15 +2737,53 @@ export class Field {
     this.update(0);
   }
 
+  /** The catalog key of every object standing on the farm, one entry per placed copy.
+   *  What the derived capacities are a function of (see armyCapacity.ts) — they have
+   *  no business going through the save serializer to read a key off a save record. */
+  *placedKeys(): Generator<string> {
+    for (const o of this.objects.values()) yield o.def.key;
+  }
+
   serializeObjects(): PlacedObjectSave[] {
     const out: PlacedObjectSave[] = [];
     for (const o of this.objects.values()) {
       const s: PlacedObjectSave = { id: o.id, key: o.def.key, oc: o.oc, or: o.or };
       if (o.def.harvestValue) s.readyAt = o.readyAt; // fruit-tree ripen timer
-      if (o.flipped) s.rotation = 1; // horizontally mirrored by the Rotate tool
+      // Orientation. Art that turns by mirroring keeps writing `rotation` (0/1); a
+      // piece with its own art per corner writes the corner index instead, so a road
+      // bend saved by an older build — where the only orientations WERE mirror or
+      // not — comes back as the corner it drew, not as a different one.
+      if (o.def.turns) { if (o.turn) s.turn = o.turn; }
+      else if (o.flipped) s.rotation = 1;
+      if (o.memorial) s.memorial = o.memorial; // the zombie enshrined on this plinth
       out.push(s);
     }
     return out;
+  }
+
+  /** Re-place one saved object, tolerating a saved position that its real footprint
+   *  no longer fits.
+   *
+   *  Saves written before a turned object transposed its footprint (see
+   *  objectFootprint) recorded the origin of a rectangle laid out the OTHER way
+   *  round, so a hedge saved hard against the farm's east edge, or butted up against
+   *  its neighbour, can now want tiles that are off the map or already taken.
+   *  Losing the object is the one outcome a player cannot undo, so give ground in
+   *  this order: nudge it back inside the farm, then, failing that, drop the flip
+   *  and keep the object. Returns whether it made it onto the farm. */
+  private restoreOneObject(
+    def: PlaceableDef, s: PlacedObjectSave, memorial?: FallenZombie,
+  ): boolean {
+    const attempt = (turn: number): boolean => {
+      const fp = objectFootprint(def, turnFlip(def, turn));
+      // Clamp rather than reject: an origin one tile past the edge is a legal object
+      // in the wrong place, not a missing one.
+      const oc = Math.max(0, Math.min(s.oc, this.w - fp.w));
+      const or = Math.max(0, Math.min(s.or, this.h - fp.h));
+      return !!this.placeObject(def, oc, or, s.id, s.readyAt, turn, memorial);
+    };
+    const saved = savedTurn(def, s);
+    return attempt(saved) || (!!saved && attempt(0));
   }
 
   // Rebuild placed objects from a save. `resolve` maps a def key to its config.
@@ -2267,9 +2799,14 @@ export class Field {
     const restored: string[] = [];
     for (const s of saves) {
       const def = resolve(s.key);
-      if (!def || !this.footprintFits(s.oc, s.or, def.tileW, def.tileH)) continue;
-      this.placeObject(def, s.oc, s.or, s.id, s.readyAt, !!s.rotation);
-      restored.push(s.id);
+      if (!def) continue;
+      // A memorial occupant comes straight out of a save file, so it goes through
+      // the same shape check the graveyard list does before a rig is built from it.
+      // Uncapped: this is an ENSHRINED zombie, which the graveyard's cap never
+      // counts (see sanitizeFallenUncapped).
+      const memorial = s.memorial ? sanitizeFallenUncapped([s.memorial])[0] : undefined;
+      this.restoreOneObject(def, s, memorial);
+      restored.push(s.id); // reserve the id even if the object could not be re-placed
     }
     // Monotonic: a save whose objects all carry server instance ids scans to nothing,
     // and dropping the counter back would re-issue ids this session already aliased to
@@ -2284,3 +2821,4 @@ export class Field {
     return id;
   }
 }
+

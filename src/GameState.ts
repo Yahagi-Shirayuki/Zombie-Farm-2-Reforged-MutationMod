@@ -7,10 +7,15 @@ import { TutorialSave } from "./save/schema";
 import type { FarmerCatalog } from "./assets";
 import {
   activeBonusHeadId, farmerCooldownMs, farmerGold, farmerHeadHasEffect, farmerMultiplier,
+  farmerSpeedPx,
   farmerZombieGrowMs,
 } from "./farmer";
 import type { EpicBossRun } from "./epicBoss/types";
 import { parseReceivedZombie } from "./zombie/receivedReward";
+import { mutationsOf } from "./zombie/mutations";
+import { releasedToGraveyard, trimFallen, type FallenZombie } from "./zombie/memorial";
+import type { ZombieTeam } from "./zombie/teams";
+import { mergeFarmStats, newFarmStats, type FarmStats } from "./stats";
 import {
   emptyPowderStorage,
   rollPowderGrindJob,
@@ -26,7 +31,6 @@ import {
   sanitizeZombieColorDyeJobs,
   type ZombieColorDyeJob,
 } from "./zombieColorMixerBucket";
-import type { ZombieTeam } from "./zombie/teams";
 
 export const XP_THRESHOLDS = [
   0, 25, 75, 150, 250, 375, 550, 800, 1300, 1800, 2300, 2800, 3300, 3900, 4500,
@@ -54,6 +58,17 @@ export class GameState {
   // path (grow, Pot, reward, Black Market, gift); never decremented — selling or
   // losing a zombie does not un-discover its species.
   zombieDiscovered: Record<string, number> = {};
+  // ---- Mutation Almanac: lifetime count per mutation key ----
+  // The same collection, one level down: a zombie arriving with a mask counts every
+  // mutation on it, so one Tomatohead Zyborg discovers Tomatohead. Kept beside the
+  // species map and written by the same call, because every path that creates a unit
+  // already reports that unit — and a mutation has no creation path of its own.
+  mutationDiscovered: Record<string, number> = {};
+  // ---- the graveyard: zombies lost in an invasion and not revived ----
+  // Purely a memento list — a Memorial Statue is the only thing that can consume
+  // one, and enshrining moves the snapshot onto the statue. Nothing here can ever
+  // return a zombie to the roster (see src/zombie/memorial.ts).
+  fallenZombies: FallenZombie[] = [];
   // ---- ground/climate skins owned (Market Upgrade → Ground) ----
   // "grass" is the free default; buying a skin adds its terrain key here so it can
   // be re-applied for free later. The current applied skin lives on Field.climate.
@@ -106,6 +121,9 @@ export class GameState {
   // Persisted so the Army screen reopens with the same ordering after a raid.
   raidAttackOrder: string[] = [];
   // ---- saved farm line-ups ("teams") ----
+  // A name plus owned zombie ids (see zombie/teams.ts). Assembling one is nothing
+  // but a batch of the store/deploy moves the Mausoleum already offers, so this
+  // list is presentation data: it confers no zombie, slot or bonus of its own.
   zombieTeams: ZombieTeam[] = [];
   // ---- limited Epic Boss run ----
   epicBossRun: EpicBossRun | null = null;
@@ -115,6 +133,19 @@ export class GameState {
   // list is the offline-build fallback; gifting a brain is recorded here. See
   // social/friends.ts.
   friends: Friend[] = [];
+  // ---- lifetime statistics (the Account menu's Statistics panel) ----
+  // A kept tally: nothing here can be recovered from the save after the fact (see
+  // stats.ts). Purely cosmetic — no price, gate, reward or unlock reads it.
+  stats: FarmStats = newFarmStats(Date.now());
+  // Balances as of the last time the tally was reconciled. Gold and brains move
+  // through half a dozen paths — locally through addGold, online through the
+  // economy's optimistic apply and the server reconcile that follows it — and the
+  // ONE thing they all agree on is where the balance ends up. So earned/spent is
+  // read off the balance itself rather than hooked onto each path, which is also
+  // what keeps an online harvest from being counted twice.
+  private tallyGold = this.gold;
+  private tallyBrains = this.brains;
+
   // ---- first-run guided tutorial (Tim Buckwheat) ----
   // Progress {done, step, target}; undefined = never started. The
   // TutorialController reads/writes this via setTutorial() so autosave (which
@@ -161,6 +192,7 @@ export class GameState {
     this.brains = brains;
     this.xp = xp;
     const after = this.level;
+    this.accrueCurrencyStats();
     // Reconciliation still needs to restore a missed level-up presentation notification.
     if (after > before) this.onLevelUpCb?.(before, after);
     this.emit();
@@ -374,12 +406,14 @@ export class GameState {
   addGold(n: number, reason = "misc") {
     this.gold += n;
     this.onMoney?.("gold", n, reason);
+    this.accrueCurrencyStats();
     this.emit();
   }
   spendGold(n: number, reason = "purchase"): boolean {
     if (this.gold < n) return false;
     this.gold -= n;
     this.onMoney?.("gold", -n, reason);
+    this.accrueCurrencyStats();
     this.emit();
     return true;
   }
@@ -387,6 +421,7 @@ export class GameState {
     if (this.brains < n) return false;
     this.brains -= n;
     this.onMoney?.("brains", -n, reason);
+    this.accrueCurrencyStats();
     this.emit();
     return true;
   }
@@ -418,10 +453,73 @@ export class GameState {
   addBrains(n: number, reason = "misc") {
     this.brains += n;
     this.onMoney?.("brains", n, reason);
+    this.accrueCurrencyStats();
     this.emit();
   }
-  addZombieMax(n: number) {
-    this.zombieMax = Math.max(1, this.zombieMax + n);
+
+  /** Fold the movement since the last check into the lifetime earned/spent totals.
+   *  Called from every writer of gold/brains, INCLUDING the server reconcile: a
+   *  correction that takes gold back reads as spending, which is the honest answer
+   *  when the optimistic credit that preceded it was already counted as earnings. */
+  private accrueCurrencyStats() {
+    const gold = this.gold - this.tallyGold;
+    if (gold > 0) this.stats.goldEarned += gold;
+    else if (gold < 0) this.stats.goldSpent -= gold;
+    const brains = this.brains - this.tallyBrains;
+    if (brains > 0) this.stats.brainsEarned += brains;
+    else if (brains < 0) this.stats.brainsSpent -= brains;
+    this.tallyGold = this.gold;
+    this.tallyBrains = this.brains;
+  }
+
+  /** Adopt a balance WITHOUT counting it as earned or spent. Loading a save, or
+   *  importing one, is not a windfall — without this an account with 50,000 gold
+   *  would book that much in earnings every time it signed in. */
+  private rebaseCurrencyStats() {
+    this.tallyGold = this.gold;
+    this.tallyBrains = this.brains;
+  }
+
+  // ---- lifetime statistics ----
+  /** Restore a persisted tally (save load). Rebases the currency baseline with it,
+   *  because the balance arrives in the same breath. */
+  restoreStats(stats: FarmStats) {
+    this.stats = stats;
+    this.rebaseCurrencyStats();
+  }
+
+  /** Fold another copy of THIS farm's tally into the live one, keeping the higher of
+   *  each counter (see mergeFarmStats). Used when the server turns out to hold counts
+   *  this client has never seen — another device wrote while this one was away — so
+   *  that the write about to go out cannot roll the account back. Returns the merged
+   *  tally, which is what should be sent. */
+  mergeStats(incoming: FarmStats): FarmStats {
+    this.stats = mergeFarmStats(this.stats, incoming);
+    return this.stats;
+  }
+
+  /** One harvested plot. `zombieCrop` also credits the zombie it produced — the two
+   *  are the same act, and a zombie crop is still a crop for the favourite. */
+  recordHarvest(cropKey: string, zombieCrop: boolean) {
+    if (cropKey) this.stats.harvested[cropKey] = (this.stats.harvested[cropKey] ?? 0) + 1;
+    if (zombieCrop) this.stats.zombiesGrown++;
+  }
+  recordPlanted() { this.stats.planted++; }
+  recordPlowed() { this.stats.plowed++; }
+  recordTreeHarvest() { this.stats.treesHarvested++; }
+  recordZombieCombined() { this.stats.zombiesCombined++; }
+  recordZombieSold() { this.stats.zombiesSold++; }
+  /** One settled invasion. Retreats count as losses — the army came home beaten. */
+  recordRaidSettled(won: boolean) {
+    if (won) this.stats.raidsWon++;
+    else this.stats.raidsLost++;
+  }
+  /** Adopt a freshly DERIVED army cap (base + placed objects). The cap is never
+   *  accumulated — see armyCapacity.ts for why a running total could not hold. */
+  syncArmyCapacity(zombieMax: number) {
+    const next = Math.max(1, zombieMax);
+    if (next === this.zombieMax) return;
+    this.zombieMax = next;
     this.emit();
   }
   /** Adopt server base capacity plus authoritative placed-object effects. */
@@ -435,12 +533,14 @@ export class GameState {
     this.zombieCount = Math.max(0, n);
     this.emit();
   }
-  // Placing a storage shed raises the item capacity to its tier (never lowers it).
-  upgradeStorage(cap: number) {
-    if (cap > this.storageItemCap) {
-      this.storageItemCap = cap;
-      this.emit();
-    }
+  /** Adopt a freshly DERIVED shed capacity (the placed shed's tier). Like the army
+   *  cap this is never nudged in place — see shedCapacity.ts for the saves that
+   *  disagreed with the farm when it was. */
+  syncShedCapacity(itemCap: number) {
+    const next = Math.max(0, itemCap);
+    if (next === this.storageItemCap) return;
+    this.storageItemCap = next;
+    this.emit();
   }
 
   // ---- item storage (the shed's Items tab) ----
@@ -468,9 +568,68 @@ export class GameState {
     return true;
   }
 
-  /** Record one obtained zombie of `key` in the Almanac's lifetime counter. */
-  recordZombieDiscovered(key: string) {
+  /** Remember zombies that just died, so a Memorial Statue can enshrine one. Does
+   *  NOT resurrect anything: a fallen zombie is out of the roster for good, and the
+   *  only undo was the revival offer shown when the raid settled. */
+  recordFallen(fallen: FallenZombie[]) {
+    if (!fallen.length) return;
+    const known = new Set(this.fallenZombies.map((z) => z.id));
+    const added = fallen.filter((z) => !known.has(z.id));
+    if (!added.length) return;
+    this.fallenZombies = trimFallen([...this.fallenZombies, ...added]);
+    this.stats.zombiesLost += added.length;
+    this.emit();
+  }
+
+  /** Un-bury zombies the player bought back at the post-raid revival offer. They
+   *  are alive again, so a memorial must not be able to remember them. */
+  forgetFallen(ids: string[]) {
+    if (!ids.length) return;
+    const revived = new Set(ids);
+    const kept = this.fallenZombies.filter((z) => !revived.has(z.id));
+    if (kept.length === this.fallenZombies.length) return;
+    // Bought back at the post-raid offer, so they were never lost after all.
+    this.stats.zombiesLost = Math.max(0, this.stats.zombiesLost -
+      (this.fallenZombies.length - kept.length));
+    this.fallenZombies = kept;
+    this.emit();
+  }
+
+  /** Take one fallen zombie out of the graveyard — it is moving onto a statue,
+   *  which then owns the snapshot. Returns null if it is already gone (a second
+   *  statue cannot enshrine the same zombie). */
+  claimFallen(id: string): FallenZombie | null {
+    const index = this.fallenZombies.findIndex((z) => z.id === id);
+    if (index < 0) return null;
+    const [claimed] = this.fallenZombies.splice(index, 1);
+    this.emit();
+    return claimed;
+  }
+
+  /** Put an enshrined zombie back in the graveyard — the statue holding it was
+   *  removed, or the player took them off it. They rejoin at the TOP of the list
+   *  rather than at their date of death (see graveyardRank): a farm that has lost
+   *  sixty zombies since would otherwise evict them the instant the statue is sold,
+   *  which is the opposite of what the sell confirmation promises. They still age
+   *  out — just behind the next sixty losses instead of immediately. */
+  releaseFallen(fallen: FallenZombie, at = Date.now()) {
+    if (this.fallenZombies.some((z) => z.id === fallen.id)) return;
+    this.fallenZombies = trimFallen([...this.fallenZombies, releasedToGraveyard(fallen, at)]);
+    this.emit();
+  }
+
+  /** Record one obtained zombie of `key` in the Almanac's lifetime counter, along with
+   *  every mutation it arrived wearing.
+   *
+   *  `mutation` is optional so a caller that genuinely has no mask (a test, a legacy
+   *  path) still counts the species — a missing mask must never be read as "and it had
+   *  no mutations", which would be indistinguishable from a plain zombie and silently
+   *  correct. Callers that own a unit pass `unit.mutation`. */
+  recordZombieDiscovered(key: string, mutation = 0) {
     this.zombieDiscovered[key] = (this.zombieDiscovered[key] ?? 0) + 1;
+    for (const def of mutationsOf(mutation)) {
+      this.mutationDiscovered[def.key] = (this.mutationDiscovered[def.key] ?? 0) + 1;
+    }
     this.emit();
   }
 
@@ -633,6 +792,7 @@ export class GameState {
   farmerZombieStrengthMult(): number { return farmerMultiplier(this.bonusHeadId(), "zombieStrength"); }
   farmerZombieLifeMult(): number { return farmerMultiplier(this.bonusHeadId(), "zombieLife"); }
   farmerInvasionCooldownMs(value: number): number { return farmerCooldownMs(value, this.bonusHeadId()); }
+  farmerWalkSpeedPx(value: number): number { return farmerSpeedPx(value, this.bonusHeadId()); }
   syncObjectStorage(stored: Record<string, number>) {
     this.storedItems = Object.entries(stored).map(([key, count]) => ({ key, count }));
     this.emit();
@@ -806,6 +966,8 @@ export class GameState {
     this.xp = p.xp;
     this.zombieCount = p.zombieCount;
     this.zombieMax = p.zombieMax;
+    // A loaded balance is not income. See rebaseCurrencyStats.
+    this.rebaseCurrencyStats();
     this.emit();
   }
 }

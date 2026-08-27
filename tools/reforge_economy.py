@@ -78,6 +78,49 @@ CROP_REBALANCE = {
 # server/src/levels.ts both stop at 45, so a crop above it would be unplantable.
 LEVEL_CAP = 45
 
+# ---- Farm size ------------------------------------------------------------
+# Farm-size tiers Reforged ADDS beyond the three the source ships. The source
+# ladder tops out at 60x60 from level 31, leaving the last stretch to the cap with
+# nothing left to expand into.
+#
+# Each entry continues the source's own progression rather than inventing a curve:
+#
+#   size    +10 per tier      40    50     60      70
+#   level   +10 per tier      11    21     31      41
+#   gold    x5  per tier      10k   50k    250k    1.25M
+#   brains  step doubles      6     8      12      20      (+2, +4, +8)
+#
+# prep_upgrades.py appends these after the extracted tiers AND asserts they still
+# continue that progression, so a tier added with an off-pattern price fails loudly
+# instead of quietly shipping. Without this table a prep re-run would drop them.
+#
+# KEEP IN SYNC with SIZE_TIERS in server/src/shopCatalog.ts — the server prices the
+# purchase itself and would reject a tier it doesn't know.
+EXTRA_SIZE_TIERS = [
+    {"name": "Colossal 'ol Farm", "size": 70, "level": 41,
+     "gold": 1_250_000, "brains": 20},
+]
+
+# ---- Ground skins ---------------------------------------------------------
+# Ground/climate skins Reforged ADDS beyond the six the source ships. `terrain`
+# must name a row emitted by prep_assets.slice_ground — for a derived skin, a key
+# of DERIVED_GROUND_ROWS there.
+#
+# Priced into the existing gold ladder (stone 1000, dirt 2000, snow/sand 5000,
+# water 10000) rather than given a curve of its own, and level 1 like every other
+# skin: the ground is pure cosmetics, so the gate is the price.
+#
+# KEEP IN SYNC with CLIMATE_COST in server/src/shopCatalog.ts, which charges the
+# purchase, and with the theme table in src/surroundings.ts, which dresses the
+# land around a farm wearing the skin.
+EXTRA_CLIMATES = [
+    {"name": "Autumn Ground", "terrain": "autumn", "level": 1, "gold": 3000},
+    # Sakura sits on the rung the ladder was missing, between the 5000 pair
+    # (snow/sand) and the 10000 moon — it is the most elaborate skin in the set
+    # (its own trees, its own falling petals) without being the end of the ladder.
+    {"name": "Sakura Ground", "terrain": "sakura", "level": 1, "gold": 7500},
+]
+
 # ---- Mutant zombies -------------------------------------------------------
 # A "mutant" zombie is the pre-mutated unit the market sells: it carries its
 # mutation already grown AND a tier-graded body (Green 2/2/2, Blue 5/2/5,
@@ -171,6 +214,34 @@ MUTANT_CLASS_REBALANCE = {
 }
 
 
+# ---- Tier-4 mutant bits ---------------------------------------------------
+# ZF2 shipped Eyebiscus and Heartichoke carrying a LOWER tier's mutation bit —
+# Carrot's 4 and Cauliflower's 512 — even though Market.json advertises "+3" on
+# Eyebiscus against Carrot's "+1". So the game's two priciest, slowest mutation
+# crops granted the Tier-1 bonus, and the Heartichoke filed itself under the hair
+# slot while visibly wearing a body (heartichokeBody replaces the body exactly as
+# limaBeanBody does). Both are mutations of their own now — appended to the catalog
+# in src/zombie/mutations.ts, which is where their slot and stats are authored — so
+# the source bit has to be overridden here or the join in prep_market.py reverts it.
+MUTANT_BIT_REBALANCE = {
+    "ZombieActorRegularTier4Eyebiscus":   16384,  # hair_eye, +1 attack +1 speed
+    "ZombieActorRegularTier4Heartichoke": 32768,  # body (with Lima Bean), +5 life
+}
+
+
+def rebalance_mutant_bit(key, entry):
+    """Overwrite one zombies.json entry's guaranteed mutation bit, in place.
+
+    Returns True if the zombie's bit is overridden, False if it is not in the table.
+    Must run AFTER the source `mutation` read, since it overrides it.
+    """
+    bit = MUTANT_BIT_REBALANCE.get(key)
+    if bit is None:
+        return False
+    entry["mutation"] = bit
+    return True
+
+
 def rebalance_mutant_class(key, entry):
     """Overwrite one zombies.json entry's tier + colour class, in place.
 
@@ -196,6 +267,40 @@ def rebalance_mutant(key, entry):
     if level > LEVEL_CAP:
         raise ValueError(f"{key}: unlock level {level} is above the level cap {LEVEL_CAP}")
     entry["level"] = level
+    return True
+
+
+# ---- Named-special stat overrides ----------------------------------------
+# The named specials take their combat stats straight from ZF2's Zombies.json.
+# These entries overwrite a stat AFTER that read, for the cases where the shipped
+# numbers make an event ladder pay out backwards.
+#
+# Admiral Zombie is the only one so far. It is Bully Frog's TOP prize (quest 3011,
+# the final level of the ladder), and it shipped as a strictly worse Captain Zombie
+# (quest 3000, the first prize): identical 21 str / 38.5 con, but dex 2 against the
+# Captain's 2.65, so climbing the whole ladder bought a zombie that deals 24% LESS
+# damage than the one you got at the bottom of it. It is the only epic ladder in the
+# game whose omega prize is a downgrade. The Admiral now edges the Captain on both
+# axes it can be compared on — a little faster and a little tougher.
+SPECIAL_STAT_REBALANCE = {
+    # key: {stat: value}
+    "ZombieActorAdmiral": {"dex": 2.9, "con": 40.5},  # Captain: dex 2.65, con 38.5
+}
+
+
+def rebalance_special_stats(key, entry):
+    """Overwrite a named special's combat stats from SPECIAL_STAT_REBALANCE, in place.
+
+    Returns True if the zombie is rebalanced, False if it is not in the table.
+    Must run AFTER the source unitStats read, since it overrides it.
+    """
+    row = SPECIAL_STAT_REBALANCE.get(key)
+    if row is None:
+        return False
+    unknown = set(row) - {"str", "dex", "con", "focus"}
+    if unknown:
+        raise ValueError(f"{key}: unknown stat override {sorted(unknown)}")
+    entry.update(row)
     return True
 
 

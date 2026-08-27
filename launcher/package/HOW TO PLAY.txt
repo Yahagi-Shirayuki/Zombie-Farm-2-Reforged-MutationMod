@@ -1,0 +1,96 @@
+ZOMBIE FARM REFORGED
+====================
+
+HOW TO PLAY
+-----------
+
+1. Make sure you extracted this whole folder out of the zip.
+   (Right-click the zip > "Extract All...". Do not run anything from inside
+   the zip window itself - it will not work.)
+
+2. Double-click:  Play Zombie Farm.cmd
+
+3. The game opens in your web browser. A small "Zombie Farm Reforged" window
+   also appears - leave it open while you play. Closing it stops the game.
+
+The first time you run it, a "Zombie Farm Reforged" shortcut is added to your
+Desktop. After that you can just use the Desktop icon.
+
+
+WINDOWS MIGHT WARN YOU THE FIRST TIME
+-------------------------------------
+
+Because this was downloaded from the internet, Windows may show:
+
+  "Windows protected your PC"       -> click "More info", then "Run anyway"
+  "Do you want to run this file?"   -> click "Run"
+
+That is Windows being cautious about any downloaded file, not a virus warning.
+Nothing is installed and nothing is sent anywhere - the launcher only serves
+files from this folder to your own browser, on your own PC.
+
+
+CHECKING FOR UPDATES
+--------------------
+
+Settings (cog icon) > Updates > "Check for Updates" asks whether a newer
+version has been released. Nothing else ever contacts the internet - the game
+does not check on its own, and you can play with no connection at all.
+
+If something newer exists, you're asked first. Saying yes opens the download
+page in your browser and does nothing else: your current copy, your saved farm
+and any mods are left exactly as they are. You download the new zip and extract
+it yourself, whenever you feel like it.
+
+
+WHAT ABOUT MY SAVED FARM?
+-------------------------
+
+Your farm is saved by your BROWSER, not by these files. Two things follow:
+
+  * Always launch the game the same way (this launcher). Opening it from a
+    different address or a different browser shows a different, empty farm.
+  * "Clear browsing data / cookies and site data" in your browser will delete
+    your farm. Use the in-game Settings to export a backup first.
+
+Deleting or moving this folder does NOT delete your farm, and re-downloading a
+newer version does not either.
+
+
+INSTALLING MODS
+---------------
+
+Everything the game shows lives in the "game" folder. A mod is normally a set of
+files you drop into "game\assets", replacing the originals.
+
+  * Back up any file you replace, so you can undo it.
+  * Reload the browser tab (F5) to see the change - there is no cache to clear.
+  * If the game stops loading after a mod, delete the "game" folder and
+    re-extract it from the zip.
+
+Only install mods from someone you trust. Modded files are code and art that
+run on your PC.
+
+
+IT DIDN'T WORK
+--------------
+
+The launcher writes a log here (paste this path into Explorer's address bar):
+
+  %LOCALAPPDATA%\ZombieFarmReforged\launcher-log.txt
+
+Common fixes:
+  * Nothing happened at all -> you are probably still inside the zip.
+    Extract it properly first.
+  * Blank/black page in the browser -> press F5 to reload; the game needs a
+    moment on the first launch.
+  * "Couldn't open a local port" -> restart Windows and try again.
+  * Antivirus blocked it -> allow "Play Zombie Farm.cmd" and
+    "launcher\launcher.ps1", or play online instead (see below).
+
+You can also play in your browser with nothing to download:
+
+  https://zombiefarmreforged.com
+
+That version is the online one, with accounts and friends. It cannot run mods,
+and its farm is separate from this one.

@@ -61,8 +61,10 @@ const SFX_VOL: Partial<Record<Sfx, number>> = {
 // an explicit assets/audio/ path so A() preserves the recovered WAV extension
 // instead of applying its legacy data-driven WAV -> MP3 decor coercion.
 function fightStrikeFile({ team, attackName = "", impact, sfxFile }: FightStrike): string {
-  if (impact === "projectile") return "audio/splat.wav";
+  // An explicitly named cue wins over the generic thrown-debris splat: the alien bolt
+  // has its own authored fire/hit pair (alienLaser.wav / stun.wav).
   if (sfxFile) return sfxFile.includes("/") ? sfxFile : `audio/${sfxFile}`;
+  if (impact === "projectile") return "audio/splat.wav";
   const attack = attackName.toLowerCase();
   if (attack.includes("bite")) return "audio/bite.wav";
   if (attack.includes("poke") || attack.includes("stab") || attack.includes("midgetstack")) {
@@ -568,6 +570,8 @@ const clampVolume = (value: unknown, fallback = 1): number =>
 const FIGHT_CUE_FILES = [
   "audio/bite.wav", "audio/flail.wav", "audio/poke.wav",
   "audio/swipe.wav", "audio/punch.wav", "audio/splat.wav",
+  // Alien boss laser: fired on `AlienStageBullet init`, hit on `collidedWith:`.
+  "audio/alienLaser.wav", "audio/stun.wav",
 ];
 
 /** Web Audio voices allowed at once. Combat can fire ~20 cues/s; past this many
@@ -581,6 +585,11 @@ const MAX_VOICES = 24;
 const ONE_SHOT_RECLAIM_MS = 10_000;
 
 export class AudioManager {
+  /** Raised once when this device refuses to store the audio settings, so the
+   *  player is told rather than left wondering why their volume keeps resetting.
+   *  Wired to a HUD toast in main, like SaveManager.onStorageError. */
+  onStorageError: ((message: string) => void) | null = null;
+  private storageWarned = false;
   masterOn = true;
   musicOn = true;
   sfxOn = true;
@@ -676,7 +685,13 @@ export class AudioManager {
   // --- persistence ---------------------------------------------------------
   private read(): StoredSettings {
     try {
-      return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+      const parsed: unknown = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+      // Anything but a plain object is corrupt storage, not settings. Reading the
+      // fields off it would throw inside the constructor and take the whole game's
+      // boot with it, so a stored `null`/number/string falls back to the defaults.
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? parsed as StoredSettings
+        : {};
     } catch {
       return {};
     }
@@ -692,8 +707,19 @@ export class AudioManager {
     };
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(data));
-    } catch {
-      /* ignore quota/private-mode failures */
+    } catch (error) {
+      // A refused write is INVISIBLE from inside the game: the slider moves, the
+      // volume changes, and the whole thing is gone at next launch. That reads as
+      // "my settings don't save" with nothing anywhere to explain it, so say it
+      // once — the save path already warns the same way for the same reason.
+      console.warn("[audio] settings write failed", error);
+      if (!this.storageWarned) {
+        this.storageWarned = true;
+        this.onStorageError?.(
+          "Audio settings can't be saved in this browser, so they'll reset when you come back. " +
+          "Private browsing or a full storage quota is the usual cause.",
+        );
+      }
     }
   }
 

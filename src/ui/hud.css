@@ -168,6 +168,70 @@
   color: #ffd98a; font-size: 12px; font-weight: 700; }
 #hud .qlog-reward img { width: 22px; height: 22px; object-fit: contain; flex: 0 0 auto; }
 #hud .qlog-empty { color: #cbb98f; font-style: italic; padding: 8px; }
+
+/* ---- Daily & Weekly quests ----
+   Its own rail button below the quest log's, not a slot on the rail: these are a
+   separate board on a separate clock, and mixing them in would push the progression
+   quests off a four-slot rail every day. Built on the .qmore card next door, since
+   both are glyph buttons rather than quest art. */
+#hud .quest.qperiodic { position: relative; display: flex; align-items: center;
+  justify-content: center; }
+#hud .quest.qperiodic .qperiodic-glyph { font-size: 22px; line-height: 1; color: #f4e9cf;
+  text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+/* "There is XP waiting right now" — the badge counts only what can be COLLECTED, so
+   the highlight has to mean the same thing rather than "you have dailies". */
+#hud .quest.qperiodic.ready .qperiodic-glyph { color: #ffe49a; }
+#hud .quest.qperiodic.ready { filter: drop-shadow(0 2px 2px rgba(0,0,0,.4))
+  drop-shadow(0 0 5px rgba(255,214,110,.75)); }
+#hud .quest.qperiodic .qbadge { background: #d8bc40; color: #3a2c07; border-color: #7a5f10; }
+
+#hud .panel.periodicquests { text-align: left; width: min(500px, 92vw); }
+#hud .pq-list { margin-top: 8px; max-height: 64vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
+#hud .pq-scope { display: flex; flex-direction: column; gap: 7px; }
+#hud .pq-heading { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; border-bottom: 1px solid rgba(255,255,255,.12); padding-bottom: 4px; }
+#hud .pq-title { color: #d8bc84; font-size: 12px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .06em; }
+/* Coarse by design (see formatPeriodRemaining) — minutes only near the boundary. */
+#hud .pq-timer { color: #cbb98f; font-size: 11.5px; font-weight: 700; flex: 0 0 auto; }
+#hud .pq-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border-radius: 10px; background: rgba(0,0,0,.22); }
+#hud .pq-row > img { width: 32px; height: 32px; object-fit: contain; flex: 0 0 auto; }
+#hud .pq-row.done { background: rgba(112,169,30,.2);
+  box-shadow: inset 0 0 0 1px rgba(142,199,79,.45); }
+/* Collected: still listed, so the board reads as finished rather than half-empty. */
+#hud .pq-row.claimed { opacity: .55; }
+#hud .pq-body { flex: 1 1 auto; min-width: 0; }
+#hud .pq-text { color: #f4e9cf; font-size: 13.5px; font-weight: 700;
+  overflow-wrap: anywhere; }
+#hud .pq-meter { height: 8px; margin-top: 5px; border-radius: 5px; overflow: hidden;
+  background: rgba(0,0,0,.55); border: 1px solid #2f1d0d; }
+/* The fill is an inline-styled width and nothing else, so it needs its box here. */
+#hud .pq-meter > span { display: block; height: 100%;
+  background: linear-gradient(#b6f36a,#5fbf2f); }
+#hud .pq-row.claimed .pq-meter > span { background: linear-gradient(#cbb98f,#8a7a55); }
+#hud .pq-count { margin-top: 3px; color: #d8ccaa; font-size: 11.5px; font-weight: 700; }
+#hud .pq-reward { display: flex; align-items: center; gap: 5px; flex: 0 0 auto;
+  color: #ffd98a; font-size: 12.5px; font-weight: 800; }
+#hud .pq-reward img { width: 22px; height: 22px; object-fit: contain; }
+#hud .pq-action { flex: 0 0 auto; display: flex; align-items: center; min-width: 74px;
+  justify-content: flex-end; }
+#hud .pq-action .zbtn.pq-claim { padding: 6px 12px; font-size: 12px; }
+#hud .pq-claimed { color: #8fdc5a; font-size: 12px; font-weight: 800; }
+#hud .pq-empty { color: #cbb98f; font-style: italic; padding: 8px; }
+/* Phones: the reward chip and the button stop fitting beside the objective, so the
+   row wraps and they share the line under it. The body's basis is the row minus the
+   icon and its gap, which keeps the icon on the objective's line rather than letting
+   it take a line of its own — 100% would push the text down past it. */
+@media (max-width: 430px) {
+  #hud .pq-row { flex-wrap: wrap; }
+  #hud .pq-row > img { order: 0; }
+  #hud .pq-body { order: 0; flex: 1 1 calc(100% - 42px); }
+  #hud .pq-reward { order: 1; }
+  #hud .pq-action { order: 2; flex: 1 1 auto; min-width: 0; }
+}
+
 /* profile manager */
 #hud .panel.profiles { width: min(440px, 92vw); text-align: left; }
 #hud .prof-list { margin-top: 8px; display: flex; flex-direction: column; gap: 8px;
@@ -193,18 +257,9 @@
 #hud .prof-btn:disabled { opacity: .4; cursor: not-allowed; filter: none; }
 #hud .prof-input { flex: 1 1 auto; min-width: 0; padding: 6px 9px; border-radius: 7px; border: 2px solid #1e1207;
   background: #2a1c0c; color: #ffe9a8; font: 700 14px system-ui, sans-serif; }
-/* friends panel */
-/* This panel grows with the friend list and the gift inbox, so it has to scroll on
-   EVERY screen. The generic panel-scroll rule is inside the touch/narrow media query,
-   which left a tall panel centred with its top — close button, inbox header and all —
-   stranded above the viewport on a desktop mouse. Bounded here, scoped to this panel
-   rather than changing every panel in the game. */
-#hud .fr-bg { box-sizing: border-box; padding: 12px; }
-#hud .fr-bg > .panel { max-height: 100%; overflow-y: auto; overscroll-behavior: contain; }
-/* A scroll container can't have a visible overflow axis, so the close button's usual
-   16px overhang past the corner would be clipped. Tuck it inside instead — the same
-   thing the touch layout already does for exactly this reason. */
-#hud .fr-bg > .panel > .panelclose { top: 2px; right: 2px; z-index: 3; }
+/* friends panel. It grows with the friend list and the gift inbox, so it has to
+   scroll on EVERY screen, and it used to carry its own copy of the bound-and-scroll
+   rule for that reason; `#hud .panelbg > .panel` now does that for the whole layer. */
 #hud .fr-note { margin-top: 6px; font-size: 12px; line-height: 1.4; color: #c9b98f; }
 #hud .fr-empty { padding: 10px 4px; font-size: 13px; color: #b6a986; font-style: italic; }
 #hud .prof-badge.fr-gifts { background: #7a4bc9; color: #f0e8ff; }
@@ -343,7 +398,6 @@
   min-width: 0; padding: 0; overflow: hidden; display: flex; flex-direction: column;
   background: linear-gradient(105deg, #724822 0 29%, #f0dfb5 29.2% 100%);
   color: #3b2918; text-shadow: none; border-color: #2c180a; }
-#hud .guide-panel > .panelclose { top: 8px; right: 8px; z-index: 2; }
 #hud .guide-header { flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
   min-height: 76px; padding: 10px 64px 10px 20px; box-sizing: border-box;
   color: #fff6d9; text-shadow: 0 2px 2px #2d170b;
@@ -417,6 +471,24 @@
 #hud.raiding .questcol, #hud.raiding .invade-shortcut, #hud.raiding .fab,
 #hud.raiding .touch-cancel, #hud.raiding .plant-label,
 #hud.raiding .crop-hover { display: none !important; }
+/* Shown from the moment the farm is hidden until the battle scene is on screen.
+   Deliberately NOT inside `.raiding`'s hide list: it is the only thing on screen
+   during that window, and without it the player is looking at the stage's bare
+   clear colour with no way to tell loading apart from a crash. */
+#hud .battle-loading { position: fixed; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 14px; z-index: 30;
+  pointer-events: none; color: #f3ecd2;
+  font: 700 16px/1.3 "Trebuchet MS", system-ui, sans-serif; text-shadow: 0 2px 4px #000;
+  background: rgba(12, 20, 8, .55); }
+#hud .battle-loading-spinner { width: 42px; height: 42px; border-radius: 50%;
+  border: 4px solid rgba(243, 236, 210, .25); border-top-color: #f07a1e;
+  animation: battle-spin 900ms linear infinite; }
+@keyframes battle-spin { to { transform: rotate(360deg); } }
+/* A device asking for less motion gets a pulse instead of a spin. */
+@media (prefers-reduced-motion: reduce) {
+  #hud .battle-loading-spinner { animation: battle-pulse 1.4s ease-in-out infinite; }
+  @keyframes battle-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+}
 /* "u" key: hide all farm chrome for a clean, unobstructed view of the farm. */
 #hud.ui-hidden .topbar, #hud.ui-hidden .tools, #hud.ui-hidden .menucol,
 #hud.ui-hidden .questcol, #hud.ui-hidden .invade-shortcut, #hud.ui-hidden .fab,
@@ -452,7 +524,7 @@
    Sits above the farm chrome but below every panel (.panelbg is z-index 20+), so a
    dialog can never end up underneath it. */
 #hud .tw-bg { position: fixed; inset: 0; z-index: 19; pointer-events: auto; }
-#hud .tw { position: fixed; min-width: 186px; max-height: 78vh; overflow-y: auto;
+#hud .tw { position: fixed; min-width: 186px; max-width: 280px; max-height: 78vh; overflow-y: auto;
   display: flex; flex-direction: column; gap: 2px; padding: 6px;
   background: linear-gradient(#6e4425, #492b16); border: 2px solid #2f1d0d;
   border-radius: 14px; box-shadow: 0 6px 16px rgba(0,0,0,.55); outline: none; }
@@ -464,7 +536,8 @@
   font: 700 14px system-ui,sans-serif; text-shadow: 0 1px 2px #000; }
 #hud .tw-item img { width: 30px; height: 30px; object-fit: contain; flex: 0 0 auto;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
-#hud .tw-item .tw-lbl { flex: 1 1 auto; }
+#hud .tw-item .tw-lbl { flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #hud .tw-item .tw-key { flex: 0 0 auto; min-width: 18px; padding: 1px 5px; border-radius: 6px;
   background: rgba(0,0,0,.4); border: 1px solid #2f1d0d; color: #ffe9b0;
   font: 800 11px system-ui,sans-serif; text-align: center; }
@@ -521,7 +594,8 @@
   text-shadow: 0 1px 2px #000; white-space: nowrap; box-shadow: 0 2px 5px rgba(0,0,0,.4); }
 
 /* modal panel with an X close in the top-right (used by all closeable menus) */
-#hud .panelbg { position: fixed; inset: 0; pointer-events: auto; z-index: 20;
+#hud .panelbg { position: fixed; inset: 0; pointer-events: auto; z-index: 20; box-sizing: border-box;
+  padding: 12px;
   background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
 #hud .army-bg { z-index: 25; }
 #hud .game-confirm-bg { z-index: 26; }
@@ -531,6 +605,12 @@
 /* Pre-purchase zombie card: opened from the Market (21) or the plant picker (19),
    so it shares the layer the item-description parchment uses. */
 #hud .zpreview-bg { z-index: 24; }
+/* Invasion purchase prompts (Invasion Voucher + Brain Ticket). Both are raised from
+   the ARMY screen (25), so inheriting the shared modal layer mounted them underneath
+   the screen that offered them — you had to back out of the invasion to buy. The
+   voucher only ever looked right because Raid Select shares the 20 layer and it won
+   on DOM order, which is not a property to rely on. See ui/invasionLayering.test.ts. */
+#hud .raid-ticket-bg { z-index: 30; }
 #hud .writer-lock-bg { z-index: 60; }
 #hud .fullscreen-prompt-bg { z-index: 10001; }
 #hud .writer-lock-panel { max-width: 420px; text-align: center; }
@@ -546,11 +626,52 @@
   text-shadow: 0 1px 2px #000; }
 #hud .panel h2 { margin: 0 0 8px; font-size: 20px; }
 #hud .panel p { margin: 0; font-size: 14px; opacity: .92; }
-#hud .settings-panel { box-sizing: border-box; max-height: calc(100dvh - 24px);
-  overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-#hud .settings-panel > .panelclose { top: 4px; right: 4px; z-index: 1; }
-#hud .panelclose { position: absolute; top: -16px; right: -16px; width: 42px; height: 42px;
-  border: none; background: none; cursor: pointer; padding: 0;
+/* Every shared modal is bounded by the screen and scrolls inside itself when its
+   composition is taller. This used to live only in the touch layout, so a short
+   DESKTOP window (a laptop in landscape, a half-height browser) centred a tall
+   panel with its whole top — heading, close button and all — stranded above the
+   viewport, which looks exactly like a cropped X. Settings and the friends list
+   each grew their own copy of this rule as that turned up; one rule on the layer
+   they share covers those two and everything else on it.
+   `.raid-bg > .panel` and `.guide-panel` deliberately keep their own bounds and
+   scroll an inner column instead — both are fixed-height compositions. */
+#hud .panelbg > .panel { max-height: 100%; overflow-y: auto; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch; }
+/* Stated at the same weight as the rule above, and after it, so the exemption does
+   not rest on source order alone: both are fixed-height compositions that scroll an
+   inner column, and letting the frame itself scroll slides the whole book/board. */
+#hud .panelbg > .guide-panel, #hud .raid-bg > .panel { overflow: hidden; }
+/* Statistics, Settings (its Display tab is the tall one) and the quest log scroll
+   without drawing a scrollbar: these three are plain read-down lists whose whole
+   composition is the content, so the track only cuts a grey stripe through the
+   parchment. Scrolling itself is untouched — wheel, drag and keys all still work.
+   Named panels rather than the whole layer, because the panels that DO carry a
+   themed track (the market grid) are deliberate. */
+#hud .stats-panel, #hud .settings-panel, #hud .panel.questlog, #hud .qlog-list {
+  scrollbar-width: none; -ms-overflow-style: none; }
+#hud .stats-panel::-webkit-scrollbar,
+#hud .settings-panel::-webkit-scrollbar,
+#hud .panel.questlog::-webkit-scrollbar,
+#hud .qlog-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* The shared modal X sits INSIDE the panel's top-right corner, on every screen.
+   It used to hang 16px past that corner, which reads well on a plain box but is
+   sliced in half the moment the panel becomes a scroll container — and the rule
+   directly above makes a scroll container of EVERY panel on this layer that grows
+   past the screen. Settings, the friends list, raid select, the Farmer's Guide and
+   the Almanac's field-note pages each hit that on their own, and each was patched
+   with its own "tuck it back in" override as the clipping was spotted, one panel
+   at a time; the Almanac page shipped with a cropped X because it was simply the
+   one nobody thought to patch. Inside by DEFAULT makes the whole class of bug
+   impossible rather than merely catchable.
+   The z-index belongs to that default too: the button is the panel's first
+   child, so anything drawn after it paints over the corner (the storage panel's
+   `.st-close` needed exactly this).
+   The four market-parchment panels (`.mkt`, `.st`, `.info-box`, `.pm`) keep the
+   authentic overhanging X. They are fixed-size flex columns whose INNER lists
+   scroll, so they never clip their own corner — see ui/closeButtonFit.test.ts,
+   which fails if one of them grows an overflow. */
+#hud .panelclose { position: absolute; top: 4px; right: 4px; width: 42px; height: 42px;
+  border: none; background: none; cursor: pointer; padding: 0; z-index: 3;
   filter: drop-shadow(0 2px 3px rgba(0,0,0,.6)); }
 #hud .panelclose img { width: 100%; height: 100%; }
 /* settings rows: label + on/off toggle */
@@ -580,6 +701,12 @@
   background: linear-gradient(#c0553f, #9c3320); }
 #hud .set-dev-revoke:hover { filter: brightness(1.1); }
 #hud .set-dev-revoke:disabled { opacity: .5; cursor: default; }
+/* Settings is tabbed (Game / Audio / Display / Controls); pin the panel's width so
+   switching to a narrower tab doesn't shrink the panel under the cursor, and give
+   the body a floor so short tabs don't collapse the panel to its tab bar. */
+#hud .settings-panel { width: min(460px, 92vw); }
+#hud .set-tabs { margin: 2px 0 6px; }
+#hud .set-body { min-height: 240px; }
 #hud .set-row { display: flex; align-items: center; justify-content: space-between;
   gap: 24px; min-width: 240px; padding: 8px 2px; font-size: 15px; font-weight: 700; }
 #hud .set-row + .set-row { border-top: 1px solid rgba(255,255,255,.15); }
@@ -640,6 +767,24 @@
   text-shadow: 0 1px 1px rgba(0,0,0,.4); }
 #hud .dev-btn:hover { filter: brightness(1.08); }
 #hud .dev-btn:active { filter: brightness(.92); }
+
+/* ---- Statistics panel (Account menu): the lifetime tally ---- */
+/* Fixed width so the longest row can't stretch the sheet, and the whole panel
+   scrolls as one — the close button sits inside the corner (see .panelclose), so
+   scrolling here cannot crop it. */
+#hud .stats-panel { width: min(430px, 92vw); }
+#hud .stats-body { margin-top: 4px; }
+#hud .stats-section + .stats-section { margin-top: 14px; }
+#hud .stats-heading { margin: 0 0 2px; padding-bottom: 4px; font-size: 13px; letter-spacing: .06em;
+  text-transform: uppercase; color: #d8b45e; border-bottom: 1px solid rgba(255,255,255,.15); }
+#hud .stats-row { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 18px; padding: 6px 2px; font-size: 14px; font-weight: 700; }
+#hud .stats-row + .stats-row { border-top: 1px solid rgba(255,255,255,.08); }
+#hud .stats-label { color: #f2ead0; }
+#hud .stats-figure { display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+  text-align: right; }
+#hud .stats-value { color: #ffe9a8; font-variant-numeric: tabular-nums; }
+#hud .stats-note { font-size: 11px; font-weight: 400; color: #cbe6a0; opacity: .85; }
 
 /* ---- Zombie detail page: card (left) + stats/abilities (right) ---- */
 #hud .zpanel { padding: 18px 20px; }
@@ -726,6 +871,10 @@
   box-shadow: 0 1px 3px rgba(0,0,0,.5); cursor: pointer; }
 #hud .zmut-vis:hover { background: #34240f; }
 #hud .zmut-vis.off { border-color: #8d7a52; opacity: .85; }
+
+/* an owned zombie's mutation tile also carries a visibility badge: the eye hides
+   that one vegetable on THIS zombie (cosmetic only — the stats stay). A hidden
+   mutation greys its tile so the row reads at a glance. The rule itself is above. */
 /* small tooltip popup for a stat/ability */
 #hud .ztip { position: fixed; transform: translate(-50%, -100%); z-index: 5;
   box-sizing: border-box; max-width: min(180px, calc(100vw - 16px)); min-width: 96px;
@@ -761,8 +910,11 @@
 
 /* ---- Zombie roster (Zombies menu) ---- */
 #hud .zroster { display: flex; flex-direction: column; gap: 10px; width: min(560px, 88vw); }
+/* `space-between` parks the roster count in the panel's top-right corner, which is
+   where the close button now lives — so reserve its width. Same for the combiner's
+   timer and the army screen's slot count. */
 #hud .zr-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
-  flex-wrap: wrap; }
+  flex-wrap: wrap; padding-right: 44px; }
 #hud .zr-head h2 { margin: 0; font-size: 20px; }
 #hud .zr-total { font-size: 15px; font-weight: 800; color: #b6f36a; }
 #hud .zr-total .zr-sub { color: #9fd3e8; font-weight: 700; }
@@ -798,10 +950,48 @@
 #hud .zl-row { width: 100%; max-width: none; min-width: 0; flex: 0 0 auto; }
 #hud .zl-row .zdetail { flex-wrap: nowrap; }
 
+/* ---- Zombie Teams (saved line-ups, opened from the Mausoleum) ---- */
+#hud .zteam-panel { width: min(620px, 92vw); }
+#hud .zteam-list { display: flex; flex-direction: column; gap: 8px; max-height: 58vh; overflow: auto;
+  padding: 2px; }
+#hud .zteam-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap; background: #3a2612; border: 2px solid #1e1207; border-radius: 10px;
+  padding: 8px 10px; box-shadow: inset 0 -3px 0 rgba(0,0,0,.25); }
+#hud .zteam-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 210px; }
+#hud .zteam-nm { font-size: 15px; font-weight: 800; overflow-wrap: anywhere; }
+#hud .zteam-sub { font-size: 11.5px; font-weight: 700; opacity: .75; }
+/* The line-up strip: one small frame per member, in attack order. */
+#hud .zteam-strip { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+#hud .zteam-pip { width: 30px; height: 30px; border-radius: 6px; background: #24160a center/contain no-repeat;
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,.06); }
+#hud .zteam-pip.resting { box-shadow: inset 0 0 0 2px rgba(79,155,216,.85); opacity: .8; }
+#hud .zteam-pip.gone { border: 1px dashed rgba(255,170,150,.6); opacity: .5; }
+/* Capacity warning: shown on the row before the player taps Assemble. */
+#hud .zteam-warn { font-size: 11.5px; font-weight: 700; color: #ffc9a8; }
+#hud .zteam-actions { margin-top: 0; justify-content: flex-end; flex: 0 0 auto; }
+#hud .zteam-actions .zbtn { padding: 6px 11px; font-size: 12px; }
+/* Team editor: the raid Army picker, reused wholesale (same cards + numbering). */
+#hud .zteam-edit .zteam-name { flex: 1 1 100%; }
+#hud .zteam-edit .zteam-where { opacity: .6; font-size: 9.5px; }
+
+/* ---- Invasions panel (Social → Invasions, ui/panels/invasions.ts) ---- */
+#hud .pvp-panel { width: min(680px, 94vw); display: flex; flex-direction: column; gap: 8px; }
+#hud .pvp-tabs { margin-top: 2px; }
+#hud .pvp-body { display: flex; flex-direction: column; gap: 8px; max-height: 62vh; overflow: auto;
+  padding: 2px; scrollbar-width: none; }
+#hud .pvp-body::-webkit-scrollbar { width: 0; height: 0; display: none; }
+#hud .pvp-pips { font-size: 12.5px; font-weight: 800; opacity: .85; }
+#hud .pvp-list { display: flex; flex-direction: column; gap: 8px; }
+#hud .pvp-row { align-items: flex-start; }
+#hud .pvp-scout { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; }
+#hud .pvp-claim { background: #274126; border-color: #142611; }
+#hud .pvp-stats { display: flex; flex-direction: column; gap: 2px; padding: 2px 4px; }
+
 /* ---- Zombie Pot (combiner) ---- */
 #hud .cmb { display: flex; flex-direction: column; gap: 12px; width: min(560px, 90vw);
   max-width: 100%; min-width: 0; }
-#hud .cmb-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+#hud .cmb-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding-right: 44px; }
 #hud .cmb-head h2 { margin: 0; font-size: 20px; }
 #hud .cmb-time { font-size: 13px; font-weight: 800; color: #b6f36a; }
 #hud .cmb-head > * { min-width: 0; overflow-wrap: anywhere; }
@@ -856,6 +1046,12 @@
 #hud .cmb-go.cmb-store { background: linear-gradient(#5b93cf, #3b6ea8); color: #f2f8ff;
   padding: 10px 20px; font-size: 14px; }
 #hud .cmb-go:disabled { opacity: .45; cursor: not-allowed; filter: grayscale(.5); }
+/* Spend an Insta-Grow on the running combine. A consumable, not a collect, so it
+   reads amber and sits beside the (disabled) Collect rather than replacing it. */
+#hud .cmb-go.cmb-hurry { background: linear-gradient(#e8b757, #b8811f); color: #22190a;
+  padding: 10px 18px; font-size: 14px; display: inline-flex; align-items: center; gap: 6px; }
+#hud .cmb-hurry-i { width: 18px; height: 18px; object-fit: contain; }
+#hud .cmb-hurry-ct { font-size: 12px; opacity: .8; }
 #hud .cmb-empty { text-align: center; opacity: .85; font-style: italic; padding: 22px 12px; }
 #hud .cmb-rule-note { text-align: center; font-size: 11px; line-height: 1.35; color: #d8c9a0;
   background: rgba(255,255,255,.045); border-radius: 8px; padding: 7px 9px; }
@@ -1023,12 +1219,21 @@
 #hud .rd-meta { font-size: 12px; opacity: .9; }
 #hud .rd-intro { font-size: 12.5px; line-height: 1.35; opacity: .92; white-space: pre-wrap;
   max-height: 16vh; overflow: auto; margin: 0; }
-#hud .rd-rewards { display: flex; flex-wrap: wrap; gap: 5px; }
+#hud .rd-drops { display: flex; flex-direction: column; gap: 4px; }
+#hud .rd-drop { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; }
+#hud .rd-drop-k { flex: 0 0 auto; font-weight: 800; color: #ffcf5a; }
+#hud .rd-drop-v { display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+  min-width: 0; opacity: .92; overflow-wrap: anywhere; }
 #hud .rd-chip { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px;
   background: #24160a; border: 1px solid rgba(255,255,255,.12); max-width: 100%;
   box-sizing: border-box; overflow-wrap: anywhere; }
 #hud .rd-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px;
   flex-wrap: wrap; margin-top: auto; border-top: 1px solid rgba(255,255,255,.15); padding-top: 8px; }
+/* The footer's action group: the Invade button, plus any alternate route offered
+   beside it (the Brain Ticket screen also offers the plain 2,000g voucher). Grouping
+   them keeps the pair together on the right when the row wraps on a narrow phone. */
+#hud .rd-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  justify-content: flex-end; margin-left: auto; }
 #hud .rd-army { font-size: 12px; font-weight: 700; color: #b6f36a; min-width: 0; overflow-wrap: anywhere; }
 #hud .rd-army.short { color: #ffb0a0; }
 #hud .raid-go { border: 2px solid #1e1207; border-radius: 9px; padding: 8px 18px; cursor: pointer;
@@ -1050,11 +1255,10 @@
   overflow: hidden; }
 #hud .raid-bg .raidsel { max-height: calc(100dvh - 70px); min-height: 0; }
 #hud .raid-bg .rd-detail { overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
-#hud .raid-bg .panelclose { top: 4px; right: 4px; z-index: 2; }
 /* army select */
 #hud .army-wrap { display: flex; flex-direction: column; gap: 10px; width: min(600px, 90vw); }
 #hud .army-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
-  flex-wrap: wrap; }
+  flex-wrap: wrap; padding-right: 44px; }
 #hud .army-head h2 { margin: 0; font-size: 19px; min-width: 0; overflow-wrap: anywhere; }
 #hud .army-count { font-size: 14px; font-weight: 800; color: #b6f36a; flex: 0 0 auto; white-space: nowrap; }
 #hud .army-count.short { color: #ffb0a0; }
@@ -1094,6 +1298,15 @@
   border-radius: 7px; background: linear-gradient(#7a5220, #5e3d15); color: #fff; font: 900 16px/1 system-ui;
   display: flex; align-items: center; justify-content: center; }
 #hud .raid-dice .rd-step:hover { filter: brightness(1.15); }
+/* Brain Ticket toggle. Armed it goes VIOLET, not the shared green of the other two
+   consumables: the others only help, this one also picks a much harder fight, so it must
+   not look like one more free buff sitting in the same row. The warning line spans the
+   whole row so the fight it starts is spelled out, not just implied by a colour. */
+#hud .raid-elite-btn.on { color: #f4e9ff; background: linear-gradient(#9a4fd6, #6b2ca3);
+  border-color: #3d1663; text-shadow: 0 1px 1px #000; box-shadow: 0 0 0 2px rgba(154,79,214,.45); }
+#hud .raid-elite-note:empty { display: none; }
+#hud .raid-elite-note { flex: 1 0 100%; margin: 0; font: 700 11px system-ui, sans-serif;
+  color: #e3c6ff; text-shadow: 0 1px 1px #000; }
 /* result tally — a panel that slides in from the RIGHT as the zombies march off */
 #hud .raid-res-bg { position: fixed; inset: 0; pointer-events: auto; z-index: 22;
   display: flex; align-items: stretch; justify-content: flex-end; }
@@ -1163,6 +1376,30 @@
 #hud .revive-confirm { width: 100%; padding: 12px; border: 2px solid #241307; border-radius: 10px;
   background: linear-gradient(#f2b341,#c87a18); color: #301b08; font-size: 16px; font-weight: 900; }
 #hud .revive-error { min-height: 18px; color: #8b211b; text-align: center; font-size: 12px; font-weight: 800; }
+
+/* ---- Memorial Statue ---- */
+#hud .memorial-panel { width: min(480px, 94vw); max-height: min(640px, 86vh);
+  display: flex; flex-direction: column; }
+#hud .memorial-blurb { margin: 0 0 10px; font-size: 13px; font-weight: 700; opacity: .82; }
+#hud .memorial-list { overflow-y: auto; display: grid; gap: 8px; padding-right: 4px; }
+#hud .memorial-row { display: grid; grid-template-columns: 58px 1fr auto; align-items: center;
+  gap: 10px; min-height: 66px; padding: 6px 9px; border: 2px solid #69451f; border-radius: 10px;
+  background: #f9edca; }
+#hud .memorial-row img { width: 56px; height: 56px; object-fit: contain;
+  /* The graveyard lists the dead, so the thumbnails are stone like the statues. */
+  filter: grayscale(1) contrast(.92) brightness(1.06); }
+#hud .memorial-name { font-size: 15px; font-weight: 900; }
+#hud .memorial-meta { font-size: 11px; opacity: .72; }
+#hud .memorial-pick { min-width: 96px; padding: 8px; border: 2px solid #2b170b; border-radius: 8px;
+  background: linear-gradient(#9a9a92,#6a6a63); color: #fff; font-weight: 900; cursor: pointer; }
+#hud .memorial-pick:hover { filter: brightness(1.08); }
+#hud .memorial-pick:disabled { filter: grayscale(1); opacity: .48; }
+#hud .memorial-epitaph { margin-bottom: 8px; text-align: center; font-size: 14px;
+  font-weight: 900; letter-spacing: .02em; opacity: .85; }
+/* Moving/selling the plinth is housekeeping, not part of the memorial — keep it
+   present but visibly secondary to the zombie the panel is about. */
+#hud .memorial-options { flex: 0 1 auto; font-size: 12px; opacity: .78; }
+#hud .memorial-panel .zbtns { margin-top: 10px; justify-content: center; }
 
 /* ---- Level-up popup ---- */
 #hud .lvl-bg { z-index: 24; }
@@ -1234,7 +1471,9 @@
   font-weight: 700; font-size: 17px; color: #48300f; text-shadow: 0 1px 0 rgba(255,255,255,.4); }
 #hud .mkt-cur span { display: flex; align-items: center; gap: 4px; }
 #hud .mkt-cur img { height: 21px; }
-/* Brains the market is holding for uncollected sales, beside the player's own total. */
+/* Both market wallets sit on one row; a post is priced in either. */
+#hud .bm-bg .mkt-cur { flex-wrap: wrap; row-gap: 4px; }
+/* What the market is holding for uncollected sales, beside the matching total. */
 #hud .mkt-cur .bm-held { font-size: 12px; font-weight: 700; color: #8ad14a;
   background: rgba(138,209,74,.14); border-radius: 7px; padding: 2px 7px; margin-left: -10px; }
 #hud .mkt-tabs { display: flex; gap: 7px; justify-content: center; margin-bottom: 7px; }
@@ -1386,6 +1625,14 @@
   align-items: center; flex-wrap: wrap; gap: 8px; }
 #hud .epic-market-action { min-width: 210px; }
 #hud .epic-market-action img { width: 20px; height: 20px; vertical-align: middle; }
+#hud .epic-market-favorite { margin: 6px 0 0; }
+#hud .epic-market-favorite b { color: #5c286e; }
+
+/* Event-start announcement (ui/panels/epicBossStart.ts). */
+#hud .epic-start-panel { width: min(430px, 90vw); text-align: center; }
+#hud .epic-start-portrait { width: min(220px, 60%); max-height: 210px; object-fit: contain;
+  margin: 4px auto 10px; display: block; image-rendering: pixelated; }
+#hud .epic-start-lede { font-weight: 800; color: #5c286e; margin: 0 0 8px; }
 
 /* ---- Social hub + asynchronous Black Market ---- */
 #hud .social-hub { width: min(470px, 90vw); text-align: center; }
@@ -1419,11 +1666,22 @@
   border-radius: 7px; padding: 5px; background: linear-gradient(#79b94b,#438326); color: white;
   font-weight: 800; cursor: pointer; }
 #hud .bm-card button.cancel { background: linear-gradient(#c66b59,#913b31); }
+/* Bump sits above Cancel on your own post: a secondary, keep-it-alive action, so it
+   reads amber rather than competing with the green trade buttons. */
+#hud .bm-card button.bm-repost { background: linear-gradient(#e0a844,#a9701f); }
+/* Only ever your own sale, still holding a zombie it could not hand back because your
+   farm and crypt are full. It needs to look like it needs attention. */
+#hud .bm-card.bm-expired { border-color: #b0492f; background: #f0d8c6; }
 #hud .bm-card button:disabled, #hud .bm-compose button:disabled { opacity: .5; cursor: default; }
 #hud .bm-compose { border: 2px solid #aa7a3d; border-radius: 10px; background: rgba(239,228,191,.8);
   padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow: auto; color: #49300f; }
 #hud .bm-compose h3 { margin: 0; text-align: center; }
 #hud .bm-compose label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 700; }
+/* Amount and currency read as one control: the number takes the slack, the picker
+   stays only as wide as "Brains". */
+#hud .bm-price-row { display: flex; gap: 6px; }
+#hud .bm-price-row input { flex: 1 1 auto; min-width: 0; }
+#hud .bm-price-row select { flex: 0 0 auto; }
 #hud .bm-mutation-choices { max-height: 132px; overflow: auto; padding: 5px;
   border: 1px solid #b98b4a; border-radius: 6px; background: rgba(255,248,230,.72); }
 #hud .bm-mutation-choices[hidden] { display: none; }
@@ -1518,6 +1776,11 @@
 #hud .info-name { font-weight: 700; font-size: 18px; color: #4f2f13;
   text-shadow: 0 1px 0 rgba(255,255,255,.4); }
 #hud .info-desc { font-size: 14px; line-height: 1.42; color: #48300f; }
+/* Artist credit for contributed art. Set apart from the blurb above it — smaller,
+   italic, behind a hairline rule — because it is a signature on the parchment
+   rather than another sentence about the item. */
+#hud .info-credit { align-self: stretch; padding-top: 7px; font-size: 12px;
+  font-style: italic; color: #6b4a22; border-top: 1px solid rgba(107,74,34,.28); }
 
 /* ---- Storage menu (the tool shed) ---- */
 #hud .st-bg { position: fixed; inset: 0; pointer-events: auto; z-index: 21;
@@ -1712,14 +1975,20 @@
   #hud .zcard { width: 100%; max-width: 220px; margin: 0 auto; }
   #hud .zright { min-width: 0; }
 
-  /* Every shared modal must fit the visible viewport. Individual panels can
-     scroll internally when their desktop composition is taller than a phone. */
-  #hud .panelbg { box-sizing: border-box; padding: max(8px, env(safe-area-inset-top))
+  /* Bounding the modal to the viewport is the shared rule's job now; what is left
+     here is the phone-only part of it: keep clear of the notch and the home bar,
+     and let a panel that was sized for a desktop shrink to a narrow screen. */
+  #hud .panelbg { padding: max(8px, env(safe-area-inset-top))
     max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
     max(8px, env(safe-area-inset-left)); }
-  #hud .panelbg > .panel { min-width: 0; max-width: 100%; max-height: 100%; overflow-y: auto;
-    overscroll-behavior: contain; }
-  #hud .panelbg > .panel > .panelclose { top: 2px; right: 2px; z-index: 3; }
+  #hud .panelbg > .panel { min-width: 0; max-width: 100%; }
+  /* Nothing inside a modal may be wider than the modal. Several panels hold a
+     body sized straight off the viewport (`.zroster` is 88vw, `.army-wrap` 90vw)
+     which on a phone comes out WIDER than the panel's own content box, so the
+     panel scrolled sideways and its top-right counter slid under the close
+     button. Clamping here rather than in each body's own rule keeps a desktop
+     panel — which is sized BY that body — exactly as it was. */
+  #hud .panelbg > .panel > * { max-width: 100%; }
 
   #hud .st-bg { box-sizing: border-box; padding: max(8px, env(safe-area-inset-top))
     max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
@@ -1862,10 +2131,12 @@
   #hud .zabil img { width: 22px; height: 22px; }
   #hud .zabil .zlock { font-size: 14px; }
   #hud .zabil-none { padding: 5px 2px; font-size: 10px; }
-  #hud .zmuts { gap: 5px; }
+  /* the visibility badge overhangs the tile, so the compact row needs the wider
+     gap the badge costs — otherwise each eye sits on its neighbour's frame. */
+  #hud .zmuts { gap: 10px; }
   #hud .zmut { width: 30px; height: 33px; }
   #hud .zmut img { width: 22px; height: 22px; }
-  #hud .zmut-vis { width: 17px; height: 17px; top: -4px; right: -5px; font-size: 9px; line-height: 15px; }
+  #hud .zmut-vis { width: 17px; height: 17px; top: -4px; right: -5px; font-size: 9px; }
 
   #hud .zl-panel { width: min(720px, 94vw); }
   #hud .zl-list { gap: 7px; max-height: 70vh; }
@@ -2108,3 +2379,27 @@
 #hud .mut-alm-card .zr-cls { max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #hud .mut-alm-detail { min-width: min(360px, 82vw); }
 #hud .mut-alm-stats { text-align: center; color: #f7e7b3; font-size: 14px; font-weight: 800; }
+
+/* Mutation Almanac (third tab). Same tiles as the species grid, plus the stat line
+   that is the whole reason to open it. */
+#hud .mut-note { margin: 0 0 8px; }
+#hud .mut-card .zr-por-img { image-rendering: pixelated; }
+#hud .mut-stats { font-size: 11px; font-weight: 700; color: #b6f36a; line-height: 1.2;
+  margin: 1px 2px 0; }
+#hud .mut-detail-cls { margin-top: 4px; }
+#hud .mut-detail-stats { text-align: center; font-size: 15px; font-weight: 800;
+  color: #b6f36a; margin: 8px 0 0; }
+/* Field notes: the three system explainers above the collection grid. */
+#hud .alm-notes { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
+#hud .alm-notes-label { font-size: 14px; font-weight: 800; letter-spacing: .06em;
+  text-transform: uppercase; color: #b6f36a; opacity: .95; }
+#hud .alm-note { display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  width: 100%; text-align: left; cursor: pointer; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid #6b5a33; background: rgba(0,0,0,.28); color: inherit; font: inherit; }
+#hud .alm-note:hover { background: rgba(0,0,0,.42); border-color: #b6f36a; }
+#hud .alm-note b { font-size: 14px; color: #ffd76a; }
+#hud .alm-note span { font-size: 12px; opacity: .88; }
+/* A field-note page is prose, not a card: cap the measure and let it scroll. */
+#hud .alm-guide { max-width: 520px; max-height: 78vh; overflow-y: auto; text-align: left; }
+#hud .alm-guide h2 { margin: 0 0 8px; font-size: 20px; color: #ffd76a; }
+#hud .alm-guide p { margin: 0 0 10px; font-size: 13px; line-height: 1.5; opacity: .92; }

@@ -92,6 +92,8 @@ describe("JobSystem elapsed-time catch-up", () => {
       gold: 100,
       spendGold: (amount: number) => { state.gold -= amount; },
       addXp: () => {},
+      // Lifetime tally (GameState.record*): counted on every applied job.
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: null,
       onTreeHarvest: null,
       canMutateOnline: null,
@@ -208,6 +210,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     };
     const state = {
       gold: 100, spendGold: (amount: number) => { state.gold -= amount; }, addXp: () => {},
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: null, onTreeHarvest: null, canMutateOnline: null,
     };
     const jobs = new JobSystem(
@@ -239,6 +242,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     };
     const state = {
       gold: 100, spendGold: () => {}, addXp: () => {},
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: null, onTreeHarvest: null, canMutateOnline: null,
     };
     const jobs = new JobSystem(
@@ -324,7 +328,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     const field = {
       highlightLayer: new Container(), plowHighlightLayer: new Container(), labelLayer: new Container(),
       plotOriginAt: (col: number, row: number) => ({ oc: col, or: row }),
-      isRipe: () => true, isHarvestable: () => true, ripeZombieAt: () => true,
+      isRipe: () => true, isHarvestable: () => true, isInvasiveMintAt: () => false, ripeZombieAt: () => true,
       plotCenterOf: (col: number, row: number) => ({ x: col, y: row }),
       hasFastWork: () => false,
       harvestAt,
@@ -332,6 +336,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     const state = {
       onFarm: null, onTreeHarvest: null, canMutateOnline: null,
     };
+    // Room at the tap, none by the time the farmer gets there.
     let room = 1;
     const jobs = new JobSystem(
       field as never, { setWorking } as never, walk as never, state as never,
@@ -355,6 +360,64 @@ describe("JobSystem elapsed-time catch-up", () => {
     expect(jobs.busy).toBe(true);
   });
 
+  it("refuses to queue more zombie harvests than the farm has room for", () => {
+    const walk = new FakeWalk();
+    const messages: string[] = [];
+    const field = {
+      highlightLayer: new Container(), plowHighlightLayer: new Container(), labelLayer: new Container(),
+      plotOriginAt: (col: number, row: number) => ({ oc: col, or: row }),
+      isRipe: () => true, isHarvestable: () => true, isInvasiveMintAt: () => false, ripeZombieAt: () => true,
+      plotCenterOf: (col: number, row: number) => ({ x: col, y: row }),
+      hasFastWork: () => false,
+      harvestAt: vi.fn(),
+    };
+    const jobs = new JobSystem(
+      field as never, { setWorking: () => {} } as never, walk as never,
+      { onFarm: null, onTreeHarvest: null, canMutateOnline: null } as never,
+      (_x, _y, message) => messages.push(message),
+      () => {}, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      () => 1, // one free slot on a 16-cap farm holding 15
+    );
+
+    expect(jobs.enqueue("harvest", 4, 8)).toBe(true);
+    // The first queued crop has already claimed the only slot.
+    expect(jobs.enqueue("harvest", 12, 8)).toBe(false);
+    expect(jobs.enqueue("harvest", 20, 8)).toBe(false);
+    expect(messages).toEqual(["Army full!", "Army full!"]);
+  });
+
+  it("leaves the crop in the ground when the last slot is taken during the work phase", () => {
+    const walk = new FakeWalk();
+    const messages: string[] = [];
+    const harvestAt = vi.fn();
+    const field = {
+      highlightLayer: new Container(), plowHighlightLayer: new Container(), labelLayer: new Container(),
+      plotOriginAt: (col: number, row: number) => ({ oc: col, or: row }),
+      isRipe: () => true, isHarvestable: () => true, isInvasiveMintAt: () => false, ripeZombieAt: () => true,
+      plotCenterOf: (col: number, row: number) => ({ x: col, y: row }),
+      hasFastWork: () => false,
+      harvestAt,
+    };
+    let room = 1;
+    const jobs = new JobSystem(
+      field as never, { setWorking: () => {} } as never, walk as never,
+      { onFarm: null, onTreeHarvest: null, canMutateOnline: null } as never,
+      (_x, _y, message) => messages.push(message),
+      () => {}, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      () => room,
+    );
+
+    expect(jobs.enqueue("harvest", 4, 8)).toBe(true);
+    jobs.update(0);      // walk phase
+    walk.update(0.2);    // arrives with room, starts hoeing
+    room = 0;            // a combine is collected mid-swing
+    jobs.update(2);      // work phase completes
+
+    expect(harvestAt).not.toHaveBeenCalled();
+    expect(messages).toEqual(["Army full!"]);
+    expect(jobs.busy).toBe(false);
+  });
+
   it("retains each planting's logical completion time during catch-up", () => {
     vi.useFakeTimers();
     const now = 1_000_000;
@@ -375,6 +438,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     const state = {
       gold: 100, brains: 0, level: 1,
       spendGold: (amount: number) => { state.gold -= amount; },
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: null, onTreeHarvest: null, canMutateOnline: null,
     };
     const cfg = {
@@ -410,6 +474,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     };
     const state = {
       gold: 100, brains: 0, level: 1,
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: (action: unknown) => farmActions.push(action),
       onTreeHarvest: null, canMutateOnline: () => true,
     };
@@ -467,6 +532,7 @@ describe("JobSystem elapsed-time catch-up", () => {
     };
     const state = {
       gold: 100, spendGold: (amount: number) => { state.gold -= amount; }, addXp: () => {},
+      recordPlowed: () => {}, recordPlanted: () => {}, recordHarvest: () => {}, recordTreeHarvest: () => {},
       onFarm: null, onTreeHarvest: null, canMutateOnline: null,
     };
     const first = new JobSystem(

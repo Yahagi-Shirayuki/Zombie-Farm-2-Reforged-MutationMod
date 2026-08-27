@@ -1,27 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
-  befriend, call, currentIntegrityHeaders, grantBalance, grantRoster, signIn, uniqueSub,
+  befriend, call, commandBody, currentIntegrityHeaders, DEVICE_A, grantBalance, grantFallen,
+  grantRoster, signIn, uniqueSub, xpForLevel,
 } from "./helpers";
 import { RAID_RULESET_VERSION } from "../../../src/raid/replay";
+import { epicBossById } from "../../../src/epicBoss/catalog";
+import { EPIC_BOSS_FIGHT_BRAIN_COST } from "../../../src/epicBoss/tokens";
 
-const deviceA = "device-aaaaaaaa";
-const commandBody = (
-  bootstrap: { accountVersion: number; writerGeneration: number },
-  batchId: string,
-  firstSequence: number,
-  commands: unknown[],
-  deviceId = deviceA,
-  takeWriter = false
-) => ({
-  protocolVersion: 3,
-  deviceId,
-  batchId,
-  firstSequence,
-  expectedAccountVersion: bootstrap.accountVersion,
-  writerGeneration: bootstrap.writerGeneration,
-  takeWriter,
-  commands: commands.map((command, index) => ({ sequence: firstSequence + index, command })),
-});
+const deviceA = DEVICE_A;
+
+/** What activating Loco Locust actually costs, read from the same catalog the Worker
+ *  charges from. Balance work re-prices these (they now ramp 3-5 brains with the unlock
+ *  ladder), and a literal here turns every re-price into a red integration suite. */
+const LOCUST_BRAINS = epicBossById("loco-locust")!.costBrains;
 
 describe("protocol v3 API", () => {
   it("persists a level-up invasion cooldown reset in the command transaction", async () => {
@@ -660,11 +651,11 @@ describe("protocol v3 API", () => {
     });
     expect(locked).toMatchObject({
       status: 403,
-      body: { error: "locked", level: 25, unlockLevel: 32 },
+      body: { error: "locked", level: 25, unlockLevel: 42 },
     });
 
     const session = await signIn();
-    await grantBalance(session, { gold: 400, brains: 1_000, xp: 61_000 });
+    await grantBalance(session, { gold: 400, brains: 1_000, xp: 165_000 });
     const boot = (await call<any>("POST", "/bootstrap", session.token, {})).body;
     const grown = await call<any>("POST", "/commands", session.token,
       commandBody(boot, "batch-epic-zombie", 1, [
@@ -688,11 +679,40 @@ describe("protocol v3 API", () => {
       bossId: "loco-locust",
       level: 1,
     });
-    expect(activated.body.balance.brains).toBe(brainsBeforeActivation - 10);
+    // Derived, not literal: activation prices are catalog data on a balance ladder
+    // (3-5 brains by unlock order) and an attempt is one brain. Hard-coding either meant
+    // this test failed on the re-price rather than on a regression in what it checks —
+    // that the activation and every attempt are debited authoritatively, once each.
+    expect(activated.body.balance.brains).toBe(brainsBeforeActivation - LOCUST_BRAINS);
+
+    // A bundle that disagrees with the Worker is refused BEFORE it pays. An epic fight is
+    // server-replayed and ruleset v28/v29 put the attempt window and the damage curve
+    // inside the rules, so a stale client would fight to a win under its own rules and
+    // lose it at verification — with the brain already spent. Assert the refusal AND that
+    // it cost nothing, which is the whole point of gating at start rather than at finish.
+    for (const rulesetVersion of [RAID_RULESET_VERSION - 1, undefined]) {
+      // `undefined` is the case that actually reaches production: a bundle predating this
+      // handshake sends no such field at all, and must be refused exactly like one sending
+      // a number that disagrees.
+      const stale = await call<any>("POST", "/epic-boss/start", session.token, {
+        orderedUnitIds: [epicZombieId],
+        payment: "brains",
+        ...(rulesetVersion === undefined ? {} : { rulesetVersion }),
+      });
+      expect(stale, `rulesetVersion=${rulesetVersion}`).toMatchObject({
+        status: 426,
+        body: { error: "stale_ruleset", rulesetVersion: RAID_RULESET_VERSION },
+      });
+    }
+    const afterStale = (await call<any>("POST", "/bootstrap", session.token, {})).body;
+    expect(afterStale.gameplay.balance.brains).toBe(brainsBeforeActivation - LOCUST_BRAINS);
+    // No session was opened either, so the start below is a first attempt and not a resume.
+    expect(afterStale.gameplay.epicBoss?.encounterStartedAt ?? 0).toBe(0);
 
     const started = await call<any>("POST", "/epic-boss/start", session.token, {
       orderedUnitIds: [epicZombieId],
       payment: "brains",
+      rulesetVersion: RAID_RULESET_VERSION,
     });
     expect(started.status, JSON.stringify(started.body)).toBe(200);
     const escaped = await call<any>("POST", "/epic-boss/finish", session.token, {
@@ -706,9 +726,13 @@ describe("protocol v3 API", () => {
     const retried = await call<any>("POST", "/epic-boss/start", session.token, {
       orderedUnitIds: [epicZombieId],
       payment: "brains",
+      rulesetVersion: RAID_RULESET_VERSION,
     });
     expect(retried.status, JSON.stringify(retried.body)).toBe(200);
-    expect(retried.body.balance.brains).toBe(brainsBeforeActivation - 12);
+    // Activation plus TWO attempts: the escape above did not refund the first one.
+    expect(retried.body.balance.brains).toBe(
+      brainsBeforeActivation - LOCUST_BRAINS - 2 * EPIC_BOSS_FIGHT_BRAIN_COST
+    );
 
     const ended = await call<any>("POST", "/epic-boss/end", session.token, {
       runId: activationId,
@@ -722,6 +746,54 @@ describe("protocol v3 API", () => {
       bossId: "dr-groundhog",
     });
     expect(reactivated.status, JSON.stringify(reactivated.body)).toBe(200);
+  });
+
+  it("buries an Epic Boss casualty in the graveyard, the same as an invasion does", async () => {
+    // The reported bug: a zombie lost to an epic boss left no `fallen_v3` row, so the
+    // Memorial Statue — which reads the authoritative graveyard and nothing else —
+    // told a player who had just lost one that they had never lost any.
+    const session = await signIn(uniqueSub("epic-graveyard"));
+    await grantBalance(session, { gold: 400, brains: 1_000, xp: 165_000 });
+    const boot = (await call<any>("POST", "/bootstrap", session.token, {})).body;
+    const grown = await call<any>("POST", "/commands", session.token,
+      commandBody(boot, "batch-epic-graveyard", 1, [
+        { type: "farm.plow", oc: 0, or: 0 },
+        { type: "farm.plant", oc: 0, or: 0, cropKey: "ZombieActorRegularTier1" },
+        { type: "power.buy", key: "insta_grow" },
+        { type: "power.use", key: "insta_grow", oc: 0, or: 0 },
+        { type: "farm.harvest", oc: 0, or: 0 },
+      ]));
+    expect(grown.status).toBe(200);
+    const unitId = grown.body.createdZombieIds[0];
+    // Name it, so the plaque has something to carve: names live only in the
+    // presentation blob, keyed by the roster id that is about to be deleted.
+    expect((await call<any>("PUT", "/presentation", session.token, {
+      protocolVersion: 3, expectedVersion: grown.body.presentation?.version ?? 0,
+      data: { rosterLayout: [{ id: unitId, name: "Gus" }] },
+    })).status).toBe(200);
+
+    const activated = await call<any>("POST", "/epic-boss/activate", session.token, {
+      activationId: uniqueSub("activation-graveyard"), bossId: "loco-locust",
+    });
+    expect(activated.status, JSON.stringify(activated.body)).toBe(200);
+    const started = await call<any>("POST", "/epic-boss/start", session.token, {
+      orderedUnitIds: [unitId], payment: "brains", rulesetVersion: RAID_RULESET_VERSION,
+    });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    // No retreat input: the verifier runs the whole fight to its own conclusion, and a
+    // Tier-1 Regular against the level-42 boss loses it.
+    const finished = await call<any>("POST", "/epic-boss/finish", session.token, {
+      sessionId: started.body.sessionId, finalTick: 0, inputs: [],
+    });
+    expect(finished.status, JSON.stringify(finished.body)).toBe(200);
+    expect(finished.body.losses).toEqual([unitId]);
+
+    const after = (await call<any>("POST", "/bootstrap", session.token, {})).body;
+    expect(after.gameplay.fallen).toEqual([
+      expect.objectContaining({ id: unitId, key: "ZombieActorRegularTier1", name: "Gus" }),
+    ]);
+    // ...and it is genuinely out of the roster, not merely remembered.
+    expect(after.gameplay.roster?.some((z: any) => z.id === unitId)).toBeFalsy();
   });
 
   it("persists pet ownership, makes retries idempotent, and ignores presentation forgeries", async () => {
@@ -775,6 +847,87 @@ describe("protocol v3 API", () => {
     expect(visit.body.save.objects).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "visit-pet-pen", key: "pettingZoo" }),
     ]));
+  });
+
+  it("shows a friend the zombie carved on a Memorial Statue, and releases it on sale", async () => {
+    const owner = await signIn(uniqueSub("memorial-owner"));
+    const other = await signIn(uniqueSub("memorial-visitor"));
+    await grantBalance(owner, { gold: 30_000 });
+    await grantFallen(owner, [
+      { id: "z-dead-1", key: "ZombieActorRegularTier1", name: "Gus", mutation: 8, invasions: 3, diedAt: 1_700_000_000_000 },
+      { id: "z-dead-2", key: "ZombieActorGardenTier1", diedAt: 1_700_000_001_000 },
+    ]);
+    const boot = (await call<any>("POST", "/bootstrap", owner.token, { protocolVersion: 3, deviceId: deviceA })).body;
+    // The graveyard arrives with the bootstrap, newest first, nobody enshrined yet.
+    expect(boot.gameplay.fallen).toEqual([
+      expect.objectContaining({ id: "z-dead-2", key: "ZombieActorGardenTier1" }),
+      expect.objectContaining({ id: "z-dead-1", name: "Gus", mutation: 8, invasions: 3 }),
+    ]);
+    expect(boot.gameplay.fallen.every((u: any) => u.memorialObjectId === undefined)).toBe(true);
+
+    const built = await call<any>("POST", "/commands", owner.token,
+      commandBody(boot, "batch-memorial-buy", 1, [
+        { type: "object.buy", catalogKey: "memorialStatue", clientInstanceId: "statue-1" },
+        { type: "object.buy", catalogKey: "memorialStatue", clientInstanceId: "statue-2" },
+        { type: "memorial.enshrine", instanceId: "statue-1", unitId: "z-dead-1", name: "Gus" },
+      ]));
+    expect(built.status, JSON.stringify(built.body)).toBe(200);
+    // Unlimited copies: the one-per-farm rule every other functional item lives under
+    // does not apply, or a player could only ever remember one zombie.
+    expect(built.body.results.map((r: any) => r.status)).toEqual(["applied", "applied", "applied"]);
+    expect(built.body.gameplay.fallen).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "z-dead-1", memorialObjectId: "statue-1" }),
+    ]));
+
+    // A zombie can only stand on one plinth, and only a zombie this account lost.
+    const refused = await call<any>("POST", "/commands", owner.token,
+      commandBody(built.body, "batch-memorial-bad", 4, [
+        { type: "memorial.enshrine", instanceId: "statue-2", unitId: "z-dead-1" },
+        { type: "memorial.enshrine", instanceId: "statue-2", unitId: "z-never-existed" },
+        { type: "memorial.enshrine", instanceId: "statue-1", unitId: "z-dead-2" },
+      ]));
+    expect(refused.body.results.map((r: any) => r.error))
+      .toEqual(["already_enshrined", "not_owned", "statue_occupied"]);
+
+    // THE POINT OF ALL THIS: a visitor renders the statue from the authoritative
+    // object list, so the occupant has to travel with it. Their own graveyard stays
+    // private — a visit shows what stands on the farm, not who else died.
+    await befriend(owner, other);
+    const visit = await call<any>("GET", `/friends/${owner.accountId}/save`, other.token);
+    expect(visit.status).toBe(200);
+    const statues = visit.body.save.objects.filter((o: any) => o.key === "memorialStatue");
+    expect(statues).toHaveLength(2);
+    expect(statues.find((o: any) => o.id === "statue-1").memorial)
+      .toMatchObject({ id: "z-dead-1", key: "ZombieActorRegularTier1", name: "Gus", mutation: 8 });
+    expect(statues.find((o: any) => o.id === "statue-2").memorial).toBeUndefined();
+    expect(visit.body.save.fallen).toBeUndefined();
+
+    // Selling the plinth must not bury the zombie a second time: it goes back to the
+    // graveyard, free to be enshrined again.
+    const sold = await call<any>("POST", "/commands", owner.token,
+      commandBody(refused.body, "batch-memorial-sell", 7, [
+        { type: "object.refund", instanceId: "statue-1" },
+      ]));
+    expect(sold.body.results[0], JSON.stringify(sold.body.results[0])).toMatchObject({ status: "applied" });
+    const released = sold.body.gameplay.fallen.find((u: any) => u.id === "z-dead-1");
+    expect(released.memorialObjectId).toBeUndefined();
+    // …and it rejoins at the TOP of the graveyard rather than at its date of death.
+    // A player enshrines a loss they care about, which is usually an old one, so
+    // ranking it by `diedAt` on the way back would bury it under everything that has
+    // died since — and delete it outright at the next settlement on a farm that has
+    // lost MEMORIAL_GRAVEYARD_CAP zombies in the meantime. `z-dead-2` died LATER than
+    // `z-dead-1` and led this list before the statue was sold.
+    expect(released.releasedAt).toBeGreaterThan(released.diedAt);
+    expect(released.diedAt).toBe(1_700_000_000_000); // the plaque's date is untouched
+    expect(sold.body.gameplay.fallen.map((u: any) => u.id)).toEqual(["z-dead-1", "z-dead-2"]);
+
+    const reloaded = (await call<any>("POST", "/bootstrap", owner.token, {})).body;
+    expect(reloaded.gameplay.fallen.find((u: any) => u.id === "z-dead-1").memorialObjectId)
+      .toBeUndefined();
+    // The bootstrap's ORDER BY and the settlement trim read the same expression, so
+    // the reprieve survives a reload — this is the row that would be kept.
+    expect(reloaded.gameplay.fallen.map((u: any) => u.id)).toEqual(["z-dead-1", "z-dead-2"]);
+    expect(reloaded.gameplay.objects.objects.some((o: any) => o.instanceId === "statue-1")).toBe(false);
   });
 
   it("bootstraps once and applies a mixed ordered batch", async () => {
@@ -915,6 +1068,80 @@ describe("protocol v3 API", () => {
     });
   });
 
+  it("spends a Brain Ticket for an elite invasion, and refuses without one", async () => {
+    const session = await signIn();
+    // 9,500 XP is XP_THRESHOLDS[19] — exactly level 20, the Brain Ticket's Market gate.
+    // The gate is enforced on the SERVER (boostCatalog + engine's `power.buy`), so an
+    // account seeded with gold alone is level 1 and the purchase below is refused
+    // `locked`. See boostCatalogSync.test.ts for why that number lives in two places.
+    await grantBalance(session, { gold: 30_000, xp: 9_500 });
+    await grantRoster(session, [{
+      id: "elite-raid-zombie",
+      key: "ZombieActorRegularTier1",
+      stored: false,
+    }]);
+    const boot = (await call<any>("POST", "/bootstrap", session.token, {
+      protocolVersion: 3,
+      deviceId: deviceA,
+    })).body;
+    const raid = {
+      raidId: 1,
+      orderedUnitIds: ["elite-raid-zombie"],
+      rulesetVersion: RAID_RULESET_VERSION,
+    };
+
+    // Asking for elite with an empty pocket is refused outright rather than quietly
+    // downgraded — the player asked for the fight they were going to be charged for.
+    const broke = await call<any>("POST", "/raid/start", session.token, { ...raid, brainTicket: true });
+    expect(broke).toMatchObject({ status: 409, body: { error: "no_brain_ticket" } });
+
+    const bought = await call<any>("POST", "/commands", session.token,
+      commandBody(boot, "batch-buy-brain-ticket", 1, [
+        { type: "power.buy", key: "brain_ticket" },
+      ]));
+    expect(bought.status, JSON.stringify(bought.body)).toBe(200);
+    expect(bought.body.results[0]).toMatchObject({ status: "applied" });
+    expect(bought.body.gameplay.inventory.brain_ticket).toBe(1);
+    expect(bought.body.gameplay.balance.gold).toBe(20_000);
+
+    const started = await call<any>("POST", "/raid/start", session.token, { ...raid, brainTicket: true });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    expect(started.body).toMatchObject({ ok: true, elite: true, inventory: { brain_ticket: 0 } });
+
+    await call<any>("POST", "/raid/finish", session.token, {
+      sessionId: started.body.sessionId,
+      finalTick: 0,
+      inputs: [{ seq: 1, tick: 0, type: "retreat" }],
+      clientWin: false,
+    });
+
+    // A ticket covers the wait too, so a second elite launch inside the cooldown needs
+    // only another ticket — not an Invasion Voucher on top of it.
+    const stillBroke = await call<any>("POST", "/raid/start", session.token, { ...raid, brainTicket: true });
+    expect(stillBroke).toMatchObject({ status: 409, body: { error: "no_brain_ticket" } });
+    const reboot = (await call<any>("POST", "/bootstrap", session.token, {
+      protocolVersion: 3,
+      deviceId: deviceA,
+    })).body;
+    // An Invasion Voucher is bought alongside it purely so the next assertion can show
+    // it was NOT taken: the ticket alone paid for the bypass.
+    const again = await call<any>("POST", "/commands", session.token,
+      commandBody(reboot, "batch-buy-brain-ticket-2", 2, [
+        { type: "power.buy", key: "brain_ticket" },
+        { type: "power.buy", key: "invasion_voucher" },
+      ]));
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body.gameplay.inventory).toMatchObject({ brain_ticket: 1, invasion_voucher: 1 });
+    const bypass = await call<any>("POST", "/raid/start", session.token, { ...raid, brainTicket: true });
+    expect(bypass.status, JSON.stringify(bypass.body)).toBe(200);
+    expect(bypass.body).toMatchObject({
+      ok: true,
+      elite: true,
+      bypassed: true,
+      inventory: { brain_ticket: 0, invasion_voucher: 1 },
+    });
+  });
+
   it("versions presentation independently and retires v2 mutations", async () => {
     const session = await signIn();
     for (const objectLayout of [{}, [null], [{ id: "o1", oc: "0", or: 0 }]]) {
@@ -934,12 +1161,36 @@ describe("protocol v3 API", () => {
       });
       expect(malformed.status, JSON.stringify(discovered)).toBe(400);
     }
+    // The graveyard is server-owned (fallen_v3), but a client built before that
+    // table still puts `fallen` in its presentation blob. It MUST stay accepted: an
+    // unknown key rejects the WHOLE blob, which would silently stop that client's
+    // object positions and zombie names from saving the moment a zombie died.
+    const fallen = (over: Record<string, unknown> = {}) => ({
+      id: "z9", key: "ZombieActorRegularTier1", name: "Bob",
+      mutation: 8, invasions: 5, diedAt: 1_700_000_000_000, ...over,
+    });
+    for (const bad of [
+      [fallen({ id: "bad id!" })],                          // id charset
+      [fallen({ name: "x".repeat(25) })],                   // name length
+      [fallen({ invasions: -1 })],                          // counters are non-negative
+      [fallen({ color: [1, 2] })],                          // colour is a triplet
+      [{ id: "z9" }],                                       // missing fields
+      Array.from({ length: 61 }, (_, i) => fallen({ id: `z${i}` })), // over the cap
+      { z9: fallen() },                                     // must be a list
+    ]) {
+      const malformed = await call("PUT", "/presentation", session.token, {
+        protocolVersion: 3, expectedVersion: 0, data: { fallen: bad },
+      });
+      expect(malformed.status, JSON.stringify(bad).slice(0, 80)).toBe(400);
+    }
     const presentation = await call<any>("PUT", "/presentation", session.token, {
       protocolVersion: 3,
       expectedVersion: 0,
       data: {
         camera: { x: 1, y: 2 }, tutorial: { done: false, step: 1 },
         almanac: { discovered: { ZombieActorRegularTier1: 2, ZombieActorGardenTier1: 1 } },
+        fallen: [fallen(), fallen({ id: "z10", color: [12, 34, 56] })],
+        objectLayout: [{ id: "o1", oc: 3, or: 4, memorial: fallen({ id: "z11" }) }],
       },
     });
     expect(presentation.status).toBe(200);
@@ -963,6 +1214,38 @@ describe("protocol v3 API", () => {
     const malformed = await call<any>("POST", "/commands", session.token,
       commandBody(boot, "batch-bad-trees", 1, [{ type: "object.harvest_trees", instanceIds: "all" }]));
     expect(malformed.status).toBe(400);
+  });
+
+  // Boss Tokens are rolled by the CLIENT on harvest and merely reported here. Nothing
+  // else writes `epic_boss_runs_v3.token_count` during a command batch any more, so this
+  // covers the whole live path: the command door, the engine, the conditional D1 write
+  // in v3/db.ts, and the count coming back out of a fresh bootstrap.
+  it("records client-rolled Boss Tokens and persists them past the batch", async () => {
+    const session = await signIn(uniqueSub("boss-token-grant"));
+    // Dr Groundhog unlocks at 24 and costs 5 brains to activate.
+    await grantBalance(session, { brains: 20, xp: xpForLevel(24) });
+    const activated = await call<any>("POST", "/epic-boss/activate", session.token, {
+      activationId: uniqueSub("activation"), bossId: "dr-groundhog",
+    });
+    expect(activated.status, JSON.stringify(activated.body)).toBe(200);
+    const runId = activated.body.event.runId;
+    expect(activated.body.event.tokenCount).toBe(0);
+
+    const boot = (await call<any>("POST", "/bootstrap", session.token, {})).body;
+    const granted = await call<any>("POST", "/commands", session.token,
+      commandBody(boot, "batch-boss-tokens", 1, [
+        { type: "epicBoss.token", runId },
+        { type: "epicBoss.token", runId, count: 2 },
+        // A grant for an event this account is not running is dropped, not applied.
+        { type: "epicBoss.token", runId: "some-other-run" },
+      ]));
+    expect(granted.status, JSON.stringify(granted.body)).toBe(200);
+    expect(granted.body.results.map((r: any) => r.status))
+      .toEqual(["applied", "applied", "rejected"]);
+    expect(granted.body.gameplay.epicBoss.tokenCount).toBe(3);
+
+    const after = await call<any>("POST", "/bootstrap", session.token, {});
+    expect(after.body.gameplay.epicBoss.tokenCount).toBe(3);
   });
 });
 

@@ -91,6 +91,18 @@ export async function grantRoster(
   }
 }
 
+/** Bury zombies so a scenario can exercise memorials without staging a raid that
+ *  actually kills someone. */
+export async function grantFallen(
+  s: Session,
+  units: { id: string; key: string; name?: string; mutation?: number; invasions?: number; diedAt?: number }[]
+): Promise<void> {
+  const r = await call<{ count: number }>("POST", "/dev/fixture/fallen", s.token, { units });
+  if (r.status !== 200 || r.body.count < units.length) {
+    throw new Error(`fallen fixture failed: ${r.status}`);
+  }
+}
+
 /** Establish an explicit economy balance for a scenario that tests paid actions. */
 export async function grantBalance(
   s: Session,
@@ -147,3 +159,29 @@ export async function plowPaid(s: Session, oc: number, or: number): Promise<void
     actions: [{ id: `plow-${uniqueSub()}`, type: "plow", oc, or }],
   });
 }
+
+export const DEVICE_A = "device-aaaaaaaa";
+
+/** A POST /commands envelope fenced against a bootstrap the caller just read.
+ *
+ *  Lives here rather than inside one spec because it is the v3 idiom every mutation
+ *  goes through: a spec ported off the retired v2 action routes needs this and nothing
+ *  else. Read a fresh /bootstrap first — the CAS is on `accountVersion`, so a stale one
+ *  is refused rather than applied. */
+export const commandBody = (
+  bootstrap: { accountVersion: number; writerGeneration: number },
+  batchId: string,
+  firstSequence: number,
+  commands: unknown[],
+  deviceId = DEVICE_A,
+  takeWriter = false
+) => ({
+  protocolVersion: 3,
+  deviceId,
+  batchId,
+  firstSequence,
+  expectedAccountVersion: bootstrap.accountVersion,
+  writerGeneration: bootstrap.writerGeneration,
+  takeWriter,
+  commands: commands.map((command, index) => ({ sequence: firstSequence + index, command })),
+});

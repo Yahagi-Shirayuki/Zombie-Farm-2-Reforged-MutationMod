@@ -61,7 +61,10 @@ WIKI_GOLD = {
     6: (4000, 2000),   # Zombies vs Aliens
     7: (1200, 600),    # Summer Break (filled — not in wiki)
     8: (1200, 600),    # Zombies vs Circus
-    9: (5000, 1200),   # Zombies vs Video Games
+    # Video Games' base is deliberately 1,300 above the wiki's 5,000. It is the last
+    # invasion unlocked and the hardest fight on the ladder, and at the wiki figure it
+    # paid barely more per run than the Aliens five levels below it.
+    9: (6300, 1200),   # Zombies vs Video Games
     10: (1200, 600),   # Tree World
     11: (1200, 600),   # Valentine's Day (filled — not in wiki)
 }
@@ -76,6 +79,37 @@ WIKI_GOLD = {
 #   push-back boss. Removing a key -> list it under REMOVE.
 ATTACK_OVERRIDES = {
     "CorporateBossPunchSpecial": {"REMOVE": ["knockBack"]},
+}
+
+# Deliberate divergences from UnitStats.json, same contract as ATTACK_OVERRIDES: applied
+# last so a regeneration cannot silently undo them.
+#   AlienStageActorMinion — str 6 -> 5. Nothing is wrong with 6 in isolation; it is a
+#   mid-table minion (60 damage a swing on a 1 s clock, against the Ninja Boy's 180 and
+#   the Crazed Worker's 20). What changed is that the alien raid is the ONLY swarm in the
+#   game — six of them stand on the field at once, and every enemy commits its whole
+#   output to the single front-most zombie (which the source does too), so the authored
+#   number arrives six times over: 360 damage a second onto one unit, twice the worst any
+#   other invasion can produce. Playtest verdict on the shipped value: a full mutated army
+#   was "absolutely creamed". 4 read as too soft on the next pass — an ELITE run cleared
+#   with no losses at all — so it sits at 5: the swarm lands 300/s, still the heaviest
+#   incoming rate on the ladder and still a level-36 fight.
+UNIT_OVERRIDES = {
+    "AlienStageActorMinion": {"str": 5},
+}
+
+# Units a raid SPAWNS but never lists in a stage. `used_units` is walked out of the
+# stage tables, so a unit that only ever arrives through a boss action is dropped and
+# the runtime has no stats to build it from.
+#   VideoGameStageZombieActor — what Zedzox's `turnZombie` makes out of one of YOUR
+#   zombies (raid 9). It is authored in UnitStats.json like any other actor (con 10000,
+#   dex 6, str 8, VideoGameZombieBite) and ships its own idle/attack frames in
+#   spritesheets/zombies/VideoGameZombie, but it appears in no `stageSettings` entry
+#   because nothing spawns it as wave population. The con is the tell: 10000 is roughly
+#   sixty times a wave minion's, far past what melee can chew through inside a round —
+#   this is a hazard you TAP down, not an enemy you out-fight. See BattleSim's
+#   `turnZombie` case.
+EXTRA_UNITS = {
+    "VideoGameStageZombieActor",
 }
 
 
@@ -338,7 +372,7 @@ def main():
 
     missing = set()
     raids = []
-    used_units = set()
+    used_units = set(EXTRA_UNITS)  # boss-action spawns, which no stage table lists
 
     for e in enemies:
         rid = as_int(e.get("ID"))
@@ -428,8 +462,16 @@ def main():
             continue
         attack_defs[name] = a
 
-    # Deliberate divergences (see ATTACK_OVERRIDES) — applied last so they survive
-    # every regeneration.
+    # Deliberate divergences (see UNIT_OVERRIDES / ATTACK_OVERRIDES) — applied last so
+    # they survive every regeneration.
+    for key, override in UNIT_OVERRIDES.items():
+        target = enemy_stats.get(key)
+        if target is None:
+            missing.add(f"UnitOverride:{key}")
+            continue
+        for field, value in override.items():
+            target[field] = value
+
     for name, override in ATTACK_OVERRIDES.items():
         target = attack_defs.get(name)
         if target is None:

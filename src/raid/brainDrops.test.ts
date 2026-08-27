@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   BRAIN_PITY_AMOUNT,
   BRAIN_PITY_INVASIONS,
+  BRAIN_RAMP_LEVEL,
+  brainDropChance,
   brainDropTable,
   nextBrainDryStreak,
   rollBrainDrop,
   rollBrainDropWithPity,
 } from "./brainDrops";
+import { ELITE_BRAIN_LUCK } from "./eliteInvasion";
 
 describe("invasion brain drops", () => {
   it("doubles rate without changing the 5/3/1 awards", () => {
@@ -17,11 +20,78 @@ describe("invasion brain drops", () => {
     ]);
   });
 
+  it("reports the any-brains chance the invasion card shows", () => {
+    // Every tier must miss for a win to pay nothing: 1 - .98 * .96 * .9.
+    expect(brainDropChance(20)).toBeCloseTo(1 - 0.98 * 0.96 * 0.9, 12);
+    // Level scaling carries through — a low-level raid pays less often.
+    expect(brainDropChance(5)).toBeLessThan(brainDropChance(20));
+    // Never negative, never past certainty.
+    expect(brainDropChance(0)).toBeGreaterThan(0);
+    expect(brainDropChance(100)).toBeLessThan(1);
+  });
+
   it("rolls rarest-first and awards at most one tier", () => {
     expect(rollBrainDrop(20, () => 0.019)).toBe(5);
     const rolls = [0.5, 0.039];
     expect(rollBrainDrop(20, () => rolls.shift() ?? 1)).toBe(3);
     expect(rollBrainDrop(20, () => 1)).toBe(0);
+  });
+});
+
+describe("brain odds keep climbing past the ramp level", () => {
+  // The old table clamped at BRAIN_RAMP_LEVEL, so every invasion from the Pirates
+  // (rec 21) up paid identical brain odds — the plateau this regression guards.
+  const CATALOG_REC_LEVELS = [5, 8, 12, 16, 21, 26, 31, 36, 43];
+
+  it("is strictly increasing across the whole invasion ladder", () => {
+    const odds = CATALOG_REC_LEVELS.map((level) => brainDropChance(level));
+    for (let i = 1; i < odds.length; i++) expect(odds[i]).toBeGreaterThan(odds[i - 1]);
+  });
+
+  it("keeps the same slope above the ramp level instead of flattening", () => {
+    // Two steps of equal size either side of the reference level move the 1-brain
+    // tier by the same amount — i.e. one straight line, no knee at BRAIN_RAMP_LEVEL.
+    const commonest = (level: number) => brainDropTable(level)[2].chance;
+    const below = commonest(BRAIN_RAMP_LEVEL) - commonest(BRAIN_RAMP_LEVEL - 10);
+    const above = commonest(BRAIN_RAMP_LEVEL + 10) - commonest(BRAIN_RAMP_LEVEL);
+    expect(above).toBeCloseTo(below, 12);
+  });
+
+  it("stays stingy at the top of the ladder", () => {
+    // The hardest invasion still pays nothing three wins in four.
+    expect(brainDropChance(43)).toBeLessThan(0.3);
+  });
+
+  it("floors at zero rather than going negative below the ladder", () => {
+    expect(brainDropTable(-50).every((tier) => tier.chance > 0)).toBe(true);
+  });
+});
+
+describe("elite (Brain Ticket) luck", () => {
+  it("multiplies every tier by the elite factor", () => {
+    const plain = brainDropTable(20);
+    const elite = brainDropTable(20, ELITE_BRAIN_LUCK);
+    for (let i = 0; i < plain.length; i++) {
+      expect(elite[i].amount).toBe(plain[i].amount);
+      expect(elite[i].chance).toBeCloseTo(plain[i].chance * ELITE_BRAIN_LUCK, 12);
+    }
+  });
+
+  it("turns a roll that would have missed into a drop", () => {
+    // At rec 20 the tiers are 2% / 4% / 10% ordinarily and 8% / 16% / 40% elite, so a
+    // 12% roll misses every ordinary tier and lands on the elite 3-brain one.
+    expect(rollBrainDrop(20, () => 0.12)).toBe(0);
+    expect(rollBrainDrop(20, () => 0.12, ELITE_BRAIN_LUCK)).toBe(3);
+  });
+
+  it("carries through the pity roll", () => {
+    expect(rollBrainDropWithPity(20, 0, () => 0.12, ELITE_BRAIN_LUCK)).toBe(3);
+  });
+
+  it("cannot push a tier past certainty", () => {
+    for (const tier of brainDropTable(1000, ELITE_BRAIN_LUCK)) {
+      expect(tier.chance).toBeLessThan(1);
+    }
   });
 });
 

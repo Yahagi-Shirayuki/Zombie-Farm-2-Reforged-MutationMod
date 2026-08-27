@@ -39,7 +39,7 @@ describe("GameState item storage projections", () => {
   it("keeps the shed intact across a capacity upgrade", () => {
     const s = new GameState();
     s.syncObjectStorage({ beachBall: 1 });
-    s.upgradeStorage(16);
+    s.syncShedCapacity(16);
     s.syncCapacities(16, 16);
     expect(s.storageItemCap).toBe(16);
     expect(s.storedItems).toEqual([{ key: "beachBall", count: 1 }]);

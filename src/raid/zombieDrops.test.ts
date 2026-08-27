@@ -15,6 +15,7 @@ import {
   TEDDY_ZOMBIE_KEY,
   ZOMBIE_LUCK_DICE_CAP,
 } from "./zombieDrops";
+import { ELITE_BRAIN_LUCK } from "./eliteInvasion";
 
 describe("rare raid zombie drops", () => {
   it("keeps Old McZombie on its existing exact 1% threshold", () => {
@@ -142,5 +143,33 @@ describe("rare zombie pity floor", () => {
       dry = nextRaidZombieDryWins(dry, !!drop);
     }
     expect(received).toBe(RAID_ZOMBIE_PITY_WINS + 1);
+  });
+});
+
+describe("a Brain Ticket widens the rare-zombie roll too", () => {
+  it("multiplies the rate on top of any dice", () => {
+    expect(raidZombieDropRate(1, 0, ELITE_BRAIN_LUCK)).toBeCloseTo(0.04, 10);
+    // Dice first (one die doubles the base), then the elite multiplier.
+    expect(raidZombieDropRate(1, 1, ELITE_BRAIN_LUCK)).toBeCloseTo(0.08, 10);
+    expect(raidZombieDropRate(7, 0, ELITE_BRAIN_LUCK)).toBeCloseTo(0.032, 10);
+  });
+
+  it("turns a roll that would have missed into a drop", () => {
+    expect(rollRaidZombieDrop(1, true, 0.03, 0)).toBeNull();
+    expect(rollRaidZombieDrop(1, true, 0.03, 0, ELITE_BRAIN_LUCK)?.key).toBe(OLD_MC_ZOMBIE_KEY);
+  });
+
+  it("carries through the per-raid pity roll", () => {
+    expect(rollRaidZombieDropWithPity(1, true, 0.03, 0, 0, ELITE_BRAIN_LUCK)?.key)
+      .toBe(OLD_MC_ZOMBIE_KEY);
+  });
+
+  it("still pays nothing on a raid with no rare zombie", () => {
+    expect(raidZombieDropRate(2, 5, ELITE_BRAIN_LUCK)).toBe(0);
+    expect(rollRaidZombieDrop(2, true, 0, 5, ELITE_BRAIN_LUCK)).toBeNull();
+  });
+
+  it("cannot exceed certainty", () => {
+    expect(raidZombieDropRate(1, ZOMBIE_LUCK_DICE_CAP, 1000)).toBe(1);
   });
 });

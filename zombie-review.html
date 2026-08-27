@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ZF Zombie Review</title>
+    <!--
+      Zombie Review — a dev-only contact sheet for every assembled zombie.
+      ====================================================================
+      Served by the Vite dev server at /zombie-review.html. It is NOT part of the
+      production build (rollup's default input is index.html alone), so it costs the
+      shipped bundle nothing.
+
+      Unlike tools/sprite_assembler.html — which inlines a snapshot of the atlas and
+      reimplements the rig in vanilla JS so it can be double-clicked — this page imports
+      the GAME's own modules: loadAssets(), RaidActor, the mutation catalog, the display
+      prefs. Whatever it shows is what the game draws, because it is the same code.
+    -->
+    <style>
+      :root {
+        --bg: #14171c; --panel: #1c2128; --panel2: #232a33; --line: #313a45;
+        --ink: #e6edf3; --muted: #8b98a5; --accent: #58a6ff; --accent2: #3fb950;
+        --danger: #f85149; --warn: #d29922;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+        font: 13px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+      #app { display: grid; grid-template-columns: 244px 1fr 292px; height: 100vh; }
+      .col { min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+        background: var(--panel); }
+      .col.left { border-right: 1px solid var(--line); }
+      .col.right { border-left: 1px solid var(--line); }
+      .col.center { position: relative; background: var(--bg); }
+      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+        color: var(--muted); margin: 0; padding: 10px 12px 6px; }
+      .pad { padding: 8px 12px; }
+      .scroll { overflow-y: auto; flex: 1; }
+      label { color: var(--muted); font-size: 11px; }
+      select, input, button {
+        font: inherit; color: var(--ink); background: var(--panel2);
+        border: 1px solid var(--line); border-radius: 5px; padding: 5px 7px; }
+      select, input[type=text] { width: 100%; }
+      input[type=range] { width: 100%; padding: 0; }
+      input[type=color] { width: 34px; height: 26px; padding: 1px; }
+      button { cursor: pointer; }
+      button:hover { border-color: var(--accent); }
+      button:disabled { opacity: .35; cursor: default; }
+      button:disabled:hover { border-color: var(--line); }
+      button.on { background: #1f6feb33; border-color: var(--accent); color: #cfe4ff; }
+      .row { display: flex; gap: 6px; align-items: center; }
+      .row + .row { margin-top: 6px; }
+      .wrap { display: flex; gap: 5px; flex-wrap: wrap; }
+      .mini { padding: 3px 6px; font-size: 11px; }
+      .toolbar { display: flex; gap: 6px; padding: 8px 10px; align-items: center;
+        flex-wrap: wrap; border-bottom: 1px solid var(--line); background: var(--panel); }
+      .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 3px; }
+      #stage { flex: 1; position: relative; overflow: hidden; touch-action: none; }
+      #stage canvas { display: block; }
+      #status { border-top: 1px solid var(--line); background: var(--panel);
+        padding: 6px 10px; font: 11px/1.5 ui-monospace, "Cascadia Code", monospace;
+        color: var(--muted); white-space: pre-wrap; min-height: 46px; }
+      #status b { color: var(--ink); font-weight: 600; }
+      .item { display: flex; align-items: center; gap: 7px; padding: 4px 10px;
+        cursor: pointer; user-select: none; border-bottom: 1px solid #ffffff08; }
+      .item:hover { background: var(--panel2); }
+      .item.sel { background: #1f6feb26; box-shadow: inset 2px 0 0 var(--accent); }
+      .item .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+      .item .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .item .tag { font-size: 9px; color: var(--muted); background: var(--panel2);
+        padding: 1px 4px; border-radius: 3px; }
+      .mut { display: flex; align-items: center; gap: 6px; padding: 4px 10px;
+        cursor: pointer; user-select: none; border-radius: 5px; }
+      .mut:hover { background: var(--panel2); }
+      .mut.on { background: #3fb95022; box-shadow: inset 2px 0 0 var(--accent2); }
+      .mut.off { opacity: .32; cursor: not-allowed; }
+      .mut .box { width: 13px; height: 13px; border: 1px solid var(--line);
+        border-radius: 3px; flex: 0 0 auto; }
+      .mut.on .box { background: var(--accent2); border-color: var(--accent2); }
+      .mut .nm { flex: 1; }
+      .mut .st { font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace; }
+      .slot { font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
+        color: var(--muted); margin: 9px 12px 2px; }
+      .note { color: var(--muted); font-size: 11px; padding: 0 12px 6px; }
+      .warn { margin: 8px 12px; padding: 7px 9px; border-radius: 6px; font-size: 11px;
+        background: #d2992222; border: 1px solid #d2992255; color: #f0d79a; }
+      .warn button { margin-top: 6px; }
+      #boot { position: absolute; inset: 0; display: grid; place-items: center;
+        background: var(--bg); color: var(--muted); z-index: 5; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="col left">
+        <h2>Roster</h2>
+        <div class="pad">
+          <input id="search" type="text" placeholder="filter by name or key…" />
+          <div class="row" style="margin-top:6px">
+            <select id="fGroup"></select>
+            <select id="fClass"></select>
+          </div>
+        </div>
+        <div class="scroll" id="list"></div>
+        <div class="note" id="listCount"></div>
+      </div>
+
+      <div class="col center">
+        <div class="toolbar">
+          <button id="vSingle" class="mini">Single</button>
+          <button id="vSheet" class="mini">Contact sheet</button>
+          <div class="sep"></div>
+          <span class="wrap" id="anims"></span>
+          <div class="sep"></div>
+          <button id="focus" class="mini" title="Focus pose — eyes narrow while charging">Focus</button>
+          <button id="flip" class="mini" title="Art faces left at facing +1">Face ►</button>
+          <button id="pause" class="mini">Pause</button>
+          <button id="replay" class="mini" title="Rebuild the rigs (replays death)">Replay</button>
+          <div class="sep"></div>
+          <button id="png" class="mini">Export PNG</button>
+        </div>
+        <div id="stage"><div id="boot">loading assets…</div></div>
+        <div id="status"></div>
+      </div>
+
+      <div class="col right">
+        <h2>Mutations</h2>
+        <div id="prefWarn"></div>
+        <div class="pad">
+          <div class="wrap">
+            <button id="mClear" class="mini">Clear</button>
+            <button id="mFill" class="mini" title="Best legal mutation in every slot">Fill</button>
+            <button id="mRandom" class="mini">Random</button>
+            <button id="mReset" class="mini" title="Back to this species' catalog mask">Catalog</button>
+          </div>
+        </div>
+        <div class="scroll" id="muts"></div>
+
+        <h2>Display</h2>
+        <div class="pad">
+          <div class="row">
+            <label style="flex:0 0 58px">Sizing</label>
+            <select id="sizing">
+              <option value="farm">Farm (zombieFarmScale)</option>
+              <option value="raid">Raid (contain-fit 91px)</option>
+              <option value="native">Native rig (raw)</option>
+            </select>
+          </div>
+          <div class="row">
+            <label style="flex:0 0 58px">Zoom</label>
+            <input id="zoom" type="range" min="0.4" max="6" step="0.05" value="3" />
+            <span id="zoomV" class="mini" style="min-width:38px;text-align:right">3.00</span>
+          </div>
+          <div class="row">
+            <label style="flex:0 0 58px">Speed</label>
+            <input id="speed" type="range" min="0" max="2" step="0.05" value="1" />
+            <span id="speedV" class="mini" style="min-width:38px;text-align:right">1.00</span>
+          </div>
+          <div class="row">
+            <label style="flex:0 0 58px">Tint</label>
+            <select id="tintMode">
+              <option value="species">Species colour</option>
+              <option value="custom">Custom (Pot child)</option>
+            </select>
+            <input id="tint" type="color" value="#8fbf6a" />
+          </div>
+          <div class="row">
+            <label style="flex:0 0 58px">Backdrop</label>
+            <select id="backdrop">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+              <option value="checker">Checker</option>
+              <option value="grass">Farm grass</option>
+            </select>
+          </div>
+          <div class="row">
+            <label style="flex:0 0 58px">Guides</label>
+            <button id="guides" class="mini on">Ground + bounds</button>
+          </div>
+        </div>
+
+        <h2>Game prefs</h2>
+        <div class="note">Shared with the game (localStorage) — the rigs honour them.</div>
+        <div class="pad">
+          <div class="row">
+            <button id="pMut" class="mini" style="flex:1">Show mutations</button>
+            <button id="pColor" class="mini" style="flex:1">Body colour</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/devtools/zombieReview.ts"></script>
+  </body>
+</html>

@@ -24,8 +24,10 @@ Core routes:
 - `POST /writer/acquire`, `POST /writer/release`, `GET /writer/status` — exclusive writer lease
 - `POST /raid/start`, `POST /raid/finish`, `POST /raid/revive`
 - `POST /epic-boss/activate|end|start|finish`
-- `GET /black-market/orders`, `GET /black-market/summary`, `POST /black-market/orders`,
-  `POST /black-market/orders/:id/cancel`, `POST /black-market/orders/:id/fulfill`
+- `GET /black-market/orders`, `GET /black-market/summary`, `GET /black-market/fulfillments`,
+  `GET /black-market/history`, `POST /black-market/orders`,
+  `POST /black-market/orders/:id/cancel`, `POST /black-market/orders/:id/fulfill`,
+  `POST /black-market/orders/:id/collect`, `POST /black-market/orders/:id/repost`
 - `GET /me`, `POST /username`, `POST /session/refresh`, `POST /logout`,
   `POST /session/logout-all`, `GET /session/list`, `POST /session/revoke`
 - `GET /friends`, `GET /friends/requests`, `GET /friends/:id/save` (read-only visit projection),
@@ -45,8 +47,10 @@ server-owned tables and catalogs) into the session row. `/raid/finish` accepts
 replaying that input transcript against the pinned config (`src/raidVerifier.ts` →
 `src/raid/replay.ts`), and rewards are priced from the server catalog against the replayed
 survivor ratio. An elapsed-time gate (`future_finish`) and ruleset-version pinning
-(`stale_ruleset`, currently `RAID_RULESET_VERSION = 10`) are defense-in-depth on top of the
-replay, not substitutes for it.
+(`stale_ruleset`, currently `RAID_RULESET_VERSION = 1040` — declared once in
+`src/raid/replay.ts` and imported by both sides) are defense-in-depth on top of the replay,
+not substitutes for it. `/epic-boss/start` performs the same handshake and refuses a
+mismatched client with `426 stale_ruleset` before charging a token or a brain.
 
 The optional `clientWin` / `clientLosses` fields exist because the Beach crab and Circus
 trapeze hazards run **client-only** — `raidVerifier.grabberOf` returns `null`, so the server
@@ -73,6 +77,10 @@ concession field.
   between accounts. Keep it behind `BLACK_MARKET_ENABLED` in any environment where the
   release gates in `../SECURITY.md` have not been confirmed.
 - Paid currency, competitive rankings, and PvP must remain disabled until those gates pass.
+  Friend invasions (zero-stakes PvP-lite) are gated behind the `PVP_ENABLED` Worker var —
+  "1" on staging for playtesting, "0" in production. The client's surfaces follow the
+  bootstrap's `pvpEnabled` capability, so that one var is the whole launch switch —
+  see `../docs/FRIEND_INVASIONS.md`.
 - A raid and an Epic Boss fight are mutually exclusive: `/raid/start` rejects with
   `409 raid_in_progress` while an Epic Boss session is live, and vice versa.
 
@@ -135,8 +143,14 @@ npm run dev
 The local Worker runs at `http://127.0.0.1:8787`. In the repository root, copy
 `.env.example` to `.env.local` and run the client with `npm run dev`.
 
+`wrangler dev` binds the default (staging) D1 config, and local state is keyed by
+database id — so after the 2026-08 default-env flip an existing checkout's local
+database starts empty; run `npm run db:init:local` once to re-create it.
+
 With `DEV_AUTH=1`, the client exposes `window.zfDevSignIn(sub, name)` for automated
-local sign-in without the Google popup. **Never deploy with `DEV_AUTH=1`.**
+local sign-in without the Google popup. **Never deploy with `DEV_AUTH=1`** — the one
+exception is the staging Worker below, which is a separate deployment with its own
+database and exists precisely so test accounts never touch prod.
 
 Validation commands:
 
@@ -150,14 +164,66 @@ npm run test:integration
 
 1. In Google Cloud, create an OAuth 2.0 Web client and add the Pages origin and local
    development origin to Authorized JavaScript origins.
-2. Create the D1 database and place its ID in `wrangler.toml`.
+2. Create the D1 database and place its ID in `wrangler.toml` under `[env.production]`.
 3. Follow `../docs/PROTOCOL_V3_ROLLOUT.md`. Protocol v3 uses a destructive reset and
    intentionally has no legacy data migration.
-4. Store `SESSION_SECRET` with `wrangler secret put SESSION_SECRET`; never commit it.
+4. Store `SESSION_SECRET` with `wrangler secret put SESSION_SECRET --env production`;
+   never commit it.
 5. Set `GOOGLE_CLIENT_ID`, `ALLOWED_ORIGIN`, `DEV_AUTH=0`, and the operational protocol
-   variables in `wrangler.toml`.
+   variables in `wrangler.toml` under `[env.production.vars]`.
 6. Deploy the Worker and client in the documented order, then perform the authenticated
    smoke checks before enabling mutations.
+
+## Deploying: staging by default, production by explicit step
+
+`wrangler.toml`'s top level IS the staging environment, so every bare wrangler
+command targets the disposable staging stack; production lives in
+`[env.production]` and is only reachable with an explicit `--env production`:
+
+```bash
+npm run deploy        # → staging Worker (zombiefarm-server-staging)
+npm run deploy:prod   # → migrations:check + typecheck + unit + integration tests,
+                      #   then the PROD Worker (zombiefarm-server)
+```
+
+A wrangler command that names a prod-only resource without the flag fails with
+"Couldn't find a D1 DB … in your wrangler.toml" rather than falling through to
+staging — the flag is the guard. (`wrangler d1 execute <name> --remote` is the
+exception: it resolves any database in the account by name, which is what keeps
+the RUNBOOK's forensic queries working unchanged.)
+
+## Staging environment
+
+A fully separate Worker + D1 database for testing server features on real Cloudflare
+infrastructure without risking prod. It is the top-level (default) config in
+`wrangler.toml` (named environments inherit almost nothing — its bindings and vars
+and prod's are declared separately). Live at
+`https://zombiefarm-server-staging.zombiefarm.workers.dev`, database
+`zombiefarm-staging`.
+
+- Deploy: `npm run deploy` (or bare `npx wrangler deploy`).
+- Config mirrors prod except `DEV_AUTH=1` (sign in via `window.zfDevSignIn`, no
+  Google) and `ALLOWED_ORIGIN=http://localhost:5173`.
+- **Connecting a local client** (verified end-to-end 2026-08-22): set
+  `VITE_API_URL=https://zombiefarm-server-staging.zombiefarm.workers.dev` in the
+  root `.env.local` (leave `VITE_GOOGLE_CLIENT_ID` blank), `npm run dev` in the
+  repo root, open `http://localhost:5173` **exactly** (CORS is exact-match on
+  `localhost:5173`/`4173`; `127.0.0.1` and other ports are rejected), then in the
+  console `localStorage.setItem("zf2r.play-mode.v1","online")` + reload, and
+  `await window.zfDevSignIn("you@test.local","YourName")` + reload. Every distinct
+  `devSub` is its own throwaway account. Full recipe: root `README.md`, "Online
+  against the deployed STAGING server".
+- Direct API poking: `GET /` is unauthenticated; for the rest, `POST /auth` with
+  `{"devSub":"..."}` returns a token to pass as `Authorization: Bearer`.
+- Database inspection: `npx wrangler d1 execute zombiefarm-staging --remote
+  --command "..."` (no `--env` flag — staging is the default environment).
+- New migrations: `npx wrangler d1 migrations apply zombiefarm-staging --remote`.
+  The database was initialized via the fresh path (`schema.sql` +
+  `scripts/baseline-migrations.sql` — see `migrations/README.md`), so only migrations
+  added after the baseline apply. Because prod upgrades in place while staging was
+  built fresh, always rehearse a new migration against a prod snapshot too; passing
+  on staging alone doesn't prove the upgrade path.
+- Staging's data is disposable; there is no prod-data copy step.
 
 ## Operational notes
 
